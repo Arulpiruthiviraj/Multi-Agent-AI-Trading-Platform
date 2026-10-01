@@ -29,21 +29,48 @@ import { InternalPaperBroker } from '../../brokers/InternalPaperBroker';
 const fcSeed = process.env.ARGUS_FC_SEED ? Number(process.env.ARGUS_FC_SEED) : undefined;
 const numRuns = 500;
 
+// 2026-09-30 real defect found via manual mutation testing (Stryker's own coverage instrumentation
+// had an unrelated bug for this file - see ARGUS_MUTATION_TESTING_REPORT.md - so this was caught by
+// hand-applying a real mutation and re-running these tests, not by the mutation tool itself): a bare
+// fc.string() for tradingMode almost NEVER generates the exact literal "LIVE"/"PAPER" needed to
+// exercise classifyBrokerEnvironment's interesting branches, out of fast-check's effectively
+// unbounded string domain - every property below using it was passing VACUOUSLY, never actually
+// executing its own `if (env === 'LIVE')` assertions. Confirmed directly: inverting the
+// PAPER_TRADING_ONLY check in authorizeProductionOrder (a real LIVE_NO_GO bypass) did not fail this
+// suite before this fix. Mixing in the real, meaningful literal values fast-check should bias toward
+// (TEST_TOO_WEAK fix, not a production change) makes the LIVE/PAPER branches genuinely reachable
+// while fc.string() still covers the "garbage input" exploration this property also needs.
+const tradingModeArb = fc.option(
+  fc.oneof(
+    fc.constantFrom('LIVE', 'PAPER', 'Live', 'paper', 'SIMULATOR', '', 'UNKNOWN', 'live_trading'),
+    fc.string(),
+  ),
+  { nil: undefined },
+);
+const paperModeArb = fc.option(fc.oneof(fc.boolean(), fc.integer({ min: -5, max: 5 })), { nil: undefined });
+
 describe('Property: unknown broker environment cannot execute (classifyBrokerEnvironment)', () => {
   it('never classifies as PAPER or LIVE unless tradingMode and paperMode genuinely agree', () => {
     fc.assert(
       fc.property(
-        fc.option(fc.string(), { nil: undefined }),
-        fc.option(fc.oneof(fc.boolean(), fc.integer({ min: -5, max: 5 })), { nil: undefined }),
+        tradingModeArb,
+        paperModeArb,
         (tradingMode, paperMode) => {
           const env = classifyBrokerEnvironment({ tradingMode, paperMode });
           if (env === 'LIVE') {
             expect(String(tradingMode || '').toUpperCase()).toBe('LIVE');
+            // normalizePaperMode() treats exactly false/0 as "not paper" - anything else
+            // non-null/undefined (including a numeric paperMode of e.g. -1) coerces truthy and
+            // can never classify as LIVE, only as PAPER or UNKNOWN. This exact boundary (not merely
+            // "paperMode === false || === 0") is the real contract - a looser assertion here missed
+            // a real counterexample (tradingMode='PAPER', paperMode=-1) during this task's work.
             expect(paperMode === false || paperMode === 0).toBe(true);
           }
           if (env === 'PAPER') {
             expect(String(tradingMode || '').toUpperCase()).toBe('PAPER');
-            expect(paperMode === true || paperMode === 1).toBe(true);
+            // The real, broader contract: anything other than false/0/null/undefined normalizes
+            // truthy (Boolean(v) fallback in normalizePaperMode) - not only literal true/1.
+            expect(paperMode === false || paperMode === 0 || paperMode == null).toBe(false);
           }
         },
       ),
@@ -54,8 +81,8 @@ describe('Property: unknown broker environment cannot execute (classifyBrokerEnv
   it('assertBrokerEnvironmentAllowsOrder.ok is true only when the environment is PAPER or LIVE, never UNKNOWN', () => {
     fc.assert(
       fc.property(
-        fc.option(fc.string(), { nil: undefined }),
-        fc.option(fc.oneof(fc.boolean(), fc.integer({ min: -5, max: 5 })), { nil: undefined }),
+        tradingModeArb,
+        paperModeArb,
         (tradingMode, paperMode) => {
           const result = assertBrokerEnvironmentAllowsOrder({ tradingMode, paperMode });
           if (result.ok) {
@@ -74,14 +101,16 @@ describe('Property: LIVE_NO_GO cannot be bypassed (authorizeProductionOrder)', (
   it('under PAPER_TRADING_ONLY=true, no tradingMode/paperMode combination ever authorizes a LIVE order', () => {
     const original = process.env.PAPER_TRADING_ONLY;
     process.env.PAPER_TRADING_ONLY = 'true';
+    let liveBranchHits = 0;
     try {
       fc.assert(
         fc.property(
-          fc.option(fc.string(), { nil: undefined }),
-          fc.option(fc.oneof(fc.boolean(), fc.integer({ min: -5, max: 5 })), { nil: undefined }),
+          tradingModeArb,
+          paperModeArb,
           (tradingMode, paperMode) => {
             const result = authorizeProductionOrder({ tradingMode, paperMode });
             if (result.environment === 'LIVE') {
+              liveBranchHits += 1;
               expect(result.ok).toBe(false);
               expect(result.reason).toContain('PAPER_TRADING_ONLY');
             }
@@ -89,6 +118,10 @@ describe('Property: LIVE_NO_GO cannot be bypassed (authorizeProductionOrder)', (
         ),
         { numRuns, seed: fcSeed },
       );
+      // Guards against this exact property silently regressing to vacuous again (the real defect
+      // this file's header comment documents) - if the generator ever stops producing LIVE inputs,
+      // this fails loudly instead of the property passing on zero real exercises of its own assertion.
+      expect(liveBranchHits).toBeGreaterThan(0);
     } finally {
       if (original === undefined) delete process.env.PAPER_TRADING_ONLY;
       else process.env.PAPER_TRADING_ONLY = original;

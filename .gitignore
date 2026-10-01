@@ -32,3 +32,5 @@ data/.argus_runtime_session.json
 sqlite.db
 quant-core-java/target/
 quant-core-java/.mvn/cacerts-with-norton-ca
+.stryker-tmp/
+reports/mutation/

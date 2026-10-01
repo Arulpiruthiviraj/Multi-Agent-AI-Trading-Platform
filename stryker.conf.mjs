@@ -21,8 +21,8 @@
 export default {
   packageManager: 'npm',
   testRunner: 'vitest',
-  reporters: ['html', 'clear-text', 'progress'],
-  coverageAnalysis: 'all',
+  reporters: ['html', 'clear-text', 'progress', 'json'],
+  coverageAnalysis: 'off',
   files: [
     'src/**/*.ts',
     'src/**/*.tsx',
@@ -41,6 +41,13 @@ export default {
   ],
   vitest: {
     configFile: 'vitest.mutation.config.ts',
+    // 2026-09-30 real bug found: Vitest's own --related file-detection heuristic failed to
+    // associate liveOrderAuthorization.ts with liveReadiness.test.ts (which genuinely imports and
+    // calls it), producing a false 0%-coverage/"no coverage" result for the entire file and masking
+    // real mutation data behind a tooling artifact, not a real test gap. Disabling `related` runs
+    // the full (small, 4-file/24-test) vitest.mutation.config.ts set per mutant instead of trying
+    // to guess which subset is relevant - slower per mutant, but correct.
+    related: false,
   },
   tempDirName: '.stryker-tmp',
   htmlReporter: {
