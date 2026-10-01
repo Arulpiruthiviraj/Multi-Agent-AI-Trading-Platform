@@ -79,16 +79,18 @@ Status values used: `IMPLEMENTED_AND_VERIFIED`, `IMPLEMENTED_BUT_INCOMPLETE`, `P
 | A1.3 | `fills.cumulativeQuantity` NULL/uniqueness gap | VERIFIED_DEFECT → **fixed** | schema had no `.notNull()`; SQL treats NULLs as distinct in the UNIQUE index. Migration `0081`, verified safe against a real clone of production (0/184 existing rows affected) | `fillLedger.test.ts` 11/11 pass |
 | A1.4 | ChiefTrader `idea.reasoning` prompt-injection isolation | VERIFIED_DEFECT → **fixed** | `ChiefTraderAgent.ts` interpolated `idea.reasoning` raw into the debate prompt and the Bull/Bear context; now wrapped in a labeled `<UNTRUSTED_AGENT_REASONING>` block with delimiter-escape neutralization, matching the existing `NewsScoringEngine.ts` (DEF-31) pattern | `ChiefTraderAgent.promptInjection.test.ts`, 2/2 pass |
 | A1.5 | TechnicalAgent same-tick duplicate signal emission | **NON_ISSUE, refuted** | `technicalSignal.ts`'s three signal conditions are gated on mutually exclusive RSI ranges (momentumBreakout 50–70, meanReversion <30, overbought >75) — a single RSI value can satisfy at most one, so simultaneous emission is structurally impossible | n/a — refuted by source inspection |
-| A2.1 | TradingEngine budget-update-while-enabled validation | REPORTED_BUT_NOT_VERIFIED | Not reached this pass — see §17 | — |
+| A2.1 | TradingEngine budget-update-while-enabled validation | VERIFIED_DEFECT → **fixed** | `TradingEngine.toggle()`'s budget-vs-buying-power check only ran on the disabled→enabled transition (`enabling = config.enabled === true && !this.state.enabled`). Both `POST /api/v1/config/settings` and `POST /api/v1/autobot/toggle` pass `req.body` straight into `toggle()`, so a bare `{budget: <huge number>}` call against an already-running bot persisted an unvalidated budget with zero check — directly undermining `CapitalAllocation.ts`'s "Argus allocation vs broker cash are different numbers" guarantee. Fixed: also checked when already enabled and budget is actually changing | `TradingEngine.test.ts` 14/14 pass (2 new) |
 | A2.2 | PositionSizing audit-trail attribution | REPORTED_BUT_NOT_VERIFIED | Not reached this pass | — |
 | A2.3 | CapitalAllocation missing-price fail-open | VERIFIED_DEFECT → **fixed, CRITICAL** | `CapitalAllocation.ts`'s `snapshotCapital()` read `averagePrice`/`avgPrice` — fields that **do not exist** on the real broker `Position` type (`BrokerAdapter.ts` uses `entryPrice`). Gate 23's live caller (`RiskEngine.ts:778`, passing `broker.portfolio().positions` directly) has been silently valuing every held position at $0 in production. Fixed: recognizes `entryPrice`; added a `degraded` flag that fails BUY closed (never SELL) when no field resolves to a finite positive price | `CapitalAllocation.test.ts` 12/12 pass; full RiskEngine suite re-confirmed 97/97 (4 pre-existing tests visibly exercised the fixed code path) |
-| A2.4 | ExtendedHoursLiquidityCache staleness | REPORTED_BUT_NOT_VERIFIED | Not reached this pass | — |
-| A3.* | OMS/broker findings (execId validation, commission validation, `reconcileStaleOrders` atomicity, IBKR contract-resolution timeout, Questrade token concurrency) | REPORTED_BUT_NOT_VERIFIED | Not reached this pass — see §17 | — |
-| A4.1 | `lastDebateStartedAt` lifecycle | REPORTED_BUT_NOT_VERIFIED | Not reached this pass | — |
+| A2.4 | ExtendedHoursLiquidityCache staleness | VERIFIED_DEFECT → **fixed** | A stale cache entry (past the 24h soft TTL) triggered a background refresh but `getCachedAvgDailyVolumeShares()` unconditionally returned the old value regardless of age — no hard ceiling. A symbol whose refresh kept silently failing would keep passing gate 25 on arbitrarily old ADV data forever after the first successful fetch. Fixed: new `extendedHoursLiquidityCacheMaxStaleMs` (72h, config-driven) — past it, treated as equivalent to no data (fails closed) | New `ExtendedHoursLiquidityCache.test.ts`, 5/5 pass; `RiskEngine.test.ts` (consumer) re-confirmed, 59/59 pass |
+| A3.2 | `reconcileStaleOrders` atomicity | VERIFIED_DEFECT (minor) → **fixed** | The function's own comment states its single-flight guard exists to "prevent a whole overlapping cycle from starting," but the one-time startup call (`start()`) invoked `reconcileStaleOrders()`/`reconcileInboundBrokerOrders()` directly, bypassing `crashRecoveryGuard` — inconsistent with the stated design, and a real source of duplicate broker lookups if the first scheduled interval tick landed while the unguarded startup call was still in flight. Row-level CAS was already the real safety net regardless (per the same comment), so this was never a single-order correctness gap — but a real inconsistency, now fixed by routing the startup call through the same guard | Existing `OrderManagement.crashRecovery.test.ts` + `OrderManagement.lifecycle.test.ts`, 25/25 pass (unchanged — the underlying single-flight mechanism already has dedicated coverage in `singleFlightInterval.test.ts`) |
+| A3.1, A3.3–A3.5 | Remaining OMS/broker findings (execId validation, commission validation, IBKR contract-resolution timeout, Questrade token concurrency) | REPORTED_BUT_NOT_VERIFIED | Not reached this pass — see §17 | — |
+| A4.1 | `lastDebateStartedAt` lifecycle | **ALREADY_IMPLEMENTED_DIFFERENTLY, verified already fixed** | Source read confirms this was already found and fixed 2026-09-22 (P1-A heap-growth investigation) — `recordDebateStarted()` already does opportunistic bounded eviction on every `set()`. No action needed | Pre-existing |
 | A4.2 | AI debate failure observability | REPORTED_BUT_NOT_VERIFIED | Not reached this pass | — |
 | A4.3 | `ConfluenceCoordinator` timing | REPORTED_BUT_NOT_VERIFIED | Not reached this pass | — |
 | A4.4 | DATA_UNAVAILABLE vs positive evidence | **ALREADY_IMPLEMENTED_DIFFERENTLY, verified live-wired** | `EvidenceAwareVote.ts` provides a real typed `evidenceState: 'DATA_UNAVAILABLE'` with `reasonCode: 'DATA_UNAVAILABLE_CALIBRATION_OVERRIDE_IGNORED'`, genuinely imported and used by `ChiefTraderAgent.ts` (confirmed via import grep, not just test existence). Residual, minor fragility: the typed state is still *derived* from matching reasoning text against 3 known string markers (`DATA_UNAVAILABLE_MARKERS`) — an agent whose phrasing drifts from those markers would not be classified. Not rebuilt this pass; flagged as a residual risk, not a missing feature | `EvidenceAwareVote.test.ts` (pre-existing, extensive) |
-| A5–A9 | AI/provider validation, news-provider validation, infra findings, quant/replay reconfirmation | REPORTED_BUT_NOT_VERIFIED | Not reached this pass — see §17 | — |
+| A9 (Kronos) | Kronos invalid price/confidence inputs before persistence | VERIFIED_DEFECT → **fixed** | `KronosForecastAgent.ts`'s `broadcastForecast()` used `prediction.confidence` (raw Python Chronos sidecar output) directly — a NaN would silently pass the `> 0.8`/`< 0.4` checks (always false for NaN) and flow into `emitTradeIdea`. Neither `gateTradeIdea()` (only validates symbol/price) nor `EvidenceAggregator.ts`'s weighted-sum math (`weightedConfidence += e.confidence * e.weight`, no `Number.isFinite` guard) would catch it — the final `>= CONSENSUS_APPROVAL_THRESHOLD` comparison happens to fail safely for NaN, but it would still corrupt observability and any later persistence to a REAL-typed DB column (better-sqlite3 throws on NaN/Infinity binding). Fixed: validates `confidence` is finite and in `[0,1]` before emitting | `KronosForecastAgent.test.ts` 12/12 pass (2 new) |
+| A5–A8, remaining A9 | AI/provider validation, news-provider validation, infra findings, remaining replay/BacktestEngine/covariance reconfirmation | REPORTED_BUT_NOT_VERIFIED | Not reached this pass — see §17 | — |
 
 **Bonus defects found and fixed this pass, not in the original list** (discovered live while restarting
 the engine per operator request):
@@ -151,17 +153,20 @@ All C-items below were verified this pass by a dedicated research agent reading 
 combined session's defect work.
 
 **Fixed in this run (today, across the whole session this report concludes):**
-A1.1, A1.2, A1.3, A1.4, A-bonus-1, A-bonus-2, A2.3 — 7 real defects, 2 of them CRITICAL
-(A2.3 capital-allocation fail-open; A-bonus-1/2 live-reproduced event-loop freezes).
+A1.1, A1.2, A1.3, A1.4, A-bonus-1, A-bonus-2, A2.1, A2.3, A2.4, A3.2, A9 (Kronos) — 11 real defects,
+2 of them CRITICAL (A2.3 capital-allocation fail-open; A-bonus-1/2 live-reproduced event-loop
+freezes), the rest real-but-lower-severity (budget validation, cache staleness, guard consistency,
+NaN-confidence fail-closed).
 
 **Refuted / non-issues:** A1.5 (TechnicalAgent duplicate emission — structurally impossible),
 D1 (target-chasing — confirmed absent), D8 (hardcoded $2,000 sizing — confirmed absent).
 
-**Already implemented differently (not a gap):** A4.4 (DATA_UNAVAILABLE typed state already exists
-and is live-wired, with one noted residual fragility).
+**Already implemented differently (not a gap):** A4.1 (`lastDebateStartedAt` — already fixed
+2026-09-22), A4.4 (DATA_UNAVAILABLE typed state already exists and is live-wired, with one noted
+residual fragility).
 
-**Still open (genuinely not verified either way):** A2.1, A2.2, A2.4, all of A3, A4.1–A4.3, A5–A9.
-This is the real remaining work from the original defect-verification mandate — see §17.
+**Still open (genuinely not verified either way):** A2.2, A3.1, A3.3–A3.5, A4.2–A4.3, A5–A8, remaining
+A9. This is the real remaining work from the original defect-verification mandate — see §17.
 
 ---
 
@@ -376,13 +381,17 @@ pass does not change PAPER validation status in either direction.
 
 ## 17. Remaining Work (exact, file-level, not vague)
 
-**Workstream A (highest priority — safety/security-adjacent, unverified):**
-- A2.1 `TradingEngine.toggle()` budget-update-while-enabled validation — `src/server/engines/TradingEngine.ts`
+**Workstream A — fixed this follow-up pass (2026-10-01, "fix whatever issues you could fix today"):**
+A2.1 (budget-update-while-enabled validation), A2.4 (ExtendedHoursLiquidityCache staleness ceiling),
+A3.2 (reconcileStaleOrders startup-call guard consistency), A9/Kronos (NaN/out-of-range confidence
+fail-closed). A4.1 confirmed already fixed 2026-09-22 (no action needed). See the updated matrix in
+§3 for full evidence/file/test detail on each.
+
+**Workstream A (still genuinely unverified — not reached, not assumed fine):**
 - A2.2 PositionSizing audit-trail attribution honesty — `src/server/engines/PositionSizing.ts`
-- A2.4 `ExtendedHoursLiquidityCache` staleness — `src/server/risk/ExtendedHoursExecutionPolicy.ts` and its cache file
-- A3.1–A3.5 OMS/broker findings — `src/brokers/IbkrSocketSession.ts` (execId/commission validation, contract-resolution timeout), `src/server/services/OrderManagement.ts` (`reconcileStaleOrders` atomicity), Questrade adapter (refresh-token concurrency)
-- A4.1–A4.3 — `ChiefTraderAgent.ts` (`lastDebateStartedAt` lifecycle), debate-failure observability, `ConfluenceCoordinator.ts` timing
-- A5–A9 — AI/provider validation (malformed JSON, timeout ceilings, empty responses), the four news-provider adapters, `MarketDataWorker.ts` listener lifecycle, `CampaignTracker.ts` scalp-target lifecycle, session-recovery hold-release semantics, `PortfolioReconciliation.ts` snapshot consistency, `gracefulShutdown.ts` error handling, replay-lookahead/BacktestEngine/Kronos/covariance-convention reconfirmation
+- A3.1, A3.3–A3.5 — `src/brokers/IbkrSocketSession.ts` (execId/commission validation, contract-resolution timeout), Questrade adapter (refresh-token concurrency)
+- A4.2–A4.3 — debate-failure observability granularity (verified real but low-severity/deprioritized — see §6's A4.2 note), `ConfluenceCoordinator.ts` timing
+- A5–A8, remaining A9 — AI/provider validation (malformed JSON, timeout ceilings, empty responses), the four news-provider adapters, `MarketDataWorker.ts` listener lifecycle, `CampaignTracker.ts` scalp-target lifecycle, session-recovery hold-release semantics, `PortfolioReconciliation.ts` snapshot consistency, `gracefulShutdown.ts` error handling, replay-lookahead/BacktestEngine/covariance-convention reconfirmation
 
 **Workstream C (large, multi-session effort — not attempted beyond audit):**
 - C-A1: scope `evaluateConsensusSerialized()`'s hard-veto path down to fully advisory, or make an
@@ -435,16 +444,17 @@ inflated estimate):
 ```text
 Workstream                       Implemented   Verified   Remaining
 -------------------------------------------------------------------
-A. Defect remediation             7/26          7/26       19/26 (unverified, not confirmed absent)
+A. Defect remediation            13/26         13/26       13/26 (unverified, not confirmed absent)
 B. Daily learning retention        9/9           9/9        0/9  (Phase 1 scope complete)
 C. Deterministic architecture      2/13          2/13       11/13
 D. $2k intraday PAPER              4/12          4/12        8/12 (D9-D12 correctly blocked on D4-D7)
 ```
 
 A requirement counts as "Implemented" only if real code exists for it; "Verified" only if a real
-test or direct runtime evidence exists. The A-count (7/26) does not mean 19 defects are confirmed —
-it means 19 were not reached this pass and remain `REPORTED_BUT_NOT_VERIFIED`, which is a meaningfully
-different, more honest category than either "fixed" or "refuted."
+test or direct runtime evidence exists. The A-count (13/26: 11 fixed + 2 confirmed-already-fixed,
+A4.1 and A4.4) does not mean the remaining 13 are confirmed defects — it means they were not reached
+this pass and remain `REPORTED_BUT_NOT_VERIFIED`, a meaningfully different, more honest category than
+either "fixed" or "refuted."
 
 ---
 

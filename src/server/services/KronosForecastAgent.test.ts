@@ -145,6 +145,41 @@ describe('KronosForecastAgent Chronos unavailable fail-closed', () => {
     });
   });
 
+  it('2026-10-01 defect verification pass (finding A9): does not emitTradeIdea when Chronos returns a non-finite confidence (NaN)', async () => {
+    getStatus.mockReturnValue({ isAvailable: true });
+    predict.mockResolvedValue({
+      symbol: 'TSLA', prediction: 'BUY', confidence: NaN,
+      expectedMove: '+1.0%', forecastHorizon: 5, support: 100, resistance: 110,
+    });
+
+    const agent = new KronosForecastAgent();
+    (agent as any).priceHistory.TSLA = [250, 251, 252];
+    await (agent as any).onTick({ symbol: 'TSLA', price: 253 });
+
+    expect(emitTradeIdea).not.toHaveBeenCalled();
+  });
+
+  it('2026-10-01 defect verification pass (finding A9): does not emitTradeIdea when Chronos returns an out-of-range confidence (Infinity or > 1)', async () => {
+    getStatus.mockReturnValue({ isAvailable: true });
+    predict.mockResolvedValueOnce({
+      symbol: 'AMD', prediction: 'BUY', confidence: Infinity,
+      expectedMove: '+1.0%', forecastHorizon: 5, support: 100, resistance: 110,
+    });
+    const agent1 = new KronosForecastAgent();
+    (agent1 as any).priceHistory.AMD = [100, 101, 102];
+    await (agent1 as any).onTick({ symbol: 'AMD', price: 103 });
+    expect(emitTradeIdea).not.toHaveBeenCalled();
+
+    predict.mockResolvedValueOnce({
+      symbol: 'AMD', prediction: 'BUY', confidence: 1.5,
+      expectedMove: '+1.0%', forecastHorizon: 5, support: 100, resistance: 110,
+    });
+    const agent2 = new KronosForecastAgent();
+    (agent2 as any).priceHistory.AMD = [100, 101, 102];
+    await (agent2 as any).onTick({ symbol: 'AMD', price: 103 });
+    expect(emitTradeIdea).not.toHaveBeenCalled();
+  });
+
   it('still calls Chronos /forecast when Autobot idea generation is off — but never emitTradeIdea', async () => {
     ideaGenEnabled.value = false;
     getStatus.mockReturnValue({ isAvailable: true });

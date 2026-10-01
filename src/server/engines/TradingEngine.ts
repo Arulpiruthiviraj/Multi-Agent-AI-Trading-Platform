@@ -469,11 +469,22 @@ class TradingEngine {
         // rejected toggle() never has any side effect on the live-arm state.
         //
         // Allocated budget must not exceed what the active broker actually reports as available -
-        // otherwise the bot starts "funded" on paper against capital that isn't really there. Only
-        // checked on the enable transition (not on every config edit while already running), and
-        // against the budget this call is actually about to apply, not whatever was previously set.
+        // otherwise the bot starts "funded" on paper against capital that isn't really there.
+        // 2026-10-01 defect verification pass (finding A2.1): this previously checked ONLY on the
+        // disabled->enabled transition, never on a budget-only update while already running. Both
+        // POST /api/v1/config/settings and POST /api/v1/autobot/toggle pass req.body straight into
+        // this function, so a bare {budget: <huge number>} call against an already-enabled bot
+        // persisted an unvalidated budget with zero check - directly undermining
+        // CapitalAllocation.ts's own "Argus allocation vs broker cash are different numbers" guarantee
+        // (gate 23 trusts settings.budget as the ceiling; nothing upstream of it re-validates that
+        // ceiling against real buying power once the bot is already running). Now also checked when
+        // the bot is already enabled and budget is actually changing - still never on every unrelated
+        // config edit while running, and against the budget this call is actually about to apply, not
+        // whatever was previously set.
+        const budgetChanging = Object.prototype.hasOwnProperty.call(config, 'budget') && config.budget !== this.state.budget;
         const enabling = config.enabled === true && !this.state.enabled;
-        if (enabling) {
+        const needsBudgetCheck = enabling || (this.state.enabled && budgetChanging);
+        if (needsBudgetCheck) {
             const targetBudget = Object.prototype.hasOwnProperty.call(config, 'budget') ? (config.budget as number) : this.state.budget;
             const broker = BrokerManager.getInstance().getActiveBroker();
             try {
@@ -481,12 +492,12 @@ class TradingEngine {
                 const availableToTrade = portfolio.buyingPower ?? portfolio.cash ?? 0;
                 if (targetBudget > availableToTrade) {
                     const msg = `Allocated fund ($${targetBudget.toLocaleString()}) exceeds ${broker.name}'s available buying power ($${availableToTrade.toLocaleString(undefined, { maximumFractionDigits: 2 })}). Deposit more funds with ${broker.name} to raise available buying power, or lower the allocated amount.`;
-                    this.logHistory('veto', `Blocked start: ${msg}`);
+                    this.logHistory('veto', `${enabling ? 'Blocked start' : 'Blocked budget update'}: ${msg}`);
                     return { ok: false, error: msg };
                 }
             } catch (e: any) {
-                const msg = `Could not verify ${broker.name}'s available funds before starting: ${e.message}`;
-                this.logHistory('veto', `Blocked start: ${msg}`);
+                const msg = `Could not verify ${broker.name}'s available funds ${enabling ? 'before starting' : 'before applying the budget change'}: ${e.message}`;
+                this.logHistory('veto', `${enabling ? 'Blocked start' : 'Blocked budget update'}: ${msg}`);
                 return { ok: false, error: msg };
             }
         }

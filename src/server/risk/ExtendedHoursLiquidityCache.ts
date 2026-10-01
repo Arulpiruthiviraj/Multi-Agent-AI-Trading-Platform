@@ -28,6 +28,10 @@ const inflight = new Set<string>();
 /** Reuses the SAME cache TTL as the broad-universe tradable-assets list (24h) - ADV is a
  *  slow-moving daily statistic, not a value that needs sub-hour freshness. */
 const CACHE_TTL_MS = continuousIntelligence.broadUniverseAssetsCacheTtlMs;
+/** 2026-10-01 defect verification pass (finding A2.4) - hard ceiling beyond which a stale entry is
+ *  treated as equivalent to no data at all, not returned forever while background refreshes keep
+ *  silently failing. See config/continuousIntelligence.json's own comment. */
+const MAX_STALE_MS = continuousIntelligence.extendedHoursLiquidityCacheMaxStaleMs;
 
 async function refreshOne(symbol: string): Promise<void> {
   if (inflight.has(symbol)) return;
@@ -55,9 +59,16 @@ export function getCachedAvgDailyVolumeShares(symbol: string, now: Date = new Da
     void refreshOne(symbol);
     return null;
   }
-  if (now.getTime() - entry.fetchedAtMs > CACHE_TTL_MS) {
+  const ageMs = now.getTime() - entry.fetchedAtMs;
+  if (ageMs > CACHE_TTL_MS) {
     void refreshOne(symbol);
   }
+  // 2026-10-01 defect verification pass (finding A2.4): previously returned entry.shares
+  // unconditionally here regardless of age - a symbol whose background refresh kept silently
+  // failing would keep passing gate 25 on arbitrarily old data forever after the first successful
+  // fetch. Past the hard ceiling, this is no longer trustworthy "real but stale" data - fail closed
+  // exactly like the never-fetched-yet case above, not a fabricated pass.
+  if (ageMs > MAX_STALE_MS) return null;
   return entry.shares;
 }
 

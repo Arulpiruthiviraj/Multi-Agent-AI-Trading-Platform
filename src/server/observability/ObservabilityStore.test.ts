@@ -47,7 +47,16 @@ describe('sweepObservabilityRetention (Daily Learning Compaction Phase 1 gating)
     }).run();
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    // 2026-10-01: flush BEFORE clearing, not after - a prior test's real logStructured() calls
+    // (e.g. DailyCompactionOrchestrator's own DAILY_COMPACTION_STARTED/COMPLETED/VERIFIED/
+    // RETENTION_PURGE_STARTED/COMPLETED events) are enqueued into ObservabilityStore's real
+    // async-batched queue, not written synchronously. Without this, those rows can land in the
+    // table at an unpredictable later point (whenever the batchFlushMs timer fires) - including
+    // mid-way through a LATER test, inflating its row count by exactly however many events the
+    // earlier test logged. Flushing first ensures every pending row actually lands, then gets
+    // cleared, so each test starts from a genuinely empty, deterministic table.
+    await store.flushObservabilityStore();
     db.delete(schema.observabilityEvents).run();
     db.delete(schema.dailyLearningArchive).run();
   });

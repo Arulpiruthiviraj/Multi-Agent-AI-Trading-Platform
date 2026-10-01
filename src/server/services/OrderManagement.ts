@@ -214,8 +214,20 @@ export class OrderManagementService {
           await this.reconcileInboundBrokerOrders().catch(e => console.error('[OMS] inbound broker fill recovery failed', e));
         });
       }, CRASH_RECOVERY_INTERVAL_MS);
-      this.reconcileStaleOrders().catch(e => console.error('[OMS] crash-recovery startup check failed', e));
-      this.reconcileInboundBrokerOrders().catch(e => console.error('[OMS] inbound broker fill recovery failed', e));
+      // 2026-10-01 defect verification pass (finding A3.2): this startup check previously called
+      // reconcileStaleOrders()/reconcileInboundBrokerOrders() directly, bypassing crashRecoveryGuard
+      // entirely - contradicting this guard's own stated purpose above ("prevents a WHOLE overlapping
+      // cycle from starting"). If the first scheduled interval tick landed while this unguarded
+      // startup call was still in flight (a real broker round-trip + DB writes, not instant), the two
+      // would genuinely race instead of coalescing. Row-level CAS updates are the real safety net
+      // regardless (per this guard's own comment), so this was never a correctness gap on a single
+      // order row - but it was a real inconsistency with the documented single-flight intent, and a
+      // genuine source of duplicate broker lookups/log noise under real timing. Routed through the
+      // same guard, bundled the same way the interval tick already bundles both calls.
+      void this.crashRecoveryGuard.run(async () => {
+        await this.reconcileStaleOrders();
+        await this.reconcileInboundBrokerOrders().catch(e => console.error('[OMS] inbound broker fill recovery failed', e));
+      });
     }
   }
 
@@ -822,12 +834,27 @@ export class OrderManagementService {
         // since genuinely filled (a real cancel/fill race at the exchange, not an Argus-internal
         // bug) was previously never corrected - followUpOpenOrders() excludes terminal rows from
         // its own WHERE clause, and this function's old unconditional `continue` here was the only
-        // other periodic re-check, so nothing ever looked again. Same condition shape as
-        // followUpOpenOrders()'s own comparison; applyFollowUpUpdate() is the same CAS-protected,
-        // already-idempotent write path (FD-4) used everywhere else, so a call here for a row that
-        // genuinely has not changed is a safe, cheap no-op (recordFillProgress's own cumulative-
-        // watermark dedup prevents a duplicate fills row).
-        if (o.status !== knownRow.status || filledQty > 0) {
+        // other periodic re-check, so nothing ever looked again.
+        //
+        // 2026-10-01, live-reproduced defect (CRITICAL - caused a real unintended short position):
+        // the original `|| filledQty > 0` branch is true for EVERY already-filled order, forever,
+        // for as long as the broker keeps reporting it in broker.orders() (which IBKR does for a
+        // real lookback window, not just one cycle) - so an already-FILLED, already-fully-resolved
+        // row with an UNCHANGED broker status got reprocessed on every single reconciliation cycle.
+        // applyFollowUpUpdate() itself has no "did anything actually change" guard (its own comment
+        // explicitly assumes the caller already filtered that out) - its CAS check only protects
+        // against a DIFFERENT row being concurrently modified, and unconditionally re-emits
+        // ORDER_EXECUTED on every call. Live-observed real consequence: an old BUY (filled ~1h
+        // earlier) and a completed exit SELL both got ORDER_EXECUTED re-emitted minutes/an-hour
+        // after their real fills; a downstream listener (PortfolioMonitor's own exit-pending
+        // tracking) treated the replayed SELL event as still-unresolved, re-subscribed to the
+        // symbol, and eventually re-approved a second exit against an already-flat position -
+        // flipping it into an unintended short. Fixed: only use the filledQty fallback when the
+        // LOCAL row is NOT already terminal (the real, intended case this guards - a fill that grew
+        // since last observed while still genuinely in flight, e.g. PARTIALLY_FILLED -> more
+        // filled). A genuine status transition (the FD-8 scenario above, e.g. CANCELED -> FILLED)
+        // is still always caught by the first clause regardless of terminality.
+        if (o.status !== knownRow.status || (filledQty > 0 && !isTerminalOrderStatus(knownRow.status))) {
           await this.applyFollowUpUpdate(knownRow, o);
         }
         continue;

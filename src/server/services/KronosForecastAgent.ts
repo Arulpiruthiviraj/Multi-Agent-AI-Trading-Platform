@@ -186,6 +186,24 @@ export class KronosForecastAgent {
       return;
     }
 
+    // 2026-10-01 defect verification pass (finding A9): prediction.confidence comes straight from
+    // the Python Chronos sidecar's own numerical output - nothing upstream of this point validates
+    // it (expectedMove/support/resistance are display-only strings used solely in the reasoning
+    // text, per IForecastEngine.ts's own type - not a numeric safety concern the same way). Neither
+    // gateTradeIdea() (only checks symbol/price) nor EvidenceAggregator's weighted-sum math
+    // (`weightedConfidence += e.confidence * e.weight`, no Number.isFinite guard) rejects a
+    // non-finite confidence - a NaN happens to fail the final `>= CONSENSUS_APPROVAL_THRESHOLD`
+    // comparison safely (NaN comparisons are always false), but it would still corrupt observability
+    // payloads and any later persistence of this idea's confidence to a REAL-typed DB column
+    // (better-sqlite3 throws binding NaN/Infinity). Fail closed at the source instead, matching how
+    // every other external-model-output path in this codebase (FundamentalAgent.ts/MacroAgent.ts's
+    // coerceString/numeric validation on their own LLM-derived outputs) already validates before
+    // ever constructing an idea from it.
+    if (!Number.isFinite(prediction.confidence) || prediction.confidence < 0 || prediction.confidence > 1) {
+      console.error(`[KronosForecastAgent] ${prediction.symbol}: Chronos returned a non-finite or out-of-range confidence (${prediction.confidence}) - not emitting a trade idea from this forecast.`);
+      return;
+    }
+
     if (prediction.confidence > 0.8) {
       eventBus.publish(EVENTS.KRONOS_HIGH_CONFIDENCE, prediction);
     } else if (prediction.confidence < 0.4) {

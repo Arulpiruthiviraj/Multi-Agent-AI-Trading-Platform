@@ -78,6 +78,8 @@
   "broadUniverseEnabledEnvVar": "ARGUS_BROAD_UNIVERSE_ENABLED",
   "broadUniverseAssetsCacheTtlMs": 86400000,
   "broadUniverseSnapshotCacheTtlMs": 900000,
+  "_extendedHoursLiquidityCacheMaxStaleMsComment": "2026-10-01 defect verification pass (finding A2.4): ExtendedHoursLiquidityCache.ts previously had no hard staleness ceiling - a cache entry past broadUniverseAssetsCacheTtlMs (24h) triggered a background refresh but still unconditionally returned the old value, so a symbol whose refresh kept silently failing (e.g. a persistent network issue) would keep passing gate 25 (extended_hours_execution_policy) on arbitrarily old ADV data instead of ever failing closed again after the first successful fetch. 3x the normal TTL (72h) - well past any reasonable 'still basically current' bound for a slow-moving daily statistic, while not being so tight that one missed overnight refresh cycle spuriously fails a gate that correctly tolerates staleness up to a point.",
+  "extendedHoursLiquidityCacheMaxStaleMs": 259200000,
   "_broadUniverseAssetsFetchTimeoutMsComment": "2026-09-05: fetchTradableAssets() was sharing the same 15s timeout as every other single-symbol Alpaca call in this file, but /v2/assets returns thousands of rows - a fundamentally larger response than a per-symbol snapshot/bar/movers call. A live boot-time failure ('This operation was aborted') was traced to this timeout racing Alpaca's full response. Raised only for this one bulk call; every other fetchJson() call site in this file keeps its own 15000ms.",
   "broadUniverseAssetsFetchTimeoutMs": 45000,
   "broadUniverseMinPrice": 5,

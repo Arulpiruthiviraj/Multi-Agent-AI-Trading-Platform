@@ -176,6 +176,46 @@ describe('TradingEngine - trading-safety kill switch (P0)', () => {
     await tradingEngine.toggle({ enabled: false } as any);
   });
 
+  it('2026-10-01 defect verification pass (finding A2.1): toggle() refuses a budget-only increase beyond available buying power while the bot is ALREADY enabled, not just on the enable transition', async () => {
+    const broker = BrokerManager.getInstance().getActiveBroker();
+    const portfolio = await broker.portfolio();
+    const availableToTrade = portfolio.buyingPower ?? portfolio.cash ?? 0;
+
+    tradingEngine.state.enabled = false;
+    const on = await tradingEngine.toggle({ enabled: true, budget: Math.max(1, availableToTrade - 1) } as any);
+    expect(on.ok).toBe(true);
+
+    // Same call shape POST /api/v1/config/settings sends: no `enabled` field at all, just a new budget.
+    const result = await tradingEngine.toggle({ budget: availableToTrade + 1_000_000 } as any);
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/exceeds/i);
+    // The bad budget must never have been applied to live state or persisted.
+    expect(tradingEngine.state.budget).not.toBe(availableToTrade + 1_000_000);
+    const [row] = await db.select().from(schema.settings).limit(1);
+    expect(row.budget).not.toBe(availableToTrade + 1_000_000);
+
+    await tradingEngine.toggle({ enabled: false } as any);
+  });
+
+  it('2026-10-01 defect verification pass (finding A2.1): toggle() allows a budget-only decrease while already enabled, and leaves unrelated config edits unaffected', async () => {
+    const broker = BrokerManager.getInstance().getActiveBroker();
+    const portfolio = await broker.portfolio();
+    const availableToTrade = portfolio.buyingPower ?? portfolio.cash ?? 0;
+
+    tradingEngine.state.enabled = false;
+    await tradingEngine.toggle({ enabled: true, budget: Math.max(2, availableToTrade - 1) } as any);
+
+    const result = await tradingEngine.toggle({ budget: Math.max(1, availableToTrade - 2) } as any);
+    expect(result.ok).toBe(true);
+    expect(tradingEngine.state.budget).toBe(Math.max(1, availableToTrade - 2));
+
+    // An unrelated config edit (no `budget` field at all) must not trigger the broker check or fail.
+    const unrelated = await tradingEngine.toggle({ strategy: 'MOMENTUM' } as any);
+    expect(unrelated.ok).toBe(true);
+
+    await tradingEngine.toggle({ enabled: false } as any);
+  });
+
   it('toggle() treats settings.autoBotEnabled as the same lever as enabled (DB vs in-memory name)', async () => {
     const broker = BrokerManager.getInstance().getActiveBroker();
     const portfolio = await broker.portfolio();

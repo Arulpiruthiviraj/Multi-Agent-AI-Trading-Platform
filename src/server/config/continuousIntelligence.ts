@@ -114,6 +114,10 @@ export interface ContinuousIntelligenceConfig {
   broadUniverseEnabledEnvVar: string;
   broadUniverseAssetsCacheTtlMs: number;
   broadUniverseSnapshotCacheTtlMs: number;
+  /** 2026-10-01 defect verification pass (finding A2.4) - see config/continuousIntelligence.json's
+   *  own comment. Hard staleness ceiling for ExtendedHoursLiquidityCache.ts: an entry older than
+   *  this is treated as equivalent to no data (fails gate 25 closed), not returned as-is forever. */
+  extendedHoursLiquidityCacheMaxStaleMs: number;
   broadUniverseAssetsFetchTimeoutMs: number;
   broadUniverseMinPrice: number;
   broadUniverseMaxPrice: number;
@@ -323,6 +327,7 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     rescueReservedSlotsForPriorityClasses: requireNumber(raw.rescueReservedSlotsForPriorityClasses, 'rescueReservedSlotsForPriorityClasses'),
     broadUniverseEnabledEnvVar: raw.broadUniverseEnabledEnvVar,
     broadUniverseAssetsCacheTtlMs: requireNumber(raw.broadUniverseAssetsCacheTtlMs, 'broadUniverseAssetsCacheTtlMs'),
+    extendedHoursLiquidityCacheMaxStaleMs: requireNumber(raw.extendedHoursLiquidityCacheMaxStaleMs, 'extendedHoursLiquidityCacheMaxStaleMs'),
     broadUniverseSnapshotCacheTtlMs: requireNumber(raw.broadUniverseSnapshotCacheTtlMs, 'broadUniverseSnapshotCacheTtlMs'),
     broadUniverseAssetsFetchTimeoutMs: requireNumber(raw.broadUniverseAssetsFetchTimeoutMs, 'broadUniverseAssetsFetchTimeoutMs'),
     broadUniverseMinPrice: requireNumber(raw.broadUniverseMinPrice, 'broadUniverseMinPrice'),

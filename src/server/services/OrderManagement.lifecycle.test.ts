@@ -429,6 +429,98 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
     expect(fillRows.length).toBe(0);
   });
 
+  it('2026-10-01, live-reproduced CRITICAL defect: reconcileInboundBrokerOrders does NOT re-emit ORDER_EXECUTED for an already-FILLED row when the broker still reports the same unchanged terminal status', async () => {
+    const nowIso = new Date().toISOString();
+    await db.insert(schema.trades).values({
+      id: 'already-filled-1',
+      symbol: 'OKTA',
+      side: 'SELL',
+      quantity: 14,
+      price: 212.49,
+      status: 'FILLED',
+      timestamp: nowIso,
+      filledAt: nowIso,
+      reasoning: 'test',
+      traceId: 'already-filled-1-trace',
+      brokerOrderId: 'broker-already-filled-1',
+      requestId: 'already-filled-1',
+      submittedAt: nowIso,
+    });
+    // Broker still reports this order (IBKR keeps completed orders visible for a real lookback
+    // window, not just one cycle) - SAME status, SAME filled quantity as what's already recorded.
+    ordersResponse = [{
+      id: 'broker-already-filled-1',
+      symbol: 'OKTA',
+      side: 'SELL',
+      type: 'MARKET',
+      status: 'FILLED',
+      quantity: 14,
+      filledQuantity: 14,
+      averageFillPrice: 212.49,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }];
+
+    const executedEvents: any[] = [];
+    const handler = (p: any) => { if (p.id === 'already-filled-1') executedEvents.push(p); };
+    eventBus.on('ORDER_EXECUTED', handler);
+    try {
+      // Simulates multiple real reconciliation cycles all seeing the same settled order.
+      await oms.reconcileInboundBrokerOrders();
+      await oms.reconcileInboundBrokerOrders();
+      await oms.reconcileInboundBrokerOrders();
+    } finally {
+      eventBus.off('ORDER_EXECUTED', handler);
+    }
+
+    expect(executedEvents.length).toBe(0); // nothing changed - must not be re-broadcast even once
+    const after = (await db.select().from(schema.trades).where(eq(schema.trades.id, 'already-filled-1')))[0];
+    expect(after.status).toBe('FILLED'); // untouched
+  });
+
+  it('2026-10-01: reconcileInboundBrokerOrders STILL corrects a genuine status transition on an already-terminal local row (FD-8 scenario: CANCELED locally, broker says it actually filled)', async () => {
+    const nowIso = new Date().toISOString();
+    await db.insert(schema.trades).values({
+      id: 'canceled-but-really-filled',
+      symbol: 'NFLX',
+      side: 'BUY',
+      quantity: 5,
+      price: 500,
+      status: 'CANCELED',
+      timestamp: nowIso,
+      reasoning: 'test',
+      traceId: 'canceled-but-really-filled-trace',
+      brokerOrderId: 'broker-canceled-but-filled-1',
+      requestId: 'canceled-but-really-filled',
+      submittedAt: nowIso,
+    });
+    ordersResponse = [{
+      id: 'broker-canceled-but-filled-1',
+      symbol: 'NFLX',
+      side: 'BUY',
+      type: 'MARKET',
+      status: 'FILLED', // genuinely different from the local CANCELED status
+      quantity: 5,
+      filledQuantity: 5,
+      averageFillPrice: 500,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }];
+
+    const executedEvents: any[] = [];
+    const handler = (p: any) => { if (p.id === 'canceled-but-really-filled') executedEvents.push(p); };
+    eventBus.on('ORDER_EXECUTED', handler);
+    try {
+      await oms.reconcileInboundBrokerOrders();
+    } finally {
+      eventBus.off('ORDER_EXECUTED', handler);
+    }
+
+    expect(executedEvents.length).toBe(1); // the real transition must still be caught and broadcast
+    const after = (await db.select().from(schema.trades).where(eq(schema.trades.id, 'canceled-but-really-filled')))[0];
+    expect(after.status).toBe('FILLED'); // corrected from the stale CANCELED
+  });
+
   it('followUpOpenOrders cancels a still-open order older than tradingSafety.omsFollowUpMaxAgeMs', async () => {
     const { tradingSafety } = await import('../config/tradingSafety');
     const oldIso = new Date(Date.now() - tradingSafety.omsFollowUpMaxAgeMs - 60_000).toISOString();
