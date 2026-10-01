@@ -1,0 +1,9 @@
+{
+  "requestTimeoutMs": 15000,
+  "historyTimeoutMs": 60000,
+  "maxHistoryPages": 100,
+  "historyPageSize": 10000,
+  "advCalendarLookbackMultiplier": 3,
+  "webhookTimeoutMs": 5000,
+  "webhookMaxConcurrent": 4
+}

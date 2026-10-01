@@ -1,0 +1,15 @@
+{
+  "$comment": "SMC/ICT confluence weights and detection thresholds. Pattern classification only — not proof of intentional manipulation. Changing this file is a reviewed config change. QUANT_SMC_STRATEGY_ENABLED (env) is what includes this strategy in live Quant evaluateAll; default is off. Backtest via strategyId SMC_LIQUIDITY_SWEEP does not require that flag. Strategy remains UNVALIDATED until walk-forward OOS.",
+  "liquidityIdentified": 20,
+  "liquiditySwept": 20,
+  "chochConfirmed": 15,
+  "displacement": 15,
+  "orderBlock": 10,
+  "fvg": 10,
+  "volumeConfirmation": 5,
+  "regimeAlignment": 5,
+  "equalLevelTolerancePct": 0.5,
+  "displacementRangeMultiple": 1.5,
+  "rvolConfirmation": 1.2,
+  "sweepLookbackBars": 3
+}

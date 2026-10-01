@@ -1,0 +1,18 @@
+{
+  "capturedAt": "2026-09-20T02:08:32.782Z",
+  "/api/v1/system/reconciliation/status": {
+    "error": "TimeoutError: The operation was aborted due to timeout"
+  },
+  "/api/v2/runtime/market/status": {
+    "error": "TimeoutError: The operation was aborted due to timeout"
+  },
+  "/api/v2/continuous-intelligence/status": {
+    "error": "TimeoutError: The operation was aborted due to timeout"
+  },
+  "/api/v1/portfolio": {
+    "error": "TimeoutError: The operation was aborted due to timeout"
+  },
+  "/api/v1/orders": {
+    "error": "TimeoutError: The operation was aborted due to timeout"
+  }
+}

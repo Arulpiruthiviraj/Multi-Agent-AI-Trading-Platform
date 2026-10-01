@@ -1,0 +1,14 @@
+{
+  "$comment": "Role assignment for optional model outputs. A model may not vote outside its role. Majority vote across roles is not used as an order.",
+  "roles": {
+    "FORECAST": ["KronosForecastAgent", "chronos-kronos"],
+    "TECHNICAL": ["TechnicalAgent"],
+    "NEWS": ["NewsAgent", "NewsEngine"],
+    "FUNDAMENTAL": ["FundamentalAgent"],
+    "MACRO": ["MacroAgent"],
+    "QUANT": ["QuantEngine", "QuantSignalAgent"],
+    "CRITIC": ["QuantContradictionAnalyzer", "BearResearcher"],
+    "RISK": ["RiskAgent", "RiskEngine"],
+    "EXECUTION": ["OrderManagementService"]
+  }
+}

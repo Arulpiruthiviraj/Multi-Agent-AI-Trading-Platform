@@ -1,0 +1,29 @@
+{
+  "$comment": "Project A (AI Cost Governor design note, docs/audits/ARGUS_PROJECT_A_AI_COST_GOVERNOR_DESIGN_NOTE.md). Phase A4 governor logic exists as real code but is OFF by default (aiCostGovernorEnabledEnvVar unset -> isRuntimeFlagEnabled() returns false) and, even when enabled, defaults to SHADOW-ONLY - real routing only changes once an operator ALSO explicitly sets aiCostGovernorLiveEnabledEnvVar to 'true' (default false, same off-unless-explicit convention as every other flag here). Until then it only computes and logs what it WOULD have chosen without changing real AIRouter.routeTask() behavior. It never touches ChiefTrader/RiskEngine/OMS/consensus/routeConsensus - see the design note's safety-boundary list.",
+  "aiCostGovernorEnabledEnvVar": "AI_COST_GOVERNOR_ENABLED",
+  "aiCostGovernorLiveEnabledEnvVar": "AI_COST_GOVERNOR_LIVE_ENABLED",
+  "minEffectiveSampleForTrust": 20,
+  "maxEscalationsPerAgentPerMinute": 10,
+  "policies": {
+    "ReflectionEngine": { "tiers": ["LOCAL"], "qualityFloor": 0.0 },
+    "ExplainabilityAgent": { "tiers": ["LOCAL"], "qualityFloor": 0.0 },
+    "NewsAgent": { "tiers": ["LOCAL"], "qualityFloor": 0.55 },
+    "FundamentalAgent": { "tiers": ["LOCAL", "ECONOMICAL"], "qualityFloor": 0.55 },
+    "MacroAgent": { "tiers": ["LOCAL", "ECONOMICAL"], "qualityFloor": 0.55 },
+    "BullResearcher": { "tiers": ["LOCAL", "ECONOMICAL"], "qualityFloor": 0.55 },
+    "BearResearcher": { "tiers": ["LOCAL", "ECONOMICAL"], "qualityFloor": 0.55 },
+    "QuantContradictionAnalyzer": { "tiers": ["LOCAL", "ECONOMICAL"], "qualityFloor": 0.55 }
+  },
+  "providerCostTiers": {
+    "Ollama (Local)": "LOCAL",
+    "Mistral": "ECONOMICAL",
+    "Gemini": "ECONOMICAL",
+    "NVIDIA": "ECONOMICAL",
+    "Kimi": "ECONOMICAL",
+    "OpenRouter": "ECONOMICAL",
+    "OpenRouter (Free Tier)": "ECONOMICAL",
+    "LiteLLM Gateway": "ECONOMICAL",
+    "OpenAI": "STRONG",
+    "Claude": "STRONG"
+  }
+}

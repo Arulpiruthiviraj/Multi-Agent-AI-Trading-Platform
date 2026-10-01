@@ -1,0 +1,959 @@
+﻿node.exe : npm warn Unknown env config "devdir". This will error in a future major version of npm. See `npm help 
+npmrc` for supported config options.
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Users\ithay\AppData\Roaming\ ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn Unknow...config options.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+npm notice run my-money-miner@0.0.0 npx
+npm notice run tsx agent_workspace/hybrid_discovery_audit_probe.ts
+
+===== PRAGMA / tables of interest =====
+[
+  { name: 'agent_predictions' },
+  { name: 'event_traces' },
+  { name: 'ohlcv_bars' },
+  { name: 'agent_reasoning_logs' },
+  { name: 'observability_events' },
+  { name: 'config_overrides' }
+]
+
+===== event_traces columns =====
+[
+  {
+    cid: 0,
+    name: 'id',
+    type: 'TEXT',
+    notnull: 1,
+    dflt_value: null,
+    pk: 1
+  },
+  {
+    cid: 1,
+    name: 'correlation_id',
+    type: 'TEXT',
+    notnull: 0,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 2,
+    name: 'trade_id',
+    type: 'TEXT',
+    notnull: 0,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 3,
+    name: 'timestamp',
+    type: 'INTEGER',
+    notnull: 1,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 4,
+    name: 'source',
+    type: 'TEXT',
+    notnull: 1,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 5,
+    name: 'destination',
+    type: 'TEXT',
+    notnull: 0,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 6,
+    name: 'event_type',
+    type: 'TEXT',
+    notnull: 1,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 7,
+    name: 'payload',
+    type: 'TEXT',
+    notnull: 0,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 8,
+    name: 'duration_ms',
+    type: 'INTEGER',
+    notnull: 0,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 9,
+    name: 'success',
+    type: 'INTEGER',
+    notnull: 0,
+    dflt_value: 'true',
+    pk: 0
+  },
+  {
+    cid: 10,
+    name: 'error_info',
+    type: 'TEXT',
+    notnull: 0,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 11,
+    name: 'transaction_id',
+    type: 'TEXT',
+    notnull: 0,
+    dflt_value: null,
+    pk: 0
+  }
+]
+
+===== observability_events columns =====
+[
+  {
+    cid: 0,
+    name: 'id',
+    type: 'TEXT',
+    notnull: 1,
+    dflt_value: null,
+    pk: 1
+  },
+  {
+    cid: 1,
+    name: 'ts',
+    type: 'INTEGER',
+    notnull: 1,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 2,
+    name: 'level',
+    type: 'TEXT',
+    notnull: 1,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 3,
+    name: 'category',
+    type: 'TEXT',
+    notnull: 1,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 4,
+    name: 'event_type',
+    type: 'TEXT',
+    notnull: 0,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 5,
+    name: 'logger_name',
+    type: 'TEXT',
+    notnull: 1,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 6,
+    name: 'message',
+    type: 'TEXT',
+    notnull: 1,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 7,
+    name: 'session_id',
+    type: 'TEXT',
+    notnull: 1,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 8,
+    name: 'correlation_id',
+    type: 'TEXT',
+    notnull: 0,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 9,
+    name: 'decision_id',
+    type: 'TEXT',
+    notnull: 0,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 10,
+    name: 'trace_id',
+    type: 'TEXT',
+    notnull: 0,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 11,
+    name: 'order_id',
+    type: 'TEXT',
+    notnull: 0,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 12,
+    name: 'symbol',
+    type: 'TEXT',
+    notnull: 0,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 13,
+    name: 'component',
+    type: 'TEXT',
+    notnull: 0,
+    dflt_value: null,
+    pk: 0
+  },
+  {
+    cid: 14,
+    name: 'payload',
+    type: 'TEXT',
+    notnull: 0,
+    dflt_value: null,
+    pk: 0
+  }
+]
+
+===== config_overrides opportunity =====
+[]
+
+===== event_traces OPPORTUNITY / WATCHLIST last 40 =====
+{
+  typeCol: 'event_type',
+  payloadCol: 'payload',
+  tsCol: 'timestamp',
+  cols: [
+    'id',          'correlation_id',
+    'trade_id',    'timestamp',
+    'source',      'destination',
+    'event_type',  'payload',
+    'duration_ms', 'success',
+    'error_info',  'transaction_id'
+  ]
+}
+[
+  {
+    id: 'ffb13ae3-a075-4fba-9bf2-6c2f753386f3',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787189969746,
+    payload: '{"symbol":"MSFT","source":"OpportunityDiscovery","reason":"SEED_UNIVERSE_EXPANSION","honesty":"Subscribe request only ΓÇö not a trade idea and not an order."}'
+  },
+  {
+    id: 'ffa5f408-fbce-4634-9ba7-ab72b9afc73f',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787275103619,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":16,"rejected":0,"shortlisted":16,"subscribeRequested":0,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"TSLA","assetClass":"LARGE_CAP"'
+  },
+  {
+    id: 'ff756c26-1f51-4a88-ad11-be88a17d2c80',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787323588803,
+    payload: '{"symbol":"TSLA","reason":"CAMPAIGN_WATCHLIST_BOOST","source":"CampaignWatchlistBoost","at":"2026-08-21T14:46:28.803Z"}'
+  },
+  {
+    id: 'ff704172-f3b1-4b51-b744-99e73322dbd6',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787253935921,
+    payload: '{"symbol":"GLD","source":"PortfolioIntel","reason":"OPEN_POSITION_NEEDS_TICKS","honesty":"Subscribe so exits have a live price. Not an order."}'
+  },
+  {
+    id: 'ff5951f3-b2f4-4fe2-baab-85f631f1e41d',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787266364228,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":16,"rejected":0,"shortlisted":16,"subscribeRequested":0,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"TSLA","assetClass":"LARGE_CAP"'
+  },
+  {
+    id: 'ff11141c-f0bb-46dd-a461-b7b6c07e03e2',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787270543370,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":16,"rejected":0,"shortlisted":16,"subscribeRequested":0,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"TSLA","assetClass":"LARGE_CAP"'
+  },
+  {
+    id: 'ff0ba288-592d-437e-a122-635b39ac8e7b',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787321695254,
+    payload: '{"symbol":"AMD","reason":"CAMPAIGN_WATCHLIST_BOOST","source":"CampaignWatchlistBoost","at":"2026-08-21T14:14:55.254Z"}'
+  },
+  {
+    id: 'feefe7e8-bed4-41b2-8921-12efa68a1278',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787323583701,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":10,"rejected":0,"shortlisted":10,"subscribeRequested":0,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"SPY","assetClass":"ETF","reason":"already_subscribed"},{"symbol":"QQQ","assetClass":"ETF","reason":"already_subscribed"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"alr'
+  },
+  {
+    id: 'fed94c55-3ebd-4baf-a658-289f6fdb1a96',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787324068851,
+    payload: '{"symbol":"MSFT","reason":"CAMPAIGN_WATCHLIST_BOOST","source":"CampaignWatchlistBoost","at":"2026-08-21T14:54:28.851Z"}'
+  },
+  {
+    id: 'feb3d4d2-1656-4375-851f-7fb71f15bf30',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787178372130,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":9,"rejected":0,"shortlisted":9,"subscribeRequested":4,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"seed_candidate"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"seed_candidate"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"seed_candidate"},{"symbol":"TSLA","assetClass":"LARGE_CAP","reason":"see'
+  },
+  {
+    id: 'fe7f8a6b-c6ca-4d68-933e-5fc983e0d6f5',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787321455219,
+    payload: '{"symbol":"TSLA","reason":"CAMPAIGN_WATCHLIST_BOOST","source":"CampaignWatchlistBoost","at":"2026-08-21T14:10:55.219Z"}'
+  },
+  {
+    id: 'fe43b247-8aff-4dd3-a7ce-71f27aa5e6ab',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787319995751,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":16,"rejected":0,"shortlisted":16,"subscribeRequested":0,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"TSLA","assetClass":"LARGE_CAP"'
+  },
+  {
+    id: 'fe3d002d-bc70-4f03-8bd7-9596f4b2444a',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787315315409,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":16,"rejected":0,"shortlisted":16,"subscribeRequested":0,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"TSLA","assetClass":"LARGE_CAP"'
+  },
+  {
+    id: 'fe361cf9-d3ec-462e-80de-2c9086c3d230',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787229629360,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":16,"rejected":0,"shortlisted":16,"subscribeRequested":4,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"watch_candidate"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"watch_candidate"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"watch_candidate"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"watch_candidate"},{"symbol":"TSLA","assetClass":"LARGE_CAP","reason":"w'
+  },
+  {
+    id: 'fdd6c802-719f-4e27-80ca-92d315ca6b9f',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787321455224,
+    payload: '{"symbol":"AMD","reason":"CAMPAIGN_WATCHLIST_BOOST","source":"CampaignWatchlistBoost","at":"2026-08-21T14:10:55.224Z"}'
+  },
+  {
+    id: 'fdcc9933-7b9c-4d5e-8ffc-a5ea3feb398b',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787321215142,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":16,"rejected":0,"shortlisted":16,"subscribeRequested":0,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"TSLA","assetClass":"LARGE_CAP"'
+  },
+  {
+    id: 'fda58895-0e03-4be6-850d-121e19b74355',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787199086252,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":16,"rejected":0,"shortlisted":16,"subscribeRequested":0,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"TSLA","assetClass":"LARGE_CAP"'
+  },
+  {
+    id: 'fd0fc81d-6b82-4932-a3ab-ee9ac2c204bd',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787322868754,
+    payload: '{"symbol":"GLD","reason":"CAMPAIGN_WATCHLIST_BOOST","source":"CampaignWatchlistBoost","at":"2026-08-21T14:34:28.754Z"}'
+  },
+  {
+    id: 'fcdc6567-fcb9-4122-afa3-ca059b70429d',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787322628271,
+    payload: '{"symbol":"NVDA","reason":"CAMPAIGN_WATCHLIST_BOOST","source":"CampaignWatchlistBoost","at":"2026-08-21T14:30:28.271Z"}'
+  },
+  {
+    id: 'fcd4b031-963d-4ee5-a0b0-d06462489d1c',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787237184352,
+    payload: '{"symbol":"JPM","source":"OpportunityDiscovery","reason":"SEED_UNIVERSE_EXPANSION","honesty":"Subscribe request only ΓÇö not a trade idea and not an order."}'
+  },
+  {
+    id: 'fc92fbb3-5ef0-4aaa-8a06-b12504488907',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787277863766,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":16,"rejected":0,"shortlisted":16,"subscribeRequested":0,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"TSLA","assetClass":"LARGE_CAP"'
+  },
+  {
+    id: 'fc8cf0dc-940f-4f40-ac62-3ffa2ef28f98',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787238893650,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":16,"rejected":0,"shortlisted":16,"subscribeRequested":4,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"watch_candidate"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"watch_candidate"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"watch_candidate"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"watch_candidate"},{"symbol":"TSLA","assetClass":"LARGE_CAP","reason":"w'
+  },
+  {
+    id: 'fc46758a-ef47-402b-bd41-1b4995e09e4d',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787314715400,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":16,"rejected":0,"shortlisted":16,"subscribeRequested":0,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"TSLA","assetClass":"LARGE_CAP"'
+  },
+  {
+    id: 'fc3cc42c-624b-4b46-8314-4652a558c2d5',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787238325545,
+    payload: '{"symbol":"SMH","source":"OpportunityDiscovery","reason":"SEED_UNIVERSE_EXPANSION","honesty":"Subscribe request only ΓÇö not a trade idea and not an order."}'
+  },
+  {
+    id: 'fc16d9e5-df58-42dd-a47f-9ff99711cdf2',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787229255596,
+    payload: '{"symbol":"NVDA","source":"OpportunityDiscovery","reason":"SEED_UNIVERSE_EXPANSION","honesty":"Subscribe request only ΓÇö not a trade idea and not an order."}'
+  },
+  {
+    id: 'fc0ae892-3dc0-49d1-a7b9-1fc7a698ad42',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787320973419,
+    payload: '{"symbol":"SPY","reason":"CAMPAIGN_WATCHLIST_BOOST","source":"CampaignWatchlistBoost","at":"2026-08-21T14:02:53.419Z"}'
+  },
+  {
+    id: 'fbdd7f4b-1208-456f-baea-b461827adc53',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787257600900,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":16,"rejected":0,"shortlisted":16,"subscribeRequested":0,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"TSLA","assetClass":"LARGE_CAP"'
+  },
+  {
+    id: 'fbdd4f32-613a-44fe-bbd7-b667ab8901f2',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787317115513,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":16,"rejected":0,"shortlisted":16,"subscribeRequested":0,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"TSLA","assetClass":"LARGE_CAP"'
+  },
+  {
+    id: 'fbcf584b-5e5e-45b2-950a-4d2757de19fe',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787321575237,
+    payload: '{"symbol":"META","reason":"CAMPAIGN_WATCHLIST_BOOST","source":"CampaignWatchlistBoost","at":"2026-08-21T14:12:55.237Z"}'
+  },
+  {
+    id: 'fbba5373-c600-4ad1-a45a-cbe3ffdcb58f',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787142903634,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":9,"rejected":0,"shortlisted":9,"subscribeRequested":0,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"TSLA","assetClass":"LARGE_CAP","'
+  },
+  {
+    id: 'fb15d364-dce3-41a1-a709-1a2e4654182e',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787194580731,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":16,"rejected":0,"shortlisted":16,"subscribeRequested":0,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"TSLA","assetClass":"LARGE_CAP"'
+  },
+  {
+    id: 'fb0b2de2-533f-4a62-8235-aaeadc13b962',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787141703549,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":9,"rejected":0,"shortlisted":9,"subscribeRequested":0,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"TSLA","assetClass":"LARGE_CAP","'
+  },
+  {
+    id: 'fb0923de-00c9-4039-b234-6bc9c7784967',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787242601134,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":16,"rejected":0,"shortlisted":16,"subscribeRequested":4,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"TSLA","assetClass":"LARGE_CAP"'
+  },
+  {
+    id: 'fb008b7a-1f3b-451d-8b53-14a716370dce',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787235299179,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":16,"rejected":0,"shortlisted":16,"subscribeRequested":0,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"TSLA","assetClass":"LARGE_CAP"'
+  },
+  {
+    id: 'faa9265b-00b1-490b-80cd-a11cd3232055',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787322278755,
+    payload: '{"symbol":"META","reason":"CAMPAIGN_WATCHLIST_BOOST","source":"CampaignWatchlistBoost","at":"2026-08-21T14:24:38.754Z"}'
+  },
+  {
+    id: 'fa6bee88-b84e-4d8d-b4c9-8215368e584c',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787238010132,
+    payload: '{"symbol":"AAPL","source":"OpportunityDiscovery","reason":"SEED_UNIVERSE_EXPANSION","honesty":"Subscribe request only ΓÇö not a trade idea and not an order."}'
+  },
+  {
+    id: 'fa53095c-c17d-420f-8a01-b834f876c612',
+    event_type: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 1787260841322,
+    payload: '{"ran":true,"skippedOverlap":false,"enabled":true,"scanned":16,"rejected":0,"shortlisted":16,"subscribeRequested":0,"ideasEmitted":0,"rejectedReasons":{},"shortlist":[{"symbol":"AAPL","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"MSFT","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"NVDA","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"AMZN","assetClass":"LARGE_CAP","reason":"already_subscribed"},{"symbol":"TSLA","assetClass":"LARGE_CAP"'
+  },
+  {
+    id: 'fa2e6e93-ce88-4743-8cb7-9dee533f1b5c',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787196471416,
+    payload: '{"symbol":"AAPL","source":"OpportunityDiscovery","reason":"SEED_UNIVERSE_EXPANSION","honesty":"Subscribe request only ΓÇö not a trade idea and not an order."}'
+  },
+  {
+    id: 'fa26970e-e5de-4227-94a4-225dcec7b9aa',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787322507014,
+    payload: '{"symbol":"SPY","reason":"CAMPAIGN_WATCHLIST_BOOST","source":"CampaignWatchlistBoost","at":"2026-08-21T14:28:27.014Z"}'
+  },
+  {
+    id: 'f9eb24c0-b761-4233-be2b-76e10758ff8f',
+    event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    ts: 1787322175261,
+    payload: '{"symbol":"NVDA","reason":"CAMPAIGN_WATCHLIST_BOOST","source":"CampaignWatchlistBoost","at":"2026-08-21T14:22:55.261Z"}'
+  }
+]
+
+counts by type (today-ish last 5k rows):
+[
+  { event_type: 'TRACE_SPAN', n: 1453 },
+  { event_type: 'TRADE_IDEA_GENERATED', n: 1164 },
+  { event_type: 'MODEL_HEALTH', n: 901 },
+  { event_type: 'DESK_NO_TRADE', n: 290 },
+  { event_type: 'CHIEF_CONSENSUS_COMPLETED', n: 248 },
+  { event_type: 'CHIEF_CONSENSUS_STARTED', n: 228 },
+  { event_type: 'TRADE_LIFECYCLE', n: 221 },
+  { event_type: 'AGENT_DISAGREEMENT', n: 172 },
+  { event_type: 'DIAGNOSTIC_CREATED', n: 40 },
+  { event_type: 'PORTFOLIO_DECISION_RECORDED', n: 34 },
+  { event_type: 'RISK_ASSESSMENT_COMPLETED', n: 24 },
+  { event_type: 'CAMPAIGN_PROGRESS_UPDATED', n: 24 },
+  { event_type: 'RISK_ASSESSMENT_STARTED', n: 20 },
+  { event_type: 'NEWS_CATALYST', n: 20 },
+  { event_type: 'RISK_BLOCK', n: 19 },
+  { event_type: 'OPPORTUNITY_SCAN_COMPLETED', n: 16 },
+  { event_type: 'CAPITAL_CHECK', n: 15 },
+  { event_type: 'WATCHLIST_SUBSCRIBE_REQUESTED', n: 14 },
+  { event_type: 'POSITION_MONITORED', n: 14 },
+  { event_type: 'TRADE_IDEA_REJECTED', n: 12 },
+  { event_type: 'DATA_STALE', n: 11 },
+  { event_type: 'CAMPAIGN_EFFORT_TELEMETRY', n: 10 },
+  { event_type: 'MODEL_UNAVAILABLE', n: 9 },
+  { event_type: 'CHIEF_APPROVED_IDEA', n: 8 },
+  { event_type: 'RISK_GATE_EVALUATED', n: 5 },
+  { event_type: 'ORDER_EXECUTED', n: 5 },
+  { event_type: 'ORDER_SUBMITTED', n: 4 },
+  { event_type: 'ORDER_FILLED', n: 4 },
+  { event_type: 'ORDER_ACCEPTED', n: 4 },
+  { event_type: 'RECONCILIATION_MATCH', n: 3 },
+  { event_type: 'POSITION_RISK_CHANGED', n: 2 },
+  { event_type: 'OPENALICE_VERIFICATION_REQUESTED', n: 2 },
+  { event_type: 'MODEL_FALLBACK', n: 2 },
+  { event_type: 'TRADING_STATE_CHANGED', n: 1 },
+  { event_type: 'LEARNED_NEW_RULE', n: 1 }
+]
+
+===== observability_events recent opportunity / snapshot / hot-swap / symbol limit =====
+{
+  obsCols: [
+    'id',             'ts',
+    'level',          'category',
+    'event_type',     'logger_name',
+    'message',        'session_id',
+    'correlation_id', 'decision_id',
+    'trace_id',       'order_id',
+    'symbol',         'component',
+    'payload'
+  ]
+}
+[
+  {
+    id: 'ffed05a0-cccf-4f2f-8562-7fb296f3853c',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'ffed05a0-cccf-4f2f-8562-7fb296f3853c'
+  },
+  {
+    id: 'ffae4fca-c0a5-415b-8348-234d4833e99c',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'ffae4fca-c0a5-415b-8348-234d4833e99c'
+  },
+  {
+    id: 'ff9e25ca-bf10-49bc-a136-983a49767d26',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'ff9e25ca-bf10-49bc-a136-983a49767d26'
+  },
+  {
+    id: 'ff94a05d-6949-4af4-a8e3-ebb2385e4304',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'ff94a05d-6949-4af4-a8e3-ebb2385e4304'
+  },
+  {
+    id: 'ff68df5a-9cf1-44ea-8dd9-e181ea9ddbf0',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'ff68df5a-9cf1-44ea-8dd9-e181ea9ddbf0'
+  },
+  {
+    id: 'ff5723bb-fdbc-47b5-8b06-03e004af0f1d',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'ff5723bb-fdbc-47b5-8b06-03e004af0f1d'
+  },
+  {
+    id: 'fe9f3ff1-5368-4ef8-aa57-a6e30335c355',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'fe9f3ff1-5368-4ef8-aa57-a6e30335c355'
+  },
+  {
+    id: 'fe1ee08c-e804-46f9-b96b-38d5e0b697a5',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'fe1ee08c-e804-46f9-b96b-38d5e0b697a5'
+  },
+  {
+    id: 'fe083046-196d-4b2c-a008-5df58058e148',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'fe083046-196d-4b2c-a008-5df58058e148'
+  },
+  {
+    id: 'fd90bdd2-c793-409b-82a1-75af8df52638',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'fd90bdd2-c793-409b-82a1-75af8df52638'
+  },
+  {
+    id: 'fd797646-5366-41e9-abc2-03ad42ff4f68',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'fd797646-5366-41e9-abc2-03ad42ff4f68'
+  },
+  {
+    id: 'fd2bd1f9-aa0d-492f-8e66-fb303770637b',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'fd2bd1f9-aa0d-492f-8e66-fb303770637b'
+  },
+  {
+    id: 'fd127a03-2d4b-4fda-aae1-c69efd54e1c9',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'fd127a03-2d4b-4fda-aae1-c69efd54e1c9'
+  },
+  {
+    id: 'fcd8171b-a439-47e6-8ad2-531ac254e22d',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'fcd8171b-a439-47e6-8ad2-531ac254e22d'
+  },
+  {
+    id: 'fc7edf07-744b-41cd-bf28-a991e818677a',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'fc7edf07-744b-41cd-bf28-a991e818677a'
+  },
+  {
+    id: 'fc697478-2bc5-4f28-bc1b-bbb2417a47ea',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'fc697478-2bc5-4f28-bc1b-bbb2417a47ea'
+  },
+  {
+    id: 'fc4162f2-7aaa-4a07-b995-34e3b12aa088',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'fc4162f2-7aaa-4a07-b995-34e3b12aa088'
+  },
+  {
+    id: 'fc348b78-97cb-42dc-945b-388bd8e5f664',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'fc348b78-97cb-42dc-945b-388bd8e5f664'
+  },
+  {
+    id: 'fbfae642-4017-429a-b030-23d5cfc06561',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'fbfae642-4017-429a-b030-23d5cfc06561'
+  },
+  {
+    id: 'fb85e0f8-c683-4d3d-b05f-d21765e3da48',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'fb85e0f8-c683-4d3d-b05f-d21765e3da48'
+  },
+  {
+    id: 'fb4acb8e-b16b-430e-bfd2-0975f1a9daa2',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'fb4acb8e-b16b-430e-bfd2-0975f1a9daa2'
+  },
+  {
+    id: 'faaf3628-fbd3-4eee-a8e2-246e23d667b2',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'faaf3628-fbd3-4eee-a8e2-246e23d667b2'
+  },
+  {
+    id: 'fa81c6b9-cd2f-4a7b-b911-de75e00634b6',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'fa81c6b9-cd2f-4a7b-b911-de75e00634b6'
+  },
+  {
+    id: 'f9ea0d05-4bf4-4743-9716-b7455c653d61',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f9ea0d05-4bf4-4743-9716-b7455c653d61'
+  },
+  {
+    id: 'f730e97d-4158-46f3-a709-8f89202c27be',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f730e97d-4158-46f3-a709-8f89202c27be'
+  },
+  {
+    id: 'f720f44d-de49-4ed4-9414-32a903b391e5',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f720f44d-de49-4ed4-9414-32a903b391e5'
+  },
+  {
+    id: 'f70cfb8a-99a2-483b-b598-ba371bed4f10',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f70cfb8a-99a2-483b-b598-ba371bed4f10'
+  },
+  {
+    id: 'f6de5436-4a46-48ca-90ae-2b4e0842a268',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f6de5436-4a46-48ca-90ae-2b4e0842a268'
+  },
+  {
+    id: 'f627f3a5-5dfb-4823-b978-b0125b7a469b',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f627f3a5-5dfb-4823-b978-b0125b7a469b'
+  },
+  {
+    id: 'f525f3f5-e5c3-4fa6-80a7-06cd32cfd908',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f525f3f5-e5c3-4fa6-80a7-06cd32cfd908'
+  },
+  {
+    id: 'f4fc7ed6-27a7-4744-b43c-5340da384a3b',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f4fc7ed6-27a7-4744-b43c-5340da384a3b'
+  },
+  {
+    id: 'f4ee16f2-7256-4d0c-8a02-f68230647d84',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f4ee16f2-7256-4d0c-8a02-f68230647d84'
+  },
+  {
+    id: 'f49043d2-a2fc-4e8a-8850-62ff9df12f9a',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f49043d2-a2fc-4e8a-8850-62ff9df12f9a'
+  },
+  {
+    id: 'f43b22b9-90d2-438c-b720-9b80e07e85bc',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f43b22b9-90d2-438c-b720-9b80e07e85bc'
+  },
+  {
+    id: 'f430c6eb-2692-4f57-aee4-5a114706920c',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f430c6eb-2692-4f57-aee4-5a114706920c'
+  },
+  {
+    id: 'f4217de7-84f2-4b78-be42-8d19cf13c093',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f4217de7-84f2-4b78-be42-8d19cf13c093'
+  },
+  {
+    id: 'f37fa813-a2c9-46b9-ac68-0f7e7a4cf762',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f37fa813-a2c9-46b9-ac68-0f7e7a4cf762'
+  },
+  {
+    id: 'f306e44f-fced-4934-8bfc-2678b10e3b54',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f306e44f-fced-4934-8bfc-2678b10e3b54'
+  },
+  {
+    id: 'f25dc5c0-8ea1-4104-bae8-955030c2f057',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f25dc5c0-8ea1-4104-bae8-955030c2f057'
+  },
+  {
+    id: 'f1bd8788-ea0d-4e22-9ccf-b696662b8a66',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f1bd8788-ea0d-4e22-9ccf-b696662b8a66'
+  },
+  {
+    id: 'f1ad332f-5a04-4b06-907a-1246c1e1366d',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f1ad332f-5a04-4b06-907a-1246c1e1366d'
+  },
+  {
+    id: 'f10f4416-fb36-4858-8c23-70cdbb3ee8fc',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f10f4416-fb36-4858-8c23-70cdbb3ee8fc'
+  },
+  {
+    id: 'f0e7d625-72b8-4930-a613-493c7df46991',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f0e7d625-72b8-4930-a613-493c7df46991'
+  },
+  {
+    id: 'f0c51988-ad10-439b-9b0f-52cf71caf0e4',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f0c51988-ad10-439b-9b0f-52cf71caf0e4'
+  },
+  {
+    id: 'f050d509-0df8-48a5-b704-2ae818b445c1',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f050d509-0df8-48a5-b704-2ae818b445c1'
+  },
+  {
+    id: 'f02af601-47ad-4751-a340-b38144c2f430',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'f02af601-47ad-4751-a340-b38144c2f430'
+  },
+  {
+    id: 'ef689919-546a-4ecb-b446-c94a67f0ef3c',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'ef689919-546a-4ecb-b446-c94a67f0ef3c'
+  },
+  {
+    id: 'ef492cd3-9d16-4117-b4de-a591783d194e',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'ef492cd3-9d16-4117-b4de-a591783d194e'
+  },
+  {
+    id: 'ef3c1f4e-2964-4302-8b22-5c99f9ede4fa',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'ef3c1f4e-2964-4302-8b22-5c99f9ede4fa'
+  },
+  {
+    id: 'eee6dd97-4880-4063-a949-d6b30530fc98',
+    category: 'EVENTBUS',
+    message: 'OPPORTUNITY_SCAN_COMPLETED',
+    ts: 'eee6dd97-4880-4063-a949-d6b30530fc98'
+  }
+]
+
+===== agent_predictions last 24h sample by agent/symbol =====
+[ { error: 'no such column: agent' } ]
+
+===== agent_reasoning_logs recent agents =====
+[ { error: 'no such column: agent' } ]
+
+===== agent_reasoning sample for non-anchor symbols =====
+[ { error: 'no such column: agent' } ]
+
+===== ohlcv recent symbols =====
+[
+  {
+    symbol: 'AAPL',
+    timeframe: '1Day',
+    n: 2171,
+    last_ts: 1787284800000
+  },
+  { symbol: 'AMD', timeframe: '1Day', n: 2171, last_ts: 1787284800000 },
+  { symbol: 'AMZN', timeframe: '1Day', n: 279, last_ts: 1787284800000 },
+  { symbol: 'DIA', timeframe: '1Day', n: 280, last_ts: 1787284800000 },
+  { symbol: 'GLD', timeframe: '1Day', n: 279, last_ts: 1787284800000 },
+  {
+    symbol: 'GOOGL',
+    timeframe: '1Day',
+    n: 278,
+    last_ts: 1787284800000
+  },
+  { symbol: 'IWM', timeframe: '1Day', n: 2171, last_ts: 1787284800000 },
+  { symbol: 'JPM', timeframe: '1Day', n: 278, last_ts: 1787284800000 },
+  { symbol: 'META', timeframe: '1Day', n: 278, last_ts: 1787284800000 },
+  {
+    symbol: 'MSFT',
+    timeframe: '1Day',
+    n: 2171,
+    last_ts: 1787284800000
+  },
+  {
+    symbol: 'NVDA',
+    timeframe: '1Day',
+    n: 2171,
+    last_ts: 1787284800000
+  },
+  { symbol: 'QQQ', timeframe: '1Day', n: 2171, last_ts: 1787284800000 },
+  { symbol: 'SMH', timeframe: '1Day', n: 278, last_ts: 1787284800000 },
+  { symbol: 'SPY', timeframe: '1Day', n: 2171, last_ts: 1787284800000 },
+  { symbol: 'TLT', timeframe: '1Day', n: 64, last_ts: 1787284800000 },
+  {
+    symbol: 'TSLA',
+    timeframe: '1Day',
+    n: 2171,
+    last_ts: 1787284800000
+  },
+  { symbol: 'XLC', timeframe: '1Day', n: 278, last_ts: 1787284800000 },
+  { symbol: 'XLE', timeframe: '1Day', n: 278, last_ts: 1787284800000 },
+  { symbol: 'XLF', timeframe: '1Day', n: 278, last_ts: 1787284800000 },
+  { symbol: 'XLK', timeframe: '1Day', n: 2171, last_ts: 1787284800000 },
+  { symbol: 'XLY', timeframe: '1Day', n: 279, last_ts: 1787284800000 },
+  { symbol: 'XOM', timeframe: '1Day', n: 278, last_ts: 1787284800000 },
+  {
+    symbol: 'TSLA',
+    timeframe: '1Min',
+    n: 1015,
+    last_ts: 1787258460000
+  },
+  { symbol: 'IWM', timeframe: '1Min', n: 535, last_ts: 1787256540000 },
+  { symbol: 'QQQ', timeframe: '1Min', n: 614, last_ts: 1787256360000 },
+  { symbol: 'SPY', timeframe: '1Min', n: 543, last_ts: 1787256000000 },
+  {
+    symbol: 'AAPL',
+    timeframe: '1Min',
+    n: 1031,
+    last_ts: 1787255940000
+  },
+  { symbol: 'AMD', timeframe: '1Min', n: 436, last_ts: 1787255940000 },
+  { symbol: 'AMZN', timeframe: '1Min', n: 442, last_ts: 1787255940000 },
+  { symbol: 'DIA', timeframe: '1Min', n: 287, last_ts: 1787255940000 }
+]
+
+===== runtime session / pid =====
+data/.argus_runtime_session.json: {
+  "pid": 12780,
+  "startedAt": "2026-08-21T14:24:26.735Z",
+  "lastHeartbeatAt": "2026-08-21T15:09:34.937Z",
+  "cleanShutdown": false
+}
+data/.argus_engine.pid: MISSING
+.argus_dev.pid: 3173
+
+===== config continuousIntelligence anchors/caps =====
+{
+  maxActiveSubscriptions: 12,
+  coreStreamingSymbols: [ 'SPY', 'QQQ', 'GLD' ],
+  protectedSymbols: [ 'SPY', 'QQQ', 'GLD' ],
+  snapshotScanRthMs: 30000,
+  snapshotScanOffHoursMs: 300000,
+  snapshotTopCandidates: 8,
+  universeLen: 122,
+  momentumRotationEnabled: true
+}

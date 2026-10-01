@@ -1,0 +1,325 @@
+{
+  "since": "2026-08-21T18:57:59.014Z",
+  "probedAt": "2026-08-21T19:57:59.016Z",
+  "tradesByStatus": [],
+  "tradesCount": {
+    "c": 0
+  },
+  "riskCols": [
+    {
+      "cid": 0,
+      "name": "transaction_id",
+      "type": "TEXT",
+      "notnull": 0,
+      "dflt_value": null,
+      "pk": 0
+    },
+    {
+      "cid": 1,
+      "name": "trace_id",
+      "type": "TEXT",
+      "notnull": 1,
+      "dflt_value": null,
+      "pk": 1
+    },
+    {
+      "cid": 2,
+      "name": "symbol",
+      "type": "TEXT",
+      "notnull": 1,
+      "dflt_value": null,
+      "pk": 0
+    },
+    {
+      "cid": 3,
+      "name": "side",
+      "type": "TEXT",
+      "notnull": 1,
+      "dflt_value": null,
+      "pk": 0
+    },
+    {
+      "cid": 4,
+      "name": "approved",
+      "type": "INTEGER",
+      "notnull": 1,
+      "dflt_value": null,
+      "pk": 0
+    },
+    {
+      "cid": 5,
+      "name": "max_quantity",
+      "type": "REAL",
+      "notnull": 1,
+      "dflt_value": null,
+      "pk": 0
+    },
+    {
+      "cid": 6,
+      "name": "rejection_gate",
+      "type": "TEXT",
+      "notnull": 0,
+      "dflt_value": null,
+      "pk": 0
+    },
+    {
+      "cid": 7,
+      "name": "account_equity",
+      "type": "REAL",
+      "notnull": 0,
+      "dflt_value": null,
+      "pk": 0
+    },
+    {
+      "cid": 8,
+      "name": "buying_power",
+      "type": "REAL",
+      "notnull": 0,
+      "dflt_value": null,
+      "pk": 0
+    },
+    {
+      "cid": 9,
+      "name": "reasoning",
+      "type": "TEXT",
+      "notnull": 0,
+      "dflt_value": null,
+      "pk": 0
+    },
+    {
+      "cid": 10,
+      "name": "created_at",
+      "type": "TEXT",
+      "notnull": 1,
+      "dflt_value": null,
+      "pk": 0
+    }
+  ],
+  "riskByApproved": [
+    {
+      "_error": "no such column: timestamp"
+    }
+  ],
+  "riskGateFails": [
+    {
+      "_error": "no such column: created_at"
+    }
+  ],
+  "eventTracesTypes": [],
+  "consensusDecisions": [
+    {
+      "_error": "no such column: timestamp"
+    }
+  ],
+  "recentConsensus": [
+    {
+      "_error": "no such column: timestamp"
+    }
+  ],
+  "agentPredictions": [
+    {
+      "agent_name": "KronosEngine",
+      "prediction": "SELL",
+      "c": 156
+    },
+    {
+      "agent_name": "TechnicalAgent",
+      "prediction": "BUY",
+      "c": 54
+    },
+    {
+      "agent_name": "KronosEngine",
+      "prediction": "BUY",
+      "c": 34
+    },
+    {
+      "agent_name": "KronosEngine",
+      "prediction": "HOLD",
+      "c": 21
+    },
+    {
+      "agent_name": "FundamentalAgent",
+      "prediction": "HOLD",
+      "c": 15
+    },
+    {
+      "agent_name": "MacroAgent",
+      "prediction": "HOLD",
+      "c": 12
+    },
+    {
+      "agent_name": "QuantEngine",
+      "prediction": "BUY",
+      "c": 10
+    },
+    {
+      "agent_name": "OpportunityScreener",
+      "prediction": "BUY",
+      "c": 7
+    },
+    {
+      "agent_name": "TechnicalAgent",
+      "prediction": "SELL",
+      "c": 7
+    }
+  ],
+  "observability": [
+    {
+      "_error": "no such column: timestamp"
+    }
+  ],
+  "settings": {
+    "selected_broker": "IBKR Gateway (Socket)",
+    "trading_mode": "PAPER",
+    "auto_bot_enabled": 1
+  },
+  "fills60": {
+    "c": 0
+  },
+  "logSizeBytes": 2169887,
+  "logMtime": "2026-08-21T19:58:02.836Z",
+  "logKeywordHits": 200,
+  "logKeywordSample": [
+    "[ChiefTrader] Debate for RIVN: 0 of 1 providers returned a usable verdict - fail-closed HOLD.",
+    "[ChiefTrader] NO TRADE on RIVN. [NO TRADE] Confidence 25.7% did not clear 75%.",
+    "[ChiefTrader] Reviewing SELL on HOOD proposed by KronosEngine",
+    "[ChiefTrader] Triggering multi-model debate for HOOD",
+    "[ChiefTrader] Bull/Bear research failed - debate continues without it Error: All AI providers failed for task BearResearcher. Last error: OpenRouter (Free Tier) API error: 402 Payment Required",
+    "    at async ChiefTraderAgent.reviewIdea (C:\\WorkProjects\\Multi-Agent-AI-Trading-Platform\\src\\server\\services\\ChiefTraderAgent.ts:353:40)",
+    "[ChiefTrader] Debate for HOOD: 0 of 1 providers returned a usable verdict - fail-closed HOLD.",
+    "[ChiefTrader] NO TRADE on HOOD. [NO TRADE] Confidence 25.7% did not clear 75%.",
+    "[ChiefTrader] Reviewing BUY on COIN proposed by TechnicalAgent",
+    "[ChiefTrader] NO TRADE on COIN. [NO TRADE] Confidence 4.7% did not clear 75%.",
+    "[ChiefTrader] Reviewing SELL on SOFI proposed by KronosEngine",
+    "[ChiefTrader] Triggering multi-model debate for SOFI",
+    "[ChiefTrader] Bull/Bear research failed - debate continues without it Error: All AI providers failed for task BullResearcher. Last error: OpenRouter (Free Tier) API error: 402 Payment Required",
+    "    at async ChiefTraderAgent.reviewIdea (C:\\WorkProjects\\Multi-Agent-AI-Trading-Platform\\src\\server\\services\\ChiefTraderAgent.ts:353:40)",
+    "[ChiefTrader] Debate for SOFI: 0 of 1 providers returned a usable verdict - fail-closed HOLD.",
+    "[ChiefTrader] NO TRADE on SOFI. [NO TRADE] Confidence 25.7% did not clear 75%.",
+    "[ChiefTrader] Reviewing HOLD on MRVL proposed by MacroAgent",
+    "[ChiefTrader] NO TRADE on MRVL. [NO TRADE] Confidence 0.0% did not clear 75%.",
+    "[ChiefTrader] Reviewing HOLD on AMD proposed by FundamentalAgent",
+    "[ChiefTrader] Reviewing BUY on SPY proposed by TechnicalAgent",
+    "[ChiefTrader] Reviewing BUY on IWM proposed by TechnicalAgent",
+    "[ChiefTrader] NO TRADE on AMD. [NO TRADE] Confidence 0.0% did not clear 75%.",
+    "[ChiefTrader] NO TRADE on SPY. [NO TRADE] Confidence 43.8% did not clear 75%.",
+    "[ChiefTrader] NO TRADE on IWM. [NO TRADE] Confidence 43.8% did not clear 75%.",
+    "[ChiefTrader] Reviewing SELL on QQQ proposed by KronosEngine",
+    "[ChiefTrader] Triggering multi-model debate for QQQ",
+    "[ChiefTrader] Reviewing SELL on SPY proposed by KronosEngine",
+    "[ChiefTrader] Triggering multi-model debate for SPY",
+    "[ChiefTrader] Reviewing BUY on SPY proposed by QuantEngine",
+    "[ChiefTrader] Debate still in flight for SPY - storing QuantEngine's idea and waiting before evaluating consensus.",
+    "[ChiefTrader] Reviewing SELL on IWM proposed by KronosEngine",
+    "[ChiefTrader] Triggering multi-model debate for IWM",
+    "[ChiefTrader] Reviewing BUY on SOFI proposed by TechnicalAgent",
+    "[ChiefTrader] Debate cooldown active for SOFI - not starting another provider fan-out.",
+    "[ChiefTrader] Reviewing BUY on AMD proposed by KronosEngine",
+    "[ChiefTrader] Debate cooldown active for AMD - not starting another provider fan-out.",
+    "[ChiefTrader] NO TRADE on AMD. [NO TRADE] Confidence 48.8% did not clear 75%.",
+    "[ChiefTrader] NO TRADE on SOFI. [NO TRADE] Confidence 43.2% did not clear 75%.",
+    "[ChiefTrader] Reviewing SELL on GLD proposed by KronosEngine",
+    "[ChiefTrader] Debate cooldown active for GLD - not starting another provider fan-out.",
+    "[ChiefTrader] NO TRADE on GLD. [NO TRADE] Confidence 48.8% did not clear 75%.",
+    "[ChiefTrader] Reviewing BUY on NET proposed by TechnicalAgent",
+    "[ChiefTrader] Triggering multi-model debate for NET",
+    "[ChiefTrader] Bull/Bear research failed - debate continues without it Error: All AI providers failed for task BullResearcher. Last error: fetch failed",
+    "    at async ChiefTraderAgent.reviewIdea (C:\\WorkProjects\\Multi-Agent-AI-Trading-Platform\\src\\server\\services\\ChiefTraderAgent.ts:353:40)",
+    "[ChiefTrader] Bull/Bear research failed - debate continues without it Error: All AI providers failed for task BullResearcher. Last error: fetch failed",
+    "    at async ChiefTraderAgent.reviewIdea (C:\\WorkProjects\\Multi-Agent-AI-Trading-Platform\\src\\server\\services\\ChiefTraderAgent.ts:353:40)",
+    "[ChiefTrader] Bull/Bear research failed - debate continues without it Error: All AI providers failed for task BullResearcher. Last error: fetch failed",
+    "    at async ChiefTraderAgent.reviewIdea (C:\\WorkProjects\\Multi-Agent-AI-Trading-Platform\\src\\server\\services\\ChiefTraderAgent.ts:353:40)",
+    "[ChiefTrader] Reviewing BUY on IWM proposed by QuantEngine",
+    "[ChiefTrader] Debate still in flight for IWM - storing QuantEngine's idea and waiting before evaluating consensus.",
+    "[ChiefTrader] Reviewing SELL on RIVN proposed by KronosEngine",
+    "[ChiefTrader] Debate cooldown active for RIVN - not starting another provider fan-out.",
+    "[ChiefTrader] Debate for SPY: 0 of 2 providers returned a usable verdict - fail-closed HOLD.",
+    "[ChiefTrader] NO TRADE on SPY. [NO TRADE] Confidence 9.0% did not clear 75%.",
+    "[ChiefTrader] Debate for IWM: 0 of 2 providers returned a usable verdict - fail-closed HOLD.",
+    "[ChiefTrader] NO TRADE on IWM. [NO TRADE] Confidence 7.8% did not clear 75%.",
+    "[ChiefTrader] Debate for QQQ: 0 of 2 providers returned a usable verdict - fail-closed HOLD.",
+    "[ChiefTrader] NO TRADE on QQQ. [NO TRADE] Confidence 25.7% did not clear 75%.",
+    "[ChiefTrader] Reviewing BUY on NET proposed by KronosEngine",
+    "[ChiefTrader] Debate still in flight for NET - storing KronosEngine's idea and waiting before evaluating consensus.",
+    "[ChiefTrader] NO TRADE on RIVN. [NO TRADE] Confidence 48.8% did not clear 75%.",
+    "[ChiefTrader] Reviewing BUY on MRVL proposed by QuantEngine",
+    "[ChiefTrader] Triggering multi-model debate for MRVL",
+    "[ChiefTrader] Reviewing BUY on MRVL proposed by TechnicalAgent",
+    "[ChiefTrader] Debate still in flight for MRVL - storing TechnicalAgent's idea and waiting before evaluating consensus.",
+    "[ChiefTrader] Bull/Bear research failed - debate continues without it Error: All AI providers failed for task BullResearcher. Last error: OpenRouter (Free Tier) API error: 402 Payment Required",
+    "    at async ChiefTraderAgent.reviewIdea (C:\\WorkProjects\\Multi-Agent-AI-Trading-Platform\\src\\server\\services\\ChiefTraderAgent.ts:353:40)",
+    "[ChiefTrader] Debate for MRVL: 0 of 1 providers returned a usable verdict - fail-closed HOLD.",
+    "[ChiefTrader] NO TRADE on MRVL. [NO TRADE] Confidence 28.8% did not clear 75%.",
+    "[ChiefTrader] Bull/Bear research failed - debate continues without it Error: All AI providers failed for task BearResearcher. Last error: fetch failed",
+    "    at async ChiefTraderAgent.reviewIdea (C:\\WorkProjects\\Multi-Agent-AI-Trading-Platform\\src\\server\\services\\ChiefTraderAgent.ts:353:40)",
+    "[ChiefTrader] Debate for NET: 0 of 1 providers returned a usable verdict - fail-closed HOLD.",
+    "[ChiefTrader] NO TRADE on NET. [NO TRADE] Confidence 34.7% did not clear 75%.",
+    "[ChiefTrader] Reviewing BUY on HOOD proposed by KronosEngine",
+    "[ChiefTrader] Triggering multi-model debate for HOOD",
+    "[ChiefTrader] Bull/Bear research failed - debate continues without it Error: All AI providers failed for task BullResearcher. Last error: OpenRouter (Free Tier) API error: 402 Payment Required",
+    "    at async ChiefTraderAgent.reviewIdea (C:\\WorkProjects\\Multi-Agent-AI-Trading-Platform\\src\\server\\services\\ChiefTraderAgent.ts:353:40)",
+    "[ChiefTrader] Debate for HOOD: 0 of 1 providers returned a usable verdict - fail-closed HOLD.",
+    "[ChiefTrader] NO TRADE on HOOD. [NO TRADE] Confidence 25.7% did not clear 75%."
+  ],
+  "logRecentDated": [
+    "{\"ts\":\"2026-08-21T19:57:44.608Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"UI_UPDATE\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_MRVL_1787342263_d22a\",\"decisionId\":\"trace_MRVL_1787342263_d22a\",\"traceId\":\"trace_MRVL_1787342263_d22a\",\"category\":\"EVENTBUS\",\"eventType\":\"UI_UPDATE\",\"symbol\":null,\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:44.612Z\",\"level\":\"INFO\",\"logger\":\"AIRouter\",\"msg\":\"ai_call\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_MRVL_1787342263_d22a\",\"decisionId\":\"trace_MRVL_1787342263_d22a\",\"traceId\":\"trace_MRVL_1787342263_d22a\",\"category\":\"AI\",\"eventType\":\"AI_CALL\",\"symbol\":null,\"orderId\":null,\"component\":\"AIRouter\"}",
+    "{\"ts\":\"2026-08-21T19:57:44.658Z\",\"level\":\"INFO\",\"logger\":\"AIRouter\",\"msg\":\"ai_call\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_MRVL_1787342263_d22a\",\"decisionId\":\"trace_MRVL_1787342263_d22a\",\"traceId\":\"trace_MRVL_1787342263_d22a\",\"category\":\"AI\",\"eventType\":\"AI_CALL\",\"symbol\":null,\"orderId\":null,\"component\":\"AIRouter\"}",
+    "{\"ts\":\"2026-08-21T19:57:44.660Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"CHIEF_CONSENSUS_STARTED\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_MRVL_1787342263_d22a\",\"decisionId\":\"trace_MRVL_1787342263_d22a\",\"traceId\":\"trace_MRVL_1787342263_d22a\",\"category\":\"CONSENSUS\",\"eventType\":\"CHIEF_CONSENSUS_STARTED\",\"symbol\":\"MRVL\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:44.663Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"AGENT_DISAGREEMENT\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_MRVL_1787342263_d22a\",\"decisionId\":\"trace_MRVL_1787342263_d22a\",\"traceId\":\"trace_MRVL_1787342263_d22a\",\"category\":\"CONSENSUS\",\"eventType\":\"AGENT_DISAGREEMENT\",\"symbol\":\"MRVL\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:44.665Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"CHIEF_CONSENSUS_COMPLETED\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_MRVL_1787342263_d22a\",\"decisionId\":\"trace_MRVL_1787342263_d22a\",\"traceId\":\"trace_MRVL_1787342263_d22a\",\"category\":\"CONSENSUS\",\"eventType\":\"CHIEF_CONSENSUS_COMPLETED\",\"symbol\":\"MRVL\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:44.679Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"DESK_NO_TRADE\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_MRVL_1787342263_d22a\",\"decisionId\":\"trace_MRVL_1787342263_d22a\",\"traceId\":\"trace_MRVL_1787342263_d22a\",\"category\":\"AGENT\",\"eventType\":\"DESK_NO_TRADE\",\"symbol\":\"MRVL\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:44.682Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"TRADE_LIFECYCLE\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_MRVL_1787342263_d22a\",\"decisionId\":\"trace_MRVL_1787342263_d22a\",\"traceId\":\"trace_MRVL_1787342263_d22a\",\"category\":\"ORDER\",\"eventType\":\"TRADE_LIFECYCLE\",\"symbol\":\"MRVL\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:44.757Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"SYSTEM_METRICS\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"EVENTBUS\",\"eventType\":\"SYSTEM_METRICS\",\"symbol\":null,\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:44.866Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"UI_UPDATE\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_NET_1787342263_9633\",\"decisionId\":\"trace_NET_1787342263_9633\",\"traceId\":\"trace_NET_1787342263_9633\",\"category\":\"EVENTBUS\",\"eventType\":\"UI_UPDATE\",\"symbol\":null,\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:44.916Z\",\"level\":\"INFO\",\"logger\":\"AIRouter\",\"msg\":\"ai_call\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_NET_1787342263_9633\",\"decisionId\":\"trace_NET_1787342263_9633\",\"traceId\":\"trace_NET_1787342263_9633\",\"category\":\"AI\",\"eventType\":\"AI_CALL\",\"symbol\":null,\"orderId\":null,\"component\":\"AIRouter\"}",
+    "{\"ts\":\"2026-08-21T19:57:44.920Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"UI_UPDATE\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_NET_1787342263_9633\",\"decisionId\":\"trace_NET_1787342263_9633\",\"traceId\":\"trace_NET_1787342263_9633\",\"category\":\"EVENTBUS\",\"eventType\":\"UI_UPDATE\",\"symbol\":null,\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:44.925Z\",\"level\":\"INFO\",\"logger\":\"AIRouter\",\"msg\":\"ai_call\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_NET_1787342263_9633\",\"decisionId\":\"trace_NET_1787342263_9633\",\"traceId\":\"trace_NET_1787342263_9633\",\"category\":\"AI\",\"eventType\":\"AI_CALL\",\"symbol\":null,\"orderId\":null,\"component\":\"AIRouter\"}",
+    "{\"ts\":\"2026-08-21T19:57:45.040Z\",\"level\":\"INFO\",\"logger\":\"AIRouter\",\"msg\":\"ai_call\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_NET_1787342263_9633\",\"decisionId\":\"trace_NET_1787342263_9633\",\"traceId\":\"trace_NET_1787342263_9633\",\"category\":\"AI\",\"eventType\":\"AI_CALL\",\"symbol\":null,\"orderId\":null,\"component\":\"AIRouter\"}",
+    "{\"ts\":\"2026-08-21T19:57:45.043Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"CHIEF_CONSENSUS_STARTED\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_NET_1787342263_9633\",\"decisionId\":\"trace_NET_1787342263_9633\",\"traceId\":\"trace_NET_1787342263_9633\",\"category\":\"CONSENSUS\",\"eventType\":\"CHIEF_CONSENSUS_STARTED\",\"symbol\":\"NET\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:45.045Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"AGENT_DISAGREEMENT\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_NET_1787342263_9633\",\"decisionId\":\"trace_NET_1787342263_9633\",\"traceId\":\"trace_NET_1787342263_9633\",\"category\":\"CONSENSUS\",\"eventType\":\"AGENT_DISAGREEMENT\",\"symbol\":\"NET\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:45.046Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"CHIEF_CONSENSUS_COMPLETED\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_NET_1787342263_9633\",\"decisionId\":\"trace_NET_1787342263_9633\",\"traceId\":\"trace_NET_1787342263_9633\",\"category\":\"CONSENSUS\",\"eventType\":\"CHIEF_CONSENSUS_COMPLETED\",\"symbol\":\"NET\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:45.051Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"DESK_NO_TRADE\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_NET_1787342263_9633\",\"decisionId\":\"trace_NET_1787342263_9633\",\"traceId\":\"trace_NET_1787342263_9633\",\"category\":\"AGENT\",\"eventType\":\"DESK_NO_TRADE\",\"symbol\":\"NET\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:45.053Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"TRADE_LIFECYCLE\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_NET_1787342263_9633\",\"decisionId\":\"trace_NET_1787342263_9633\",\"traceId\":\"trace_NET_1787342263_9633\",\"category\":\"ORDER\",\"eventType\":\"TRADE_LIFECYCLE\",\"symbol\":\"NET\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:45.898Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"KRONOS_FORECAST_STARTED\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"EVENTBUS\",\"eventType\":\"KRONOS_FORECAST_STARTED\",\"symbol\":\"HOOD\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:46.468Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"KRONOS_FORECAST_COMPLETED\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"EVENTBUS\",\"eventType\":\"KRONOS_FORECAST_COMPLETED\",\"symbol\":\"HOOD\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:46.468Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"KRONOS_HIGH_CONFIDENCE\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"EVENTBUS\",\"eventType\":\"KRONOS_HIGH_CONFIDENCE\",\"symbol\":\"HOOD\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:46.470Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"TRADE_IDEA_GENERATED\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_HOOD_1787342266_5635\",\"decisionId\":\"trace_HOOD_1787342266_5635\",\"traceId\":\"trace_HOOD_1787342266_5635\",\"category\":\"AGENT\",\"eventType\":\"TRADE_IDEA_GENERATED\",\"symbol\":\"HOOD\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:46.565Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"UI_UPDATE\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_HOOD_1787342266_5635\",\"decisionId\":\"trace_HOOD_1787342266_5635\",\"traceId\":\"trace_HOOD_1787342266_5635\",\"category\":\"EVENTBUS\",\"eventType\":\"UI_UPDATE\",\"symbol\":null,\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:46.566Z\",\"level\":\"INFO\",\"logger\":\"AIRouter\",\"msg\":\"ai_call\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_HOOD_1787342266_5635\",\"decisionId\":\"trace_HOOD_1787342266_5635\",\"traceId\":\"trace_HOOD_1787342266_5635\",\"category\":\"AI\",\"eventType\":\"AI_CALL\",\"symbol\":null,\"orderId\":null,\"component\":\"AIRouter\"}",
+    "{\"ts\":\"2026-08-21T19:57:46.573Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"UI_UPDATE\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_HOOD_1787342266_5635\",\"decisionId\":\"trace_HOOD_1787342266_5635\",\"traceId\":\"trace_HOOD_1787342266_5635\",\"category\":\"EVENTBUS\",\"eventType\":\"UI_UPDATE\",\"symbol\":null,\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:46.576Z\",\"level\":\"INFO\",\"logger\":\"AIRouter\",\"msg\":\"ai_call\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_HOOD_1787342266_5635\",\"decisionId\":\"trace_HOOD_1787342266_5635\",\"traceId\":\"trace_HOOD_1787342266_5635\",\"category\":\"AI\",\"eventType\":\"AI_CALL\",\"symbol\":null,\"orderId\":null,\"component\":\"AIRouter\"}",
+    "{\"ts\":\"2026-08-21T19:57:46.663Z\",\"level\":\"INFO\",\"logger\":\"AIRouter\",\"msg\":\"ai_call\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_HOOD_1787342266_5635\",\"decisionId\":\"trace_HOOD_1787342266_5635\",\"traceId\":\"trace_HOOD_1787342266_5635\",\"category\":\"AI\",\"eventType\":\"AI_CALL\",\"symbol\":null,\"orderId\":null,\"component\":\"AIRouter\"}",
+    "{\"ts\":\"2026-08-21T19:57:46.665Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"CHIEF_CONSENSUS_STARTED\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_HOOD_1787342266_5635\",\"decisionId\":\"trace_HOOD_1787342266_5635\",\"traceId\":\"trace_HOOD_1787342266_5635\",\"category\":\"CONSENSUS\",\"eventType\":\"CHIEF_CONSENSUS_STARTED\",\"symbol\":\"HOOD\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:46.668Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"AGENT_DISAGREEMENT\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_HOOD_1787342266_5635\",\"decisionId\":\"trace_HOOD_1787342266_5635\",\"traceId\":\"trace_HOOD_1787342266_5635\",\"category\":\"CONSENSUS\",\"eventType\":\"AGENT_DISAGREEMENT\",\"symbol\":\"HOOD\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:46.671Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"CHIEF_CONSENSUS_COMPLETED\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_HOOD_1787342266_5635\",\"decisionId\":\"trace_HOOD_1787342266_5635\",\"traceId\":\"trace_HOOD_1787342266_5635\",\"category\":\"CONSENSUS\",\"eventType\":\"CHIEF_CONSENSUS_COMPLETED\",\"symbol\":\"HOOD\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:46.680Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"DESK_NO_TRADE\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_HOOD_1787342266_5635\",\"decisionId\":\"trace_HOOD_1787342266_5635\",\"traceId\":\"trace_HOOD_1787342266_5635\",\"category\":\"AGENT\",\"eventType\":\"DESK_NO_TRADE\",\"symbol\":\"HOOD\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:46.682Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"TRADE_LIFECYCLE\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_HOOD_1787342266_5635\",\"decisionId\":\"trace_HOOD_1787342266_5635\",\"traceId\":\"trace_HOOD_1787342266_5635\",\"category\":\"ORDER\",\"eventType\":\"TRADE_LIFECYCLE\",\"symbol\":\"HOOD\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:46.761Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"SYSTEM_METRICS\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"EVENTBUS\",\"eventType\":\"SYSTEM_METRICS\",\"symbol\":null,\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:48.565Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"TECHNICAL_ANALYSIS_STARTED\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_HOOD_1787342268_e12f\",\"decisionId\":\"trace_HOOD_1787342268_e12f\",\"traceId\":\"trace_HOOD_1787342268_e12f\",\"category\":\"EVENTBUS\",\"eventType\":\"TECHNICAL_ANALYSIS_STARTED\",\"symbol\":\"HOOD\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:48.566Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"TECHNICAL_ANALYSIS_COMPLETED\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_HOOD_1787342268_e12f\",\"decisionId\":\"trace_HOOD_1787342268_e12f\",\"traceId\":\"trace_HOOD_1787342268_e12f\",\"category\":\"EVENTBUS\",\"eventType\":\"TECHNICAL_ANALYSIS_COMPLETED\",\"symbol\":\"HOOD\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:48.762Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"SYSTEM_METRICS\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"EVENTBUS\",\"eventType\":\"SYSTEM_METRICS\",\"symbol\":null,\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:49.229Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"NEWS_PIPELINE_TICK\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"EVENTBUS\",\"eventType\":\"NEWS_PIPELINE_TICK\",\"symbol\":null,\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:50.771Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"SYSTEM_METRICS\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"EVENTBUS\",\"eventType\":\"SYSTEM_METRICS\",\"symbol\":null,\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:52.774Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"SYSTEM_METRICS\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"EVENTBUS\",\"eventType\":\"SYSTEM_METRICS\",\"symbol\":null,\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:54.561Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"TECHNICAL_ANALYSIS_STARTED\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_RIVN_1787342274_033d\",\"decisionId\":\"trace_RIVN_1787342274_033d\",\"traceId\":\"trace_RIVN_1787342274_033d\",\"category\":\"EVENTBUS\",\"eventType\":\"TECHNICAL_ANALYSIS_STARTED\",\"symbol\":\"RIVN\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:54.562Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"TECHNICAL_ANALYSIS_COMPLETED\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_RIVN_1787342274_033d\",\"decisionId\":\"trace_RIVN_1787342274_033d\",\"traceId\":\"trace_RIVN_1787342274_033d\",\"category\":\"EVENTBUS\",\"eventType\":\"TECHNICAL_ANALYSIS_COMPLETED\",\"symbol\":\"RIVN\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:54.818Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"SYSTEM_METRICS\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"EVENTBUS\",\"eventType\":\"SYSTEM_METRICS\",\"symbol\":null,\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:56.826Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"SYSTEM_METRICS\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"EVENTBUS\",\"eventType\":\"SYSTEM_METRICS\",\"symbol\":null,\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:57:58.832Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"SYSTEM_METRICS\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"EVENTBUS\",\"eventType\":\"SYSTEM_METRICS\",\"symbol\":null,\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:58:00.004Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"NEWS_PIPELINE_TICK\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"EVENTBUS\",\"eventType\":\"NEWS_PIPELINE_TICK\",\"symbol\":null,\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:58:00.234Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"TECHNICAL_ANALYSIS_STARTED\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_COIN_1787342280_f72b\",\"decisionId\":\"trace_COIN_1787342280_f72b\",\"traceId\":\"trace_COIN_1787342280_f72b\",\"category\":\"EVENTBUS\",\"eventType\":\"TECHNICAL_ANALYSIS_STARTED\",\"symbol\":\"COIN\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:58:00.234Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"TECHNICAL_ANALYSIS_COMPLETED\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":\"trace_COIN_1787342280_f72b\",\"decisionId\":\"trace_COIN_1787342280_f72b\",\"traceId\":\"trace_COIN_1787342280_f72b\",\"category\":\"EVENTBUS\",\"eventType\":\"TECHNICAL_ANALYSIS_COMPLETED\",\"symbol\":\"COIN\",\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:58:00.835Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"SYSTEM_METRICS\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"EVENTBUS\",\"eventType\":\"SYSTEM_METRICS\",\"symbol\":null,\"orderId\":null,\"component\":\"EventBus\"}",
+    "{\"ts\":\"2026-08-21T19:58:02.831Z\",\"level\":\"INFO\",\"logger\":\"EventBus\",\"msg\":\"SYSTEM_METRICS\",\"sessionId\":\"sess_123a646b-2742-4e8c-b0a1-3ed113cdb57a\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"EVENTBUS\",\"eventType\":\"SYSTEM_METRICS\",\"symbol\":null,\"orderId\":null,\"component\":\"EventBus\"}"
+  ],
+  "healthHttp": {
+    "error": "unauthorized"
+  },
+  "statusHttp": {
+    "error": "unauthorized"
+  },
+  "ciStatus": {
+    "error": "unauthorized"
+  }
+}

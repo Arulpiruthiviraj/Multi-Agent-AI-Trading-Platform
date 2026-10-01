@@ -1,0 +1,11 @@
+{
+  "$comment": "LangGraph research service (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md). A separate, isolated Python process (langgraph-research/) reached only over loopback HTTP - no broker credentials, no SQLite access, no ability to place orders or emit trading events. Off by default (langGraphResearchEnabledEnvVar unset -> disabled), same off-unless-explicit convention as config/aiCostGovernor.json. Its output is advisory research only, persisted by Node into research_agent_runs - it never reaches ChiefTrader/RiskEngine/OMS/EventBus.",
+  "langGraphResearchEnabledEnvVar": "LANGGRAPH_RESEARCH_ENABLED",
+  "baseUrl": "http://127.0.0.1:8090",
+  "port": 8090,
+  "requestTimeoutMs": 45000,
+  "healthCheckTimeoutMs": 2500,
+  "maxConcurrentRuns": 2,
+  "researchRecommendationStalenessMs": 86400000,
+  "$staleness_comment": "Phase 3: a recommendation is flagged stale once its evidence-fetch timestamp is older than this, computed at READ time (not generation time) so a recommendation never silently appears current forever. 86400000ms (24h) chosen because the evidence a recommendation is grounded in (backtest/OOS/paper-trade counts) is itself only updated by manual/batch research runs, at most daily - evidence older than one trading day is worth a human reviewer knowing about, even though the recommendation row itself is never mutated."
+}

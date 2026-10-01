@@ -1,0 +1,902 @@
+﻿node.exe : npm warn Unknown env config "devdir". This will error in a future major version of npm. See `npm help 
+npmrc` for supported config options.
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Users\ithay\AppData\Roaming\ ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn Unknow...config options.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+npm notice run my-money-miner@0.0.0 argus-cli
+npm notice run node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/argus-cli.ts status
+{
+  "ok": true,
+  "runtime": {
+    "phase": "RUNNING",
+    "coreBootedAt": "2026-08-21T15:13:51.259Z",
+    "headless": false,
+    "engineDaemon": false,
+    "webUiEnabled": true,
+    "apiEnabled": true,
+    "bootError": null,
+    "pid": 41640,
+    "uptimeMs": 373326
+  },
+  "autobot": {
+    "enabled": true,
+    "autoBotEnabled": true,
+    "tradingMode": "PAPER",
+    "tradingState": "TRADING_ENABLED",
+    "emergencyStopActive": false,
+    "budget": 2000,
+    "strategy": "ADAPTIVE_MULTI_STRATEGY",
+    "strategyFocus": "ADAPTIVE_MULTI_STRATEGY",
+    "dailyLossLimit": 5000,
+    "scheduleWindow": {
+      "scheduleEnabled": false,
+      "inWindow": null,
+      "startTime": "09:30",
+      "endTime": "16:00",
+      "timezone": "America/New_York"
+    }
+  },
+  "system": {
+    "running": true,
+    "mode": "PAPER",
+    "dbConnected": true
+  },
+  "consistent": true,
+  "liveReadiness": "LIVE_NO_GO",
+  "pipelineAgents": {
+    "togglable": [
+      {
+        "id": "TechnicalAgent",
+        "label": "Technical",
+        "description": "RSI/MACD/Bollinger tick ideas on MARKET_DATA.",
+        "enabled": true,
+        "available": true,
+        "unavailableReason": null,
+        "keepsBackgroundPipeline": false,
+        "lastTickAt": 1787325578359,
+        "lastTickAgeMs": 53,
+        "lastSuccessfulTickAt": 1787325570919,
+        "lastFailureAt": null,
+        "consecutiveFailures": 0,
+        "lastError": null,
+        "currentState": "TICKING",
+        "alive": true,
+        "healthy": true,
+        "healthLabel": "STARTING",
+        "chronosAvailable": null
+      },
+      {
+        "id": "NewsAgent",
+        "label": "News",
+        "description": "News TRADE_IDEA_GENERATED when desk policy allows. Cluster ingest for RiskEngine news_veto runs from process boot (independent of Autobot); ideas stay gated.",
+        "enabled": true,
+        "available": true,
+        "unavailableReason": null,
+        "keepsBackgroundPipeline": true,
+        "lastTickAt": 1787325569272,
+        "lastTickAgeMs": 9140,
+        "lastSuccessfulTickAt": 1787325570282,
+        "lastFailureAt": null,
+        "consecutiveFailures": 0,
+        "lastError": null,
+        "currentState": "SUCCESS",
+        "alive": true,
+        "healthy": true,
+        "healthLabel": "RUNNING",
+        "chronosAvailable": null,
+        "newsAgentMode": "CATALYST_ONLY",
+        "ideasEmitting": false,
+        "catalystOnly": true
+      },
+      {
+        "id": "FundamentalAgent",
+        "label": "Fundamental",
+        "description": "Alpha Vantage + AIRouter fundamental ideas.",
+        "enabled": true,
+        "available": true,
+        "unavailableReason": null,
+        "keepsBackgroundPipeline": false,
+        "lastTickAt": 1787325529811,
+        "lastTickAgeMs": 48601,
+        "lastSuccessfulTickAt": 1787325529817,
+        "lastFailureAt": null,
+        "consecutiveFailures": 0,
+        "lastError": null,
+        "currentState": "SUCCESS",
+        "alive": true,
+        "healthy": true,
+        "healthLabel": "RUNNING",
+        "chronosAvailable": null
+      },
+      {
+        "id": "MacroAgent",
+        "label": "Macro",
+        "description": "Alpha Vantage + AIRouter macro ideas.",
+        "enabled": true,
+        "available": true,
+        "unavailableReason": null,
+        "keepsBackgroundPipeline": false,
+        "lastTickAt": 1787325530577,
+        "lastTickAgeMs": 47835,
+        "lastSuccessfulTickAt": 1787325530579,
+        "lastFailureAt": null,
+        "consecutiveFailures": 0,
+        "lastError": null,
+        "currentState": "SUCCESS",
+        "alive": true,
+        "healthy": true,
+        "healthLabel": "RUNNING",
+        "chronosAvailable": null
+      },
+      {
+        "id": "KronosEngine",
+        "label": "Kronos",
+        "description": "Local Chronos forecasts on MARKET_DATA for research/UI; TRADE_IDEA_GENERATED only when Autobot/idea gate allows. Starts at process boot (independent of Autobot); ideas stay fail-closed when Chronos /health is down.",
+        "enabled": true,
+        "available": true,
+        "unavailableReason": null,
+        "keepsBackgroundPipeline": true,
+        "lastTickAt": 1787325578359,
+        "lastTickAgeMs": 53,
+        "lastSuccessfulTickAt": 1787325569924,
+        "lastFailureAt": null,
+        "consecutiveFailures": 0,
+        "lastError": null,
+        "currentState": "TICKING",
+        "alive": true,
+        "healthy": true,
+        "healthLabel": "STARTING",
+        "chronosAvailable": true
+      },
+      {
+        "id": "QuantEngine",
+        "label": "Quant",
+        "description": "Additive QuantSignalAgent ideas. Requires QUANT_ENGINE_ENABLED=true.",
+        "enabled": true,
+        "available": true,
+        "unavailableReason": null,
+        "keepsBackgroundPipeline": false,
+        "lastTickAt": 1787325529792,
+        "lastTickAgeMs": 48620,
+        "lastSuccessfulTickAt": null,
+        "lastFailureAt": 1787325529793,
+        "consecutiveFailures": 1,
+        "lastError": "Alpaca bars request rate-limited until 2026-08-21T15:19:16.150Z - failing closed, no fabricated bars.",
+        "currentState": "FAILED",
+        "alive": true,
+        "healthy": false,
+        "healthLabel": "FAILED",
+        "chronosAvailable": null
+      }
+    ],
+    "alwaysOn": [
+      {
+        "id": "ChiefTrader",
+        "label": "Chief Trader",
+        "reason": "Consensus must stay on whenever Autobot is on so remaining agent ideas still go through weighted debate. Not an entry generator.",
+        "enabled": true
+      },
+      {
+        "id": "RiskEngine",
+        "label": "Risk Engine",
+        "reason": "Operator must not disable RiskEngine. Every approved idea still evaluates every gate.",
+        "enabled": true
+      },
+      {
+        "id": "OMS",
+        "label": "Order Management",
+        "reason": "OMS is the only order path. Disabling it from a lamp would leave approvals with nowhere honest to go.",
+        "enabled": true
+      },
+      {
+        "id": "PortfolioMonitor",
+        "label": "Portfolio exits",
+        "reason": "Take-profit / trailing-stop / thesis-invalidation SELLs are capital preservation, not entry votes.",
+        "enabled": true
+      },
+      {
+        "id": "MarketData",
+        "label": "Market data",
+        "reason": "Price feed stays up so RiskEngine and Diagnostics have live ticks even when idea agents are off.",
+        "enabled": true
+      }
+    ],
+    "enabledMap": {
+      "TechnicalAgent": true,
+      "NewsAgent": true,
+      "FundamentalAgent": true,
+      "MacroAgent": true,
+      "KronosEngine": true,
+      "QuantEngine": true
+    },
+    "autobotEnabled": true,
+    "liveIdeaGenerationEnabled": true,
+    "interruptedSessionHold": false,
+    "forensicCheckpointBuyLock": {
+      "locked": false,
+      "reason": null,
+      "lockedAt": null
+    },
+    "tradingState": "TRADING_ENABLED",
+    "emergencyStopActive": false,
+    "workersRunning": true,
+    "ideaWorkersArmed": true,
+    "pipelineAgentDeadAfterMs": 180000,
+    "discovery": {
+      "enabled": true,
+      "ideasEnabled": true,
+      "ran": true,
+      "skippedOverlap": false,
+      "scanned": 122,
+      "rejected": 0,
+      "shortlisted": 122,
+      "subscribeRequested": 4,
+      "ideasEmitted": 0,
+      "rejectedReasons": {},
+      "shortlist": [
+        {
+          "symbol": "SPY",
+          "assetClass": "ETF",
+          "reason": "already_subscribed"
+        },
+        {
+          "symbol": "QQQ",
+          "assetClass": "ETF",
+          "reason": "already_subscribed"
+        },
+        {
+          "symbol": "NVDA",
+          "assetClass": "LARGE_CAP",
+          "reason": "already_subscribed"
+        },
+        {
+          "symbol": "AAPL",
+          "assetClass": "LARGE_CAP",
+          "reason": "already_subscribed"
+        },
+        {
+          "symbol": "MSFT",
+          "assetClass": "LARGE_CAP",
+          "reason": "already_subscribed"
+        },
+        {
+          "symbol": "TSLA",
+          "assetClass": "LARGE_CAP",
+          "reason": "already_subscribed"
+        },
+        {
+          "symbol": "IWM",
+          "assetClass": "ETF",
+          "reason": "already_subscribed"
+        },
+        {
+          "symbol": "GLD",
+          "assetClass": "ETF",
+          "reason": "already_subscribed"
+        },
+        {
+          "symbol": "AMD",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed"
+        },
+        {
+          "symbol": "META",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed"
+        },
+        {
+          "symbol": "DIA",
+          "assetClass": "ETF",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "SMH",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "XLF",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "XLE",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "XLK",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "SOXL",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "TQQQ",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "SQQQ",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "AMZN",
+          "assetClass": "LARGE_CAP",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "GOOGL",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "GOOG",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "AVGO",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "BRK.B",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "JPM",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "V",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "UNH",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "XOM",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "MA",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "LLY",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "JNJ",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "WMT",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "PG",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "HD",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "COST",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "ABBV",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "ORCL",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed"
+        },
+        {
+          "symbol": "BAC",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "CRM",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "KO",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "MRK",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "PEP",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "CVX",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "TMO",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "ACN",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "CSCO",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "MCD",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "ADBE",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "LIN",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "ABT",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "WFC",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "TXN",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "IBM",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "DIS",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "QCOM",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "GE",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "CAT",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "INTU",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "VZ",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "AMAT",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "NOW",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "ISRG",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "CMCSA",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "UBER",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "PFE",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "BA",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "NKE",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "SBUX",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "GS",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "MS",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "BLK",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "SCHW",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "AXP",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "BKNG",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "PLTR",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "COIN",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "SHOP",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "SQ",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "PYPL",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "NFLX",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "MU",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "INTC",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "ARM",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "CRWD",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "PANW",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "SNOW",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "DDOG",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "NET",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "MDB",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "TEAM",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "ZM",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "ROKU",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "SNAP",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "PINS",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "RBLX",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "SOFI",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "HOOD",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed"
+        },
+        {
+          "symbol": "MARA",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "RIOT",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "AAL",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "UAL",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "DAL",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "F",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "GM",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "RIVN",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "NIO",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "LCID",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "PATH",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "AI",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "S",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "OKTA",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "TTD",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "ABNB",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "MRVL",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "KLAC",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "LRCX",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "ASML",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "TSM",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "DELL",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "HPE",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "CSX",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "UNP",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        },
+        {
+          "symbol": "FDX",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate"
+        }
+      ],
+      "momentumHotSwap": true,
+      "momentumRanked": 8,
+      "rth": true,
+      "at": "2026-08-21T15:19:27.240Z",
+      "honesty": "Continuous intelligence, not continuous trading. OpportunityDiscovery never emits TRADE_IDEA_GENERATED. Live Alpaca IEX WebSocket streaming is capped at maxActiveSubscriptions=12. Anchor/coreStreamingSymbols (SPY,QQQ,GLD) stay permanently protected; SnapshotScanner REST-ranks 100+ liquid names every snapshotScanRthMs in RTH (off-hours: snapshotScanOffHoursMs) and hot-swaps up to snapshotTopCandidates into the remaining dynamic slots without exceeding the cap. OpportunityScreener ideas need ARGUS_OPPORTUNITY_IDEAS_ENABLED (one vote into ChiefTrader ΓÇö consensus 0.75 / min-2 unchanged). MarketDataWorker prunes lowest-momentum / least-ticked non-protected symbols and unsubscribes on the wire before accepting new WATCHLIST_SUBSCRIBE_REQUESTED entries.",
+      "pipelineRate": {
+        "ideasInWindow": 21,
+        "aiCallsInWindow": 20,
+        "maxTradeIdeasPerMinute": 120,
+        "maxAiCallsPerMinute": 90,
+        "ideasDropped": 0,
+        "aiDropped": 0,
+        "windowMs": 60000
+      }
+    },
+    "lastConsensus": {
+      "at": "2026-08-21T15:19:30.926Z",
+      "symbol": "TSLA",
+      "approved": false,
+      "side": "BUY",
+      "independentAgreeingAgents": 1,
+      "requiredAgents": 2,
+      "confidence": 0.04689841737113848,
+      "threshold": 0.75,
+      "reason": "[NO TRADE] Confidence 4.7% did not clear 75%.",
+      "agentVotes": [
+        {
+          "agent": "FundamentalAgent",
+          "side": "HOLD",
+          "confidence": 0
+        },
+        {
+          "agent": "KronosEngine",
+          "side": "SELL",
+          "confidence": 0.4881469774792572
+        },
+        {
+          "agent": "ConsensusDebate",
+          "side": "HOLD",
+          "confidence": 0.8
+        },
+        {
+          "agent": "TechnicalAgent",
+          "side": "BUY",
+          "confidence": 0.43847628514626524
+        }
+      ]
+    },
+    "whyNoTrade": "NO TRADE\nFundamentalAgent: HOLD\nKronosEngine: SELL\nTechnicalAgent: BUY\nConsensus: NO APPROVAL\nReason: [NO TRADE] Confidence 4.7% did not clear 75%.\nIndependent agents agreeing with BUY: 1. Required: 2.\nWeighted confidence: 4.7% vs 75%."
+  },
+  "live": "NO-GO"
+}

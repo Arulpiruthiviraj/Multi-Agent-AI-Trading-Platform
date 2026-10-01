@@ -1,0 +1,49 @@
+﻿{
+  "ok": true,
+  "health": {
+    "ok": true,
+    "phase": "RUNNING",
+    "coreBooted": true,
+    "tradingState": "TRADING_ENABLED",
+    "autobotEnabled": true,
+    "emergencyStopActive": false,
+    "marketDataConnected": true,
+    "brokerId": "ibkr_gateway",
+    "pipelineRunning": true,
+    "liveReadiness": "LIVE_NO_GO",
+    "safeMode": false,
+    "pid": 29088,
+    "uptimeMs": 1362664,
+    "engineDaemon": false
+  },
+  "activeBroker": {
+    "id": "ibkr_gateway",
+    "name": "IBKR Gateway (Socket)",
+    "paperTradingOnly": true,
+    "connection": {
+      "adapter": "IB_GATEWAY_SOCKET",
+      "host": "127.0.0.1",
+      "port": 4002,
+      "accountId": "DUR959160",
+      "serverTime": "2026-08-21T18:07:23.000Z",
+      "authenticated": true,
+      "maxMarketDataLines": 90,
+      "mode": "socket",
+      "requiresManualReauth": false,
+      "streamingCapacity": 90,
+      "activeMarketDataLines": 0
+    }
+  },
+  "ibkrPaths": {
+    "gatewaySocket": {
+      "port": 4002,
+      "status": "CONNECTED",
+      "accountId": "DUR959160"
+    },
+    "webApi": {
+      "port": 5000,
+      "status": "OFFLINE"
+    }
+  },
+  "live": "LIVE_NO_GO"
+}

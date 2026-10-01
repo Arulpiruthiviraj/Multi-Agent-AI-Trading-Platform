@@ -1,0 +1,30 @@
+﻿node.exe : npm warn Unknown env config "devdir". This will error in a future major version of npm. See `npm help 
+npmrc` for supported config options.
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Users\ithay\AppData\Roaming\ ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn Unknow...config options.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+npm notice run my-money-miner@0.0.0 argus-cli
+npm notice run node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/argus-cli.ts health
+{
+  "ok": true,
+  "health": {
+    "ok": true,
+    "phase": "RUNNING",
+    "coreBooted": true,
+    "tradingState": "TRADING_ENABLED",
+    "autobotEnabled": true,
+    "emergencyStopActive": false,
+    "marketDataConnected": true,
+    "brokerId": "alpaca",
+    "pipelineRunning": true,
+    "liveReadiness": "LIVE_NO_GO",
+    "safeMode": false,
+    "pid": 41640,
+    "uptimeMs": 375484,
+    "engineDaemon": false
+  },
+  "live": "LIVE_NO_GO"
+}

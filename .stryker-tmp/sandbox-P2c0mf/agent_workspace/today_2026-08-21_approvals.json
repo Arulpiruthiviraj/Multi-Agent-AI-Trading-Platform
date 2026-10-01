@@ -1,0 +1,1097 @@
+{
+  "approved_consensus": [
+    {
+      "ts": "2026-08-21T15:35:04.921Z",
+      "symbol": "IWM",
+      "side": "BUY",
+      "conf": 1,
+      "txn": "ARG-2026-08-21-000090",
+      "reason": "SOURCE: MANUAL_OVERRIDE — Manual consensus override via Advanced Trade Sandbox; human bypassed ChiefTrader AI consensus; RiskEngine+OMS still apply."
+    },
+    {
+      "ts": "2026-08-21T15:35:07.330Z",
+      "symbol": "IWM",
+      "side": "BUY",
+      "conf": 1,
+      "txn": "ARG-2026-08-21-000091",
+      "reason": "SOURCE: MANUAL_OVERRIDE — Manual consensus override via Advanced Trade Sandbox; human bypassed ChiefTrader AI consensus; RiskEngine+OMS still apply."
+    },
+    {
+      "ts": "2026-08-21T15:35:09.882Z",
+      "symbol": "ORCL",
+      "side": "BUY",
+      "conf": 1,
+      "txn": "ARG-2026-08-21-000092",
+      "reason": "SOURCE: MANUAL_OVERRIDE — Manual consensus override via Advanced Trade Sandbox; human bypassed ChiefTrader AI consensus; RiskEngine+OMS still apply."
+    },
+    {
+      "ts": "2026-08-21T16:42:52.847Z",
+      "symbol": "IWM",
+      "side": "SELL",
+      "conf": 0.85,
+      "txn": "ARG-2026-08-21-000153",
+      "reason": "[Risk Exit] EXIT_CODE=TARGET_REACHED Campaign intraday ATR Target-1 ($299.80, 1.25x ATR) — bank scalp toward daily goal."
+    },
+    {
+      "ts": "2026-08-21T18:31:08.102Z",
+      "symbol": "SOFI",
+      "side": "SELL",
+      "conf": 1,
+      "txn": "ARG-2026-08-21-000203",
+      "reason": "SOURCE: MANUAL_OVERRIDE — Manual consensus override via Advanced Trade Sandbox; human bypassed ChiefTrader AI consensus; RiskEngine+OMS still apply."
+    },
+    {
+      "ts": "2026-08-21T18:31:14.257Z",
+      "symbol": "TSLA",
+      "side": "BUY",
+      "conf": 1,
+      "txn": "ARG-2026-08-21-000205",
+      "reason": "SOURCE: MANUAL_OVERRIDE — Manual consensus override via Advanced Trade Sandbox; human bypassed ChiefTrader AI consensus; RiskEngine+OMS still apply."
+    },
+    {
+      "ts": "2026-08-21T18:31:15.993Z",
+      "symbol": "RIOT",
+      "side": "BUY",
+      "conf": 1,
+      "txn": "ARG-2026-08-21-000206",
+      "reason": "SOURCE: MANUAL_OVERRIDE — Manual consensus override via Advanced Trade Sandbox; human bypassed ChiefTrader AI consensus; RiskEngine+OMS still apply."
+    }
+  ],
+  "risk": [
+    {
+      "transaction_id": "ARG-2026-08-21-000090",
+      "trace_id": "manual-override-cc7ef23d-ea68-4563-af27-c30d64323d70",
+      "symbol": "IWM",
+      "side": "BUY",
+      "approved": 1,
+      "max_quantity": 2,
+      "rejection_gate": null,
+      "account_equity": 100044.45,
+      "buying_power": 399670.85,
+      "reasoning": "Approved based on 2.0% portfolio risk cap and available BP.",
+      "created_at": "2026-08-21T15:35:05.365Z"
+    },
+    {
+      "transaction_id": "ARG-2026-08-21-000091",
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "symbol": "IWM",
+      "side": "BUY",
+      "approved": 0,
+      "max_quantity": 0,
+      "rejection_gate": "duplicate_signal",
+      "account_equity": 100044.48,
+      "buying_power": 399011.93,
+      "reasoning": "Duplicate BUY signal for IWM within 60s.",
+      "created_at": "2026-08-21T15:35:07.553Z"
+    },
+    {
+      "transaction_id": "ARG-2026-08-21-000092",
+      "trace_id": "manual-override-8589190d-c336-4576-bdce-3507050e0d1c",
+      "symbol": "ORCL",
+      "side": "BUY",
+      "approved": 0,
+      "max_quantity": 0,
+      "rejection_gate": "data_freshness",
+      "account_equity": 100044.53,
+      "buying_power": 398952.18,
+      "reasoning": "Stale market data: last real tick is 310s old (threshold 300s).",
+      "created_at": "2026-08-21T15:35:10.009Z"
+    },
+    {
+      "transaction_id": "ARG-2026-08-21-000153",
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "symbol": "IWM",
+      "side": "SELL",
+      "approved": 1,
+      "max_quantity": 2,
+      "rejection_gate": null,
+      "account_equity": 100046.43,
+      "buying_power": 398957.48,
+      "reasoning": "Approved based on 2.0% portfolio risk cap and available BP.",
+      "created_at": "2026-08-21T16:42:53.210Z"
+    },
+    {
+      "transaction_id": "ARG-2026-08-21-000203",
+      "trace_id": "manual-override-a1a639a9-81dd-439e-86c0-599de757e2e3",
+      "symbol": "SOFI",
+      "side": "SELL",
+      "approved": 0,
+      "max_quantity": 0,
+      "rejection_gate": "sell_position_exists",
+      "account_equity": 1000000,
+      "buying_power": 3333333.33,
+      "reasoning": "Cannot sell - no existing position in broker portfolio.",
+      "created_at": "2026-08-21T18:31:08.278Z"
+    },
+    {
+      "transaction_id": "ARG-2026-08-21-000205",
+      "trace_id": "manual-override-ba0e11bd-b1a5-432e-9cb0-994b421212ea",
+      "symbol": "TSLA",
+      "side": "BUY",
+      "approved": 1,
+      "max_quantity": 1,
+      "rejection_gate": null,
+      "account_equity": 1000000,
+      "buying_power": 3333333.33,
+      "reasoning": "Approved based on 2.0% portfolio risk cap and available BP.",
+      "created_at": "2026-08-21T18:31:14.343Z"
+    },
+    {
+      "transaction_id": "ARG-2026-08-21-000206",
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "symbol": "RIOT",
+      "side": "BUY",
+      "approved": 1,
+      "max_quantity": 33,
+      "rejection_gate": null,
+      "account_equity": 1000000,
+      "buying_power": 3333333.33,
+      "reasoning": "Approved based on 2.0% portfolio risk cap and available BP.",
+      "created_at": "2026-08-21T18:31:16.042Z"
+    }
+  ],
+  "trades": [
+    {
+      "id": "e79bfee6-9ce1-420f-9021-dae7adea13a7",
+      "symbol": "IWM",
+      "side": "BUY",
+      "status": "FILLED",
+      "submitted_at": "2026-08-21T15:35:05.509Z",
+      "filled_at": "2026-08-21T15:35:25.733Z",
+      "broker_id": "alpaca",
+      "execution_environment": "PAPER",
+      "reasoning": "Approved based on 2.0% portfolio risk cap and available BP. executionEnvironment=PAPER"
+    },
+    {
+      "id": "b46c1e12-5894-4fe2-aaf9-867b54852e13",
+      "symbol": "IWM",
+      "side": "SELL",
+      "status": "FILLED",
+      "submitted_at": "2026-08-21T16:42:53.336Z",
+      "filled_at": "2026-08-21T16:43:04.065Z",
+      "broker_id": "alpaca",
+      "execution_environment": "PAPER",
+      "reasoning": "Approved based on 2.0% portfolio risk cap and available BP. executionEnvironment=PAPER"
+    },
+    {
+      "id": "60697e63-6826-4c9c-aa65-09a6de4e674e",
+      "symbol": "TSLA",
+      "side": "BUY",
+      "status": "REJECTED",
+      "submitted_at": "2026-08-21T18:31:14.353Z",
+      "filled_at": null,
+      "broker_id": "alpaca",
+      "execution_environment": "UNKNOWN",
+      "reasoning": "BROKER_ENVIRONMENT_UNKNOWN: settings.tradingMode and broker paperMode disagree or are incomplete. No order. executionEnvironment=UNKNOWN"
+    },
+    {
+      "id": "1b8f549f-0881-4d3a-8f99-9ffb692f67fa",
+      "symbol": "RIOT",
+      "side": "BUY",
+      "status": "REJECTED",
+      "submitted_at": "2026-08-21T18:31:16.048Z",
+      "filled_at": null,
+      "broker_id": "alpaca",
+      "execution_environment": "UNKNOWN",
+      "reasoning": "BROKER_ENVIRONMENT_UNKNOWN: settings.tradingMode and broker paperMode disagree or are incomplete. No order. executionEnvironment=UNKNOWN"
+    }
+  ],
+  "recentTrades": [
+    {
+      "id": "1b8f549f-0881-4d3a-8f99-9ffb692f67fa",
+      "symbol": "RIOT",
+      "side": "BUY",
+      "status": "REJECTED",
+      "submitted_at": "2026-08-21T18:31:16.048Z",
+      "broker_id": "alpaca",
+      "execution_environment": "UNKNOWN"
+    },
+    {
+      "id": "60697e63-6826-4c9c-aa65-09a6de4e674e",
+      "symbol": "TSLA",
+      "side": "BUY",
+      "status": "REJECTED",
+      "submitted_at": "2026-08-21T18:31:14.353Z",
+      "broker_id": "alpaca",
+      "execution_environment": "UNKNOWN"
+    },
+    {
+      "id": "b46c1e12-5894-4fe2-aaf9-867b54852e13",
+      "symbol": "IWM",
+      "side": "SELL",
+      "status": "FILLED",
+      "submitted_at": "2026-08-21T16:42:53.336Z",
+      "broker_id": "alpaca",
+      "execution_environment": "PAPER"
+    },
+    {
+      "id": "e79bfee6-9ce1-420f-9021-dae7adea13a7",
+      "symbol": "IWM",
+      "side": "BUY",
+      "status": "FILLED",
+      "submitted_at": "2026-08-21T15:35:05.509Z",
+      "broker_id": "alpaca",
+      "execution_environment": "PAPER"
+    },
+    {
+      "id": "eb30897f-a62e-4fec-89c3-7223df8916c2",
+      "symbol": "CRM",
+      "side": "SELL",
+      "status": "FILLED",
+      "submitted_at": "2026-08-20T22:44:40.325Z",
+      "broker_id": "alpaca",
+      "execution_environment": "REPLAY"
+    },
+    {
+      "id": "c067aee8-04da-43db-ae05-93fa75db63b5",
+      "symbol": "AMD",
+      "side": "SELL",
+      "status": "FILLED",
+      "submitted_at": "2026-08-20T22:44:40.247Z",
+      "broker_id": "alpaca",
+      "execution_environment": "REPLAY"
+    },
+    {
+      "id": "b64eec85-5056-4061-b9f6-a64dd9d83b57",
+      "symbol": "META",
+      "side": "SELL",
+      "status": "FILLED",
+      "submitted_at": "2026-08-20T22:44:40.198Z",
+      "broker_id": "alpaca",
+      "execution_environment": "REPLAY"
+    },
+    {
+      "id": "336bcf9c-e142-4a18-bfa8-c19185b2a68c",
+      "symbol": "AMZN",
+      "side": "SELL",
+      "status": "FILLED",
+      "submitted_at": "2026-08-20T22:44:40.147Z",
+      "broker_id": "alpaca",
+      "execution_environment": "REPLAY"
+    },
+    {
+      "id": "08d1fb15-02ae-44de-a992-e76341e2d226",
+      "symbol": "GOOGL",
+      "side": "SELL",
+      "status": "FILLED",
+      "submitted_at": "2026-08-20T22:44:40.089Z",
+      "broker_id": "alpaca",
+      "execution_environment": "REPLAY"
+    },
+    {
+      "id": "523a69d4-c581-4f61-a912-fd2b7d440a1d",
+      "symbol": "NVDA",
+      "side": "SELL",
+      "status": "FILLED",
+      "submitted_at": "2026-08-20T22:44:39.962Z",
+      "broker_id": "alpaca",
+      "execution_environment": "REPLAY"
+    },
+    {
+      "id": "70e6d55e-624a-41bc-ae53-ca6a8aa71798",
+      "symbol": "MSFT",
+      "side": "SELL",
+      "status": "FILLED",
+      "submitted_at": "2026-08-20T22:44:39.906Z",
+      "broker_id": "alpaca",
+      "execution_environment": "REPLAY"
+    },
+    {
+      "id": "e89de717-d29f-4aff-b571-e9dbe94d696a",
+      "symbol": "AAPL",
+      "side": "SELL",
+      "status": "FILLED",
+      "submitted_at": "2026-08-20T22:44:39.796Z",
+      "broker_id": "alpaca",
+      "execution_environment": "REPLAY"
+    },
+    {
+      "id": "ec56e4cb-2159-4a88-86f4-a27827a2c30b",
+      "symbol": "CRM",
+      "side": "BUY",
+      "status": "FILLED",
+      "submitted_at": "2026-08-20T22:44:34.519Z",
+      "broker_id": "alpaca",
+      "execution_environment": "REPLAY"
+    },
+    {
+      "id": "652f7c87-ad04-46fd-ab9d-040b49c2beb1",
+      "symbol": "AMD",
+      "side": "BUY",
+      "status": "FILLED",
+      "submitted_at": "2026-08-20T22:44:34.463Z",
+      "broker_id": "alpaca",
+      "execution_environment": "REPLAY"
+    },
+    {
+      "id": "7d0a581c-f841-47ef-8da9-5edf3e1b20fe",
+      "symbol": "META",
+      "side": "BUY",
+      "status": "FILLED",
+      "submitted_at": "2026-08-20T22:44:34.325Z",
+      "broker_id": "alpaca",
+      "execution_environment": "REPLAY"
+    },
+    {
+      "id": "e3c91847-655f-487b-bb96-2666b4f34412",
+      "symbol": "AMZN",
+      "side": "BUY",
+      "status": "FILLED",
+      "submitted_at": "2026-08-20T22:44:34.259Z",
+      "broker_id": "alpaca",
+      "execution_environment": "REPLAY"
+    },
+    {
+      "id": "4e651a77-6e2b-4054-a3ea-ab185402779f",
+      "symbol": "GOOGL",
+      "side": "BUY",
+      "status": "FILLED",
+      "submitted_at": "2026-08-20T22:44:34.204Z",
+      "broker_id": "alpaca",
+      "execution_environment": "REPLAY"
+    },
+    {
+      "id": "40e5d022-b7b4-45fa-9583-e3f00b20bc68",
+      "symbol": "NVDA",
+      "side": "BUY",
+      "status": "FILLED",
+      "submitted_at": "2026-08-20T22:44:34.117Z",
+      "broker_id": "alpaca",
+      "execution_environment": "REPLAY"
+    },
+    {
+      "id": "0db6762a-afe7-4e18-b70f-498cc6c4cc96",
+      "symbol": "MSFT",
+      "side": "BUY",
+      "status": "FILLED",
+      "submitted_at": "2026-08-20T22:44:34.059Z",
+      "broker_id": "alpaca",
+      "execution_environment": "REPLAY"
+    },
+    {
+      "id": "96801016-1aea-412b-ab8d-d0731b51b93f",
+      "symbol": "AAPL",
+      "side": "BUY",
+      "status": "FILLED",
+      "submitted_at": "2026-08-20T22:44:33.967Z",
+      "broker_id": "alpaca",
+      "execution_environment": "REPLAY"
+    }
+  ],
+  "gates_sample": [
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "emergency_stop",
+      "passed": 1,
+      "sequence": 0,
+      "detail": "{\"tradingState\":\"TRADING_ENABLED\",\"emergencyStopActive\":false,\"replay\":false}"
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "autobot_enabled",
+      "passed": 1,
+      "sequence": 1,
+      "detail": "{\"enabled\":true,\"side\":\"SELL\",\"note\":\"SELL/exit is not blocked by Autobot-off; emergency_stop still applies.\"}"
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "same_symbol_cooldown",
+      "passed": 1,
+      "sequence": 2,
+      "detail": "{\"skipped\":true,\"cooldownMs\":300000}"
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "post_loss_cooldown",
+      "passed": 1,
+      "sequence": 3,
+      "detail": "{\"skipped\":true,\"cooldownMs\":900000}"
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "daily_trade_limit",
+      "passed": 1,
+      "sequence": 4,
+      "detail": "{\"skipped\":true,\"maxDailyTrades\":0}"
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "duplicate_signal",
+      "passed": 1,
+      "sequence": 5,
+      "detail": "{\"skipped\":true,\"windowMs\":60000}"
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "invalid_account_equity",
+      "passed": 1,
+      "sequence": 6,
+      "detail": "{\"equity\":100046.43}"
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "daily_loss",
+      "passed": 1,
+      "sequence": 7,
+      "detail": "{\"dailyLoss\":0,\"threshold\":4000,\"limit\":5000,\"restrictedLiveModeActive\":false,\"replay\":false}"
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "consecutive_loss",
+      "passed": 1,
+      "sequence": 8,
+      "detail": "{\"maxConsecutiveLosses\":3,\"triggered\":false}"
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "portfolio_drawdown",
+      "passed": 1,
+      "sequence": 9,
+      "detail": "{\"drawdownPct\":0,\"maxDrawdownPct\":0.15,\"peakEquity\":100046.43,\"equityNow\":100046.43}"
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "order_rate_limit",
+      "passed": 1,
+      "sequence": 10,
+      "detail": "{\"recentOrderCount\":0,\"maxOrdersPerMinute\":5,\"replay\":false,\"skipped\":false}"
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "market_hours",
+      "passed": 1,
+      "sequence": 11,
+      "detail": "{\"marketClock\":\"open\",\"skipped\":false,\"replay\":false,\"dailyBarSessionAssumed\":false}"
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "data_freshness",
+      "passed": 1,
+      "sequence": 12,
+      "detail": "{\"priceAgeMs\":7,\"thresholdMs\":300000,\"grade\":\"GREEN\",\"replay\":false}"
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "news_veto",
+      "passed": 1,
+      "sequence": 13,
+      "detail": "{\"matchingClusters\":0,\"replay\":false}"
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "price_validity",
+      "passed": 1,
+      "sequence": 14,
+      "detail": "{\"currentPrice\":299.84,\"reasonCode\":\"OK\"}"
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "order_notional_cap",
+      "passed": 1,
+      "sequence": 15,
+      "detail": "{\"status\":\"SKIPPED\",\"reason\":\"SELL/exit is not capped by notional/risk-per-share/buying-power - those limit new capital "
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "sufficient_size",
+      "passed": 1,
+      "sequence": 16,
+      "detail": "{\"maxQuantity\":9007199254740991,\"buyingPower\":398957.48}"
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "sell_position_exists",
+      "passed": 1,
+      "sequence": 17,
+      "detail": "{\"existingQuantity\":2}"
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "argus_capital_allocation",
+      "passed": 1,
+      "sequence": 18,
+      "detail": "{\"passed\":true,\"requestedNotional\":0,\"remaining\":2000,\"allocated\":2000,\"used\":0,\"reason\":\"SELL/exit does not consume Arg"
+    },
+    {
+      "trace_id": "d9193390-c0a4-4ffd-9a68-21c6c27ec559",
+      "gate_name": "daily_buy_notional",
+      "passed": 1,
+      "sequence": 19,
+      "detail": "{\"passed\":true,\"skipped\":true,\"cap\":100000,\"alreadyDeployed\":599.08,\"requestedNotional\":0,\"projected\":599.08}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "emergency_stop",
+      "passed": 1,
+      "sequence": 0,
+      "detail": "{\"tradingState\":\"TRADING_ENABLED\",\"emergencyStopActive\":false,\"replay\":false}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "autobot_enabled",
+      "passed": 1,
+      "sequence": 1,
+      "detail": "{\"enabled\":true,\"side\":\"BUY\"}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "same_symbol_cooldown",
+      "passed": 1,
+      "sequence": 2,
+      "detail": "{\"cooldownMs\":300000,\"lastFillMs\":null}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "post_loss_cooldown",
+      "passed": 1,
+      "sequence": 3,
+      "detail": "{\"cooldownMs\":900000,\"lastLossMs\":null}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "daily_trade_limit",
+      "passed": 1,
+      "sequence": 4,
+      "detail": "{\"skipped\":true,\"maxDailyTrades\":0}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "duplicate_signal",
+      "passed": 1,
+      "sequence": 5,
+      "detail": "{\"windowMs\":60000,\"recentSameSymbolBuys\":0}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "invalid_account_equity",
+      "passed": 1,
+      "sequence": 6,
+      "detail": "{\"equity\":1000000}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "daily_loss",
+      "passed": 1,
+      "sequence": 7,
+      "detail": "{\"dailyLoss\":0,\"threshold\":4000,\"limit\":5000,\"restrictedLiveModeActive\":false,\"replay\":false}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "consecutive_loss",
+      "passed": 1,
+      "sequence": 8,
+      "detail": "{\"maxConsecutiveLosses\":3,\"triggered\":false}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "portfolio_drawdown",
+      "passed": 1,
+      "sequence": 9,
+      "detail": "{\"drawdownPct\":0,\"maxDrawdownPct\":0.15,\"peakEquity\":1000000,\"equityNow\":1000000}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "order_rate_limit",
+      "passed": 1,
+      "sequence": 10,
+      "detail": "{\"recentOrderCount\":2,\"maxOrdersPerMinute\":5,\"replay\":false,\"skipped\":false}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "market_hours",
+      "passed": 1,
+      "sequence": 11,
+      "detail": "{\"marketClock\":\"open\",\"skipped\":false,\"replay\":false,\"dailyBarSessionAssumed\":false}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "data_freshness",
+      "passed": 1,
+      "sequence": 12,
+      "detail": "{\"priceAgeMs\":69,\"thresholdMs\":300000,\"grade\":\"GREEN\",\"replay\":false}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "news_veto",
+      "passed": 1,
+      "sequence": 13,
+      "detail": "{\"matchingClusters\":0,\"replay\":false}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "price_validity",
+      "passed": 1,
+      "sequence": 14,
+      "detail": "{\"currentPrice\":19.99,\"reasonCode\":\"OK\"}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "order_notional_cap",
+      "passed": 1,
+      "sequence": 15,
+      "detail": "{\"status\":\"CLAMPED\",\"sizingMode\":\"FIXED_DOLLAR\",\"effectiveNotionalCapDollar\":666.6666666666666,\"maxTradeSizeDollar\":666."
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "symbol_concentration",
+      "passed": 1,
+      "sequence": 16,
+      "detail": "{\"status\":\"PASS\",\"existingValue\":0,\"maxPositionValue\":200000,\"capPct\":0.2,\"boundQuantity\":null}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "open_positions_cap",
+      "passed": 1,
+      "sequence": 17,
+      "detail": "{\"currentOpenPositions\":0,\"maxOpenPositions\":3,\"isNewPosition\":true}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "sector_concentration",
+      "passed": 1,
+      "sequence": 18,
+      "detail": "{\"skipped\":true,\"status\":\"SKIPPED\",\"reason\":\"symbol not in sector map\"}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "correlation_exposure",
+      "passed": 1,
+      "sequence": 19,
+      "detail": "{\"skipped\":true,\"status\":\"SKIPPED\",\"reason\":\"no existing positions to correlate against\"}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "sufficient_size",
+      "passed": 1,
+      "sequence": 20,
+      "detail": "{\"maxQuantity\":33,\"buyingPower\":3333333.33}"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "argus_capital_allocation",
+      "passed": 1,
+      "sequence": 21,
+      "detail": "{\"passed\":true,\"requestedNotional\":659.67,\"remaining\":2000,\"allocated\":2000,\"used\":0,\"reason\":\"BUY $659.67 fits remainin"
+    },
+    {
+      "trace_id": "manual-override-39a499bf-c06f-495c-971b-3654776bc62c",
+      "gate_name": "daily_buy_notional",
+      "passed": 1,
+      "sequence": 22,
+      "detail": "{\"passed\":true,\"skipped\":false,\"cap\":100000,\"alreadyDeployed\":599.08,\"requestedNotional\":659.67,\"projected\":1258.75}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "emergency_stop",
+      "passed": 1,
+      "sequence": 0,
+      "detail": "{\"tradingState\":\"TRADING_ENABLED\",\"emergencyStopActive\":false,\"replay\":false}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "autobot_enabled",
+      "passed": 1,
+      "sequence": 1,
+      "detail": "{\"enabled\":true,\"side\":\"BUY\"}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "same_symbol_cooldown",
+      "passed": 1,
+      "sequence": 2,
+      "detail": "{\"cooldownMs\":300000,\"lastFillMs\":null}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "post_loss_cooldown",
+      "passed": 1,
+      "sequence": 3,
+      "detail": "{\"cooldownMs\":900000,\"lastLossMs\":null}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "daily_trade_limit",
+      "passed": 1,
+      "sequence": 4,
+      "detail": "{\"skipped\":true,\"maxDailyTrades\":0}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "duplicate_signal",
+      "passed": 0,
+      "sequence": 5,
+      "detail": "{\"windowMs\":60000,\"recentSameSymbolBuys\":1}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "invalid_account_equity",
+      "passed": 1,
+      "sequence": 6,
+      "detail": "{\"equity\":100044.48}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "daily_loss",
+      "passed": 1,
+      "sequence": 7,
+      "detail": "{\"dailyLoss\":0,\"threshold\":4000,\"limit\":5000,\"restrictedLiveModeActive\":false,\"replay\":false}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "consecutive_loss",
+      "passed": 1,
+      "sequence": 8,
+      "detail": "{\"maxConsecutiveLosses\":3,\"triggered\":false}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "portfolio_drawdown",
+      "passed": 1,
+      "sequence": 9,
+      "detail": "{\"drawdownPct\":0,\"maxDrawdownPct\":0.15,\"peakEquity\":100044.48,\"equityNow\":100044.48}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "order_rate_limit",
+      "passed": 1,
+      "sequence": 10,
+      "detail": "{\"recentOrderCount\":1,\"maxOrdersPerMinute\":5,\"replay\":false,\"skipped\":false}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "market_hours",
+      "passed": 1,
+      "sequence": 11,
+      "detail": "{\"marketClock\":\"open\",\"skipped\":false,\"replay\":false,\"dailyBarSessionAssumed\":false}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "data_freshness",
+      "passed": 1,
+      "sequence": 12,
+      "detail": "{\"priceAgeMs\":235,\"thresholdMs\":300000,\"grade\":\"GREEN\",\"replay\":false}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "news_veto",
+      "passed": 1,
+      "sequence": 13,
+      "detail": "{\"matchingClusters\":0,\"replay\":false}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "price_validity",
+      "passed": 1,
+      "sequence": 14,
+      "detail": "{\"currentPrice\":299.53,\"reasonCode\":\"OK\"}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "order_notional_cap",
+      "passed": 1,
+      "sequence": 15,
+      "detail": "{\"status\":\"CLAMPED\",\"sizingMode\":\"FIXED_DOLLAR\",\"effectiveNotionalCapDollar\":666.6666666666666,\"maxTradeSizeDollar\":666."
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "symbol_concentration",
+      "passed": 1,
+      "sequence": 16,
+      "detail": "{\"status\":\"PASS\",\"existingValue\":299.53,\"maxPositionValue\":20008.896,\"capPct\":0.2,\"boundQuantity\":null}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "open_positions_cap",
+      "passed": 1,
+      "sequence": 17,
+      "detail": "{\"currentOpenPositions\":2,\"maxOpenPositions\":3,\"isNewPosition\":false}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "sector_concentration",
+      "passed": 1,
+      "sequence": 18,
+      "detail": "{\"skipped\":true,\"status\":\"SKIPPED\",\"reason\":\"symbol not in sector map\"}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "correlation_exposure",
+      "passed": 1,
+      "sequence": 19,
+      "detail": "{\"status\":\"PASS\",\"correlatedValue\":299.53,\"maxCorrelatedValue\":50022.24,\"capPct\":0.5,\"boundQuantity\":null}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "sufficient_size",
+      "passed": 1,
+      "sequence": 20,
+      "detail": "{\"maxQuantity\":2,\"buyingPower\":399011.93}"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "argus_capital_allocation",
+      "passed": 1,
+      "sequence": 21,
+      "detail": "{\"passed\":true,\"requestedNotional\":599.06,\"remaining\":2000,\"allocated\":2000,\"used\":0,\"reason\":\"BUY $599.06 fits remainin"
+    },
+    {
+      "trace_id": "manual-override-5fe6c22b-3f27-492a-b67c-f7d6fe109be2",
+      "gate_name": "daily_buy_notional",
+      "passed": 1,
+      "sequence": 22,
+      "detail": "{\"passed\":true,\"skipped\":false,\"cap\":100000,\"alreadyDeployed\":0,\"requestedNotional\":599.06,\"projected\":599.06}"
+    },
+    {
+      "trace_id": "manual-override-8589190d-c336-4576-bdce-3507050e0d1c",
+      "gate_name": "emergency_stop",
+      "passed": 1,
+      "sequence": 0,
+      "detail": "{\"tradingState\":\"TRADING_ENABLED\",\"emergencyStopActive\":false,\"replay\":false}"
+    },
+    {
+      "trace_id": "manual-override-8589190d-c336-4576-bdce-3507050e0d1c",
+      "gate_name": "autobot_enabled",
+      "passed": 1,
+      "sequence": 1,
+      "detail": "{\"enabled\":true,\"side\":\"BUY\"}"
+    },
+    {
+      "trace_id": "manual-override-8589190d-c336-4576-bdce-3507050e0d1c",
+      "gate_name": "same_symbol_cooldown",
+      "passed": 1,
+      "sequence": 2,
+      "detail": "{\"cooldownMs\":300000,\"lastFillMs\":null}"
+    },
+    {
+      "trace_id": "manual-override-8589190d-c336-4576-bdce-3507050e0d1c",
+      "gate_name": "post_loss_cooldown",
+      "passed": 1,
+      "sequence": 3,
+      "detail": "{\"cooldownMs\":900000,\"lastLossMs\":null}"
+    },
+    {
+      "trace_id": "manual-override-8589190d-c336-4576-bdce-3507050e0d1c",
+      "gate_name": "daily_trade_limit",
+      "passed": 1,
+      "sequence": 4,
+      "detail": "{\"skipped\":true,\"maxDailyTrades\":0}"
+    },
+    {
+      "trace_id": "manual-override-8589190d-c336-4576-bdce-3507050e0d1c",
+      "gate_name": "duplicate_signal",
+      "passed": 1,
+      "sequence": 5,
+      "detail": "{\"windowMs\":60000,\"recentSameSymbolBuys\":0}"
+    },
+    {
+      "trace_id": "manual-override-8589190d-c336-4576-bdce-3507050e0d1c",
+      "gate_name": "invalid_account_equity",
+      "passed": 1,
+      "sequence": 6,
+      "detail": "{\"equity\":100044.53}"
+    },
+    {
+      "trace_id": "manual-override-8589190d-c336-4576-bdce-3507050e0d1c",
+      "gate_name": "daily_loss",
+      "passed": 1,
+      "sequence": 7,
+      "detail": "{\"dailyLoss\":0,\"threshold\":4000,\"limit\":5000,\"restrictedLiveModeActive\":false,\"replay\":false}"
+    },
+    {
+      "trace_id": "manual-override-8589190d-c336-4576-bdce-3507050e0d1c",
+      "gate_name": "consecutive_loss",
+      "passed": 1,
+      "sequence": 8,
+      "detail": "{\"maxConsecutiveLosses\":3,\"triggered\":false}"
+    },
+    {
+      "trace_id": "manual-override-8589190d-c336-4576-bdce-3507050e0d1c",
+      "gate_name": "portfolio_drawdown",
+      "passed": 1,
+      "sequence": 9,
+      "detail": "{\"drawdownPct\":0,\"maxDrawdownPct\":0.15,\"peakEquity\":100044.53,\"equityNow\":100044.53}"
+    },
+    {
+      "trace_id": "manual-override-8589190d-c336-4576-bdce-3507050e0d1c",
+      "gate_name": "order_rate_limit",
+      "passed": 1,
+      "sequence": 10,
+      "detail": "{\"recentOrderCount\":2,\"maxOrdersPerMinute\":5,\"replay\":false,\"skipped\":false}"
+    },
+    {
+      "trace_id": "manual-override-8589190d-c336-4576-bdce-3507050e0d1c",
+      "gate_name": "market_hours",
+      "passed": 1,
+      "sequence": 11,
+      "detail": "{\"marketClock\":\"open\",\"skipped\":false,\"replay\":false,\"dailyBarSessionAssumed\":false}"
+    },
+    {
+      "trace_id": "manual-override-8589190d-c336-4576-bdce-3507050e0d1c",
+      "gate_name": "data_freshness",
+      "passed": 0,
+      "sequence": 12,
+      "detail": "{\"priceAgeMs\":309856,\"thresholdMs\":300000,\"grade\":\"RED\",\"replay\":false}"
+    },
+    {
+      "trace_id": "manual-override-8589190d-c336-4576-bdce-3507050e0d1c",
+      "gate_name": "news_veto",
+      "passed": 0,
+      "sequence": 13,
+      "detail": "{\"matchingClusters\":1,\"replay\":false}"
+    }
+  ],
+  "gate_fail_summary": {
+    "duplicate_signal": 1,
+    "data_freshness": 1,
+    "news_veto": 1,
+    "sell_position_exists": 1
+  },
+  "predByHour": [
+    {
+      "hour": "2026-08-21T13",
+      "c": 565
+    },
+    {
+      "hour": "2026-08-21T14",
+      "c": 497
+    },
+    {
+      "hour": "2026-08-21T15",
+      "c": 1058
+    },
+    {
+      "hour": "2026-08-21T16",
+      "c": 818
+    },
+    {
+      "hour": "2026-08-21T17",
+      "c": 356
+    },
+    {
+      "hour": "2026-08-21T18",
+      "c": 806
+    },
+    {
+      "hour": "2026-08-21T19",
+      "c": 357
+    },
+    {
+      "hour": "2026-08-21T20",
+      "c": 97
+    }
+  ],
+  "consensusByHour": [
+    {
+      "hour": "2026-08-21T13",
+      "approved": 0,
+      "c": 25
+    },
+    {
+      "hour": "2026-08-21T14",
+      "approved": 0,
+      "c": 31
+    },
+    {
+      "hour": "2026-08-21T15",
+      "approved": 0,
+      "c": 58
+    },
+    {
+      "hour": "2026-08-21T15",
+      "approved": 1,
+      "c": 3
+    },
+    {
+      "hour": "2026-08-21T16",
+      "approved": 0,
+      "c": 44
+    },
+    {
+      "hour": "2026-08-21T16",
+      "approved": 1,
+      "c": 1
+    },
+    {
+      "hour": "2026-08-21T17",
+      "approved": 0,
+      "c": 20
+    },
+    {
+      "hour": "2026-08-21T18",
+      "approved": 0,
+      "c": 41
+    },
+    {
+      "hour": "2026-08-21T18",
+      "approved": 1,
+      "c": 3
+    },
+    {
+      "hour": "2026-08-21T19",
+      "approved": 0,
+      "c": 16
+    },
+    {
+      "hour": "2026-08-21T20",
+      "approved": 0,
+      "c": 16
+    }
+  ],
+  "agentRth": [
+    {
+      "agent_name": "KronosEngine",
+      "prediction": "SELL",
+      "c": 2034
+    },
+    {
+      "agent_name": "TechnicalAgent",
+      "prediction": "BUY",
+      "c": 787
+    },
+    {
+      "agent_name": "KronosEngine",
+      "prediction": "BUY",
+      "c": 646
+    },
+    {
+      "agent_name": "KronosEngine",
+      "prediction": "HOLD",
+      "c": 236
+    },
+    {
+      "agent_name": "FundamentalAgent",
+      "prediction": "HOLD",
+      "c": 226
+    },
+    {
+      "agent_name": "MacroAgent",
+      "prediction": "HOLD",
+      "c": 185
+    },
+    {
+      "agent_name": "QuantEngine",
+      "prediction": "BUY",
+      "c": 182
+    },
+    {
+      "agent_name": "OpportunityScreener",
+      "prediction": "BUY",
+      "c": 100
+    },
+    {
+      "agent_name": "TechnicalAgent",
+      "prediction": "SELL",
+      "c": 36
+    },
+    {
+      "agent_name": "QuantEngine",
+      "prediction": "SELL",
+      "c": 24
+    },
+    {
+      "agent_name": "PortfolioManager",
+      "prediction": "SELL",
+      "c": 1
+    }
+  ]
+}
