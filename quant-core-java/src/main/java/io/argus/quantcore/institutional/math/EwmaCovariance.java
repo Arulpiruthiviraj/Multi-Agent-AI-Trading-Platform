@@ -20,9 +20,12 @@ public final class EwmaCovariance {
         if (returns.length < 2) {
             return null;
         }
+        // P1-9 (2026-10-04 remediation): t ran 1..length-1, reading returns[t-1] - the final
+        // element (index length-1) was never incorporated into any update. t now runs 1..length
+        // inclusive so the loop's last iteration (t=length) folds in returns[length-1].
         double seed = sampleVariance(returns);
         double v = seed;
-        for (int t = 1; t < returns.length; t++) {
+        for (int t = 1; t <= returns.length; t++) {
             v = lambda * v + (1 - lambda) * returns[t - 1] * returns[t - 1];
         }
         return v;
@@ -57,7 +60,9 @@ public final class EwmaCovariance {
             }
         }
 
-        for (int t = 1; t < n; t++) {
+        // P1-9 (2026-10-04 remediation): same off-by-one as variance() above - t now runs 1..n
+        // inclusive so the final observation (index n-1) is incorporated.
+        for (int t = 1; t <= n; t++) {
             double[][] next = new double[m][m];
             for (int i = 0; i < m; i++) {
                 for (int j = i; j < m; j++) {
