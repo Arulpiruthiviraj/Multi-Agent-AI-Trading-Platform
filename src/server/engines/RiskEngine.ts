@@ -601,19 +601,39 @@ export class RiskEngine {
                     staleThresholdMs: STALE_PRICE_THRESHOLD_MS,
                   })
                 : null;
+            // P1-11 (2026-10-04 remediation): an unconfigured Alpaca clock previously passed gate
+            // 12 unconditionally, regardless of real time - unsafe as a generic production rule
+            // for any deployment (e.g. IBKR-only, no Alpaca keys at all) running unattended, since
+            // it would approve trades at 2am/weekends with no live session check whatsoever.
+            // tradingSafety.allowTradingWithoutMarketClock (default true, preserving existing
+            // behavior/tests) lets an operator opt into the stronger check: when false, an
+            // unconfigured clock falls back to classifyMarketSession()'s real NY-calendar session
+            // classifier (the same pure, no-network-dependency mechanism replay already uses)
+            // against the real live wall clock, rather than blindly passing.
+            const unconfiguredFallbackSession = (!replay && marketClock === 'unconfigured' && !tradingSafety.allowTradingWithoutMarketClock)
+                ? classifyMarketSession(nowMs, TRADING_TIMEZONE, extendedHoursEnabled)
+                : null;
+            const unconfiguredFallbackPassed = unconfiguredFallbackSession !== null
+                && sessionAllowsFills(unconfiguredFallbackSession, extendedHoursEnabled);
             const marketHoursPassed = proposalIsCrypto
                 ? !!cryptoVenueResult?.passed
-                : (marketClock === 'open' || marketClock === 'unconfigured' || extendedHoursAllowsFills);
+                : (marketClock === 'open'
+                    || (marketClock === 'unconfigured' && (tradingSafety.allowTradingWithoutMarketClock ? true : unconfiguredFallbackPassed))
+                    || extendedHoursAllowsFills);
             recordGate('market_hours', marketHoursPassed, proposalIsCrypto
                 ? { assetClass: 'CRYPTO', ...cryptoVenueResult!.detail, reasonCode: cryptoVenueResult!.reasonCode }
                 : {
-                    marketClock, skipped: marketClock === 'unconfigured', replay: !!replay, dailyBarSessionAssumed: isDailyFrequency,
+                    marketClock, skipped: marketClock === 'unconfigured' && tradingSafety.allowTradingWithoutMarketClock,
+                    replay: !!replay, dailyBarSessionAssumed: isDailyFrequency,
                     extendedHoursEnabled, extendedHoursSession: extendedHoursEnabled ? liveSessionForExtendedHours : undefined,
+                    unconfiguredFallbackSession, allowTradingWithoutMarketClock: tradingSafety.allowTradingWithoutMarketClock,
                   });
             const marketHoursReason = proposalIsCrypto
                 ? `CRYPTO_VENUE_UNAVAILABLE: ${cryptoVenueResult?.reasonCode} (instrument enabled=${cryptoVenueResult?.detail.instrumentEnabled}, data source available=${cryptoVenueResult?.detail.dataSourceAvailable}, paper broker available=${cryptoVenueResult?.detail.paperBrokerAvailable}).`
                 : marketClock === 'unavailable'
                 ? 'Alpaca market clock unavailable (HTTP/network failure). Fail-closed: new trades blocked until the clock can be read.'
+                : marketClock === 'unconfigured' && !tradingSafety.allowTradingWithoutMarketClock
+                ? `No Alpaca clock configured and allowTradingWithoutMarketClock is false - fell back to the real NY-calendar session classifier, which reports ${unconfiguredFallbackSession} (not currently open for fills).`
                 : 'Market is currently closed (Alpaca clock).';
 
             // 2c. Stale market-data check - only fires when we've actually seen a real tick for

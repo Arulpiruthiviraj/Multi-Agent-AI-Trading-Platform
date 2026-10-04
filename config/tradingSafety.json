@@ -101,6 +101,7 @@
   "agentWinRateAlertPct": 48,
   "agentWinRateAlertMinPredictions": 20,
   "autoFlattenOnReconciliationMismatch": false,
+  "allowTradingWithoutMarketClock": true,
   "oosSharpeDegradationMinRatio": 0.6,
   "oosWinRateMinPct": 40,
   "permutationTestIterations": 1000,

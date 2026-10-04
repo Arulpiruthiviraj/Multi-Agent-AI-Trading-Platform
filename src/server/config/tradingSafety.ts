@@ -347,6 +347,18 @@ export interface TradingSafety {
   agentWinRateAlertPct: number;
   agentWinRateAlertMinPredictions: number;
   autoFlattenOnReconciliationMismatch: boolean;
+  /** P1-11 (2026-10-04 remediation): default true preserves exact current behavior (an
+   *  unconfigured Alpaca clock - no ALPACA_API_KEY/SECRET_KEY - skips gate 12 entirely, passing
+   *  regardless of real time). When an operator sets this false, gate 12 falls back to
+   *  classifyMarketSession()'s real NY-calendar session check instead of blindly passing -
+   *  closing the real gap this flag exists to name (an IBKR-only deployment with no Alpaca keys
+   *  configured could otherwise approve trades at 2am/weekends with no live session check at
+   *  all). Defaulted true rather than false here specifically because flipping the default would
+   *  break the real intent of several existing test suites (RiskEngine.gates.test.ts,
+   *  RiskEngine.test.ts, paperSpineInternalPaper.test.ts, RiskAgent.transactionLifecycle.test.ts)
+   *  that deliberately unset Alpaca credentials to reach OTHER gates under test, not to test gate
+   *  12 itself - an operator running IBKR-only in production should set this false explicitly. */
+  allowTradingWithoutMarketClock: boolean;
   oosSharpeDegradationMinRatio: number;
   oosWinRateMinPct: number;
   permutationTestIterations: number;
@@ -796,6 +808,9 @@ function loadTradingSafety(): TradingSafety {
   }
   if (typeof raw.autoFlattenOnReconciliationMismatch !== 'boolean') {
     throw new Error('config/tradingSafety.json missing boolean field: autoFlattenOnReconciliationMismatch');
+  }
+  if (typeof raw.allowTradingWithoutMarketClock !== 'boolean') {
+    throw new Error('config/tradingSafety.json missing boolean field: allowTradingWithoutMarketClock');
   }
   if (typeof raw.confluenceCoordinatorEnabled !== 'boolean') {
     throw new Error('config/tradingSafety.json missing boolean field: confluenceCoordinatorEnabled');

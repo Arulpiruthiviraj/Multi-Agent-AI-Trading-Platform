@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -356,6 +356,81 @@ describe('RiskEngine gate accumulation (Phase 2)', () => {
       await riskEngine.evaluateRisk({ traceId, symbol: 'BTC-USD', side: 'BUY', currentPrice: 60000 });
       const [assessment] = await db.select().from(schema.riskAssessments).where(eq(schema.riskAssessments.traceId, traceId));
       expect(assessment.approved).toBe(false);
+    });
+  });
+
+  // P1-11 (2026-10-04 remediation): an unconfigured Alpaca clock must not unconditionally pass
+  // gate 12 when the operator has opted into the stronger check.
+  describe('market_hours fallback when Alpaca is unconfigured and allowTradingWithoutMarketClock is false', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('fails closed on a real weekend, via the classifyMarketSession fallback, even though Alpaca is unconfigured', async () => {
+      const { tradingSafety } = await import('../config/tradingSafety');
+      const original = tradingSafety.allowTradingWithoutMarketClock;
+      tradingSafety.allowTradingWithoutMarketClock = false;
+      vi.useFakeTimers();
+      // A known Saturday, 11:00 ET - unambiguously closed regardless of when this suite runs.
+      vi.setSystemTime(new Date('2026-10-03T15:00:00.000Z'));
+      try {
+        tradingEngine.state.dayStartDateStr = getTradingDateStr();
+        tradingEngine.state.dayStartEquity = 100000;
+        tradingEngine.state.dailyLossLimit = 5000;
+        const traceId = 'gates-test-unconfigured-fallback-weekend';
+        await riskEngine.evaluateRisk({ traceId, symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+        const gates = await db.select().from(schema.riskGateResults).where(eq(schema.riskGateResults.traceId, traceId));
+        const gate = gates.find((g: any) => g.gateName === 'market_hours');
+        expect(gate.passed).toBe(false);
+        const detail = JSON.parse(gate.detail);
+        expect(detail.marketClock).toBe('unconfigured');
+        expect(detail.skipped).toBe(false);
+        expect(detail.unconfiguredFallbackSession).toBe('CLOSED');
+      } finally {
+        tradingSafety.allowTradingWithoutMarketClock = original;
+      }
+    });
+
+    it('passes via the real NY session classifier during a known regular-hours weekday, even with Alpaca unconfigured', async () => {
+      const { tradingSafety } = await import('../config/tradingSafety');
+      const original = tradingSafety.allowTradingWithoutMarketClock;
+      tradingSafety.allowTradingWithoutMarketClock = false;
+      vi.useFakeTimers();
+      // A known Tuesday, 11:00 ET - unambiguously regular session.
+      vi.setSystemTime(new Date('2026-10-06T15:00:00.000Z'));
+      try {
+        tradingEngine.state.dayStartDateStr = getTradingDateStr();
+        tradingEngine.state.dayStartEquity = 100000;
+        tradingEngine.state.dailyLossLimit = 5000;
+        const traceId = 'gates-test-unconfigured-fallback-weekday';
+        await riskEngine.evaluateRisk({ traceId, symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+        const gates = await db.select().from(schema.riskGateResults).where(eq(schema.riskGateResults.traceId, traceId));
+        const gate = gates.find((g: any) => g.gateName === 'market_hours');
+        expect(gate.passed).toBe(true);
+        const detail = JSON.parse(gate.detail);
+        expect(detail.unconfiguredFallbackSession).toBe('REGULAR');
+      } finally {
+        tradingSafety.allowTradingWithoutMarketClock = original;
+      }
+    });
+
+    it('with the flag at its default (true), still blindly passes regardless of real time (unchanged legacy behavior)', async () => {
+      const { tradingSafety } = await import('../config/tradingSafety');
+      expect(tradingSafety.allowTradingWithoutMarketClock).toBe(true); // confirms the real shipped default
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-10-03T15:00:00.000Z')); // the same weekend as above
+      try {
+        tradingEngine.state.dayStartDateStr = getTradingDateStr();
+        tradingEngine.state.dayStartEquity = 100000;
+        tradingEngine.state.dailyLossLimit = 5000;
+        const traceId = 'gates-test-unconfigured-default-still-passes';
+        await riskEngine.evaluateRisk({ traceId, symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+        const gates = await db.select().from(schema.riskGateResults).where(eq(schema.riskGateResults.traceId, traceId));
+        const gate = gates.find((g: any) => g.gateName === 'market_hours');
+        expect(gate.passed).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });
