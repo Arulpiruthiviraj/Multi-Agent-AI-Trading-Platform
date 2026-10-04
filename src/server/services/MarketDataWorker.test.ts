@@ -185,14 +185,14 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
   });
 
   it('ingestIbkrBidAsk (2026-09-23 spread forensic fix): a real IBKR ASK(2) tick populates the same latestAskPrices/latestAskTimestamps store the Alpaca "q" path uses, so getLatestSpreadBps can finally return a real value once a bid also exists', () => {
-    worker.ingestIbkrQuote('TSLA', 250.10); // BID-equivalent, via the pre-existing IBKR path
+    worker.ingestIbkrBidAsk('TSLA', 1, 250.10); // actual BID, never a generic LAST tick
     worker.ingestIbkrBidAsk('TSLA', 2, 250.30); // ASK - the newly-wired path
 
     expect(worker.getLatestAsk('TSLA')).toBe(250.30);
     expect(worker.getLatestSpreadBps('TSLA', 60_000)).not.toBeNull();
   });
 
-  it('ingestIbkrBidAsk ignores non-ASK fields (BID=1, LAST=4) - it is additive only and never duplicates what ingestIbkrQuote already does', () => {
+  it('ingestIbkrBidAsk never assigns BID or LAST to the ask cache', () => {
     worker.ingestIbkrBidAsk('NVDA', 1, 100); // BID
     worker.ingestIbkrBidAsk('NVDA', 4, 100.5); // LAST
 

@@ -283,7 +283,7 @@ export class QuantSignalAgent {
     const notAttemptedSymbols = symbols.slice(attemptedSymbols.length);
     this.nextCycleSymbol = notAttemptedSymbols[0] ?? null;
     observeSafe(() => structuredLogger.info('quant_cycle_completed', {
-      category: 'QUANT', eventType: 'QUANT_CYCLE_COMPLETED',
+      category: 'DISCOVERY', eventType: 'QUANT_CYCLE_COMPLETED',
       durationMs: Date.now() - cycleStarted, concurrency, attemptedSymbols, completedSymbols,
       notAttemptedSymbols, reason: abortRateLimit ? 'PROVIDER_BACKOFF' : 'COMPLETED',
     }));

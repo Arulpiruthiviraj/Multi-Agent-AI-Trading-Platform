@@ -85,7 +85,8 @@ export async function fetchJson(path: string, init?: RequestInit) {
       : code === 'ECONNREFUSED' ? 'ENGINE_UNREACHABLE' : 'TRANSPORT_FAILED';
     throw new Error(`${reason}: ${init?.method ?? 'GET'} ${path.split('?')[0]} after ${Date.now() - started}ms`
       + (requestId ? ` (requestId=${requestId})` : '')
-      + '. No server completion was confirmed; this does not establish broker or order failure.');
+      + '. No server completion was confirmed; this does not establish broker or order failure.',
+      { cause: { code: signal.aborted ? undefined : code } });
   }
   let body: unknown;
   try {
@@ -1609,6 +1610,11 @@ const commands: Record<string, () => Promise<void>> = {
   async config() {
     console.log(JSON.stringify(await fetchJson('/api/v2/runtime/config'), null, 2));
   },
+  async 'paper-profile'() {
+    const { paperAllocationProfile } = await import('./cli/paperAllocationProfile');
+    const profile = JSON.parse(readFileSync(join(ROOT, 'config', 'paperAllocationProfile.json'), 'utf8'));
+    console.log(JSON.stringify(await paperAllocationProfile(fetchJson, profile.budget, process.argv.includes('--apply')), null, 2));
+  },
   async positions() {
     console.log(JSON.stringify(await fetchJson('/api/v2/runtime/portfolio'), null, 2));
   },
@@ -1728,7 +1734,7 @@ const commands: Record<string, () => Promise<void>> = {
     const groups: Array<[string, string[]]> = [
       ['System / lifecycle', ['status', 'health', 'start', 'stop', 'restart', 'wait-ready', 'config']],
       ['Watchdog (detached auto-restart supervisor)', ['watchdog-start', 'watchdog-stop', 'watchdog-restart', 'watchdog-status']],
-      ['Trading state / portfolio', ['resume', 'pause', 'ready', 'positions', 'portfolio', 'brokers', 'set-broker']],
+      ['Trading state / portfolio', ['resume', 'pause', 'ready', 'positions', 'portfolio', 'brokers', 'set-broker', 'paper-profile']],
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],

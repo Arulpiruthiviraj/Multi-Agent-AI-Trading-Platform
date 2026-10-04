@@ -54,6 +54,26 @@ describe('PortfolioReconciliationWorker.reconcile persistence (Phase 3)', () => 
     expect(last.mismatches).toBeNull();
   });
 
+  it('does not certify account consistency using cost basis when a broker mark is missing', async () => {
+    const broker = (await import('../../brokers/BrokerManager')).BrokerManager.getInstance().getActiveBroker();
+    const original = broker.portfolio;
+    broker.portfolio = async () => ({ cash: 1000, buyingPower: 1000, equity: 1100, positions: [
+      { symbol: 'NOMRK', quantity: 1, entryPrice: 100, currentPrice: null, marketValue: null,
+        unrealizedPnl: null, unrealizedPnlPercent: null, valuationStatus: 'UNAVAILABLE' },
+    ] });
+    try {
+      await portfolioReconciliationWorker.reconcile();
+      const events = await db.select().from(schema.reconciliationEvents);
+      expect(events.at(-1).matches).toBe(false);
+      expect(JSON.parse(events.at(-1).mismatches)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'ACCOUNT_VALUATION_UNAVAILABLE' }),
+      ]));
+    } finally {
+      broker.portfolio = original;
+      await db.delete(schema.portfolio).where(eq(schema.portfolio.symbol, 'NOMRK'));
+    }
+  });
+
   it('persists a MATCH row and hydrates local when the broker holds a position Argus does not yet have', async () => {
     const broker = (await import('../../brokers/BrokerManager')).BrokerManager.getInstance().getActiveBroker();
     // Monkey-patch portfolio() to simulate a broker-side position Argus's local table doesn't

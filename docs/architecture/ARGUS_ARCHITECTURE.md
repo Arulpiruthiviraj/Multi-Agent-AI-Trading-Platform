@@ -1,5 +1,57 @@
 # Argus Architecture
 
+## 2026-10-04: remaining forensic correctness and operations fixes
+
+The existing trading spine and all approval thresholds remain unchanged. These changes extend
+its data and control-plane boundaries; they introduce no strategy or quant calculation in Node.
+
+- `IBGatewaySocketAdapter.positions()` no longer substitutes average cost for a market mark or
+  reports fabricated zero unrealized P&L. The positions callback supplies quantity and cost basis
+  only. Current price, market value and unrealized P&L are NULL/UNAVAILABLE until a real valuation
+  source is integrated; portfolio valuation is PARTIAL when any position lacks a mark. Broker
+  account equity remains its independently reported account value. Quantity and basis survive.
+  Reconciliation labels a nonempty portfolio with missing marks `ACCOUNT_VALUATION_UNAVAILABLE`
+  rather than certifying account equity against cost basis. This holds readiness until real marks
+  are available; it does not invent a valuation or erase the holdings.
+- MarketDataWorker's existing spread formula now consumes separately observed BID and ASK, both
+  fresh, instead of letting a LAST tick stand in for BID. This is input-provenance/freshness repair,
+  not a new or duplicated quant calculation. Existing freshness limits remain authoritative.
+- A single shared shutdown promise makes overlapping signal/API requests wait for the same drain.
+  The clean-session marker is written only after successful worker/network/database shutdown;
+  a failed step or forced network close retains dirty status. Session marker replacement is atomic,
+  and the engine PID remains visible until the successful drain and marker write complete,
+  and malformed existing markers hold entries rather than silently behaving like first boot.
+- The October 1 crash log directly records `ERR_HTTP_HEADERS_SENT` in runtime health and VectorBT
+  status after request timeouts. Those routes now settle late successes/failures without a second
+  response or an unhandled rejection; the orders route has the same protection. This fixes that
+  observed error class, not proof of the cause of every process death or the original orders delay.
+  CLI transport errors distinguish unreachable engines from aborted requests and retain server
+  correlation ids when headers arrived. No broker failure is inferred from a client timeout.
+- Quant cycle scheduling remembers the first unattempted symbol after provider backoff. Previously
+  every cycle restarted with the same priority names, allowing persistent tail starvation. This
+  is control-plane fairness only, not changed strategy ranking, concurrency, subscription capacity,
+  provider pacing or approval math. `QUANT_CYCLE_COMPLETED` records duration and attempted,
+  completed and unattempted symbol sets. This defect is source/test verified; it is not established
+  as the cause of Friday's entire coverage decline, especially on the distinct IBKR history path.
+- Unsampled `RUNTIME_SESSION_STARTED`, `RUNTIME_PHASE_CHANGED` and
+  `AUTOBOT_CONFIGURATION_PERSISTED` observations add timestamped startup/lifecycle/configuration
+  evidence to the existing store. Effective SAFE_MODE still derives from the existing runtime,
+  trading state and emergency flag, not a second state machine. These observations do not
+  reconstruct missing historical uptime or create a guaranteed lossless audit log.
+- `argus-cli paper-profile` previews the owner-requested allocation in
+  `config/paperAllocationProfile.json`; `--apply` uses the existing validated settings API and
+  reads values back. It requires confirmed PAPER, TRADING_PAUSED and disabled Autobot. It sets
+  the allocation and caps the existing order ceiling at that allocation without increasing it.
+  It never enables/resumes trading, changes the broker account, or claims a daily return.
+
+Operational closure remains separate: the engine was unreachable during this pass, so profile
+activation, authenticated broker reconciliation of the existing short, reviewed legacy baseline
+recovery, historical accounting repair and deployment verification remain pending. The guarded
+profile application was attempted and failed at the initial read, without a settings mutation.
+Weak/conflicting signals and finite data entitlements are not solved by these engineering repairs;
+strategy edge needs out-of-sample/forward evidence through the existing research/promotion gates.
+No historical record, broker position, strategy enablement or approval threshold was changed.
+
 ## 2026-10-03: fill-backed inventory and forensic remediation
 
 The October 1 OKTA incident exposed an eventual-consistency failure: a confirmed close deleted

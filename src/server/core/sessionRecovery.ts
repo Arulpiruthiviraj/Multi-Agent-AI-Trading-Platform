@@ -7,7 +7,7 @@ import { writeFileSync, readFileSync, mkdirSync, renameSync, unlinkSync } from '
 import { dirname, join } from 'node:path';
 import { eventBus } from './EventBus';
 import { EVENTS } from './eventNames';
-import { structuredLogger } from '../observability/StructuredLogger';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { assertNotProductionRuntimePath } from './productionRuntimePathGuard';
 
 export interface RuntimeSessionFile {
@@ -168,6 +168,11 @@ export function beginRuntimeSession(): void {
     exitCode: null,
   };
   write(current);
+  observeSafe(() => structuredLogger.info('runtime_session_started', {
+    category: 'SYSTEM', eventType: 'RUNTIME_SESSION_STARTED', component: 'sessionRecovery',
+    pid: current!.pid, parentPid: current!.parentPid, startedAt: current!.startedAt,
+    entryRecoveryHold: holdNewEntryIdeas,
+  }));
   if (!heartbeat) {
     heartbeat = setInterval(() => {
       if (!current) return;
@@ -200,7 +205,7 @@ export function beginRuntimeSession(): void {
   }
 }
 
-export function markCleanShutdown(): void {
+export function markCleanShutdown(): boolean {
   if (heartbeat) {
     clearInterval(heartbeat);
     heartbeat = null;
@@ -219,8 +224,11 @@ export function markCleanShutdown(): void {
   current.lastHeartbeatAt = new Date().toISOString();
   try {
     write(current);
+    return true;
   } catch (e) {
+    current.cleanShutdown = false;
     console.error('[sessionRecovery] Failed to persist clean shutdown marker', e);
+    return false;
   }
 }
 

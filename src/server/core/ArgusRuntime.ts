@@ -10,6 +10,7 @@ import { marketDataWorker } from '../services/MarketDataWorker';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { evaluateLiveReadiness } from './liveReadinessEngine';
 import { getPipelineAgentSnapshot } from './pipelineAgentSnapshot';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 
 export type ArgusRuntimePhase =
   | 'STOPPED'
@@ -71,6 +72,17 @@ export class ArgusRuntime {
   private coreBootedAt: string | null = null;
   private bootError: string | null = null;
 
+  private transition(phase: ArgusRuntimePhase): void {
+    const fromPhase = this.phase;
+    this.phase = phase;
+    if (fromPhase === phase) return;
+    observeSafe(() => structuredLogger.info('runtime_phase_changed', {
+      category: 'SYSTEM', eventType: 'RUNTIME_PHASE_CHANGED', fromPhase, toPhase: phase,
+      effectivePhase: this.derivePhase(), pid: process.pid, uptimeMs: Math.round(process.uptime() * 1000),
+      autobotEnabled: tradingEngine.state.enabled, tradingState: tradingEngine.state.tradingState,
+    }));
+  }
+
   static getInstance(): ArgusRuntime {
     if (!ArgusRuntime.instance) {
       ArgusRuntime.instance = new ArgusRuntime();
@@ -116,17 +128,17 @@ export class ArgusRuntime {
   /** Engine-only initialize — no Express/Vite/WebSocket. Idempotent. */
   async initialize(): Promise<void> {
     if (this.phase === 'RUNNING' || isArgusCoreBooted()) {
-      this.phase = 'RUNNING';
+      this.transition('RUNNING');
       return;
     }
-    this.phase = 'STARTING';
+    this.transition('STARTING');
     this.bootError = null;
     try {
       await bootArgusCore();
       this.coreBootedAt = new Date().toISOString();
-      this.phase = 'RUNNING';
+      this.transition('RUNNING');
     } catch (e: unknown) {
-      this.phase = 'FAILED';
+      this.transition('FAILED');
       this.bootError = e instanceof Error ? e.message : String(e);
       throw e;
     }
@@ -145,7 +157,7 @@ export class ArgusRuntime {
     if (this.phase === 'STOPPED' && !isArgusCoreBooted()) {
       return { ok: true };
     }
-    this.phase = 'STOPPING';
+    this.transition('STOPPING');
     const reason = opts.reason ?? 'Runtime stop requested';
     const actor = opts.actor ?? 'ArgusRuntime';
     try {
@@ -156,10 +168,10 @@ export class ArgusRuntime {
         await tradingEngine.setTradingState('TRADING_PAUSED', { reason, actor });
       }
       system.stop();
-      this.phase = 'SAFE_MODE';
+      this.transition('SAFE_MODE');
       return { ok: true };
     } catch (e: unknown) {
-      this.phase = 'FAILED';
+      this.transition('FAILED');
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   }

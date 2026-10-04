@@ -28,6 +28,14 @@ TradingAgents (https://github.com/TauricResearch/TradingAgents, Apache-2.0) is *
 
 ## Ground truth (do not inflate)
 
+**2026-10-04 operational evidence:** IBKR positions without real marks carry NULL valuation,
+never average-cost-as-price or invented zero P&L. Spread evidence requires independently fresh
+BID and ASK. Shutdown requests share one drain; only successful completion marks the session
+clean, and unreadable existing markers fail closed. The owner-requested PAPER allocation profile
+uses the existing settings API with paused/disabled prerequisites; a saved profile is not activation.
+See `docs/architecture/ARGUS_ARCHITECTURE.md` for this and the October 3 fill-backed inventory
+contract, including migration 0082's unresolved legacy-baseline deployment constraint.
+
 **2026-09-19 implementation update (deployment evidence in the dated audit):** IB Gateway desired subscriptions survive transport reconnect under the existing line cap and SDK pacing; explicit teardown cancels intent. Reissued requests invalidate prior quote/error caches. Broker readiness requires synchronization plus authenticated healthy transport, rather than a selected adapter name. BUY exposure uses each holding's observed fresh mark; missing required marks fail closed, while SELL exits retain their existing held-quantity clamp. Execution-quality summaries partition organic/manual/unattributed paper, replay, backtest, simulation, live and unknown evidence. Gateway/Web adapter IDs are stamped correctly without reclassifying historical rows. Forecast total cost, net expected return and profit probability remain null until supported total-cost evidence exists; measured organic-paper slippage alone is not a total-cost estimate. These changes do not establish alpha, certify a strategy, or authorize resume/live trading.
 
 

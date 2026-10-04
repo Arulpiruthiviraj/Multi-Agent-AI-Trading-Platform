@@ -28,6 +28,12 @@ TradingAgents (https://github.com/TauricResearch/TradingAgents, Apache-2.0) is *
 
 ## Ground truth (do not inflate)
 
+**2026-10-04 operational evidence:** IBKR positions without real marks carry NULL valuation,
+never average-cost-as-price or invented zero P&L. Spread evidence requires independently fresh
+BID and ASK. Shutdown requests share one drain; only successful completion marks the session
+clean, and unreadable existing markers fail closed. The owner-requested PAPER allocation profile
+uses the existing settings API with paused/disabled prerequisites; a saved profile is not activation.
+
 **2026-10-03 fill-backed inventory contract:** OMS production SELL is CLOSE_LONG. Its existing
 submission boundary checks broker quantity against durable scoped fill evidence and unresolved
 orders; RiskEngine's existing sell-position gate also rejects conflicts. Fill, signed inventory

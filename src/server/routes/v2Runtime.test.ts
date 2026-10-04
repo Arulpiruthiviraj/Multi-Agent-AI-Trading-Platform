@@ -4,6 +4,8 @@ import express from 'express';
 import { runtimeRouter } from './v2Runtime';
 import { argusApplication } from '../app/ArgusApplication';
 import { structuredLogger } from '../observability/StructuredLogger';
+import * as availability from '../core/aiQuantAvailability';
+import { BrokerManager } from '../../brokers/BrokerManager';
 
 describe('v2Runtime routes', () => {
   let app: express.Express;
@@ -18,6 +20,26 @@ describe('v2Runtime routes', () => {
     const res = await request(app).get('/api/v2/runtime/status');
     expect(res.status).toBeLessThan(500);
     expect(res.body).toHaveProperty('runtime');
+  });
+
+  it.each([false, true])('settles late health checks without a duplicate response (reject=%s)', async (reject) => {
+    const res: any = { headersSent: false, destroyed: false, json: vi.fn(), status: vi.fn() };
+    res.status.mockReturnValue(res);
+    const broker = vi.spyOn(BrokerManager.getInstance(), 'getIbkrPathStatus').mockResolvedValue({} as any);
+    const ai = vi.spyOn(availability, 'computeAiAvailability').mockResolvedValue({} as any);
+    const quant = vi.spyOn(availability, 'computeQuantAvailability').mockImplementationOnce(async () => {
+      res.headersSent = true;
+      if (reject) throw new Error('late health failure');
+      return {} as any;
+    });
+    try {
+      const route: any = runtimeRouter.stack.find((layer: any) => layer.route?.path === '/health');
+      const next = vi.fn();
+      await route.route.stack[0].handle({}, res, next);
+      expect(res.status).not.toHaveBeenCalled();
+      expect(res.json).not.toHaveBeenCalled();
+      expect(next).not.toHaveBeenCalled();
+    } finally { broker.mockRestore(); ai.mockRestore(); quant.mockRestore(); }
   });
 
   it.each([false, true])('does not send a second orders response after timeout (ledger rejection=%s)', async (reject) => {

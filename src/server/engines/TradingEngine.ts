@@ -34,6 +34,7 @@
  */
 
 import { eventBus } from '../core/EventBus';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { EVENTS } from '../core/eventNames';
 import { isTelemetryPulsePayload } from '../core/telemetryPulse';
 import {
@@ -543,6 +544,12 @@ class TradingEngine {
                 autoTradeScheduleTimezone: this.state.autoTradeScheduleTimezone,
             }).run();
             console.log('[TradingEngine] SQLite settings updated after toggle.');
+            observeSafe(() => structuredLogger.info('autobot_configuration_persisted', {
+                category: 'TRADING_SAFETY', eventType: 'AUTOBOT_CONFIGURATION_PERSISTED',
+                previouslyEnabled: wasEnabled, enabled: this.state.enabled,
+                tradingMode: this.state.tradingMode, tradingState: this.state.tradingState,
+                budget: this.state.budget, maxTradeSize: this.state.maxTradeSize,
+            }));
         } catch (e) {
             console.error('[TradingEngine] Failed to update SQLite settings', e);
         }

@@ -82,12 +82,6 @@ async function performDrain(handles: ShutdownHandles): Promise<void> {
   };
   console.log('[gracefulShutdown] Stopping new trades and draining workers...');
   try {
-    const { clearEnginePid } = await import('../app/enginePid');
-    clearEnginePid();
-  } catch {
-    /* pid file optional */
-  }
-  try {
     const { tradingEngine } = await import('../engines/TradingEngine');
     await tradingEngine.setTradingState('TRADING_PAUSED', {
       reason: 'Process shutdown drain — no new orders until restart recovery.',
@@ -230,7 +224,12 @@ async function performDrain(handles: ShutdownHandles): Promise<void> {
   }
   if (!drainFailed) {
     const { markCleanShutdown } = await import('./sessionRecovery');
-    markCleanShutdown();
+    drainFailed = !markCleanShutdown();
+  }
+  if (!drainFailed) {
+    // Keep ownership visible throughout the drain so watchdog/CLI cannot mistake it for death.
+    const { clearEnginePid } = await import('../app/enginePid');
+    clearEnginePid();
   }
   console.log(`[gracefulShutdown] Drain complete; clean=${!drainFailed}.`);
 }

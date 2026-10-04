@@ -4,6 +4,12 @@ Node.js multi-agent trading terminal (Express + Vite + `ws` + SQLite). Package n
 
 **LIVE real-money: NO-GO.** Paper: `PAPER_READY_WITH_REQUIRED_OPERATOR_ACTIONS` (supervised, conditional). Empirical edge is not established by documentation. Organic closed PAPER FILLED SELL P&L soak baseline remains **0** until soak counts real closes.
 
+The owner-requested $2,000 PAPER allocation is staged in `config/paperAllocationProfile.json`.
+With an authenticated, reachable engine in PAPER, trading paused and Autobot disabled, run
+`npm run argus-cli -- paper-profile` to preview and append `--apply` to save and verify it through
+the existing settings API. This does not resume trading or reconcile legacy positions. Complete
+the inventory/baseline checks in `docs/architecture/ARGUS_ARCHITECTURE.md` before a PAPER session.
+
 **Harness (CODE-VERIFIED 2026-09-01):** `npm run lint` exit 0 · `npm test` **428** files / **2889** tests · Node **≥24.18** (package `engines.node`) · schema **74** SQLite tables.
 
 ### Why "ARGUS"?

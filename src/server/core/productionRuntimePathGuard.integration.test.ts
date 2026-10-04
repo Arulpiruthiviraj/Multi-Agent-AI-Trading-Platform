@@ -26,6 +26,7 @@ function isTargetPath(p: unknown): boolean {
 
 const fsWriteFileSyncMock = vi.fn();
 const fsMkdirSyncMock = vi.fn();
+const fsRenameSyncMock = vi.fn();
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -33,12 +34,15 @@ vi.mock('node:fs', async (importOriginal) => {
     ...actual,
     writeFileSync: (p: any, ...rest: any[]) => (isTargetPath(p) ? fsWriteFileSyncMock(p, ...rest) : (actual as any).writeFileSync(p, ...rest)),
     mkdirSync: (p: any, ...rest: any[]) => (isTargetPath(p) ? fsMkdirSyncMock(p, ...rest) : (actual as any).mkdirSync(p, ...rest)),
+    renameSync: (from: any, to: any) => (isTargetPath(from) ? fsRenameSyncMock(from, to) : actual.renameSync(from, to)),
+    unlinkSync: (p: any) => (isTargetPath(p) ? undefined : actual.unlinkSync(p)),
   };
 });
 
 beforeEach(() => {
   fsWriteFileSyncMock.mockClear();
   fsMkdirSyncMock.mockClear();
+  fsRenameSyncMock.mockClear();
 });
 
 describe('sessionRecovery.ts - production path guard wiring', () => {
@@ -54,6 +58,7 @@ describe('sessionRecovery.ts - production path guard wiring', () => {
     // without isolating it first).
     expect(() => beginRuntimeSession()).toThrow(/FATAL.*production runtime path/);
     expect(fsWriteFileSyncMock).not.toHaveBeenCalled();
+    expect(fsRenameSyncMock).not.toHaveBeenCalled();
   });
 
   it('succeeds normally, with real (mocked) writes, once an isolated test path is set', async () => {
@@ -62,7 +67,8 @@ describe('sessionRecovery.ts - production path guard wiring', () => {
     expect(() => beginRuntimeSession()).not.toThrow();
     expect(fsWriteFileSyncMock).toHaveBeenCalled();
     const [writtenPath] = fsWriteFileSyncMock.mock.calls[0];
-    expect(writtenPath).toBe('C:/Temp/argus_test_isolated/.argus_runtime_session.json');
+    expect(writtenPath).toBe(`C:/Temp/argus_test_isolated/.argus_runtime_session.json.${process.pid}.tmp`);
+    expect(fsRenameSyncMock).toHaveBeenCalledWith(writtenPath, 'C:/Temp/argus_test_isolated/.argus_runtime_session.json');
   });
 });
 

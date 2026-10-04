@@ -43,7 +43,7 @@ const SYNC_FAILURE_FAULT_KEY = discrepancyFaultKey('SYNC_FAILURE', '__BROKER__')
 interface MismatchDetail {
   symbol: string;
   type: 'QUANTITY_DRIFT' | 'MISSING_LOCALLY' | 'MISSING_REMOTELY'
-      | 'OPEN_ORDER_MISSING_LOCALLY' | 'OPEN_ORDER_MISSING_REMOTELY' | 'ACCOUNT_INCONSISTENCY'
+      | 'OPEN_ORDER_MISSING_LOCALLY' | 'OPEN_ORDER_MISSING_REMOTELY' | 'ACCOUNT_INCONSISTENCY' | 'ACCOUNT_VALUATION_UNAVAILABLE'
       | 'FILLED_ORDER_MISSING_LOCALLY' | 'POSITION_FILL_CONFLICT' | 'POSITION_FILL_BASELINE_UNAVAILABLE';
   localQty: number;
   remoteQty: number;
@@ -434,12 +434,18 @@ export class PortfolioReconciliationWorker {
       // problem) - not something to silently trust.
       try {
         const { cash, buyingPower, equity } = brokerPortfolio;
-        const positionsValue = remotePositions.reduce((sum: number, p: any) => sum + (p.currentPrice ?? p.entryPrice ?? 0) * p.quantity, 0);
+        const missingMarks = remotePositions.some(p => p.quantity !== 0
+          && !(typeof p.currentPrice === 'number' && Number.isFinite(p.currentPrice) && p.currentPrice > 0));
         const nonFinite = [cash, buyingPower, equity].some(v => typeof v !== 'number' || !Number.isFinite(v));
         if (nonFinite) {
           mismatches.push({ symbol: '__ACCOUNT__', type: 'ACCOUNT_INCONSISTENCY', localQty: 0, remoteQty: 0, approxDollarImpact: SIGNIFICANT_MISMATCH_DOLLARS });
           console.error(`[PortfolioReconciliation] ${broker.name} reported a non-finite cash/buyingPower/equity value: cash=${cash} buyingPower=${buyingPower} equity=${equity}`);
+        } else if (missingMarks) {
+          // Cost basis is not market value. Unknown valuation cannot prove account consistency.
+          mismatches.push({ symbol: '__ACCOUNT__', type: 'ACCOUNT_VALUATION_UNAVAILABLE', localQty: 0,
+            remoteQty: 0, approxDollarImpact: SIGNIFICANT_MISMATCH_DOLLARS });
         } else {
+          const positionsValue = remotePositions.reduce((sum: number, p: any) => sum + (p.currentPrice ?? 0) * p.quantity, 0);
           const expectedEquity = cash + positionsValue;
           const drift = Math.abs(equity - expectedEquity);
           const tolerance = Math.max(ACCOUNT_CONSISTENCY_TOLERANCE_FLOOR_DOLLARS, equity * ACCOUNT_CONSISTENCY_TOLERANCE_PCT);
