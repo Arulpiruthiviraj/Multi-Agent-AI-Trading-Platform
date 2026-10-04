@@ -183,7 +183,7 @@ export class HistoricalReplayBroker implements BrokerPlugin {
         updatedAt: new Date(this.clockNowMs),
       };
     }
-    const qty = this.applyVolumeParticipationCap(orderData.symbol!, requestedQty);
+    let qty = this.applyVolumeParticipationCap(orderData.symbol!, requestedQty);
     if (!(qty > 0)) {
       return {
         id: crypto.randomUUID(),
@@ -197,7 +197,10 @@ export class HistoricalReplayBroker implements BrokerPlugin {
         updatedAt: new Date(this.clockNowMs),
       };
     }
-    const isPartial = qty < requestedQty;
+    let isPartial = qty < requestedQty;
+    // P1-16: true only when a SELL's fill was capped by insufficient position (not by volume) -
+    // see the SELL branch below, which reassigns qty/isPartial to the economically-real amount.
+    let positionLimitedSell = false;
     if (orderData.side === 'SELL' && qtyReq < 0 && !this.shortSelling) {
       throw new Error('SHORT_DISABLED');
     }
@@ -260,13 +263,22 @@ export class HistoricalReplayBroker implements BrokerPlugin {
           };
         }
       }
+      // P1-16 (2026-10-04 remediation): this broker has no negative-inventory/short-position
+      // tracking anywhere (confirmed - `shortSelling` only ever gates whether an oversell is
+      // rejected, never creates a short position). Previously, when shortSelling allowed an
+      // oversell past the held quantity, cash/P&L/position correctly used sellQty (clamped to the
+      // held long) but the RETURNED order still reported filledQuantity = the full volume-capped
+      // qty - a phantom fill where the ledger and the broker's own economics disagreed. Commission
+      // here is rescoped to sellQty too (it was computed from the pre-clamp qty above, which would
+      // have overcharged commission on shares that were never actually sold).
       const sellQty = Math.min(qty, existing?.quantity ?? 0);
+      const sellCommission = this.costs.commissionPerShare * sellQty;
       const proceeds = priced.fill * sellQty;
-      this.cash += proceeds - commission;
-      this.feesPaid += commission;
+      this.cash += proceeds - sellCommission;
+      this.feesPaid += sellCommission;
       this.slippagePaid += priced.slippage * sellQty;
       if (existing && sellQty > 0) {
-        this.realizedPnl += (priced.fill - existing.entryPrice) * sellQty - commission;
+        this.realizedPnl += (priced.fill - existing.entryPrice) * sellQty - sellCommission;
         existing.quantity -= sellQty;
         if (existing.quantity <= 0) this._positions.delete(orderData.symbol!);
         else {
@@ -274,6 +286,12 @@ export class HistoricalReplayBroker implements BrokerPlugin {
           existing.currentPrice = priced.fill;
         }
       }
+      // qty (the volume-participation cap) is reassigned to the economically-real fill quantity so
+      // the single shared Order-construction/working-order-registration path below (used by BUY
+      // too) reports and tracks the truthful amount for a position-insufficient SELL.
+      positionLimitedSell = sellQty < qty;
+      qty = sellQty;
+      isPartial = qty < requestedQty;
     }
     const filled: Order = {
       id: orderData.clientOrderId || crypto.randomUUID(),
@@ -281,7 +299,7 @@ export class HistoricalReplayBroker implements BrokerPlugin {
       symbol: orderData.symbol!,
       side: orderData.side!,
       type: orderData.type || 'MARKET',
-      status: isPartial ? 'PARTIALLY_FILLED' : 'FILLED',
+      status: qty <= 0 ? 'REJECTED' : isPartial ? 'PARTIALLY_FILLED' : 'FILLED',
       quantity: requestedQty,
       filledQuantity: qty,
       averageFillPrice: priced.fill,
@@ -298,7 +316,12 @@ export class HistoricalReplayBroker implements BrokerPlugin {
     // liquidity becomes available. Registering the remainder here lets advanceWorkingOrders() (see
     // below) top it up on later bars using the exact same volume-cap/pricing/cash/position logic
     // this method already uses - never a different, parallel fill model.
-    if (isPartial) {
+    //
+    // A SELL left under-filled by insufficient position (not volume) is NOT registered as a
+    // working order: this simulator has no short-position model, so there is no real mechanism by
+    // which the remainder could ever "become fillable" later - registering it would just recreate
+    // the same phantom-fill-shaped problem on a delay.
+    if (isPartial && qty > 0 && !positionLimitedSell) {
       this._workingOrders.set(filled.id, {
         symbol: orderData.symbol!,
         side: orderData.side!,
