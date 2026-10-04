@@ -14,6 +14,7 @@ import {
   type OutageWindow,
   type TimelineViolation,
 } from './TimelineInvariants';
+import type { ReplayCostProfile } from '../replaySafety';
 
 export type PipelineStage =
   | 'MARKET_DATA' | 'AGENT_IDEA' | 'CONSENSUS' | 'RISK_APPROVAL' | 'ORDER_SUBMITTED'
@@ -79,6 +80,11 @@ export interface CertificationResult {
    *  bypass, orders during feed outage). Any FAIL-severity entry fails the
    *  certification outright, regardless of test shape. */
   invariantViolations: TimelineViolation[];
+  /** Transaction costs the session's broker actually deducted (from
+   *  HistoricalReplayBroker.snapshotCosts(), which fills net of the session's
+   *  cost profile). Surfaced so a reader can see the cost model was live -
+   *  simulated P&L without deducted costs would be gross-fiction. */
+  costs: { feesPaid: number; slippagePaid: number; costProfile: ReplayCostProfile };
 }
 
 const STAGE_ORDER: PipelineStage[] = [
@@ -140,6 +146,19 @@ export function evaluateCertification(
   const invariantViolations = checkTimelineInvariants(timeline, { outageWindows });
   const fatalViolations = invariantViolations.filter((v) => v.severity === 'FAIL');
 
+  // Cost-model liveness proof (2026-10-04): the synthesis path fills against a real
+  // cost profile (commission/spread/slippage). Fills under a non-zero profile with zero
+  // deducted costs means the cost model silently isn't biting - and every simulated P&L
+  // figure would be gross-fiction. Fail closed. A zero-cost profile (explicit research
+  // mode) legitimately records zero costs.
+  const brokerCosts = result.broker.snapshotCosts();
+  const feesPaid = Number(brokerCosts.feesPaid ?? 0);
+  const slippagePaid = Number(brokerCosts.slippagePaid ?? 0);
+  const profile: ReplayCostProfile = result.costProfile ?? { commissionPerShare: 0, spreadBps: 0, slippageBps: 0 };
+  const profileNonZero =
+    (profile.commissionPerShare ?? 0) > 0 || (profile.spreadBps ?? 0) > 0 || (profile.slippageBps ?? 0) > 0;
+  const costsNotApplied = fills > 0 && profileNonZero && feesPaid + slippagePaid === 0;
+
   const stages: Record<PipelineStage, boolean> = {
     MARKET_DATA: marketDataTicks > 0,
     AGENT_IDEA: ideasGenerated > 0,
@@ -196,6 +215,9 @@ export function evaluateCertification(
   } else if (fatalViolations.length > 0) {
     certification = 'FAIL';
     reason = `Timeline invariant violation(s): ${fatalViolations.map((v) => v.code).join(', ')} - see the invariant section for the offending events.`;
+  } else if (costsNotApplied) {
+    certification = 'FAIL';
+    reason = 'Fills occurred under a non-zero cost profile but the broker recorded zero fees/slippage - the transaction-cost model is not live in this run; simulated P&L would be gross-fiction.';
   } else if (requireTrade) {
     certification = completeLifecycle ? 'PASS' : 'FAIL';
     reason = completeLifecycle ? null : `Blocked at ${firstBlockingStage} - see the decision timeline for the exact rejecting event.`;
@@ -255,6 +277,7 @@ export function evaluateCertification(
       heapEndMb: heapValues[heapValues.length - 1] ?? null,
     },
     invariantViolations,
+    costs: { feesPaid, slippagePaid, costProfile: profile },
   };
 }
 
@@ -301,6 +324,8 @@ export function renderCertificationReport(cert: CertificationResult): string {
   lines.push(`Fills:               ${cert.counts.fills}`);
   lines.push(`Position lifecycle:  ${cert.stages.POSITION_OPENED ? (cert.stages.POSITION_CLOSED ? 'OPENED_AND_CLOSED' : 'OPENED_ONLY') : 'NONE'}`);
   lines.push(`Realized P&L (SIMULATED): ${cert.realizedPnl.toFixed(2)}`);
+  lines.push(`Costs deducted (SIMULATED): fees $${cert.costs.feesPaid.toFixed(2)} + slippage $${cert.costs.slippagePaid.toFixed(2)}`);
+  lines.push(`Cost profile:         $${cert.costs.costProfile.commissionPerShare}/share commission, ${cert.costs.costProfile.spreadBps}bps spread, ${cert.costs.costProfile.slippageBps}bps slippage`);
   if (cert.firstBlockingStage) lines.push(`First blocking stage: ${cert.firstBlockingStage}`);
   if (cert.reason) lines.push(`Reason:              ${cert.reason}`);
   if (cert.zeroTradeReason) lines.push(`Zero-trade reason:   ${cert.zeroTradeReason}`);

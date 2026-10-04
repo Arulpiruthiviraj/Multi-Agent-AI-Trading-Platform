@@ -33,7 +33,13 @@ function validChain(traceId: string, symbol: string, orderId: string, side: 'BUY
   ];
 }
 
-function fakeResult(timeline: TimelineEntry[], realizedPnl = 0, scenarioId = 'QUIET_OPEN'): SyntheticSessionResult {
+function fakeResult(
+  timeline: TimelineEntry[],
+  realizedPnl = 0,
+  scenarioId = 'QUIET_OPEN',
+  brokerCosts: { feesPaid?: number; slippagePaid?: number } = {},
+  costProfile = { commissionPerShare: 0.005, spreadBps: 2, slippageBps: 5 },
+): SyntheticSessionResult {
   return {
     simulationId: 'sim_test',
     scenarioId,
@@ -43,7 +49,13 @@ function fakeResult(timeline: TimelineEntry[], realizedPnl = 0, scenarioId = 'QU
     sessionEndMs: 1_700_000_000_000 + 90 * 60_000,
     timeline,
     newsItems: [],
-    broker: { snapshotCosts: () => ({ realizedPnl }) } as unknown as SyntheticSessionResult['broker'],
+    broker: {
+      snapshotCosts: () => ({
+        realizedPnl,
+        feesPaid: brokerCosts.feesPaid ?? 0,
+        slippagePaid: brokerCosts.slippagePaid ?? 0,
+      }),
+    } as unknown as SyntheticSessionResult['broker'],
     memorySamples: [],
     eventLoopP50Ms: null,
     eventLoopP95Ms: null,
@@ -52,6 +64,7 @@ function fakeResult(timeline: TimelineEntry[], realizedPnl = 0, scenarioId = 'QU
     wallClockDurationMs: 1000,
     dbPath: '/tmp/fake.db',
     calibrationSeedResults: [],
+    costProfile,
   };
 }
 
@@ -85,10 +98,15 @@ describe('evaluateCertification', () => {
       ...validChain('t1', 'AAPL', 'o1', 'BUY'),
       ...validChain('t2', 'AAPL', 'o2', 'SELL'),
     ];
-    const cert = evaluateCertification(fakeResult(timeline, 12.5, 'VALIDATED_CONVERGENCE_CONTROL'), true);
+    const cert = evaluateCertification(
+      fakeResult(timeline, 12.5, 'VALIDATED_CONVERGENCE_CONTROL', { feesPaid: 0.2, slippagePaid: 1.1 }),
+      true,
+    );
     expect(cert.certification).toBe('PASS');
     expect(cert.stages.POSITION_CLOSED).toBe(true);
     expect(cert.realizedPnl).toBe(12.5);
+    expect(cert.costs.feesPaid).toBe(0.2);
+    expect(cert.costs.slippagePaid).toBe(1.1);
   });
 
   it('marks POSITION_CLOSED on a breakeven round-trip (realizedPnl === 0)', () => {
@@ -99,7 +117,10 @@ describe('evaluateCertification', () => {
       ...validChain('t2', 'AAPL', 'o2', 'SELL'),
     ];
     // Breakeven close: the old `realizedPnl !== 0` inference reported POSITION_CLOSED=false.
-    const cert = evaluateCertification(fakeResult(timeline, 0, 'VALIDATED_CONVERGENCE_CONTROL'), true);
+    const cert = evaluateCertification(
+      fakeResult(timeline, 0, 'VALIDATED_CONVERGENCE_CONTROL', { feesPaid: 0.2, slippagePaid: 0.9 }),
+      true,
+    );
     expect(cert.stages.POSITION_CLOSED).toBe(true);
     expect(cert.certification).toBe('PASS');
   });
@@ -154,5 +175,46 @@ describe('evaluateCertification', () => {
     const cert = evaluateCertification(fakeResult(timeline, 0, 'VALIDATED_CONVERGENCE_CONTROL'), true);
     expect(cert.certification).toBe('FAIL');
     expect(cert.firstBlockingStage).toBe('CONSENSUS');
+  });
+
+  it('FAILs when fills occur under a non-zero cost profile but zero costs were recorded', () => {
+    seq = 0;
+    const timeline = [
+      entry('MARKET_DATA', { symbol: 'AAPL' }),
+      ...validChain('t1', 'AAPL', 'o1', 'BUY'),
+    ];
+    // Default fake profile is non-zero (0.005/2/5) but the broker recorded no costs:
+    // the cost model silently isn't biting, so simulated P&L would be gross-fiction.
+    const cert = evaluateCertification(fakeResult(timeline, 5, 'VALIDATED_CONVERGENCE_CONTROL'), true);
+    expect(cert.certification).toBe('FAIL');
+    expect(cert.reason).toContain('cost');
+  });
+
+  it('passes with a zero-cost profile and zero recorded costs (explicit research mode)', () => {
+    seq = 0;
+    const timeline = [
+      entry('MARKET_DATA', { symbol: 'AAPL' }),
+      ...validChain('t1', 'AAPL', 'o1', 'BUY'),
+    ];
+    const cert = evaluateCertification(
+      fakeResult(timeline, 5, 'QUIET_OPEN', {}, { commissionPerShare: 0, spreadBps: 0, slippageBps: 0 }),
+      false,
+    );
+    expect(cert.certification).toBe('PASS');
+    expect(cert.costs.feesPaid).toBe(0);
+  });
+
+  it('surfaces the session cost profile in the certification result', () => {
+    seq = 0;
+    const timeline = [
+      entry('MARKET_DATA', { symbol: 'AAPL' }),
+      ...validChain('t1', 'AAPL', 'o1', 'BUY'),
+    ];
+    const cert = evaluateCertification(
+      fakeResult(timeline, 5, 'QUIET_OPEN', { feesPaid: 0.05, slippagePaid: 0.3 }),
+      false,
+    );
+    expect(cert.certification).toBe('PASS');
+    expect(cert.costs.costProfile).toEqual({ commissionPerShare: 0.005, spreadBps: 2, slippageBps: 5 });
   });
 });
