@@ -98,6 +98,7 @@
   "thesisInvalidationExitConfidence": 0.9,
   "regimeMismatchConfidenceMultiplier": 0.5,
   "minStrategyConfidenceToTrade": 0.6,
+  "triggerAbsentConfidenceCap": 0.4,
   "agentWinRateAlertPct": 48,
   "agentWinRateAlertMinPredictions": 20,
   "autoFlattenOnReconciliationMismatch": false,
