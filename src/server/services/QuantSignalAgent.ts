@@ -28,7 +28,7 @@ import { db } from '../db';
 import * as schema from '../db/schema';
 import { marketDataWorker, type RescueRequestClass } from './MarketDataWorker';
 import { getCachedMoverSymbols } from '../continuous/MarketUniverseScanner';
-import { historicalDataGateway, Bar } from '../engines/backtest/HistoricalDataGateway';
+import { historicalDataGateway, Bar, isDailyBarFinal } from '../engines/backtest/HistoricalDataGateway';
 import { getRegisteredHistoricalBarProvider } from '../engines/backtest/historicalBarProvider';
 import { classifyRegime, RegimeResult } from '../quant/RegimeEngine';
 import { quantCoreBridge } from './QuantCoreBridge';
@@ -68,7 +68,7 @@ import { isMultiAssetEnabled } from '../config/multiAsset';
 import { classifyAsset } from '../multiAsset/AssetClassifier';
 import { createSingleFlightGuard } from '../core/singleFlightInterval';
 import { isExperimentalStrategyLive } from '../config/quantExperimentalStrategies';
-import { getTradingDateStr, tradingWallTimeToIso } from '../core/TradingCalendar';
+import { getTradingDateStr, tradingWallTimeToIso, TRADING_TIMEZONE } from '../core/TradingCalendar';
 import { replaySafety } from '../replay/replaySafety';
 
 const DEFAULT_CYCLE_INTERVAL_MS = tradingSafety.quantCycleIntervalMs;
@@ -84,6 +84,21 @@ const MIN_BARS_TO_EVALUATE = MIN_BARS;
 // Kept for unit tests of the historical regime mapping. Live evaluateSymbol must NOT emit this
 // as a trade idea — no EV, stop, or target.
 const MIN_REGIME_CONFIDENCE_TO_TRADE = tradingSafety.minRegimeConfidenceToTrade;
+
+/**
+ * P1-1 (2026-10-04 remediation): the last '1Day' bar may still be forming (fetched intraday,
+ * marked provisional in ohlcv_bars - see HistoricalDataGateway.persistBars()). Its close is then a
+ * frozen early-session snapshot, not today's real current price. Prefer the live tick whenever the
+ * last bar's own trading day has not closed yet - falls back to the bar close only when no live
+ * quote is available at all, never silently losing the bar-based evaluation this agent exists for.
+ * Extracted as a pure function (same pattern as IbkrSocketSession.buildIbkrOrder /
+ * InteractiveBrokersWebApiAdapter.resolveIbkrWebOrderType) so this safety-relevant price selection
+ * is directly unit-testable without the full evaluateSymbol pipeline.
+ */
+export function resolveQuantCurrentPrice(lastBar: Bar, liveQuote: number | null, nowMs: number): number {
+  const lastBarIsFinal = isDailyBarFinal(lastBar.timestamp, nowMs, TRADING_TIMEZONE);
+  return (!lastBarIsFinal && liveQuote != null && Number.isFinite(liveQuote) && liveQuote > 0) ? liveQuote : lastBar.close;
+}
 
 export interface DerivedIdea {
   side: 'BUY' | 'SELL';
@@ -363,7 +378,7 @@ export class QuantSignalAgent {
       /* shadow diagnostics only - must never affect real evaluation */
     }
     const marketContext = await getMarketContext(symbol, bars, TIMEFRAME, startMs, endMs);
-    const currentPrice = bars[bars.length - 1].close;
+    const currentPrice = resolveQuantCurrentPrice(bars[bars.length - 1], marketDataWorker.getLatestPrice(symbol), Date.now());
 
     // Real StrategyEngine context - reuses regime.features (trend/volatility/priceAction, already
     // computed by classifyRegime above) rather than recomputing them a second time; only momentum/

@@ -12,13 +12,32 @@
  * backoff is armed; callers may still evaluate from cache — never fabricate bars.
  * ==========================================================
  */
-import { db } from '../../db';
+import { db, sqliteDb } from '../../db';
 import * as schema from '../../db/schema';
 import { and, eq, gte, lte, asc, ne, sql } from 'drizzle-orm';
 import { tradingSafety } from '../../config/tradingSafety';
 import { networkEndpoints } from '../../config/networkEndpoints';
 import crypto from 'crypto';
 import { getRegisteredHistoricalBarProvider } from './historicalBarProvider';
+import { minutesInTimezone } from '../../replay/marketSession';
+import { replaySafety } from '../../replay/replaySafety';
+import { TRADING_TIMEZONE } from '../../core/TradingCalendar';
+
+/**
+ * P1-1 (2026-10-04 remediation): a '1Day' bar's own timestamp is its session OPEN, so a bar fetched
+ * with end=now mid-session is still forming - it is only truly final once that trading day's
+ * regular session has closed. Reuses the same NY-calendar-date comparison already established by
+ * marketSession.ts rather than a second, independent timezone implementation. A bar for a date
+ * strictly before "now"'s own calendar date is always final (a later calendar day has started, so
+ * that earlier day is over); a bar for "now"'s own date is final only once past the session close
+ * minute.
+ */
+export function isDailyBarFinal(barTimestampMs: number, nowMs: number, timeZone: string): boolean {
+  const barDateStr = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(barTimestampMs));
+  const nowDateStr = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(nowMs));
+  if (nowDateStr !== barDateStr) return true;
+  return minutesInTimezone(nowMs, timeZone) >= replaySafety.regularSessionEndMinutes;
+}
 
 export interface Bar {
   timestamp: number; // epoch ms, bar open time
@@ -144,20 +163,24 @@ export class HistoricalDataGateway {
     startMs?: number,
     endMs?: number,
   ): Promise<void> {
+    const isDailyTimeframe = timeframe === '1Day' || timeframe === '1D';
+    const now = Date.now();
     for (const b of bars) {
       if (!(b.close > 0) || !Number.isFinite(b.timestamp)) continue;
-      await db.insert(schema.ohlcvBars).values({
-        id: `${symbol}:${timeframe}:${b.timestamp}`,
-        symbol,
-        timeframe,
-        timestamp: b.timestamp,
-        open: b.open,
-        high: b.high,
-        low: b.low,
-        close: b.close,
-        volume: b.volume,
-        source,
-      }).onConflictDoNothing();
+      // P1-1 (2026-10-04): a still-forming current-day daily bar is marked provisional rather than
+      // frozen as final. persistBars() may refresh a row this process itself wrote as provisional
+      // (the WHERE clause below), but a bar already written non-provisional (the stable, completed
+      // case - and every intraday-timeframe bar, which is never partial once returned) is never
+      // touched again, matching "never overwrite immutable historical bars indiscriminately."
+      const provisional = isDailyTimeframe && !isDailyBarFinal(b.timestamp, now, TRADING_TIMEZONE) ? 1 : 0;
+      sqliteDb.prepare(
+        `INSERT INTO ohlcv_bars (id, symbol, timeframe, timestamp, open, high, low, close, volume, source, provisional)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close,
+           volume=excluded.volume, source=excluded.source, provisional=excluded.provisional
+         WHERE ohlcv_bars.provisional = 1`,
+      ).run(`${symbol}:${timeframe}:${b.timestamp}`, symbol, timeframe, b.timestamp, b.open, b.high, b.low, b.close, b.volume, source, provisional);
     }
     if (startMs != null && endMs != null) {
       this.memoryBars.delete(this.memoryKey(symbol, timeframe, startMs, endMs));

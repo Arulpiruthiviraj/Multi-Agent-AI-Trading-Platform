@@ -830,6 +830,15 @@ export const ohlcvBars = sqliteTable('ohlcv_bars', {
   close: real('close').notNull(),
   volume: real('volume').notNull(),
   source: text('source').notNull().default('alpaca'),
+  // P1-1 (2026-10-04 remediation): a still-forming current-day daily bar fetched with end=now was
+  // previously persisted with onConflictDoNothing() - first write wins forever, freezing an early-
+  // session snapshot as if it were the real closing bar. provisional=1 marks a bar fetched before
+  // its trading day's session close; persistBars() may refresh a provisional row when a later fetch
+  // observes the same bar, but a bar once written non-provisional (provisional=0, the real default)
+  // is never overwritten. Existing rows all default to 0 (final) - this migration does not retroactively
+  // mark any already-written row provisional; see the companion backfill audit script for identifying
+  // rows that were actually written intraday on their own bar date.
+  provisional: integer('provisional').notNull().default(0),
 }, (table) => ({
   symbolTimeframeTimeIdx: index('idx_ohlcv_symbol_tf_time').on(table.symbol, table.timeframe, table.timestamp),
 }));
