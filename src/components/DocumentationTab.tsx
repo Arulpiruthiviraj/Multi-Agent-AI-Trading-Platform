@@ -789,7 +789,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
               </div>
             </div>
 
-            <div className="bg-rose-950/20 border border-rose-500/15 p-4 rounded-lg flex gap-3">
+          <div className="bg-rose-950/20 border border-rose-500/15 p-4 rounded-lg flex gap-3">
               <Lock size={20} className="text-rose-400 shrink-0 mt-0.5" />
               <div>
                 <h4 className="text-rose-400 font-bold text-xs uppercase font-mono mb-1">Real Deployment Notes</h4>
@@ -880,6 +880,14 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
               <li>Kelly refuses below <strong className="text-slate-200">20 real closed trades</strong> backing the win-rate estimate - "insufficient sample size," not a fabricated number.</li>
               <li>Even when justified, the suggested size is hard-capped at <strong className="text-slate-200">10% of capital</strong>, regardless of what the raw formula computes.</li>
             </ul>
+          </div>
+
+          <div className="bg-[#111822] border border-slate-800 p-4 rounded">
+            <span className="text-[10px] font-mono uppercase text-emerald-400 font-bold block mb-3">WFO PROMOTION GATE - DSR IS A REAL SELECTOR</span>
+            <p className="text-xs text-slate-300 leading-relaxed mb-2">
+              Walk-forward validation (<code className="text-[10px]">scripts/run_vectorbt_wfo.py</code>, research-only, never places orders) promotes a strategy parameter set only if <strong className="text-slate-100">all three</strong> hold: positive out-of-sample expectancy, a passed permutation test, <strong className="text-slate-100">and</strong> a Deflated Sharpe Ratio at or above <code className="text-[10px]">dsrMinThreshold</code> (<code className="text-[10px]">config/researchSafety.json</code>, default 0.95 - the Bailey &amp; Lopez de Prado 95%-confidence bar after correcting for multiple testing). DSR used to be computed and stored but only rejected when undefined; it now has real selective force. Backtests run net of configured costs (commission, spread, slippage) - never gross-fiction.
+            </p>
+            <p className="text-[10px] text-slate-500 font-mono">Rejected candidates report the exact reason: OOS_EXPECTANCY_FAIL / PERMUTATION_FAIL / DSR_UNDEFINED / DSR_BELOW_THRESHOLD.</p>
           </div>
 
           <div className="bg-rose-950/20 border border-rose-500/15 p-4 rounded-lg flex gap-3">

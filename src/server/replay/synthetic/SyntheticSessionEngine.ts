@@ -45,7 +45,7 @@ import { seedSyntheticNewsForScenario, buildSyntheticNewsProvider, type Syntheti
 import type { DecisionTimeline, TimelineEntry } from './DecisionTimeline';
 import { InformationCutoff } from '../InformationCutoff';
 import { HistoricalReplayBroker } from '../../../brokers/HistoricalReplayBroker';
-import { replaySafety } from '../replaySafety';
+import { replaySafety, type ReplayCostProfile } from '../replaySafety';
 import { setActiveReplaySession, type ActiveReplaySession, defaultReplayConfig } from '../ReplayContext';
 import type { ResearchBar } from '../../research/ohlcvTypes';
 import type { CalibrationSeedSpec, CalibrationSeedResult } from './CalibrationHistorySeeder';
@@ -129,6 +129,10 @@ export interface SyntheticSessionResult {
    *  own header for the full disclosure. CertificationGate.ts surfaces this as calibrationSeeded
    *  so a Test B PASS achieved this way is never confused with organic calibration proof. */
   calibrationSeedResults: CalibrationSeedResult[];
+  /** The transaction-cost profile the session's broker actually filled against
+   *  (commission/spread/slippage). CertificationGate.ts uses it to prove the cost model was
+   *  live in the run: fills under a non-zero profile must show deducted costs. */
+  costProfile: ReplayCostProfile;
 }
 
 function defaultSessionStartMs(): number {
@@ -508,6 +512,7 @@ export class SyntheticSessionEngine {
       wallClockDurationMs: Date.now() - wallClockStart,
       dbPath: this.dbPath,
       calibrationSeedResults,
+      costProfile: costs,
     };
   }
 }
