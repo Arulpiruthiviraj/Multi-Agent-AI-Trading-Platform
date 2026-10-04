@@ -63,6 +63,55 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * P1-12 (2026-10-04 remediation): orders() used to pass Alpaca's raw status straight through
+ * `o.status.toUpperCase()` - already a type violation (Order.status is only
+ * 'PENDING'|'FILLED'|'PARTIALLY_FILLED'|'CANCELED'|'REJECTED', but Alpaca's real API returns
+ * values like "done_for_day"/"expired"/"stopped"/"suspended" that uppercase to names outside that
+ * union entirely). OrderManagement's isTerminalOrderStatus() never recognized those, so a dead,
+ * unfillable DAY order was treated as still "open": followUpOpenOrders() kept attempting to cancel
+ * it every cycle, Alpaca correctly 422'd the already-dead order every time, and that repeated
+ * failure eventually triggered pauseTradingForOrphan() - a real nightly trading-halt bug, not
+ * hypothetical. Maps every real Alpaca order status (per Alpaca's own documented enum) to Argus's
+ * canonical vocabulary explicitly, never a bare case-transform.
+ */
+export function mapAlpacaOrderStatus(rawStatus: string): Order['status'] {
+  switch (String(rawStatus || '').toLowerCase()) {
+    case 'filled':
+      return 'FILLED';
+    case 'partially_filled':
+      return 'PARTIALLY_FILLED';
+    case 'rejected':
+      return 'REJECTED';
+    // Dead/unfillable: no further fill is possible and there is nothing left to cancel. Mapping
+    // these to CANCELED (not a new, wider "terminal" concept) is what makes them visible to the
+    // EXISTING isTerminalOrderStatus()/TERMINAL_ORDER_STATUSES check with zero other code changes.
+    case 'canceled':
+    case 'expired':
+    case 'done_for_day':
+    case 'stopped':
+    case 'suspended':
+    case 'replaced':
+      return 'CANCELED';
+    // Still genuinely working, including an in-flight cancel/replace that has not yet completed -
+    // treating these as terminal would be the opposite, equally real bug (abandoning an order
+    // that might still fill).
+    case 'new':
+    case 'accepted':
+    case 'pending_new':
+    case 'accepted_for_bidding':
+    case 'held':
+    case 'calculated':
+    case 'pending_cancel':
+    case 'pending_replace':
+      return 'PENDING';
+    default:
+      // Unknown future Alpaca status: fail closed to PENDING (keeps follow-up/reconciliation
+      // watching it) rather than silently guessing CANCELED/FILLED for a status never reviewed.
+      return 'PENDING';
+  }
+}
+
 export class AlpacaBroker implements BrokerPlugin {
   id = 'alpaca';
   name = 'Alpaca';
@@ -296,7 +345,7 @@ export class AlpacaBroker implements BrokerPlugin {
       symbol: o.symbol,
       side: o.side.toUpperCase(),
       type: o.order_type.toUpperCase(),
-      status: o.status.toUpperCase(),
+      status: mapAlpacaOrderStatus(o.status),
       quantity: parseFloat(o.qty),
       filledQuantity: parseFloat(o.filled_qty),
       price: o.limit_price ? parseFloat(o.limit_price) : undefined,
@@ -372,7 +421,7 @@ export class AlpacaBroker implements BrokerPlugin {
       symbol: res.symbol,
       side: res.side.toUpperCase(),
       type: res.order_type.toUpperCase(),
-      status: res.status.toUpperCase(),
+      status: mapAlpacaOrderStatus(res.status),
       quantity: parseFloat(res.qty),
       filledQuantity: parseFloat(res.filled_qty),
       // Real bug found and fixed this pass: a MARKET order (especially on paper) commonly fills
@@ -426,7 +475,7 @@ export class AlpacaBroker implements BrokerPlugin {
       symbol: match.symbol,
       side: match.side.toUpperCase(),
       type: match.order_type.toUpperCase(),
-      status: match.status.toUpperCase(),
+      status: mapAlpacaOrderStatus(match.status),
       quantity: parseFloat(match.qty),
       filledQuantity: parseFloat(match.filled_qty),
       averageFillPrice: match.filled_avg_price ? parseFloat(match.filled_avg_price) : undefined,
