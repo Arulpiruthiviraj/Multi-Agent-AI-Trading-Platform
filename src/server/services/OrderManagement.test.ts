@@ -78,6 +78,7 @@ const { emitOrderExecution } = vi.hoisted(() => ({ emitOrderExecution: vi.fn() }
 
 const { mockBrokerHolder } = vi.hoisted(() => ({ mockBrokerHolder: { broker: null as any, byId: {} as Record<string, any> } }));
 const { setTradingState } = vi.hoisted(() => ({ setTradingState: vi.fn(async () => {}) }));
+const { tradingEngineState } = vi.hoisted(() => ({ tradingEngineState: { tradingState: 'TRADING_ENABLED' as string } }));
 const { preparePosition } = vi.hoisted(() => ({ preparePosition: vi.fn(() => null as string | null) }));
 
 // These tests isolate OMS orchestration. Atomic inventory/P&L and stale-position safety are
@@ -97,7 +98,7 @@ vi.mock('../../brokers/BrokerManager', () => ({
   },
 }));
 vi.mock('../engines/TradingEngine', () => ({
-  tradingEngine: { setTradingState },
+  tradingEngine: { setTradingState, state: tradingEngineState },
 }));
 
 import { OrderManagementService } from './OrderManagement';
@@ -115,6 +116,7 @@ describe('OrderManagementService.executeOrder', () => {
     setThrowOnIdempotency(false);
     setEnvRow({ tradingMode: 'Paper', paperMode: true });
     preparePosition.mockReturnValue(null);
+    tradingEngineState.tradingState = 'TRADING_ENABLED';
   });
 
   afterEach(() => {
@@ -260,6 +262,34 @@ describe('OrderManagementService.executeOrder', () => {
     // A real fill happened - it should also land in the fills ledger.
     expect(fillsInserts).toHaveLength(1);
     expect(fillsInserts[0].price).toBe(100);
+  });
+
+  // P1-3 (2026-10-04): RiskEngine's emergency_stop gate only covers the moment an assessment is
+  // evaluated - everything between RISK_ASSESSMENT_COMPLETED and the broker call is real wall-clock
+  // time an operator-triggered kill switch can land inside. This re-checks trading state immediately
+  // adjacent to the sole placeOrder() call.
+  it('refuses to submit when the kill switch engages after approval but before the broker call', async () => {
+    const placeOrder = vi.fn(async () => ({ id: 'order-killswitch', status: 'FILLED', filledQuantity: 10, averageFillPrice: 100 }));
+    mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
+    tradingEngineState.tradingState = 'EMERGENCY_STOP';
+
+    await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'kill-switch-trace');
+
+    expect(placeOrder).not.toHaveBeenCalled();
+    const finalRow = getFinalTradeRow();
+    expect(finalRow.status).toBe('REJECTED');
+    expect(finalRow.reasoning).toContain('KILL_SWITCH_ENGAGED_AT_SUBMIT');
+  });
+
+  it('submits normally when trading state is unaffected (kill-switch re-check is not a false positive)', async () => {
+    const placeOrder = vi.fn(async () => ({ id: 'order-normal', status: 'FILLED', filledQuantity: 10, averageFillPrice: 100 }));
+    mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
+    tradingEngineState.tradingState = 'TRADING_ENABLED';
+
+    await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'kill-switch-normal-trace');
+
+    expect(placeOrder).toHaveBeenCalledTimes(1);
+    expect(getFinalTradeRow().status).toBe('FILLED');
   });
 
   it('polls for a terminal fill when the broker initially returns PENDING, and records the real fill price', async () => {

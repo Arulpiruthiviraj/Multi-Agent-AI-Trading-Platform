@@ -577,6 +577,29 @@ export class OrderManagementService {
         quote: replayActive ? null : marketDataWorker.getObservedQuoteEvidence(symbol),
         environment: this.resolveFillEnvironment(orderBroker.id),
       }));
+      // P1-3 (2026-10-04 remediation): RiskEngine's own emergency_stop gate only covers the moment
+      // an assessment is evaluated. Everything between RISK_ASSESSMENT_COMPLETED and this line (DB
+      // writes, the idempotency lookup, the broker positions() round-trip above) is real wall-clock
+      // time an operator-triggered kill switch can land inside. Re-read trading state immediately
+      // adjacent to the sole broker submission call below - no await separates this check from the
+      // placeOrder() it guards, so the remaining race is millisecond-scale, not the multi-step
+      // window this closes. Mirrors the gate's own replay carve-out (replay forces ENABLED for the
+      // research clock - see RiskEngine.ts's emergency_stop gate and CLAUDE.md's gate table).
+      if (!replayActive) {
+        const { tradingEngine } = await import('../engines/TradingEngine');
+        if (tradingEngine.state.tradingState !== 'TRADING_ENABLED') {
+          const reason = 'KILL_SWITCH_ENGAGED_AT_SUBMIT';
+          await db.update(trades).set({ status: 'REJECTED', reasoning: `${reasoning} ${reason}` }).where(eq(trades.id, orderId));
+          observeSafe(() => structuredLogger.warn('order_kill_switch_refused', {
+            category: 'RISK', eventType: 'ORDER_KILL_SWITCH_REFUSED', traceId, orderId, symbol,
+            tradingState: tradingEngine.state.tradingState,
+          }));
+          eventBus.emitOrderExecution({ traceId, transactionId, id: orderId, symbol, side, quantity,
+            price: 0, status: 'REJECTED', profitLoss: null, executionEnvironment: this.resolveFillEnvironment(orderBroker.id) });
+          try { notifyReplayOrder(traceId); } catch { /* optional */ }
+          return;
+        }
+      }
       const brokerOrder = await activeBroker.placeOrder({
           symbol,
           side: side as 'BUY' | 'SELL',
