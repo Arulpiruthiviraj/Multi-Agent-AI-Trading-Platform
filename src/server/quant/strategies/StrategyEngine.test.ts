@@ -90,7 +90,7 @@ describe('StrategyEngine.evaluateAll', () => {
 describe('StrategyEngine.bestStrategyIdea', () => {
   it('returns null when no strategy clears the minimum confidence bar', () => {
     const weak: StrategyEvaluation[] = [
-      { strategy: 'MOMENTUM_BREAKOUT', side: 'BUY', setupScore: 40, confidence: 0.4, conditionsMet: [], conditionsFailed: [], contradictions: [], invalidationConditions: [], stop: { price: null, basis: 'x' }, target: { price: null, basis: 'x' }, applicableRegimes: ['BULLISH_TREND'] },
+      { strategy: 'MOMENTUM_BREAKOUT', side: 'BUY', setupScore: 40, confidence: 0.4, triggerMet: true, conditionsMet: [], conditionsFailed: [], contradictions: [], invalidationConditions: [], stop: { price: null, basis: 'x' }, target: { price: null, basis: 'x' }, applicableRegimes: ['BULLISH_TREND'] },
     ];
     expect(bestStrategyIdea(weak)).toBeNull();
   });
@@ -100,8 +100,8 @@ describe('StrategyEngine.bestStrategyIdea', () => {
     // contract evaluateAll() guarantees) - pre-sorted here to match that real contract, exactly as
     // evaluateAll() itself would hand it off.
     const evaluations: StrategyEvaluation[] = [
-      { strategy: 'MOMENTUM_BREAKOUT', side: 'SELL', setupScore: 90, confidence: 0.9, conditionsMet: ['x', 'y'], conditionsFailed: [], contradictions: ['z'], invalidationConditions: [], stop: { price: null, basis: 'x' }, target: { price: null, basis: 'x' }, applicableRegimes: ['BEARISH_TREND'] },
-      { strategy: 'TREND_FOLLOWING', side: 'BUY', setupScore: 65, confidence: 0.65, conditionsMet: ['a'], conditionsFailed: ['b'], contradictions: [], invalidationConditions: [], stop: { price: null, basis: 'x' }, target: { price: null, basis: 'x' }, applicableRegimes: ['BULLISH_TREND'] },
+      { strategy: 'MOMENTUM_BREAKOUT', side: 'SELL', setupScore: 90, confidence: 0.9, triggerMet: true, conditionsMet: ['x', 'y'], conditionsFailed: [], contradictions: ['z'], invalidationConditions: [], stop: { price: null, basis: 'x' }, target: { price: null, basis: 'x' }, applicableRegimes: ['BEARISH_TREND'] },
+      { strategy: 'TREND_FOLLOWING', side: 'BUY', setupScore: 65, confidence: 0.65, triggerMet: true, conditionsMet: ['a'], conditionsFailed: ['b'], contradictions: [], invalidationConditions: [], stop: { price: null, basis: 'x' }, target: { price: null, basis: 'x' }, applicableRegimes: ['BULLISH_TREND'] },
     ];
 
     const idea = bestStrategyIdea(evaluations);

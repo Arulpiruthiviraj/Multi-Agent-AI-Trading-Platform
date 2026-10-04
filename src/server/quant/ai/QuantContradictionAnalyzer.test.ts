@@ -11,7 +11,7 @@ function baseInput(overrides: Partial<ContradictionAnalysisInput> = {}): Contrad
     side: 'BUY',
     regime: { regime: 'BULLISH_TREND', trendStrength: 80, volatility: 'NORMAL', marketStructure: 'TRENDING', confidence: 0.85, features: {} as any, insufficientData: false },
     strategyEvaluation: {
-      strategy: 'MOMENTUM_BREAKOUT', side: 'BUY', setupScore: 90, confidence: 0.9,
+      strategy: 'MOMENTUM_BREAKOUT', side: 'BUY', setupScore: 90, confidence: 0.9, triggerMet: true,
       conditionsMet: ['a', 'b'], conditionsFailed: [], contradictions: [],
       invalidationConditions: [], stop: { price: 100, basis: 'test' }, target: { price: 120, basis: 'test' },
       applicableRegimes: ['BULLISH_TREND'],

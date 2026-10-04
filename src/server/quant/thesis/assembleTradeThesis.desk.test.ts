@@ -13,6 +13,7 @@ describe('assembleTradeThesis desk fields', () => {
         side: 'BUY',
         setupScore: 80,
         confidence: 0.8,
+        triggerMet: true,
         conditionsMet: ['BOS'],
         conditionsFailed: ['RVOL'],
         contradictions: ['Below VWAP'],
