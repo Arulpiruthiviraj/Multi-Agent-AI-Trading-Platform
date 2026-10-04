@@ -60,14 +60,16 @@ public final class RangeReversion {
         int setupScore = ScoreFromConditions.compute(conditionsMet, total);
 
         LevelSuggestion stop = nearBoundary != null
-            ? new LevelSuggestion(nearBoundary.level(), "Just beyond the real " + (bullish ? "support" : "resistance") + " boundary being faded.")
+            ? new LevelSuggestion(nearBoundary.level(), "At the real " + (bullish ? "support" : "resistance") + " boundary being faded (a close through it invalidates the range).")
             : LevelSuggestion.none("No real range boundary available yet to derive a stop.");
 
         LevelSuggestion target = farBoundary != null
             ? new LevelSuggestion(farBoundary.level(), "The opposite real range boundary - trading the width of the range.")
             : LevelSuggestion.none("No real opposite range boundary available yet to derive a target.");
 
+        boolean triggerMet = nearBoundary != null && Math.abs(nearBoundary.pct()) <= QuantThresholds.NEAR_BOUNDARY_PCT;
         return new StrategyEvaluation(ID, side, setupScore, setupScore / 100.0,
+            triggerMet, // trigger: price at the range boundary IS this setup
             conditionsMet, conditionsFailed, contradictions,
             List.of(
                 "A real close beyond the " + (bullish ? "support" : "resistance") + " boundary confirms the range is breaking, not holding.",

@@ -19,6 +19,7 @@ class StrategyParityTest {
     @Test
     void momentumBreakoutBullishMatchesTypeScript() {
         StrategyEvaluation eval = new MomentumBreakout().evaluate(StrategyFixtures.momentumBreakoutBullish());
+        assertThat(eval.triggerMet()).isTrue();
         assertThat(eval.side()).isEqualTo(StrategyEvaluation.Side.BUY);
         assertThat(eval.setupScore()).isEqualTo(100);
         assertThat(eval.confidence()).isEqualTo(1.0);
@@ -30,6 +31,7 @@ class StrategyParityTest {
     @Test
     void momentumBreakoutBearishMatchesTypeScript() {
         StrategyEvaluation eval = new MomentumBreakout().evaluate(StrategyFixtures.momentumBreakoutBearish());
+        assertThat(eval.triggerMet()).isTrue();
         assertThat(eval.side()).isEqualTo(StrategyEvaluation.Side.SELL);
         assertThat(eval.setupScore()).isEqualTo(100);
         assertThat(eval.conditionsMet()).hasSize(8);
@@ -39,6 +41,7 @@ class StrategyParityTest {
     @Test
     void pullbackContinuationBullishMatchesTypeScript() {
         StrategyEvaluation eval = new PullbackContinuation().evaluate(StrategyFixtures.momentumBreakoutBullish());
+        assertThat(eval.triggerMet()).isTrue();
         assertThat(eval.side()).isEqualTo(StrategyEvaluation.Side.BUY);
         assertThat(eval.setupScore()).isEqualTo(83);
         assertThat(eval.confidence()).isCloseTo(0.83, org.assertj.core.api.Assertions.within(0.001));
@@ -49,6 +52,7 @@ class StrategyParityTest {
     @Test
     void pullbackContinuationBearishMatchesTypeScript() {
         StrategyEvaluation eval = new PullbackContinuation().evaluate(StrategyFixtures.momentumBreakoutBearish());
+        assertThat(eval.triggerMet()).isTrue();
         assertThat(eval.side()).isEqualTo(StrategyEvaluation.Side.SELL);
         assertThat(eval.setupScore()).isEqualTo(83);
         assertThat(eval.conditionsMet()).hasSize(5);
@@ -58,6 +62,7 @@ class StrategyParityTest {
     @Test
     void meanReversionRangingMatchesTypeScript() {
         StrategyEvaluation eval = new MeanReversion().evaluate(StrategyFixtures.rangingNeutral());
+        assertThat(eval.triggerMet()).isTrue();
         assertThat(eval.side()).isEqualTo(StrategyEvaluation.Side.BUY);
         assertThat(eval.setupScore()).isEqualTo(80);
         assertThat(eval.conditionsMet()).hasSize(4);
@@ -67,6 +72,7 @@ class StrategyParityTest {
     @Test
     void trendFollowingBullishMatchesTypeScript() {
         StrategyEvaluation eval = new TrendFollowing().evaluate(StrategyFixtures.momentumBreakoutBullish());
+        assertThat(eval.triggerMet()).isTrue();
         assertThat(eval.side()).isEqualTo(StrategyEvaluation.Side.BUY);
         assertThat(eval.setupScore()).isEqualTo(100);
         assertThat(eval.conditionsMet()).hasSize(6);
@@ -76,6 +82,7 @@ class StrategyParityTest {
     @Test
     void trendFollowingBearishMatchesTypeScript() {
         StrategyEvaluation eval = new TrendFollowing().evaluate(StrategyFixtures.momentumBreakoutBearish());
+        assertThat(eval.triggerMet()).isTrue();
         assertThat(eval.side()).isEqualTo(StrategyEvaluation.Side.SELL);
         assertThat(eval.setupScore()).isEqualTo(100);
         assertThat(eval.conditionsMet()).hasSize(6);
@@ -84,6 +91,7 @@ class StrategyParityTest {
     @Test
     void rangeReversionRangingMatchesTypeScript() {
         StrategyEvaluation eval = new RangeReversion().evaluate(StrategyFixtures.rangingNeutral());
+        assertThat(eval.triggerMet()).isTrue();
         assertThat(eval.side()).isEqualTo(StrategyEvaluation.Side.BUY);
         assertThat(eval.setupScore()).isEqualTo(100);
         assertThat(eval.conditionsMet()).hasSize(5);

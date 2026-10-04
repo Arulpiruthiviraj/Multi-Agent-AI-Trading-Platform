@@ -80,7 +80,9 @@ public final class InstitutionalStatArbStrategy {
         LevelSuggestion stop = LevelSuggestion.none("Pair-spread strategy - stop is a spread-Z-score reversal, not a single-symbol price level.");
         LevelSuggestion target = LevelSuggestion.none("Pair-spread strategy - target is spread reversion to its OU mean, not a single-symbol price level.");
 
+        boolean triggerMet = result.cointegrated() && extended && reasonableHalfLife;
         return new StrategyEvaluation(ID, side, setupScore, setupScore / 100.0,
+            triggerMet, // trigger: cointegrated pair with an extended, tradeable-horizon z-score
             conditionsMet, conditionsFailed, contradictions,
             List.of(
                 "Spread Z-score crosses back through zero (reversion has completed).",
@@ -91,6 +93,7 @@ public final class InstitutionalStatArbStrategy {
 
     private StrategyEvaluation noSignal(List<String> met, List<String> failed, List<String> contradictions) {
         return new StrategyEvaluation(ID, StrategyEvaluation.Side.BUY, 0, 0.0,
+            false, // no signal by construction
             met, failed, contradictions,
             List.of(),
             LevelSuggestion.none("No signal."), LevelSuggestion.none("No signal."),

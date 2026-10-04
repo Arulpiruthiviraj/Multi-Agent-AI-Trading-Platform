@@ -34,6 +34,7 @@ public final class MultiFactorMomentumStrategy {
         if (scores == null) {
             conditionsFailed.add("Not enough bar history for the requested factor windows.");
             return new StrategyEvaluation(ID, StrategyEvaluation.Side.BUY, 0, 0.0,
+                false, // insufficient history: no signal by construction
                 conditionsMet, conditionsFailed, contradictions,
                 List.of(), LevelSuggestion.none("No signal."), LevelSuggestion.none("No signal."),
                 List.of("ANY_REGIME"));
@@ -66,7 +67,9 @@ public final class MultiFactorMomentumStrategy {
             ? (int) Math.round(((double) conditionsMet.size() / total) * 100)
             : 0;
 
+        boolean triggerMet = Math.abs(scores.composite()) >= ENTRY_COMPOSITE_THRESHOLD;
         return new StrategyEvaluation(ID, side, setupScore, setupScore / 100.0,
+            triggerMet, // trigger: composite factor score beyond the entry threshold
             conditionsMet, conditionsFailed, contradictions,
             List.of(
                 "Composite factor score flips sign on a subsequent re-evaluation.",
