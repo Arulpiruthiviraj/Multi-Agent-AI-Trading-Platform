@@ -37,6 +37,8 @@
  *                          Test B seeds a synthetic prior calibration history by default (see
  *                          CalibrationHistorySeeder.ts) - pass --no-seed-calibration to see the
  *                          plain organic (pre-seed) diagnostic instead.
+ *   --seeds=<n>          with --certify: run each test on N consecutive seeds (seed..seed+N-1);
+ *                        every seed must pass. Default 1. Catches seed-sensitive defects.
  *   --seed-calibration    (plain single-scenario runs only) apply the same synthetic calibration
  *                          seed set --certify's Test B uses. Off by default outside --certify.
  */
@@ -124,6 +126,8 @@ async function main() {
   if (args.certify) {
     console.log('=== ARGUS MANDATORY POST-CHANGE MARKET-OPEN CERTIFICATION ===');
     const seed = Number(args.seed ?? 12345);
+    const seedCount = Math.max(1, Math.floor(Number(args.seeds ?? 1)));
+    if (seedCount > 1) console.log(`Multi-seed mode: ${seedCount} seeds (${seed}..${seed + seedCount - 1}) — every seed must pass.`);
     const speed = Number(args.speed ?? 1);
     // Test B's default duration (240min, not Test A's 90min) is deliberate, not an oversight: the
     // VALIDATED_CONVERGENCE_CONTROL scenario needs 200+ real bars for TREND_FOLLOWING's own
@@ -142,7 +146,15 @@ async function main() {
       scenarioId: 'QUIET_OPEN', seed, speed, durationMinutes: testADuration, symbols,
       requireTradeForCertification: false,
     };
-    const testA = await runScenarioInChildProcess(testASpec);
+
+    // Multi-seed (2026-10-04): each test runs on seeds [seed .. seed+seedCount-1];
+    // every seed must pass. A deterministic simulator that only passes on one
+    // seed is not a proof of anything.
+    const seeds = Array.from({ length: seedCount }, (_, i) => seed + i);
+    const testAResults: Array<{ seed: number; result: ChildResultMessage | null }> = [];
+    for (const s of seeds) {
+      testAResults.push({ seed: s, result: await runScenarioInChildProcess({ ...testASpec, seed: s, simulationId: `sim_QUIET_OPEN_${s}_${Date.now()}` }) });
+    }
 
     // Explicit, disclosed methodology change (2026-09-14, operator-authorized) - see
     // CalibrationHistorySeeder.ts's own header for the full disclosure. Applied to Test B ONLY -
@@ -155,17 +167,25 @@ async function main() {
       requireTradeForCertification: true,
       calibrationSeeds: seedCalibration ? DEFAULT_CALIBRATION_SEEDS : undefined,
     };
-    const testB = await runScenarioInChildProcess(testBSpec);
+    const testBResults: Array<{ seed: number; result: ChildResultMessage | null }> = [];
+    for (const s of seeds) {
+      testBResults.push({ seed: s, result: await runScenarioInChildProcess({ ...testBSpec, seed: s, simulationId: `sim_VALIDATED_CONVERGENCE_CONTROL_${s}_${Date.now()}` }) });
+    }
 
     console.log('\n=== CERTIFICATION SUMMARY ===');
-    console.log(`TEST A (no-trade safety):     ${testA?.certification} (tradeObserved=${testA?.tradeObserved}, zeroTradeReason=${testA?.zeroTradeReason ?? 'n/a'})`);
-    console.log(`TEST B (tradeable scenario):  ${testB?.certification} (tradeObserved=${testB?.tradeObserved}, firstBlockingStage=${testB?.firstBlockingStage ?? 'none'}, calibrationSeeded=${testB?.calibrationSeeded ?? false})`);
-    if (testB?.calibrationSeeded) {
+    for (const { seed: s, result } of testAResults) {
+      console.log(`TEST A (no-trade safety) [seed=${s}]:     ${result?.certification} (tradeObserved=${result?.tradeObserved}, zeroTradeReason=${result?.zeroTradeReason ?? 'n/a'})`);
+    }
+    for (const { seed: s, result } of testBResults) {
+      console.log(`TEST B (tradeable scenario) [seed=${s}]:  ${result?.certification} (tradeObserved=${result?.tradeObserved}, firstBlockingStage=${result?.firstBlockingStage ?? 'none'}, calibrationSeeded=${result?.calibrationSeeded ?? false})`);
+    }
+    if (testBResults.some(({ result }) => result?.calibrationSeeded)) {
       console.log('  NOTE: Test B used a seeded synthetic calibration history - see the report above.');
       console.log('  A PASS here proves pipeline CAPABILITY, not organic empirically-validated alpha.');
     }
-    const overall = testA?.certification === 'PASS' && testB?.certification === 'PASS' ? 'PASS' : 'FAIL';
-    console.log(`OVERALL: ${overall}`);
+    const allResults = [...testAResults, ...testBResults].map(({ result }) => result);
+    const overall = allResults.every((r) => r?.certification === 'PASS') ? 'PASS' : 'FAIL';
+    console.log(`OVERALL: ${overall} (${allResults.filter((r) => r?.certification === 'PASS').length}/${allResults.length} runs passed)`);
     process.exit(overall === 'PASS' ? 0 : 1);
   }
 

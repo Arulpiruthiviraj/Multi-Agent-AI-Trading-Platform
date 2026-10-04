@@ -8,6 +8,12 @@
  */
 import type { SyntheticSessionResult } from './SyntheticSessionEngine';
 import type { TimelineEntry } from './DecisionTimeline';
+import {
+  checkTimelineInvariants,
+  outageWindowsForScenario,
+  type OutageWindow,
+  type TimelineViolation,
+} from './TimelineInvariants';
 
 export type PipelineStage =
   | 'MARKET_DATA' | 'AGENT_IDEA' | 'CONSENSUS' | 'RISK_APPROVAL' | 'ORDER_SUBMITTED'
@@ -69,6 +75,10 @@ export interface CertificationResult {
   wallClockDurationMs: number;
   eventLoop: { p50: number | null; p95: number | null; p99: number | null; max: number | null };
   memory: { rssStartMb: number | null; rssPeakMb: number | null; rssEndMb: number | null; heapStartMb: number | null; heapEndMb: number | null };
+  /** Causal timeline invariant violations (risk bypass, phantom fill, consensus
+   *  bypass, orders during feed outage). Any FAIL-severity entry fails the
+   *  certification outright, regardless of test shape. */
+  invariantViolations: TimelineViolation[];
 }
 
 const STAGE_ORDER: PipelineStage[] = [
@@ -103,8 +113,16 @@ function inferZeroTradeReason(timeline: readonly TimelineEntry[]): string {
  * certification verdict. `requireTrade` distinguishes Test A (must NOT require a trade - zero
  * trades is a legitimate pass) from Test B (a scenario deliberately built to contain a real,
  * recognizable opportunity - a full lifecycle IS required to pass).
+ *
+ * `opts.outageWindows` overrides the scenario-derived feed-outage windows used by the
+ * ORDER_DURING_OUTAGE invariant; when omitted they are derived from the result's own
+ * scenarioId + sessionStartMs.
  */
-export function evaluateCertification(result: SyntheticSessionResult, requireTrade: boolean): CertificationResult {
+export function evaluateCertification(
+  result: SyntheticSessionResult,
+  requireTrade: boolean,
+  opts: { outageWindows?: OutageWindow[] } = {},
+): CertificationResult {
   const timeline = result.timeline;
 
   const marketDataTicks = countEvents(timeline, 'MARKET_DATA');
@@ -115,6 +133,13 @@ export function evaluateCertification(result: SyntheticSessionResult, requireTra
   const ordersSubmitted = countEvents(timeline, 'ORDER_SUBMITTED');
   const fills = countEvents(timeline, 'ORDER_FILLED') + countEvents(timeline, 'ORDER_EXECUTED');
 
+  // Causal invariant checks (2026-10-04): counting events cannot catch ordering
+  // violations (risk bypass, phantom fills, consensus bypass, trading into a
+  // feed outage). These fail certification unconditionally.
+  const outageWindows = opts.outageWindows ?? outageWindowsForScenario(result.scenarioId, result.sessionStartMs);
+  const invariantViolations = checkTimelineInvariants(timeline, { outageWindows });
+  const fatalViolations = invariantViolations.filter((v) => v.severity === 'FAIL');
+
   const stages: Record<PipelineStage, boolean> = {
     MARKET_DATA: marketDataTicks > 0,
     AGENT_IDEA: ideasGenerated > 0,
@@ -123,7 +148,7 @@ export function evaluateCertification(result: SyntheticSessionResult, requireTra
     ORDER_SUBMITTED: ordersSubmitted > 0,
     FILL_RECEIVED: fills > 0,
     POSITION_OPENED: fills > 0, // a real fill on a BUY opens a position by construction
-    POSITION_CLOSED: false, // filled in below once we can inspect realized P&L
+    POSITION_CLOSED: false, // filled in below
   };
 
   // HistoricalReplayBroker.snapshotCosts() is real, already-public state (not a test-only shim) -
@@ -131,8 +156,24 @@ export function evaluateCertification(result: SyntheticSessionResult, requireTra
   // (see HistoricalReplayBroker's own order-fill method - the realizedPnl += ... line inside its
   // SELL branch), so a non-zero value here is direct, real evidence a position was both opened and
   // closed - not an open position's unrealized mark, which this field never includes.
+  //
+  // 2026-10-04 fix: realizedPnl !== 0 misses a close at exactly breakeven (realizedPnl === 0).
+  // A SELL fill causally after a BUY fill for the same symbol is independent, real evidence of a
+  // completed round-trip, so either signal marks the stage.
   const realizedPnl = result.broker.snapshotCosts().realizedPnl;
-  stages.POSITION_CLOSED = realizedPnl !== 0;
+  const buySymbols = new Set(
+    timeline
+      .filter((e) => (e.eventType === 'ORDER_FILLED' || e.eventType === 'ORDER_EXECUTED') && String(e.side).toUpperCase() === 'BUY' && e.symbol)
+      .map((e) => e.symbol as string),
+  );
+  const sellAfterBuy = timeline.some(
+    (e) =>
+      (e.eventType === 'ORDER_FILLED' || e.eventType === 'ORDER_EXECUTED') &&
+      String(e.side).toUpperCase() === 'SELL' &&
+      e.symbol !== null &&
+      buySymbols.has(e.symbol),
+  );
+  stages.POSITION_CLOSED = realizedPnl !== 0 || sellAfterBuy;
 
   let firstBlockingStage: PipelineStage | null = null;
   for (const stage of STAGE_ORDER) {
@@ -146,7 +187,16 @@ export function evaluateCertification(result: SyntheticSessionResult, requireTra
   let reason: string | null = null;
   let zeroTradeReason: string | null = null;
 
-  if (requireTrade) {
+  // 2026-10-04: a Test A run that produced zero market-data ticks is not a safety
+  // proof - it is a broken simulator (dead data engine). Previously this passed
+  // silently, which is exactly the false-confidence failure this gate exists to prevent.
+  if (marketDataTicks === 0) {
+    certification = 'FAIL';
+    reason = 'No MARKET_DATA ticks recorded - the synthetic data engine produced nothing; the test itself is broken, not the pipeline.';
+  } else if (fatalViolations.length > 0) {
+    certification = 'FAIL';
+    reason = `Timeline invariant violation(s): ${fatalViolations.map((v) => v.code).join(', ')} - see the invariant section for the offending events.`;
+  } else if (requireTrade) {
     certification = completeLifecycle ? 'PASS' : 'FAIL';
     reason = completeLifecycle ? null : `Blocked at ${firstBlockingStage} - see the decision timeline for the exact rejecting event.`;
   } else {
@@ -204,6 +254,7 @@ export function evaluateCertification(result: SyntheticSessionResult, requireTra
       heapStartMb: heapValues[0] ?? null,
       heapEndMb: heapValues[heapValues.length - 1] ?? null,
     },
+    invariantViolations,
   };
 }
 
@@ -258,6 +309,17 @@ export function renderCertificationReport(cert: CertificationResult): string {
   lines.push(`Consensus approvals: ${cert.counts.consensusApprovals}`);
   lines.push(`Risk approvals:      ${cert.counts.riskApprovals}`);
   lines.push(`Risk rejections:     ${cert.counts.riskRejections}`);
+  lines.push('');
+  lines.push('Timeline invariants (causal ordering):');
+  if (cert.invariantViolations.length === 0) {
+    lines.push('  none - every order had a prior risk approval, every fill had a prior order,');
+    lines.push('  every chief approval followed a consensus debate, no orders inside outage windows.');
+  } else {
+    for (const v of cert.invariantViolations) {
+      lines.push(`  [${v.severity}] ${v.code} (seq=${v.seq}${v.traceId ? ` trace=${v.traceId}` : ''}${v.symbol ? ` ${v.symbol}` : ''})`);
+      lines.push(`         ${v.detail}`);
+    }
+  }
   lines.push('');
   lines.push('Memory:');
   lines.push(`  RSS start:  ${cert.memory.rssStartMb ?? 'n/a'}MB`);
