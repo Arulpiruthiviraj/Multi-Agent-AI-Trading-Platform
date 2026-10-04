@@ -3101,6 +3101,25 @@ interaction as the leading unconfirmed candidate — left open for a future pass
 without a confirmed root cause. See `docs/audits/ARGUS_SYNTHETIC_CERTIFICATION_2026-09-15.md`'s own
 "Determinism fix" section for the full before/after evidence table.
 
+**Certification gate strengthening (2026-10-04).** `CertificationGate.ts` previously only
+*counted* timeline events, which cannot catch ordering defects (a full-looking lifecycle with a
+bypassed gate still counts the same). New `TimelineInvariants.ts` (pure, unit-tested) reads causal
+ordering off the real pipeline's own timeline, linked by `traceId` (enforced by
+`EventBus.assertTraceId`): `RISK_BYPASS` (order without a prior approved risk assessment),
+`PHANTOM_FILL` (fill without a submitted order — the class that previously escaped into
+historical replay), `CONSENSUS_BYPASS` (chief approval without a debate), `ORDER_DURING_OUTAGE`
+(order inside a scenario-derived feed-outage window), plus `UNLINKED_ORDER` (warn-only). Any
+FAIL-severity violation fails certification unconditionally, in both test shapes. Two further
+gate fixes in the same pass: Test A (`QUIET_OPEN`) previously passed *unconditionally* — even
+with zero `MARKET_DATA` ticks (a dead simulator read as a safety proof); it now FAILs when no
+market data was recorded. And `POSITION_CLOSED` was inferred from `realizedPnl !== 0`, which
+missed closes at exactly breakeven; a SELL fill causally after a BUY fill for the same symbol is
+now independent evidence of a completed round-trip. CLI: `--certify --seeds=N` runs each test on
+N consecutive seeds, all of which must pass (a deterministic simulator that only passes on one
+seed proves nothing). 20 new unit tests (`TimelineInvariants.test.ts`,
+`CertificationGate.test.ts`); the gate itself previously had zero. This strengthens defect
+detection only — no threshold, gate, consensus, or calibration logic was touched.
+
 ## Post-audit critical remediation (2026-09-15)
 
 Full detail: `docs/audits/ARGUS_COMPLETE_IMPLEMENTATION_AUDIT_2026-09-14.md` (the forensic audit) and
