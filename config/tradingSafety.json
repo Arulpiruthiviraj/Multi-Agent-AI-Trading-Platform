@@ -146,6 +146,7 @@
   "tradingAgentsShadowEnabledEnvVar": "TRADING_AGENTS_SHADOW_ENABLED",
   "extendedHoursExecutionEnabledEnvVar": "EXTENDED_HOURS_EXECUTION_ENABLED",
   "extendedHoursMaxSpreadBps": 50,
+  "maxPriceDeviationPct": 0.02,
   "extendedHoursMaxQuoteAgeMs": 900000,
   "extendedHoursMaxNotionalDollars": 1000,
   "extendedHoursMinAvgDailyVolumeShares": 500000,

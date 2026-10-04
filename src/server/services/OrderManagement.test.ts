@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { trades, fills, portfolio } from '../db/schema';
 import { structuredLogger } from '../observability/StructuredLogger';
+import { marketDataWorker } from './MarketDataWorker';
 
 // Phase 3 changed OMS from a single insert to insert-then-update as the order progresses
 // (PENDING at submission -> broker acceptance -> terminal fill/reject), so the mock now tracks
@@ -210,10 +211,15 @@ describe('OrderManagementService.executeOrder', () => {
       vi.useFakeTimers();
       vi.setSystemTime(PRE_MARKET_UTC);
       process.env.EXTENDED_HOURS_EXECUTION_ENABLED = 'true';
-      const placeOrder = vi.fn(async () => ({ id: 'order-eh-on', status: 'FILLED', averageFillPrice: 150.25 }));
+      // P1-10 (2026-10-04): a LIMIT order now requires a fresh matching live quote - without one
+      // this would be correctly refused (PRICE_DEVIATION_NO_QUOTE_AVAILABLE), which is exactly
+      // what a real extended-hours order with no live quote should do; this test is about LIMIT
+      // construction itself, so it supplies the quote its premise already assumes exists.
+      marketDataWorker.cacheObservedQuote('PDEVVALID', 150.25);
+      const placeOrder = vi.fn(async () => ({ id: 'order-eh-on', status: 'FILLED', filledQuantity: 10, averageFillPrice: 150.25 }));
       mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
 
-      await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'eh-on-trace', undefined, undefined, null, null, null, null, 150.25);
+      await oms.executeOrder('PDEVVALID', 'BUY', 10, 'reasoning', 'eh-on-trace', undefined, undefined, null, null, null, null, 150.25);
 
       expect(placeOrder).toHaveBeenCalledWith(expect.objectContaining({ type: 'LIMIT', price: 150.25, extendedHours: true }));
     });
@@ -228,6 +234,66 @@ describe('OrderManagementService.executeOrder', () => {
       await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'eh-nopx-trace');
 
       expect(placeOrder).toHaveBeenCalledWith(expect.objectContaining({ type: 'MARKET' }));
+    });
+
+    // P1-10 (2026-10-04): fat-finger/stale-price guard for the LIMIT path. Each test uses its own
+    // never-reused symbol - marketDataWorker is a real singleton whose cached quotes persist
+    // across tests in this file (cacheObservedQuote always overwrites, but never clears), so a
+    // shared 'AAPL' symbol would leak an earlier test's cached price into a later one.
+    it('refuses a LIMIT order with no live quote at all (fails closed, never skips the check)', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(PRE_MARKET_UTC);
+      process.env.EXTENDED_HOURS_EXECUTION_ENABLED = 'true';
+      const placeOrder = vi.fn(async () => ({ id: 'order-eh-noquote', status: 'FILLED', filledQuantity: 10, averageFillPrice: 150.25 }));
+      mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
+
+      await oms.executeOrder('PDEVNOQ', 'BUY', 10, 'reasoning', 'eh-no-quote-trace', undefined, undefined, null, null, null, null, 150.25);
+
+      expect(placeOrder).not.toHaveBeenCalled();
+      expect(getFinalTradeRow().status).toBe('REJECTED');
+      expect(getFinalTradeRow().reasoning).toContain('PRICE_DEVIATION_NO_QUOTE_AVAILABLE');
+    });
+
+    it('refuses a LIMIT order whose intended price deviates too far from the live quote', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(PRE_MARKET_UTC);
+      process.env.EXTENDED_HOURS_EXECUTION_ENABLED = 'true';
+      marketDataWorker.cacheObservedQuote('PDEVFAR', 150); // live quote 150, intended 170 -> ~13% off
+      const placeOrder = vi.fn(async () => ({ id: 'order-eh-deviant', status: 'FILLED', filledQuantity: 10, averageFillPrice: 170 }));
+      mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
+
+      await oms.executeOrder('PDEVFAR', 'BUY', 10, 'reasoning', 'eh-deviant-trace', undefined, undefined, null, null, null, null, 170);
+
+      expect(placeOrder).not.toHaveBeenCalled();
+      expect(getFinalTradeRow().status).toBe('REJECTED');
+      expect(getFinalTradeRow().reasoning).toContain('PRICE_DEVIATION_EXCEEDED');
+    });
+
+    it('submits a LIMIT order whose intended price closely matches the live quote', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(PRE_MARKET_UTC);
+      process.env.EXTENDED_HOURS_EXECUTION_ENABLED = 'true';
+      marketDataWorker.cacheObservedQuote('PDEVCLOSE', 150); // live 150, intended 150.25 -> well within 2%
+      const placeOrder = vi.fn(async () => ({ id: 'order-eh-close', status: 'FILLED', filledQuantity: 10, averageFillPrice: 150.25 }));
+      mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
+
+      await oms.executeOrder('PDEVCLOSE', 'BUY', 10, 'reasoning', 'eh-close-trace', undefined, undefined, null, null, null, null, 150.25);
+
+      expect(placeOrder).toHaveBeenCalledWith(expect.objectContaining({ type: 'LIMIT', price: 150.25 }));
+      expect(getFinalTradeRow().status).toBe('FILLED');
+    });
+
+    it('a MARKET order with a deviating intendedPrice is never blocked - only a LIMIT order is', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-01-14T15:00:00.000Z')); // REGULAR session -> MARKET, not LIMIT
+      marketDataWorker.cacheObservedQuote('PDEVMKT', 100); // live 100, intendedPrice 170 -> way off, but MARKET never blocks on this
+      const placeOrder = vi.fn(async () => ({ id: 'order-market-deviant', status: 'FILLED', filledQuantity: 10, averageFillPrice: 100.1 }));
+      mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
+
+      await oms.executeOrder('PDEVMKT', 'BUY', 10, 'reasoning', 'market-deviant-trace', undefined, undefined, null, null, null, null, 170);
+
+      expect(placeOrder).toHaveBeenCalledWith(expect.objectContaining({ type: 'MARKET' }));
+      expect(getFinalTradeRow().status).toBe('FILLED');
     });
 
     it('enabled but REGULAR session: sends plain MARKET, unaffected by the flag', async () => {

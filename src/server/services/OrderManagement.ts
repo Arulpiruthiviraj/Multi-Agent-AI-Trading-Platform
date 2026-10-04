@@ -572,11 +572,47 @@ export class OrderManagementService {
         try { notifyReplayOrder(traceId); } catch { /* optional */ }
         return;
       }
+      const quoteEvidence = replayActive ? null : marketDataWorker.getObservedQuoteEvidence(symbol);
       observeSafe(() => structuredLogger.info('order_quote_evidence', {
         category: 'ORDER', eventType: 'ORDER_QUOTE_EVIDENCE', orderId, traceId, symbol,
-        quote: replayActive ? null : marketDataWorker.getObservedQuoteEvidence(symbol),
+        quote: quoteEvidence,
         environment: this.resolveFillEnvironment(orderBroker.id),
       }));
+      // P1-10 (2026-10-04 remediation): a fat-finger/stale-price sanity check against the
+      // freshest observed live quote. A LIMIT order (today, only ever constructed for
+      // extended-hours attempts) whose price deviates past maxPriceDeviationPct from the live
+      // quote is refused before submission - no quote at all in a real (non-replay) environment
+      // fails closed rather than skipping the check. MARKET has no caller-supplied price to
+      // compare against, so its deviation (vs. the live quote, if any) is only recorded for
+      // observability, never blocking.
+      if (!replayActive) {
+        const observedPrice = quoteEvidence?.observedPrice ?? null;
+        const deviationPct = (observedPrice != null && observedPrice > 0 && typeof intendedPrice === 'number' && Number.isFinite(intendedPrice) && intendedPrice > 0)
+          ? Math.abs(intendedPrice - observedPrice) / observedPrice : null;
+        if (orderConstruction.type === 'LIMIT') {
+          const refusal = observedPrice == null
+            ? 'PRICE_DEVIATION_NO_QUOTE_AVAILABLE'
+            : (deviationPct !== null && deviationPct > tradingSafety.maxPriceDeviationPct)
+              ? 'PRICE_DEVIATION_EXCEEDED' : null;
+          if (refusal) {
+            await db.update(trades).set({ status: 'REJECTED', reasoning: `${reasoning} ${refusal}` }).where(eq(trades.id, orderId));
+            observeSafe(() => structuredLogger.warn('order_price_deviation_refused', {
+              category: 'RISK', eventType: 'ORDER_PRICE_DEVIATION_REFUSED', traceId, orderId, symbol,
+              reason: refusal, intendedPrice: orderConstruction.price, observedPrice, deviationPct,
+              maxPriceDeviationPct: tradingSafety.maxPriceDeviationPct,
+            }));
+            eventBus.emitOrderExecution({ traceId, transactionId, id: orderId, symbol, side, quantity,
+              price: 0, status: 'REJECTED', profitLoss: null, executionEnvironment: this.resolveFillEnvironment(orderBroker.id) });
+            try { notifyReplayOrder(traceId); } catch { /* optional */ }
+            return;
+          }
+        } else if (deviationPct !== null && deviationPct > tradingSafety.maxPriceDeviationPct) {
+          observeSafe(() => structuredLogger.warn('order_price_deviation_observed', {
+            category: 'RISK', eventType: 'ORDER_PRICE_DEVIATION_OBSERVED', traceId, orderId, symbol,
+            intendedPrice, observedPrice, deviationPct, maxPriceDeviationPct: tradingSafety.maxPriceDeviationPct,
+          }));
+        }
+      }
       // P1-3 (2026-10-04 remediation): RiskEngine's own emergency_stop gate only covers the moment
       // an assessment is evaluated. Everything between RISK_ASSESSMENT_COMPLETED and this line (DB
       // writes, the idempotency lookup, the broker positions() round-trip above) is real wall-clock

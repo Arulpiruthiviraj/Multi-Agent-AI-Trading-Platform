@@ -440,6 +440,15 @@ export interface TradingSafety {
    *  extended-hours order. No L2 feed exists in this codebase - this is the one real spread source
    *  (Alpaca IEX top-of-book), not a fabricated estimate. */
   extendedHoursMaxSpreadBps: number;
+  /** P1-10 (2026-10-04 remediation): max acceptable fractional deviation between an order's
+   *  intended fill price and the freshest observed live quote (MarketDataWorker). A LIMIT order
+   *  (today, only ever constructed for extended-hours attempts - see
+   *  OrderManagement.ts/resolveOrderConstruction()) whose price deviates past this is refused
+   *  before submission (a real fat-finger/stale-price guard); a MARKET order's deviation is only
+   *  recorded for observability, never blocking, since MARKET has no caller-supplied price to
+   *  sanity-check against in the first place. 0.02 (2%) is a conservative, named default, not a
+   *  measured market-microstructure constant. */
+  maxPriceDeviationPct: number;
   /** Max age (ms) of both the last trade/quote AND the ask side specifically before an
    *  extended-hours order is refused - premarket/after-hours ticks are naturally sparser than RTH,
    *  so this is deliberately looser than stalePriceThresholdMs, not the same number reused blindly. */
@@ -788,6 +797,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'settingsBoundBudgetMax',
   'rebalanceMinDriftPctOfEquity',
   'extendedHoursMaxSpreadBps',
+  'maxPriceDeviationPct',
   'extendedHoursMaxQuoteAgeMs',
   'extendedHoursMaxNotionalDollars',
   'extendedHoursMinAvgDailyVolumeShares',
