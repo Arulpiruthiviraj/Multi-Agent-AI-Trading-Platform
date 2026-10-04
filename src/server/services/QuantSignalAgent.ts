@@ -843,6 +843,11 @@ export class QuantSignalAgent {
     }
 
     eventBus.emit(EVENTS.QUANT_ASSESSMENT_COMPLETED, { traceId, symbol, regime, marketContext, strategyEvaluations, groupedScores, aiContradictionAnalysis, timestamp: new Date().toISOString(), emittedTradeIdea });
+    observeSafe(() => structuredLogger.info('quant_quote_evidence', {
+      category: 'DISCOVERY', eventType: 'QUANT_QUOTE_EVIDENCE', traceId, symbol,
+      quote: marketDataWorker.getObservedQuoteEvidence(symbol),
+      emittedTradeIdea,
+    }));
 
     try {
       await db.insert(schema.quantAssessments).values({

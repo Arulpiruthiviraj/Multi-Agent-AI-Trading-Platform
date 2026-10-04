@@ -13,6 +13,8 @@ import { computeAiAvailability, computeQuantAvailability, AiAvailabilityState } 
 import { getTradingReadinessSnapshot, renderTradingReadinessTree } from '../core/TradingReadinessGate';
 import { getTradingSessionReport, renderTradingSessionReport } from '../core/tradingSessionReport';
 import { allowsNewEntryIdeas } from '../core/sessionRecovery';
+import { randomUUID } from 'node:crypto';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 
 export const runtimeRouter = Router();
 
@@ -412,6 +414,24 @@ runtimeRouter.get('/trades', async (req, res) => {
 });
 
 runtimeRouter.get('/orders', async (req, res) => {
+  const requestId = randomUUID();
+  const started = performance.now();
+  res.setHeader('X-Request-ID', requestId);
+  observeSafe(() => structuredLogger.info('runtime_orders_started', {
+    category: 'SYSTEM', eventType: 'RUNTIME_ORDERS_STARTED', correlationId: requestId,
+  }));
+  let finished = false;
+  const finish = (outcome: string) => {
+    if (finished) return;
+    finished = true;
+    observeSafe(() => structuredLogger.info('runtime_orders_finished', {
+      category: 'SYSTEM', eventType: 'RUNTIME_ORDERS_FINISHED', correlationId: requestId,
+      durationMs: performance.now() - started, statusCode: res.statusCode, outcome,
+    }));
+  };
+  res.once('finish', () => finish('RESPONSE_FINISHED'));
+  res.once('close', () => finish(res.writableFinished ? 'RESPONSE_FINISHED' : 'CLIENT_DISCONNECTED'));
+  try {
   let liveId: string | null = null;
   try {
     const { BrokerManager } = await import('../../brokers/BrokerManager');
@@ -425,6 +445,9 @@ runtimeRouter.get('/orders', async (req, res) => {
     note: 'Recent trade ledger rows; full OMS order book not yet exposed on this alias.',
     live: 'NO-GO',
   });
+  } catch {
+    res.status(503).json({ ok: false, requestId, error: 'Order ledger temporarily unavailable.' });
+  }
 });
 
 runtimeRouter.get('/config', (_req, res) => {

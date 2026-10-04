@@ -21,23 +21,12 @@ function deployedBeforeCrypto() {
   // Reproduce the production migration watermark. No application imports or production DB.
   sqlite.exec('CREATE TABLE __drizzle_migrations (id SERIAL PRIMARY KEY, hash text NOT NULL, created_at numeric)');
   sqlite.prepare('INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)').run('fixture-0077', previous.when);
-  // 2026-10-01: this fixture only ever claimed the 0077 watermark via the marker row above - it
-  // never actually ran migrations 0001-0077's real CREATE TABLE statements, so any real table from
-  // that era was never created here. That was invisible until a post-0077 migration (0081, fills
-  // cumulativeQuantity NOT NULL) needed to ALTER an existing table rather than only ever CREATE new
-  // ones. Seed the one pre-existing table a later migration now rebuilds, in its real pre-0081
-  // shape, so the watermark this fixture claims is actually true for every table a later migration
-  // might touch - not just the crypto_paper_* tables this file was originally written to cover.
-  sqlite.exec(`CREATE TABLE fills (
-    id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-    order_id text NOT NULL,
-    broker_fill_id text,
-    quantity real NOT NULL,
-    price real NOT NULL,
-    filled_at text NOT NULL,
-    cumulative_quantity real
-  );
-  CREATE UNIQUE INDEX idx_fills_order_cumulative ON fills (order_id, cumulative_quantity);`);
+  // Build the actual claimed schema rather than maintaining a hand-written subset that breaks
+  // whenever a subsequent migration touches another pre-existing table. Stop by journal order:
+  // the deliberately skipped 0078 has an older timestamp, the bug this fixture reproduces.
+  for (const entry of journal.entries.slice(0, journal.entries.indexOf(previous) + 1)) {
+    sqlite.exec(readFileSync(`drizzle/${entry.tag}.sql`, 'utf8'));
+  }
   return sqlite;
 }
 

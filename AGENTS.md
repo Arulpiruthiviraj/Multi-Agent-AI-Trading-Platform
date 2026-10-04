@@ -28,6 +28,16 @@ TradingAgents (https://github.com/TauricResearch/TradingAgents, Apache-2.0) is *
 
 ## Ground truth (do not inflate)
 
+**2026-10-03 fill-backed inventory contract:** OMS production SELL is CLOSE_LONG. Its existing
+submission boundary checks broker quantity against durable scoped fill evidence and unresolved
+orders; RiskEngine's existing sell-position gate also rejects conflicts. Fill, signed inventory
+and gross realized P&L commit atomically. Reconciliation must not resurrect a closed position from
+an unversioned conflicting broker snapshot. Cancellation acknowledgment alone does not release
+the order reservation without terminal fill evidence. Migration 0082 leaves historical inventory
+basis unknown; legacy NULL watermark cases require separately reviewed baseline recovery and fail
+closed, never an invented history. No automatic flatten/resume, historical repair, or LIVE arming.
+See `docs/architecture/ARGUS_ARCHITECTURE.md` for the implementation and deployment limitations.
+
 **2026-09-28 broker recovery contract:** a successful explicit broker activation reopens the existing reconciliation worker even after initialization failed. It does not release the interrupted-session hold itself: only a real `RECONCILIATION_MATCH` does that, and paused/emergency trading states remain unchanged. Activation is refused while initialization, reconciliation, or another activation is in progress. False boot authentication fails closed. `pipeline-ready` includes an explicit Entry Generation check; healthy workers and fresh quotes alone do not mean entry ideas are permitted. Durable diagnostics preserve broker sync state and entry-refusal codes. Forward migration 0079 repairs crypto paper tables skipped because 0078's timestamp predates 0077; never rewrite deployed migration history or remove an existing broker ledger. New journal timestamps must exceed all preceding timestamps. Runtime recovery and operator reactivation remain separate checks.
 
 **2026-09-19 implementation update (deployment evidence in the dated audit):** IB Gateway desired subscriptions survive transport reconnect under the existing line cap and SDK pacing; explicit teardown cancels intent. Reissued requests invalidate prior quote/error caches. Broker readiness requires synchronization plus authenticated healthy transport, rather than a selected adapter name. BUY exposure uses each holding's observed fresh mark; missing required marks fail closed, while SELL exits retain their existing held-quantity clamp. Execution-quality summaries partition organic/manual/unattributed paper, replay, backtest, simulation, live and unknown evidence. Gateway/Web adapter IDs are stamped correctly without reclassifying historical rows. Forecast total cost, net expected return and profit probability remain null until supported total-cost evidence exists; measured organic-paper slippage alone is not a total-cost estimate. These changes do not establish alpha, certify a strategy, or authorize resume/live trading.

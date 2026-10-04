@@ -1,7 +1,9 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import { runtimeRouter } from './v2Runtime';
+import { argusApplication } from '../app/ArgusApplication';
+import { structuredLogger } from '../observability/StructuredLogger';
 
 describe('v2Runtime routes', () => {
   let app: express.Express;
@@ -16,6 +18,20 @@ describe('v2Runtime routes', () => {
     const res = await request(app).get('/api/v2/runtime/status');
     expect(res.status).toBeLessThan(500);
     expect(res.body).toHaveProperty('runtime');
+  });
+
+  it('traces orders latency and reports ledger failure without exposing exception details', async () => {
+    const log = vi.spyOn(structuredLogger, 'info');
+    const read = vi.spyOn(argusApplication, 'recentTrades').mockRejectedValueOnce(new Error('private database details'));
+    try {
+      const res = await request(app).get('/api/v2/runtime/orders');
+      expect(res.status).toBe(503);
+      expect(res.headers['x-request-id']).toBe(res.body.requestId);
+      expect(JSON.stringify(res.body)).not.toContain('private database');
+      expect(log).toHaveBeenCalledWith('runtime_orders_finished', expect.objectContaining({
+        correlationId: res.body.requestId, statusCode: 503, durationMs: expect.any(Number), outcome: 'RESPONSE_FINISHED',
+      }));
+    } finally { read.mockRestore(); log.mockRestore(); }
   });
 
   it('GET /runtime/health is registered', async () => {

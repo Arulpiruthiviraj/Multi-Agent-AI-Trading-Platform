@@ -132,6 +132,8 @@ describe('OrderManagementService.reconcileInboundBrokerOrders - unrecognized ope
   it('a broker order already known locally (by id) but whose CURRENT status has since diverged from the stale local status is corrected, not silently skipped forever', async () => {
     await db.insert(schema.trades).values({
       id: 'stale-terminal-order', symbol: 'NVDA', side: 'BUY', quantity: 3, price: 0, status: 'CANCELED',
+      positionQuantityBefore: 0, positionAveragePriceBefore: 0,
+      brokerId: 'unrecognized-order-stub', executionEnvironment: 'UNKNOWN',
       timestamp: new Date().toISOString(), reasoning: 'test: marked CANCELED by the orphan-timeout path',
       traceId: 'trace-stale-terminal', requestId: 'stale-terminal-order',
       submittedAt: new Date().toISOString(), brokerOrderId: 'broker-stale-1',

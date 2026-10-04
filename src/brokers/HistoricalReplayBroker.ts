@@ -396,7 +396,8 @@ export class HistoricalReplayBroker implements BrokerPlugin {
   async modifyOrder() { throw new Error('Replay modifyOrder unsupported'); }
   async cancelOrder(orderId: string) {
     const o = this._orders.get(orderId);
-    if (!o || o.status !== 'PENDING') return false;
+    if (!o || (o.status !== 'PENDING' && o.status !== 'PARTIALLY_FILLED')) return false;
+    this._workingOrders.delete(orderId);
     o.status = 'CANCELED';
     return true;
   }

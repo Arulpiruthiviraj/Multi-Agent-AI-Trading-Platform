@@ -93,6 +93,9 @@ describe('OrderManagementService.reconcileStaleOrders - crash recovery (Phase 1)
   });
 
   beforeEach(async () => {
+    await db.delete(schema.fills);
+    await db.delete(schema.trades);
+    await db.delete(schema.portfolio);
     lookupResponses = {};
     lookupSpy.mockClear();
     const broker = stubBroker();
@@ -103,6 +106,8 @@ describe('OrderManagementService.reconcileStaleOrders - crash recovery (Phase 1)
   async function seedCrashedRow(id: string, status: 'PENDING' | 'REJECTED') {
     await db.insert(schema.trades).values({
       id, symbol: 'AAPL', side: 'BUY', quantity: 10, price: 0, status,
+      positionQuantityBefore: 0, positionAveragePriceBefore: 0,
+      brokerId: 'crash-recovery-stub', executionEnvironment: 'UNKNOWN',
       timestamp: new Date().toISOString(),
       reasoning: 'test', traceId: `trace-${id}`, requestId: id,
       submittedAt: new Date().toISOString(),
@@ -298,6 +303,7 @@ describe('OrderManagementService.reconcileStaleOrders - crash recovery (Phase 1)
         timestamp: new Date().toISOString(), reasoning: 'test', traceId: 'trace-crash-multi-b',
         requestId: 'crash-multi-b', submittedAt: new Date().toISOString(),
         brokerOrderId: null, brokerId: 'crash-recovery-stub-b',
+        positionQuantityBefore: 0, positionAveragePriceBefore: 0, executionEnvironment: 'UNKNOWN',
       });
 
       lookupResponses['crash-multi-a'] = null; // A confirms it never received this one -> REJECTED

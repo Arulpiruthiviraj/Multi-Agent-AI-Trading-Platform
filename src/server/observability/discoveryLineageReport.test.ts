@@ -44,6 +44,47 @@ describe('discoveryLineageReport', () => {
     expect(report.terminalSummary).toMatch(/No discovery-lineage evidence/);
   });
 
+  it('bounds historical windows and does not count rejected OMS rows or status-only fills as execution', async () => {
+    const symbol = 'BOUND';
+    const start = '2026-10-02T13:30:00.000Z';
+    const end = '2026-10-02T20:00:00.000Z';
+    await db.insert(schema.trades).values([
+      { id: nextId(), symbol, side: 'SELL', quantity: 14, price: 0, status: 'REJECTED', timestamp: start, executionEnvironment: 'PAPER' },
+      { id: nextId(), symbol, side: 'BUY', quantity: 1, price: 100, status: 'FILLED', timestamp: end, executionEnvironment: 'PAPER', brokerOrderId: 'outside-window' },
+    ]);
+    await db.insert(schema.observabilityEvents).values([
+      { id: nextId(), ts: Date.parse(start), level: 'INFO', category: 'DISCOVERY', eventType: 'WATCHLIST_SUBSCRIBE_REQUESTED', loggerName: 'argus', message: 'fixture', sessionId: 's', symbol },
+      { id: nextId(), ts: Date.parse(end), level: 'INFO', category: 'DISCOVERY', eventType: 'IBKR_MARKET_DATA_ACKNOWLEDGED', loggerName: 'argus', message: 'fixture', sessionId: 's', symbol },
+    ]);
+    const report = await mod.buildDiscoveryLineageReport(symbol, start, end);
+    expect(report.omsOrderPlaced).toBe(false);
+    expect(report.fillReached).toBe(false);
+    expect(report.subscribeRequestedCount).toBe(1);
+    expect(report.acknowledgedCount).toBe(0);
+    expect(report.terminalSummary).toContain('request alone does not prove');
+    expect(report.observedTimeline.map(r => r.stage)).toContain('OMS_LEDGER_ROW');
+    expect(report.observedTimeline.some(r => r.stage === 'BROKER_ORDER_RECORDED')).toBe(false);
+  });
+
+  it('keeps acknowledgment, capacity denial, and fresh assessment quote evidence distinct', async () => {
+    const symbol = 'EVID';
+    const ts = Date.now();
+    const events = [
+      ['IBKR_MARKET_DATA_ACKNOWLEDGED', {}], ['TEMPORARY_DATA_RESCUE_DENIED', {}],
+      ['QUANT_QUOTE_EVIDENCE', { quote: { priceAgeMs: 0, observedPrice: 100 } }],
+      ['QUANT_QUOTE_EVIDENCE', { quote: { priceAgeMs: null, observedPrice: 100 } }],
+    ] as const;
+    await db.insert(schema.observabilityEvents).values(events.map(([eventType, payload]) => ({
+      id: nextId(), ts, level: 'INFO', category: 'DISCOVERY', eventType, payload: JSON.stringify(payload),
+      loggerName: 'argus', message: 'CERTIFICATION_FIXTURE_ONLY', sessionId: 's', symbol,
+    })));
+    const report = await mod.buildDiscoveryLineageReport(symbol, new Date(ts - 1).toISOString());
+    expect(report.acknowledgedCount).toBe(1);
+    expect(report.capacityDeniedCount).toBe(1);
+    expect(report.freshAssessmentQuoteCount).toBe(1);
+    expect(report.consensusPersistenceNote).toContain('not one-to-one');
+  });
+
   it('the FRVO-class case: admitted by discovery but never reaches a subscribe request in this window', async () => {
     const tsMs = Date.now();
     await db.insert(schema.observabilityEvents).values({
@@ -86,9 +127,11 @@ describe('discoveryLineageReport', () => {
     await db.insert(schema.riskAssessments).values({
       traceId: nextId(), symbol, side: 'BUY', approved: true, maxQuantity: 10, createdAt: new Date(tsMs + 4).toISOString(),
     });
+    const orderId = nextId();
     await db.insert(schema.trades).values({
-      id: nextId(), symbol, side: 'BUY', quantity: 10, price: 100, status: 'FILLED', timestamp: new Date(tsMs + 5).toISOString(), executionEnvironment: 'PAPER',
+      id: orderId, symbol, side: 'BUY', quantity: 10, price: 100, status: 'FILLED', timestamp: new Date(tsMs + 5).toISOString(), executionEnvironment: 'PAPER', brokerOrderId: 'fixture-broker-id',
     });
+    await db.insert(schema.fills).values({ orderId, quantity: 10, price: 100, cumulativeQuantity: 10, filledAt: new Date(tsMs + 6).toISOString() });
 
     const report = await mod.buildDiscoveryLineageReport(symbol, new Date(tsMs - 60_000).toISOString());
     expect(report.subscribeRequestedCount).toBe(1);

@@ -277,6 +277,9 @@ export const trades = sqliteTable('trades', {
   reasoning: text('reasoning'),
   traceId: text('trace_id'),
   profitLoss: real('profit_loss'),
+  // Durable, scoped inventory basis captured before submission; never infer from a closed BUY.
+  positionQuantityBefore: real('position_quantity_before'),
+  positionAveragePriceBefore: real('position_average_price_before'),
   newsUsed: integer('news_used', { mode: 'boolean' }).default(false),
   newsSentiment: real('news_sentiment'),
   newsConfidence: real('news_confidence'),
@@ -373,6 +376,10 @@ export const fills = sqliteTable('fills', {
    * already upheld, rather than relying solely on fillLedger.ts never being bypassed.
    */
   cumulativeQuantity: real('cumulative_quantity').notNull(),
+  // Atomic inventory watermark, ordered by fill id (not provider wall-clock timestamps).
+  positionQuantityAfter: real('position_quantity_after'),
+  positionAveragePriceAfter: real('position_average_price_after'),
+  realizedPnl: real('realized_pnl'), // gross: commissions remain separate; null for no close/unknown basis
 }, (table) => ({
   orderCumulativeUniqueIdx: uniqueIndex('idx_fills_order_cumulative').on(table.orderId, table.cumulativeQuantity),
 }));

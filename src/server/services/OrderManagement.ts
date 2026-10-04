@@ -58,13 +58,13 @@ import { isPaperTradingOnlyEnforced, normalizeTradingMode } from '../core/tradin
 import { getActiveReplaySession, notifyReplayOrder } from '../replay/ReplayContext';
 import { releasePendingCapitalReservation } from '../engines/PendingCapitalReservations';
 import { insertIncrementalFill } from './fillLedger';
-import { resolvePreTradeEntryPrice } from './omsEntryPrice';
-import { syncLocalPortfolioAfterSellFill, syncLocalPortfolioAfterBuyFill } from './localPortfolioSync';
+import { prepareOrderPosition, latestPositionFill } from './positionFillEvidence';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { isExtendedHoursExecutionEnabled } from '../config/tradingSafety';
 import { resolveOrderConstruction } from '../risk/ExtendedHoursExecutionPolicy';
 import { classifyMarketSession } from '../replay/marketSession';
 import { TRADING_TIMEZONE } from '../core/TradingCalendar';
+import { marketDataWorker } from './MarketDataWorker';
 
 function getActiveReplaySessionSafe(): { replayId: string } | null {
   try {
@@ -286,21 +286,38 @@ export class OrderManagementService {
         status,
         filledQuantity,
         averageFillPrice,
+        applyPosition: true,
       });
-      if (result.newQty <= 0) return { newQty: 0, reconciliationRequired: false };
+      if (result.newQty <= 0) {
+        if ((filledQuantity ?? 0) > 0 && !result.positionApplied) throw new Error('POSITION_FILL_BASELINE_UNAVAILABLE');
+        return { newQty: 0, reconciliationRequired: false };
+      }
+      if (!result.positionApplied) throw new Error('POSITION_FILL_BASELINE_UNAVAILABLE: fill recorded, inventory attribution requires reconciliation');
+      const recordedOrder = db.select().from(trades).where(eq(trades.id, orderId)).get();
+      if (side === 'SELL' && recordedOrder?.brokerId && recordedOrder.executionEnvironment) {
+        const position = latestPositionFill({ symbol, brokerId: recordedOrder.brokerId, environment: recordedOrder.executionEnvironment });
+        if (position?.quantity != null && position.quantity < -tradingSafety.reconQtyTolerance) {
+          throw new Error('POSITION_EXPOSURE_CROSSED_ZERO: unexpected short recorded; operator reconciliation required');
+        }
+      }
       const fillPrice = result.incrementalPrice!;
       eventBus.emit(EVENTS.ORDER_FILLED, { traceId, transactionId, id: orderId, symbol, side, quantity: result.newQty, price: fillPrice, status, filledAt: new Date().toISOString() });
-      // Immediate local portfolio sync on every SELL fill increment — do not wait for the next recon tick
-      // (stale localQty > 0 with broker flat → false MISSING_REMOTELY / operator pause).
-      if (side === 'SELL' && result.newQty > 0) {
-        await syncLocalPortfolioAfterSellFill(symbol, result.newQty);
-      }
-      if (side === 'BUY' && result.newQty > 0 && fillPrice > 0) {
-        await syncLocalPortfolioAfterBuyFill(symbol, result.newQty, fillPrice, executionBrokerId);
-      }
+      // Inventory and P&L were committed atomically with the fill, before observers run.
       return { newQty: result.newQty, reconciliationRequired: false };
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
+      const failureKind = message.startsWith('POSITION_') ? message.split(':')[0] : 'INVALID_FILL_ECONOMICS';
+      if (failureKind === 'POSITION_EXPOSURE_CROSSED_ZERO') {
+        try {
+          const { tradingEngine } = await import('../engines/TradingEngine');
+          if (tradingEngine.state.tradingState === 'TRADING_ENABLED') {
+            await tradingEngine.setTradingState('TRADING_PAUSED', {
+              reason: `Unexpected short exposure after fill for ${symbol}; operator reconciliation required.`,
+              actor: 'system:OrderManagement',
+            });
+          }
+        } catch (pauseError) { console.error('[OMS] Failed to pause after unexpected short; retaining reconciliation-required order', pauseError); }
+      }
       console.error(`[OMS] Failed to persist fill for order ${orderId}`, e);
       // F04 remediation: fillLedger.ts already refuses to synthesize a fabricated fill from
       // missing/non-finite broker fill evidence. Previously this catch stopped at logging and
@@ -323,7 +340,7 @@ export class OrderManagementService {
           checkedAt: new Date().toISOString(),
           broker: executionBrokerId || 'unknown',
           matches: false,
-          mismatches: JSON.stringify([{ type: 'INVALID_FILL_ECONOMICS', orderId, symbol, side, error: message }]),
+          mismatches: JSON.stringify([{ type: failureKind, orderId, symbol, side, error: message }]),
           worstImpactDollars: null,
           actionTaken: null,
         });
@@ -512,13 +529,6 @@ export class OrderManagementService {
         return;
       }
 
-      // Capture the pre-trade entry price so a SELL's realized P&L can be computed once it fills.
-      // Broker positions first; on throw / missing symbol → local portfolio.averagePrice → opening BUY.
-      let preTradeEntryPrice: number | null = null;
-      if (side === 'SELL') {
-        preTradeEntryPrice = await resolvePreTradeEntryPrice(symbol, () => activeBroker.positions());
-      }
-
       // Phase 1 (ARGUS_SAFETY_HARDENING_REPORT.md) - orderId (this row's own local UUID, already
       // generated above and unique per real order attempt) doubles as the real broker-level
       // idempotency key. AlpacaBroker maps this to Alpaca's own `client_order_id`, which Alpaca
@@ -540,6 +550,33 @@ export class OrderManagementService {
             intendedPrice,
             isExtendedHoursExecutionEnabled(),
           );
+      // Final close-only check uses durable fill evidence and unresolved order reservations.
+      // No await separates the synchronous reservation from the sole broker submission.
+      let positionRefusal: string | null;
+      try {
+        const positions = await activeBroker.positions();
+        if (!Array.isArray(positions)) throw new Error('Invalid broker position response');
+        const held = positions.find(p => p.symbol === symbol);
+        positionRefusal = prepareOrderPosition(orderId, { quantity: held?.quantity ?? 0, entryPrice: held?.entryPrice ?? 0 });
+      } catch {
+        positionRefusal = 'POSITION_EVIDENCE_UNAVAILABLE';
+      }
+      if (positionRefusal) {
+        await db.update(trades).set({ status: 'REJECTED', reasoning: `${reasoning} ${positionRefusal}` }).where(eq(trades.id, orderId));
+        observeSafe(() => structuredLogger.warn('order_position_refused', {
+          category: 'RISK', eventType: 'ORDER_POSITION_REFUSED', traceId, orderId, symbol,
+          reason: positionRefusal,
+        }));
+        eventBus.emitOrderExecution({ traceId, transactionId, id: orderId, symbol, side, quantity,
+          price: 0, status: 'REJECTED', profitLoss: null, executionEnvironment: this.resolveFillEnvironment(orderBroker.id) });
+        try { notifyReplayOrder(traceId); } catch { /* optional */ }
+        return;
+      }
+      observeSafe(() => structuredLogger.info('order_quote_evidence', {
+        category: 'ORDER', eventType: 'ORDER_QUOTE_EVIDENCE', orderId, traceId, symbol,
+        quote: replayActive ? null : marketDataWorker.getObservedQuoteEvidence(symbol),
+        environment: this.resolveFillEnvironment(orderBroker.id),
+      }));
       const brokerOrder = await activeBroker.placeOrder({
           symbol,
           side: side as 'BUY' | 'SELL',
@@ -558,7 +595,8 @@ export class OrderManagementService {
       await this.persistRealCommissionIfKnown(orderId, brokerOrder.commission);
 
       const acceptedAt = new Date().toISOString();
-      await db.update(trades).set({ brokerOrderId, status, price: fillPrice, acceptedAt }).where(eq(trades.id, orderId));
+      // Keep the reservation unresolved until terminal fill evidence is committed below.
+      await db.update(trades).set({ brokerOrderId, status: isTerminalOrderStatus(status) ? 'PENDING' : status, price: fillPrice, acceptedAt }).where(eq(trades.id, orderId));
       eventBus.emit(EVENTS.ORDER_ACCEPTED, { traceId, transactionId, id: orderId, brokerOrderId, status, acceptedAt });
 
       let filledQuantity = brokerOrder.filledQuantity;
@@ -572,7 +610,7 @@ export class OrderManagementService {
         }
       }
 
-      if (status === 'FILLED' || status === 'PARTIALLY_FILLED') {
+      if (status === 'FILLED' || status === 'PARTIALLY_FILLED' || (filledQuantity ?? 0) > 0) {
         const fillResult = await this.recordFillProgress(orderId, brokerOrderId, traceId, transactionId, symbol, side, quantity, status, filledQuantity, fillPrice, orderBroker.id);
         if (fillResult.reconciliationRequired) {
           // F04: fill evidence was rejected as invalid (NaN/non-finite price or quantity).
@@ -584,28 +622,7 @@ export class OrderManagementService {
         }
       }
 
-      if (side === 'SELL' && status === 'FILLED') {
-        if (preTradeEntryPrice !== null && fillPrice > 0) {
-          profitLoss = Number(((fillPrice - preTradeEntryPrice) * quantity).toFixed(2));
-        } else {
-          // Real gap this pass: a genuine FILLED SELL with no attributable P&L used to stay silently
-          // null with only a console.warn (not queryable via observability_events/the dashboard).
-          // Never invent a P&L figure here - just make the failure to attribute one observable.
-          observeSafe(() => {
-            structuredLogger.warn('pnl_attribution_failed', {
-              category: 'SYSTEM',
-              eventType: 'PNL_ATTRIBUTION_FAILED',
-              traceId,
-              decisionId: traceId,
-              orderId,
-              symbol,
-              reason: preTradeEntryPrice === null ? 'NO_ENTRY_PRICE_RESOLVED' : 'NON_POSITIVE_FILL_PRICE',
-              fillPrice,
-              quantity,
-            });
-          });
-        }
-      }
+      profitLoss = db.select({ profitLoss: trades.profitLoss }).from(trades).where(eq(trades.id, orderId)).get()?.profitLoss ?? null;
       if (status === 'FILLED') {
         filledAt = new Date().toISOString();
       }
@@ -1023,7 +1040,7 @@ export class OrderManagementService {
           // row RECONCILIATION_REQUIRED.
           let finalStatus: string = realStatus;
           let fillReconciliationRequired = false;
-          if (realStatus === 'FILLED' || realStatus === 'PARTIALLY_FILLED') {
+          if (realStatus === 'FILLED' || realStatus === 'PARTIALLY_FILLED' || (realOrder.filledQuantity ?? 0) > 0) {
             const fillResult = await this.recordFillProgress(row.id, realOrder.id, row.traceId, row.transactionId, row.symbol, row.side, row.quantity, realStatus, realOrder.filledQuantity, realOrder.averageFillPrice, broker.id);
             await this.persistRealCommissionIfKnown(row.id, realOrder.commission);
             if (fillResult.reconciliationRequired) {
@@ -1058,7 +1075,7 @@ export class OrderManagementService {
             quantity: row.quantity,
             price: safeFillPrice,
             status: finalStatus,
-            profitLoss: row.profitLoss,
+            profitLoss: db.select({ profitLoss: trades.profitLoss }).from(trades).where(eq(trades.id, row.id)).get()?.profitLoss ?? null,
           });
 
           if (row.transactionId) {
@@ -1092,10 +1109,7 @@ export class OrderManagementService {
       const finalStatus = fillResult.reconciliationRequired ? 'RECONCILIATION_REQUIRED' : match.status;
 
       const filledAt = finalStatus === 'FILLED' ? (row.filledAt || new Date().toISOString()) : row.filledAt;
-      // Realized P&L for a SELL that only resolves here (past the initial poll window) can't be
-      // computed honestly - the pre-trade entry-price snapshot only exists inside executeOrder()'s
-      // own call stack. Left null (never fabricated) rather than guessed from current position data,
-      // which may have already changed by the time this follow-up runs.
+      // The fill transaction uses the durable submission basis even after a restart or late fill.
       // CAS guard: only write if the row is still in the exact status this cycle observed it in.
       // Without this, a concurrent cancelOrder() (or another follow-up cycle) that changed the row
       // between our read and this write would get silently clobbered by a now-stale broker snapshot
@@ -1126,7 +1140,7 @@ export class OrderManagementService {
         quantity: row.quantity,
         price: fillPrice || row.price,
         status: finalStatus,
-        profitLoss: row.profitLoss ?? null,
+        profitLoss: db.select({ profitLoss: trades.profitLoss }).from(trades).where(eq(trades.id, row.id)).get()?.profitLoss ?? null,
       });
     } catch (e) {
       console.error(`[OMS] follow-up: failed to apply update for order ${row.id}`, e);
@@ -1148,7 +1162,9 @@ export class OrderManagementService {
     if (isTerminalOrderStatus(row.status)) return { ok: false, reason: `Order already ${row.status} - cannot cancel.` };
     if (!row.brokerOrderId) return { ok: false, reason: 'Order has no broker order id yet - cannot cancel.' };
 
-    const broker = BrokerManager.getInstance().getActiveBroker();
+    const broker = row.brokerId ? BrokerManager.getInstance().getBroker(row.brokerId)
+      : BrokerManager.getInstance().getActiveBroker();
+    if (!broker) return { ok: false, reason: 'Original order broker is unavailable; cancellation not attempted.' };
     if (!brokerSupports(broker, 'canCancelOrders')) {
       return { ok: false, reason: `${broker.name} does not support order cancellation.` };
     }
@@ -1160,31 +1176,23 @@ export class OrderManagementService {
       return { ok: false, reason: 'Broker cancellation call failed.' };
     }
     if (!cancelled) return { ok: false, reason: 'Broker declined to cancel the order (it may already have filled).' };
-
-    // CAS guard: the broker round-trip above is slow enough for a concurrent followUpOpenOrders()
-    // cycle to have already recorded a real fill (and synced the portfolio) for this exact order in
-    // the meantime. row.status is a stale pre-broker-call snapshot - only commit CANCELED if the row
-    // is still in that same status; otherwise a real, already-recorded fill would be silently
-    // overwritten back to CANCELED even though fills/portfolio already reflect it as filled.
-    const cancelUpdateResult = await db.update(trades)
-      .set({ status: 'CANCELED' })
-      .where(and(eq(trades.id, orderId), eq(trades.status, row.status)));
-    if (cancelUpdateResult.changes === 0) {
-      console.warn(`[OMS] cancelOrder: broker confirmed cancellation for order ${orderId} but local status changed concurrently (likely a real fill) - refusing to overwrite. Not reporting CANCELED.`);
-      return { ok: false, reason: 'Order status changed concurrently during cancellation (likely filled) - not overwriting a newer status. Re-check the order.' };
+    const current = db.select().from(trades).where(eq(trades.id, orderId)).get();
+    if (!current || current.status !== row.status) {
+      return { ok: false, reason: 'Order status changed concurrently during cancellation; re-check the order.' };
     }
-    eventBus.emitOrderExecution({
-      traceId: row.traceId,
-      transactionId: row.transactionId,
-      id: row.id,
-      symbol: row.symbol,
-      side: row.side,
-      quantity: row.quantity,
-      price: row.price,
-      status: 'CANCELED',
-      profitLoss: null,
-    });
-    return { ok: true };
+
+    // A successful cancel acknowledges the remainder, not "zero fills". Retain the reservation
+    // until a terminal cumulative fill watermark is observed and committed through the same path.
+    let terminal: Order | undefined;
+    try { terminal = (await broker.orders()).find(o => o.id === row.brokerOrderId); } catch { /* unresolved */ }
+    if (!terminal || !['FILLED', 'CANCELED'].includes(terminal.status)
+      || !Number.isFinite(terminal.filledQuantity) || terminal.filledQuantity! < 0) {
+      return { ok: false, reason: 'Cancellation acknowledged; final fill quantity unavailable. Order remains reserved for reconciliation.' };
+    }
+    await this.applyFollowUpUpdate(current, terminal);
+    const final = db.select().from(trades).where(eq(trades.id, orderId)).get();
+    return final?.status === 'CANCELED' ? { ok: true }
+      : { ok: false, reason: 'Order filled or requires reconciliation during cancellation; re-check the order.' };
   }
 }
 

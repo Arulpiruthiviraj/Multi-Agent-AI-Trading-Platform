@@ -78,6 +78,11 @@ const { emitOrderExecution } = vi.hoisted(() => ({ emitOrderExecution: vi.fn() }
 
 const { mockBrokerHolder } = vi.hoisted(() => ({ mockBrokerHolder: { broker: null as any, byId: {} as Record<string, any> } }));
 const { setTradingState } = vi.hoisted(() => ({ setTradingState: vi.fn(async () => {}) }));
+const { preparePosition } = vi.hoisted(() => ({ preparePosition: vi.fn(() => null as string | null) }));
+
+// These tests isolate OMS orchestration. Atomic inventory/P&L and stale-position safety are
+// exercised against real SQLite + OMS + reconciliation in OrderManagement.positionEvidence.test.ts.
+vi.mock('./positionFillEvidence', () => ({ prepareOrderPosition: preparePosition, applyPositionFill: () => true }));
 
 vi.mock('../db', () => ({ db: mockDb }));
 vi.mock('../core/EventBus', () => ({ eventBus: { on: vi.fn(), emit: vi.fn(), emitOrderExecution } }));
@@ -109,6 +114,7 @@ describe('OrderManagementService.executeOrder', () => {
     setPortfolioRows([]);
     setThrowOnIdempotency(false);
     setEnvRow({ tradingMode: 'Paper', paperMode: true });
+    preparePosition.mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -127,7 +133,7 @@ describe('OrderManagementService.executeOrder', () => {
     expect(tradesInserts.length).toBe(0);
   });
 
-  it('applies late cumulative BUY fills using their incremental price and original broker', async () => {
+  it('records a late cumulative BUY increment at its incremental price', async () => {
     mockBrokerHolder.broker = { id: 'new-active-broker' };
     setPortfolioRows([{ symbol: 'AAPL', quantity: 1, averagePrice: 100, brokerSource: 'original-broker' }]);
     fillsInserts.push({ orderId: 'late-order', quantity: 1, price: 100, cumulativeQuantity: 1 });
@@ -137,7 +143,6 @@ describe('OrderManagementService.executeOrder', () => {
       traceId: 'late-trace', transactionId: 'late-tx',
     }, { id: 'broker-order', status: 'FILLED', filledQuantity: 2, averageFillPrice: 110 });
     expect(fillsInserts.at(-1)).toMatchObject({ quantity: 1, price: 120 });
-    expect(getPortfolioRows()[0]).toMatchObject({ quantity: 2, averagePrice: 110, brokerSource: 'original-broker' });
   });
 
   it('aborts before placeOrder when the idempotency lookup throws', async () => {
@@ -290,20 +295,23 @@ describe('OrderManagementService.executeOrder', () => {
     expect(fillsInserts).toHaveLength(0); // never actually filled - no fill record fabricated
   });
 
-  it('computes real realized P&L on a SELL fill using the pre-trade entry price', async () => {
+  it('refuses a SELL whose durable close-long evidence rejects its quantity', async () => {
     // F04 (2026-09-27): a real broker's FILLED response always reports filledQuantity; a mock
     // that omits it is now correctly rejected by fillLedger.ts as invalid fill evidence rather
     // than silently treated as a clean fill (see the F04 outcome-propagation fix).
     const placeOrder = vi.fn(async () => ({ id: 'order-4', status: 'FILLED', filledQuantity: 10, averageFillPrice: 120 }));
     const positions = vi.fn(async () => [{ symbol: 'AAPL', quantity: 10, entryPrice: 100 }]);
     mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions };
+    preparePosition.mockReturnValue('CLOSE_LONG_QUANTITY_EXCEEDED');
 
     await oms.executeOrder('AAPL', 'SELL', 10, 'reasoning', 'sell-trace');
 
-    expect(getFinalTradeRow().profitLoss).toBe(200); // (120 - 100) * 10
+    expect(placeOrder).not.toHaveBeenCalled();
+    expect(getFinalTradeRow().status).toBe('REJECTED');
+    expect(getFinalTradeRow().reasoning).toContain('CLOSE_LONG_QUANTITY_EXCEEDED');
   });
 
-  it('computes profit_loss via local portfolio fallback when broker positions() throws', async () => {
+  it('refuses a SELL when broker inventory is unavailable even if local basis exists', async () => {
     setPortfolioRows([{ symbol: 'AAPL', quantity: 5, averagePrice: 100 }]);
     const placeOrder = vi.fn(async () => ({ id: 'order-fallback', status: 'FILLED', filledQuantity: 5, averageFillPrice: 110 }));
     const positions = vi.fn(async () => { throw new Error('positions unavailable'); });
@@ -312,12 +320,12 @@ describe('OrderManagementService.executeOrder', () => {
     await oms.executeOrder('AAPL', 'SELL', 5, 'reasoning', 'sell-fallback-trace');
 
     expect(positions).toHaveBeenCalled();
-    expect(getFinalTradeRow().profitLoss).toBe(50); // (110 - 100) * 5 from local averagePrice
-    // Full SELL fill must clear local portfolio before the next recon tick.
-    expect(getPortfolioRows().length === 0 || getPortfolioRows()[0]?.quantity === 0).toBe(true);
+    expect(placeOrder).not.toHaveBeenCalled();
+    expect(getFinalTradeRow().status).toBe('REJECTED');
+    expect(getPortfolioRows()[0].quantity).toBe(5);
   });
 
-  it('makes an unattributable P&L failure observable instead of silently leaving profit_loss null with only a console log', async () => {
+  it('makes unavailable inventory observable before a broker order is submitted', async () => {
     // Every entry-price fallback fails: broker positions() throws, no local portfolio row, and
     // (implicitly, via the mocked trades select returning []) no prior opening BUY is found either.
     const warnSpy = vi.spyOn(structuredLogger, 'warn');
@@ -332,13 +340,14 @@ describe('OrderManagementService.executeOrder', () => {
     await oms.executeOrder('AAPL', 'SELL', 5, 'reasoning', 'sell-unattributable-trace');
 
     // Never invent a P&L figure when no entry price could be resolved.
-    expect(getFinalTradeRow().profitLoss).toBeNull();
+    expect(placeOrder).not.toHaveBeenCalled();
+    expect(getFinalTradeRow().status).toBe('REJECTED');
     expect(warnSpy).toHaveBeenCalledWith(
-      'pnl_attribution_failed',
+      'order_position_refused',
       expect.objectContaining({
-        category: 'SYSTEM',
-        eventType: 'PNL_ATTRIBUTION_FAILED',
-        reason: 'NO_ENTRY_PRICE_RESOLVED',
+        category: 'RISK',
+        eventType: 'ORDER_POSITION_REFUSED',
+        reason: 'POSITION_EVIDENCE_UNAVAILABLE',
         symbol: 'AAPL',
       }),
     );

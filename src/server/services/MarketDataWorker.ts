@@ -146,6 +146,8 @@ export class MarketDataWorker {
    *  Timestamped the same way latestPriceTimestamps is, so staleness can be checked the same way. */
   private latestAskPrices: Map<string, number> = new Map();
   private latestAskTimestamps: Map<string, number> = new Map();
+  // Separate observed bid evidence: latestPrices can also contain LAST ticks.
+  private latestBidEvidence = new Map<string, { price: number; observedAtMs: number }>();
   private lastTick: Map<string, { timestampMs: number; price: number }> = new Map();
   /** Tick counts for dynamic-slot eviction (least-ticked non-core first). */
   private tickCounts: Map<string, number> = new Map();
@@ -245,6 +247,11 @@ export class MarketDataWorker {
       this.subscribedAtMs.clear();
       this.tickCounts.clear();
       this.marketDataErrors.clear();
+      this.latestBidEvidence.clear();
+      this.latestAskPrices.clear();
+      this.latestAskTimestamps.clear();
+      this.latestPrices.clear();
+      this.latestPriceTimestamps.clear();
     }
     if (prevBackend === 'ibkr_gateway' && opts.backend !== 'ibkr_gateway') {
       try { this.ibkrBridge?.clear(); } catch { /* ignore */ }
@@ -287,6 +294,7 @@ export class MarketDataWorker {
     this.latestPriceTimestamps.delete(key);
     this.latestAskPrices.delete(key);
     this.latestAskTimestamps.delete(key);
+    this.latestBidEvidence.delete(key);
     this.tickCounts.set(key, 0);
     this.lastTick.delete(key);
   }
@@ -842,6 +850,17 @@ export class MarketDataWorker {
     return this.latestAskPrices.get(key) ?? this.latestAskPrices.get(symbol) ?? null;
   }
 
+  /** Diagnostic snapshot only. Missing bid/ask observations remain null, never copied from LAST. */
+  getObservedQuoteEvidence(symbol: string) {
+    const key = quoteKey(symbol);
+    const bid = this.latestBidEvidence.get(key);
+    const askAt = this.latestAskTimestamps.get(key) ?? null;
+    return { source: this.getQuoteBackend(), capturedAtMs: Date.now(),
+      observedPrice: this.getLatestPrice(symbol), priceAgeMs: this.getLatestPriceAgeMs(symbol),
+      bid: bid?.price ?? null, bidObservedAtMs: bid?.observedAtMs ?? null,
+      ask: this.getLatestAsk(symbol), askObservedAtMs: askAt };
+  }
+
   /**
    * Real bid/ask spread in basis points, computed only when BOTH a bid (latestPrices) and an ask
    * (latestAskPrices) exist AND the ask observation is no older than maxAgeMs relative to now -
@@ -877,13 +896,17 @@ export class MarketDataWorker {
    * latestAskTimestamps, the exact same store the Alpaca "q" message path already populates from
    * msg.ap. Additive only - never touches latestPrices/ingestIbkrQuote's existing behavior for
    * BID/LAST. BID(1) ticks already reach latestPrices via the existing tickHandler->ingestIbkrQuote
-   * path, so only ASK needs a new write target here; this method is a no-op for any other field
-   * (real, but out of scope for this fix - kept a no-op rather than silently doing nothing wrong).
+   * path. BID is also retained separately for diagnostic bid/ask evidence (2026-10-03), so a
+   * LAST tick is never labeled as BID. Other tick fields remain no-ops here.
    */
   ingestIbkrBidAsk(symbol: string, field: number, price: number): void {
-    if (field !== 2) return; // ASK only - see this method's own doc comment
+    if (field !== 1 && field !== 2) return;
     const sym = quoteKey(symbol);
     if (!sym || !Number.isFinite(price) || price <= 0) return;
+    if (field === 1) {
+      this.latestBidEvidence.set(sym, { price, observedAtMs: Date.now() });
+      return;
+    }
     this.latestAskPrices.set(sym, price);
     this.latestAskTimestamps.set(sym, Date.now());
   }
@@ -1469,6 +1492,7 @@ export class MarketDataWorker {
           if (!this.acceptTickTimestamp(sym, timestampMs, msg.bp)) continue;
           this.lastTick.set(sym, { timestampMs, price: msg.bp });
           this.latestPrices.set(sym, msg.bp);
+          this.latestBidEvidence.set(sym, { price: msg.bp, observedAtMs: Date.now() });
           this.latestPriceTimestamps.set(sym, Date.now());
           // Additive only - never gates isDuplicateTick/acceptTickTimestamp/maybeEmitMarketData
           // above, all of which stay keyed on the bid price exactly as before this field existed.

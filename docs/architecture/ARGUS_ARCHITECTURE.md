@@ -1,5 +1,77 @@
 # Argus Architecture
 
+## 2026-10-03: fill-backed inventory and forensic remediation
+
+The October 1 OKTA incident exposed an eventual-consistency failure: a confirmed close deleted
+the local long, an older positive broker quantity was subsequently reconciled back into the
+cache, and a second independent exit sold it again. The existing execution spine remains
+ChiefTrader → RiskEngine → sizing → OMS → BrokerManager. These are correctness changes inside
+that spine, not a new execution path, new strategy, or permission to lower any approval gate.
+
+Migration `0082_position_fill_evidence` adds nullable submission quantity/basis to `trades`
+and signed post-fill quantity/basis plus gross realized P&L to `fills`. `positionFillEvidence.ts`
+is an internal ledger helper, called by the existing OMS/fill transaction and read by the existing
+risk/reconciliation paths. It is not another position service or broker client. Scope is adapter
+id, execution environment and symbol; monotonic fill ids are observation watermarks, not a claim
+that a provider supplied exchange sequence numbers.
+
+- OMS obtains broker positions, then synchronously checks the scoped fill watermark and unresolved
+  sibling orders and persists its basis immediately before its existing `placeOrder` call. A
+  production SELL means CLOSE_LONG: a zero/negative position or quantity above remaining long is
+  refused. OPEN_SHORT has no new authorized path. Existing PENDING/ambiguous orders reserve the
+  symbol across restarts; no timeout releases that reservation by assumption.
+- `insertIncrementalFill` commits the incremental fill, signed position, cost basis and gross
+  realized P&L in one SQLite transaction. Duplicate cumulative watermarks have no economic effect.
+  Terminal cumulative quantities below already-recorded fills are rejected for reconciliation.
+  `localPortfolioSync.ts` and `omsEntryPrice.ts` are COMPATIBILITY_ONLY, with no production callers.
+- The existing `sell_position_exists` gate also checks fill evidence. Reconciliation cannot
+  hydrate/overwrite a fill-conflicting position and cannot publish a clean MATCH for that conflict.
+  Both broker and local snapshots remain visible. Existing pause controls apply; no automatic
+  flatten or resume is introduced.
+- Delayed and recovered fills use durable basis. Only quantity reducing opposite exposure earns
+  realized P&L; opening a short earns none. An unexpected short is represented as negative inventory
+  and requires reconciliation, rather than being erased or booked as another profitable long exit.
+  `trades.profit_loss` here is gross price P&L. Real commissions remain separate and nullable;
+  this change does not establish net profitability or repair historical P&L records.
+- Cancellation resolves through the order's original broker and requires terminal cumulative fill
+  evidence before releasing its reservation. A cancel acknowledgment alone does not establish zero
+  fills. The historical replay broker now also cancels its genuinely working partial remainder.
+
+The Oct 1–2 audit is retained as a dated snapshot in
+`docs/audits/ARGUS_THURSDAY_FRIDAY_TRADING_FORENSIC_2026-10-01_2026-10-02.md`.
+**Deployment constraint:** legacy fills have NULL inventory watermarks. They deliberately fail
+closed as `POSITION_FILL_BASELINE_UNAVAILABLE`; this migration does not infer a basis from a
+historical BUY or rewrite old evidence. Existing positions, including the audited OKTA short,
+require separately reviewed broker reconciliation and baseline recovery before a supervised
+session. Broker-side native reduce-only is not claimed for equity MARKET orders: simultaneous
+external/manual account activity cannot be made atomic with an Argus SQLite transaction. Broker
+account switches likewise require reconciliation; an adapter id is not proof of account identity.
+No production migration, account adjustment, historical ledger repair, restart, resume, or live
+arming is implied by tests passing.
+
+Observability extends the existing mechanisms:
+
+- `QUANT_QUOTE_EVIDENCE` and `ORDER_QUOTE_EVIDENCE` record observed source, price age, independent
+  bid/ask observations and their timestamps with existing trace/order ids. LAST is not labeled BID;
+  absent observations remain NULL. Reissued subscriptions and backend switches invalidate cached
+  quote evidence. Replay order quotes are explicitly NULL rather than borrowed from the live feed.
+- The existing discovery-lineage report accepts `since`/`until` (exclusive end), distinguishes
+  subscription requests, acknowledgments, capacity refusals and fresh assessment evidence, and
+  reports actual fill-ledger rows. A rejected OMS row is not a submitted broker order. Its timeline
+  exposes trace/order ids where present; symbol/time-only links are not asserted causal links.
+- `CONSENSUS_TERMINAL_REASON` counts individual evaluations; `consensus_decisions` aggregates
+  interim refusals through its periodic persistence sweep. A count mismatch alone is not data loss.
+  Friday capacity pressure remains a measured limit, not proof that thresholds should be weakened.
+- `/api/v2/runtime/orders` records start/completion/disconnection, request correlation and duration;
+  ledger errors return a bounded 503 response. It still reads the ledger, never the broker order API.
+  This supplies future timeout evidence; it does not establish the historical timeout's cause.
+
+Regression coverage uses isolated SQLite and the real replay broker/OMS/reconciliation, with
+stale broker snapshots injected at the broker-data boundary. The stale position is also rejected
+by the real RiskEngine gate. Tests cover partial fills, repeated/concurrent exits, canceled
+remainders, restart/late-fill attribution, and rollback across fill/inventory/P&L. These prove
+engineering behavior under controlled conditions, not organic edge or production deployment.
+
 **This file supersedes and replaces the following 9 files, deleted from `docs/architecture/` as
 part of this consolidation (their content lives on in git history):** `SYSTEM_OVERVIEW.md`,
 `MULTI_AGENT_CONSENSUS.md`, `RISK_ENGINE_24_GATES.md`, `JAVA_QUANT_CORE.md`,

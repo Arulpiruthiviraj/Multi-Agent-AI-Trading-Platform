@@ -1,4 +1,8 @@
 /**
+ * COMPATIBILITY_ONLY (2026-10-03): OMS no longer uses these fallbacks. A prior BUY does
+ * not establish remaining inventory. Submission basis now persists in trades and is
+ * consumed by the atomic fill transaction, including delayed/recovered fills.
+ *
  * Resolve cost basis for a SELL so OMS can persist trades.profit_loss.
  * Broker positions first; on throw / missing symbol, local portfolio then opening BUY trade.
  */

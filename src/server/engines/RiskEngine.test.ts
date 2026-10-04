@@ -3,6 +3,8 @@ import * as schema from '../db/schema';
 import { getTradingDateStr } from '../core/TradingCalendar';
 import { tradingSafety } from '../config/tradingSafety';
 import { resetExtendedHoursLiquidityCacheForTests, setCachedAvgDailyVolumeSharesForTests } from '../risk/ExtendedHoursLiquidityCache';
+// Gate policy unit tests; durable ledger behavior has real-DB integration coverage.
+vi.mock('../services/positionFillEvidence', () => ({ checkPositionFillEvidence: () => null }));
 
 // db.select().from(table)...limit()/where()/orderBy() all resolve to whatever rows were
 // registered for that specific table via setTableRows(). Mirrors drizzle's own thenable

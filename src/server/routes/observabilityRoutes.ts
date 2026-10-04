@@ -701,7 +701,13 @@ observabilityRouter.get('/discovery-lineage', async (req, res) => {
     }
     const hours = Math.min(parseFloat(String(req.query.hours || '24')) || 24, 24 * 30);
     const sinceIso = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-    const report = await buildDiscoveryLineageReport(symbol, sinceIso);
+    const since = typeof req.query.since === 'string' ? req.query.since : sinceIso;
+    const until = typeof req.query.until === 'string' ? req.query.until : undefined;
+    if (!Number.isFinite(Date.parse(since)) || (until && (!Number.isFinite(Date.parse(until)) || Date.parse(until) <= Date.parse(since)))) {
+      res.status(400).json({ ok: false, error: 'Invalid since/until time window' });
+      return;
+    }
+    const report = await buildDiscoveryLineageReport(symbol, new Date(since).toISOString(), until ? new Date(until).toISOString() : undefined);
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatDiscoveryLineageReport(report));
       return;

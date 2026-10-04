@@ -1,4 +1,8 @@
 /**
+ * COMPATIBILITY_ONLY (2026-10-03): no production callers. OMS inventory mutation now runs
+ * atomically inside fillLedger through positionFillEvidence. Do not reintroduce a separate
+ * post-commit inventory writer; that loses the fill-to-position crash-safety invariant.
+ *
  * Immediate local `portfolio` sync after OMS SELL fill progress.
  * Decrements on partial closes; deletes the row on full close so PortfolioReconciliation
  * does not see stale localQty > 0 → false MISSING_REMOTELY between recon ticks.

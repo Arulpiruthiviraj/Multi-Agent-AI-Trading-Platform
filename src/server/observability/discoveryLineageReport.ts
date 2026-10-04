@@ -12,8 +12,9 @@
  * earlier miss like the original FRVO case; it exists so the next one is traceable.
  */
 import { db } from '../db';
-import { observabilityEvents, quantAssessments, riskAssessments, trades } from '../db/schema';
-import { and, eq, gte } from 'drizzle-orm';
+import { observabilityEvents, quantAssessments, riskAssessments, trades, fills } from '../db/schema';
+import { and, eq, gte, lt } from 'drizzle-orm';
+import { tradingSafety } from '../config/tradingSafety';
 import { classifyTradeEnvironment, isReplayTraceId } from '../research/organicPaper';
 import { marketDataWorker } from '../services/MarketDataWorker';
 
@@ -39,6 +40,14 @@ export interface DiscoveryDecisionEvent {
 export interface DiscoveryLineageReport {
   symbol: string;
   windowSinceIso: string;
+  windowUntilIso: string | null;
+  acknowledgedCount: number;
+  capacityDeniedCount: number;
+  freshAssessmentQuoteCount: number;
+  consensusEvaluationCount: number;
+  consensusPersistenceNote: string;
+  /** Observed stages only. Trace ids correlate downstream stages; symbol/time alone is not causality. */
+  observedTimeline: Array<{ ts: string; stage: string; traceId: string | null; orderId: string | null }>;
   discoveryDecisions: DiscoveryDecisionEvent[];
   subscribeRequestedCount: number;
   quantEvaluationCount: number;
@@ -67,13 +76,39 @@ export interface DiscoveryLineageReport {
   terminalSummary: string;
 }
 
-export async function buildDiscoveryLineageReport(symbol: string, sinceIso: string): Promise<DiscoveryLineageReport> {
+export async function buildDiscoveryLineageReport(symbol: string, sinceIso: string, untilIso?: string): Promise<DiscoveryLineageReport> {
   const sym = symbol.trim().toUpperCase();
   const sinceMs = new Date(sinceIso).getTime();
+  const untilMs = untilIso ? new Date(untilIso).getTime() : Infinity;
+  if (!Number.isFinite(sinceMs) || !(untilMs > sinceMs)) throw new Error('Invalid lineage time window');
+  const inWindow = (at: string) => { const ms = new Date(at).getTime(); return ms >= sinceMs && ms < untilMs; };
 
-  const evRows = await db.select().from(observabilityEvents).where(
-    and(eq(observabilityEvents.symbol, sym), gte(observabilityEvents.ts, sinceMs)),
+  const rawEvents = await db.select().from(observabilityEvents).where(
+    and(eq(observabilityEvents.symbol, sym), gte(observabilityEvents.ts, sinceMs),
+      untilIso ? lt(observabilityEvents.ts, untilMs) : undefined),
   );
+  const evRows = rawEvents.filter(r => {
+    if (isReplayTraceId(r.traceId)) return false;
+    try {
+      const p = JSON.parse(r.payload || '{}');
+      return !['REPLAY', 'BACKTEST', 'SIMULATION'].includes(p.executionEnvironment ?? p.environment);
+    } catch { return true; }
+  });
+  const payload = (row: typeof evRows[number]): any => { try { return JSON.parse(row.payload || '{}'); } catch { return {}; } };
+  const acknowledgedCount = evRows.filter(r => r.eventType === 'IBKR_MARKET_DATA_ACKNOWLEDGED').length;
+  const capacityDeniedCount = evRows.filter(r => r.eventType === 'TEMPORARY_DATA_RESCUE_DENIED'
+    || r.eventType === 'MARKET_DATA_CAPACITY_FULL').length;
+  const freshAssessmentQuoteCount = evRows.filter(r => r.eventType === 'QUANT_QUOTE_EVIDENCE'
+    && Number.isFinite(payload(r).quote?.priceAgeMs) && payload(r).quote.priceAgeMs >= 0
+    && payload(r).quote.priceAgeMs <= tradingSafety.stalePriceThresholdMs
+    && payload(r).quote.observedPrice > 0).length;
+  const observedTimeline = evRows.filter(r => !isReplayTraceId(r.traceId) && [
+    'DISCOVERY_CANDIDATE_ADMITTED', 'DISCOVERY_CANDIDATE_FILTERED', 'WATCHLIST_SUBSCRIBE_REQUESTED',
+    'IBKR_MARKET_DATA_ACKNOWLEDGED', 'TEMPORARY_DATA_RESCUE_DENIED', 'MARKET_DATA_CAPACITY_FULL',
+    'QUANT_QUOTE_EVIDENCE', 'TRADE_IDEA_GENERATED', 'CONSENSUS_TERMINAL_REASON', 'ORDER_QUOTE_EVIDENCE',
+    'ORDER_POSITION_REFUSED',
+  ].includes(r.eventType ?? '')).map(r => ({ ts: new Date(r.ts).toISOString(), stage: r.eventType!,
+    traceId: r.traceId ?? payload(r).traceId ?? null, orderId: r.orderId ?? payload(r).orderId ?? null }));
 
   const discoveryDecisions: DiscoveryDecisionEvent[] = evRows
     .filter((r) => r.eventType === 'DISCOVERY_CANDIDATE_ADMITTED' || r.eventType === 'DISCOVERY_CANDIDATE_FILTERED')
@@ -115,18 +150,29 @@ export async function buildDiscoveryLineageReport(symbol: string, sinceIso: stri
   }
 
   const qaRows = await db.select().from(quantAssessments).where(
-    and(eq(quantAssessments.symbol, sym), gte(quantAssessments.createdAt, sinceIso)),
+    and(eq(quantAssessments.symbol, sym), gte(quantAssessments.createdAt, sinceIso),
+      untilIso ? lt(quantAssessments.createdAt, untilIso) : undefined),
   );
 
   const riskRows = await db.select().from(riskAssessments).where(eq(riskAssessments.symbol, sym));
-  const genuineRisk = riskRows.filter((r) => new Date(r.createdAt as unknown as string).getTime() >= sinceMs && !isReplayTraceId(r.traceId));
+  const genuineRisk = riskRows.filter((r) => inWindow(r.createdAt as unknown as string) && !isReplayTraceId(r.traceId)
+    && !['REPLAY','BACKTEST','SIMULATION'].includes(classifyTradeEnvironment({ reasoning: r.reasoning, traceId: r.traceId })));
   const tradeRows = await db.select().from(trades).where(eq(trades.symbol, sym));
-  const genuineTrades = tradeRows.filter((t) => new Date(t.timestamp).getTime() >= sinceMs && classifyTradeEnvironment(t) !== 'REPLAY');
+  const genuineTrades = tradeRows.filter((t) => inWindow(t.timestamp) && ['PAPER', 'LIVE'].includes(classifyTradeEnvironment(t)));
+  const fillRows = await db.select({ id: fills.id, orderId: fills.orderId, at: fills.filledAt, traceId: trades.traceId,
+    executionEnvironment: trades.executionEnvironment, reasoning: trades.reasoning, brokerId: trades.brokerId })
+    .from(fills).innerJoin(trades, eq(trades.id, fills.orderId)).where(and(eq(trades.symbol, sym), gte(fills.filledAt, sinceIso),
+      untilIso ? lt(fills.filledAt, untilIso) : undefined));
+  const genuineFills = fillRows.filter(r => ['PAPER', 'LIVE'].includes(classifyTradeEnvironment(r)));
+  for (const r of genuineRisk) observedTimeline.push({ ts: r.createdAt as unknown as string, stage: r.approved ? 'RISK_APPROVED' : 'RISK_REJECTED', traceId: r.traceId, orderId: null });
+  for (const t of genuineTrades) observedTimeline.push({ ts: t.timestamp, stage: t.brokerOrderId ? 'BROKER_ORDER_RECORDED' : 'OMS_LEDGER_ROW', traceId: t.traceId, orderId: t.id });
+  for (const f of genuineFills) observedTimeline.push({ ts: f.at, stage: 'FILL_RECORDED', traceId: f.traceId, orderId: f.orderId });
+  observedTimeline.sort((a,b) => a.ts.localeCompare(b.ts));
 
   const riskEngineReached = genuineRisk.length > 0;
   const riskApproved = genuineRisk.some((r) => r.approved);
-  const omsOrderPlaced = genuineTrades.length > 0;
-  const fillReached = genuineTrades.some((t) => t.status === 'FILLED');
+  const omsOrderPlaced = genuineTrades.some(t => !!t.brokerOrderId || !!t.acceptedAt);
+  const fillReached = genuineFills.length > 0;
 
   const liveSlot = marketDataWorker.getActiveSlots().find((s) => s.symbol === sym) ?? null;
   const currentlySubscribed = liveSlot != null;
@@ -144,7 +190,7 @@ export async function buildDiscoveryLineageReport(symbol: string, sinceIso: stri
   else if (qaRows.length > 0) terminalSummary = 'QuantEngine evaluated this symbol but never emitted a trade idea in this window.';
   else if (marketDataError) terminalSummary = `Currently subscribed but IB rejected the market-data line (code ${marketDataError.code}: ${marketDataError.message}) - it will never tick until this is resolved (commonly a missing market-data-line entitlement for this symbol/exchange).`;
   else if (currentlySubscribed && currentTickCount === 0) terminalSummary = 'Currently subscribed (no market-data error recorded) but has not yet received a real tick.';
-  else if (subscribeRequestedCount > 0) terminalSummary = 'Subscribed but never reached a recorded QuantEngine evaluation in this window.';
+  else if (subscribeRequestedCount > 0) terminalSummary = 'Subscription requested but no QuantEngine evaluation recorded in this window; a request alone does not prove receiving fresh data.';
   else if (discoveryDecisions.some((d) => d.admitted)) terminalSummary = 'Admitted by discovery but never reached a recorded subscription request in this window.';
   else if (discoveryDecisions.length > 0) terminalSummary = `Filtered at discovery (${discoveryDecisions[discoveryDecisions.length - 1].reason ?? 'unknown reason'}).`;
   else terminalSummary = 'No discovery-lineage evidence found for this symbol in this window - either it was never scanned by an instrumented discovery source, or it predates Phase A instrumentation (shipped 2026-09-02).';
@@ -152,6 +198,11 @@ export async function buildDiscoveryLineageReport(symbol: string, sinceIso: stri
   return {
     symbol: sym,
     windowSinceIso: sinceIso,
+    windowUntilIso: untilIso ?? null,
+    acknowledgedCount, capacityDeniedCount, freshAssessmentQuoteCount,
+    consensusEvaluationCount: consensusRows.length,
+    consensusPersistenceNote: 'Terminal events count evaluations; consensus_decisions aggregates interim rejections at its periodic sweep. These counts are not one-to-one.',
+    observedTimeline,
     discoveryDecisions,
     subscribeRequestedCount,
     quantEvaluationCount: qaRows.length,
@@ -188,6 +239,10 @@ export function formatDiscoveryLineageReport(r: DiscoveryLineageReport): string 
   lines.push(
     '',
     `Subscribe requests: ${r.subscribeRequestedCount}`,
+    `Window end (exclusive): ${r.windowUntilIso ?? 'open-ended'}`,
+    `Provider acknowledgments: ${r.acknowledgedCount}; capacity/refusal events: ${r.capacityDeniedCount}`,
+    `Assessments with persisted fresh quote evidence: ${r.freshAssessmentQuoteCount}`,
+    `Consensus evaluation events: ${r.consensusEvaluationCount}. ${r.consensusPersistenceNote}`,
     `Currently subscribed (live): ${r.currentlySubscribed}${r.currentlySubscribed ? ` (tickCount=${r.currentTickCount}, dwellAgeMs=${r.currentDwellAgeMs})` : ''}`,
     `Market-data error (live): ${r.marketDataError ? `code ${r.marketDataError.code}: ${r.marketDataError.message}` : 'none'}`,
     `Quant evaluations: ${r.quantEvaluationCount}`,

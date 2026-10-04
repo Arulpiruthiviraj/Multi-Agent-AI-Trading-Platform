@@ -89,13 +89,24 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
   });
 
   beforeEach(async () => {
+    await db.delete(schema.fills);
+    await db.delete(schema.trades);
+    await db.delete(schema.portfolio);
     ordersResponse = [];
     cancelResult = true;
     canCancelOrders = true;
     placeOrderDelayMs = 0;
     placeOrderCallCount = 0;
     placeOrderResponseOverride = null;
-    cancelOrderSpy = vi.fn(async () => cancelResult);
+    cancelOrderSpy = vi.fn(async (brokerOrderId: string) => {
+      if (cancelResult) {
+        const row = sqliteDb.prepare('SELECT * FROM trades WHERE broker_order_id=?').get(brokerOrderId) as any;
+        if (row) ordersResponse = [{ id: brokerOrderId, symbol: row.symbol, side: row.side,
+          type: 'MARKET', status: 'CANCELED', quantity: row.quantity, filledQuantity: 0,
+          createdAt: new Date(), updatedAt: new Date() }];
+      }
+      return cancelResult;
+    });
     const broker = stubBroker();
     BrokerManager.getInstance().registerBroker(broker);
     await BrokerManager.getInstance().setActiveBroker('lifecycle-stub', {});
@@ -482,6 +493,10 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
     const nowIso = new Date().toISOString();
     await db.insert(schema.trades).values({
       id: 'canceled-but-really-filled',
+      positionQuantityBefore: 0,
+      positionAveragePriceBefore: 0,
+      brokerId: 'lifecycle-stub',
+      executionEnvironment: 'UNKNOWN',
       symbol: 'NFLX',
       side: 'BUY',
       quantity: 5,

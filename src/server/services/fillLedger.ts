@@ -3,6 +3,7 @@ import { fills } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { incMetric } from '../observability/ObservabilityMetrics';
+import { applyPositionFill } from './positionFillEvidence';
 
 export function isUniqueConstraint(err: unknown): boolean {
   const e = err as { code?: string; message?: string };
@@ -23,13 +24,13 @@ export async function insertIncrementalFill(opts: {
   filledQuantity: number | undefined;
   averageFillPrice: number | undefined;
   filledAt?: string;
-}): Promise<{ newQty: number; cumulativeQuantity: number; duplicate: boolean; incrementalPrice?: number }> {
+  applyPosition?: boolean;
+}): Promise<{ newQty: number; cumulativeQuantity: number; duplicate: boolean; incrementalPrice?: number; positionApplied?: boolean }> {
   const reportedQty = opts.filledQuantity;
-  if (reportedQty === 0) return { newQty: 0, cumulativeQuantity: 0, duplicate: false };
-  if (!Number.isFinite(reportedQty) || !(reportedQty! > 0)
+  if (!Number.isFinite(reportedQty) || reportedQty! < 0
     || !Number.isFinite(opts.requestedQuantity) || !(opts.requestedQuantity > 0)
     || reportedQty! > opts.requestedQuantity
-    || !Number.isFinite(opts.averageFillPrice) || !(opts.averageFillPrice! > 0)) {
+    || (reportedQty! > 0 && (!Number.isFinite(opts.averageFillPrice) || !(opts.averageFillPrice! > 0)))) {
     throw new Error(`Invalid or incomplete broker fill for ${opts.orderId}; reconciliation required`);
   }
   try {
@@ -42,8 +43,13 @@ export async function insertIncrementalFill(opts: {
         throw new Error(`Invalid existing fill economics for ${opts.orderId}; reconciliation required`);
       }
       const priorQty = prior.reduce((sum, f) => sum + f.quantity, 0);
+      if (reportedQty! < priorQty && (opts.status === 'FILLED' || opts.status === 'CANCELED')) {
+        throw new Error(`Terminal fill watermark regressed for ${opts.orderId}; reconciliation required`);
+      }
+      if (reportedQty === 0) return { newQty: 0, cumulativeQuantity: 0, duplicate: false };
       const newQty = reportedQty! - priorQty;
-      if (newQty <= 1e-9) return { newQty: 0, cumulativeQuantity: reportedQty!, duplicate: true };
+      if (newQty <= 1e-9) return { newQty: 0, cumulativeQuantity: reportedQty!, duplicate: true,
+        positionApplied: prior.every(f => f.positionQuantityAfter !== null && f.positionAveragePriceAfter !== null) };
       const priorNotional = prior.reduce((sum, f) => sum + f.quantity * f.price, 0);
       const incrementalPrice = (reportedQty! * opts.averageFillPrice! - priorNotional) / newQty;
       if (!Number.isFinite(incrementalPrice) || !(incrementalPrice > 0)) {
@@ -57,7 +63,9 @@ export async function insertIncrementalFill(opts: {
         filledAt: opts.filledAt || new Date().toISOString(),
         cumulativeQuantity: reportedQty,
       }).run();
-      return { newQty, cumulativeQuantity: reportedQty!, duplicate: false, incrementalPrice };
+      const positionApplied = opts.applyPosition
+        ? applyPositionFill(opts.orderId, newQty, incrementalPrice, reportedQty!) : false;
+      return { newQty, cumulativeQuantity: reportedQty!, duplicate: false, incrementalPrice, positionApplied };
     }, { behavior: 'immediate' });
     if (result.newQty === 0) return result;
     incMetric('fills_recorded');

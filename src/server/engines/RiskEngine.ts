@@ -56,6 +56,7 @@ import { evaluateCryptoVenueAvailability } from '../risk/CryptoVenueAvailability
 import { classifyMarketSession, sessionAllowsFills } from '../replay/marketSession';
 import { replaySafety } from '../replay/replaySafety';
 import { newsVisibleAt } from '../replay/HistoricalNewsProvider';
+import { checkPositionFillEvidence } from '../services/positionFillEvidence';
 
 const STALE_PRICE_THRESHOLD_MS = tradingSafety.stalePriceThresholdMs;
 let cachedMarketClock: { isOpen: boolean; fetchedAt: number } | null = null;
@@ -750,8 +751,14 @@ export class RiskEngine {
                 // If we are selling, make sure we have the shares
                 if (proposal.side === 'SELL') {
                     const existingPosition = portfolio.positions.find((p: any) => p.symbol === proposal.symbol);
-                    sellPositionPassed = !!existingPosition && existingPosition.quantity > 0;
-                    recordGate('sell_position_exists', sellPositionPassed, { existingQuantity: existingPosition?.quantity ?? 0 });
+                    const positionEvidenceReason = checkPositionFillEvidence({ symbol: proposal.symbol,
+                        brokerId: broker.id, environment: replay ? 'REPLAY' : resolveOmsExecutionEnvironment({
+                            brokerId: broker.id, tradingMode: settings[0]?.tradingMode ?? 'Paper',
+                        }) }, existingPosition?.quantity ?? 0);
+                    sellPositionPassed = !!existingPosition && existingPosition.quantity > 0 && !positionEvidenceReason;
+                    recordGate('sell_position_exists', sellPositionPassed, {
+                        existingQuantity: existingPosition?.quantity ?? 0, positionEvidenceReason,
+                    });
                     if (sellPositionPassed) {
                         maxQuantity = Math.min(maxQuantity, existingPosition.quantity);
                     }

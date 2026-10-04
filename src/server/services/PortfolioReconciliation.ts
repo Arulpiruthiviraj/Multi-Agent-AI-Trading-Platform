@@ -7,7 +7,7 @@
  * ==========================================================
  */
 import { db, sqliteDb } from '../db';
-import { portfolio, reconciliationEvents, portfolioSnapshots, trades } from '../db/schema';
+import { portfolio, reconciliationEvents, portfolioSnapshots, trades, settings } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { eventBus } from '../core/EventBus';
@@ -21,6 +21,9 @@ import { getActiveAcknowledgedOrderIds } from './ReconciliationAcknowledgements'
 import { isReconciliationWarmupActive, reconciliationWarmupRemainingMs } from '../core/startup';
 import { canonicalPortfolioSymbol, confirmConsecutiveFault, confirmMissingLocally, confirmStillHeldLocally, discrepancyFaultKey, findHolding, positionSetDelta, pruneResolvedFaults, summarizePositionSet } from './portfolioReconcileCompare';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
+import { checkPositionFillEvidence, latestPositionFill } from './positionFillEvidence';
+import { resolveOmsExecutionEnvironment } from '../research/organicPaper';
+import { normalizeTradingMode } from '../core/tradingModeEnv';
 
 const QTY_TOLERANCE = tradingSafety.reconQtyTolerance;
 export const SIGNIFICANT_MISMATCH_DOLLARS = tradingSafety.reconSignificantMismatchDollars;
@@ -41,7 +44,7 @@ interface MismatchDetail {
   symbol: string;
   type: 'QUANTITY_DRIFT' | 'MISSING_LOCALLY' | 'MISSING_REMOTELY'
       | 'OPEN_ORDER_MISSING_LOCALLY' | 'OPEN_ORDER_MISSING_REMOTELY' | 'ACCOUNT_INCONSISTENCY'
-      | 'FILLED_ORDER_MISSING_LOCALLY';
+      | 'FILLED_ORDER_MISSING_LOCALLY' | 'POSITION_FILL_CONFLICT' | 'POSITION_FILL_BASELINE_UNAVAILABLE';
   localQty: number;
   remoteQty: number;
   approxDollarImpact: number;
@@ -182,6 +185,20 @@ export class PortfolioReconciliationWorker {
       // so live rows looked like they already existed before the check.
       const positionsComparedAt = new Date().toISOString();
       const mismatches: MismatchDetail[] = [];
+      const environment = resolveOmsExecutionEnvironment({ brokerId: broker.id,
+        tradingMode: normalizeTradingMode(db.select().from(settings).limit(1).get()?.tradingMode) });
+      const rejectUnconfirmedPosition = (symbol: string, remoteQty: number, price: number): boolean => {
+        const scope = { symbol, brokerId: broker.id, environment };
+        const reason = checkPositionFillEvidence(scope, remoteQty);
+        if (!reason) return false;
+        if (!mismatches.some(m => m.symbol === symbol && m.type.startsWith('POSITION_FILL_'))) {
+          mismatches.push({ symbol, type: reason === 'POSITION_FILL_BASELINE_UNAVAILABLE'
+            ? 'POSITION_FILL_BASELINE_UNAVAILABLE' : 'POSITION_FILL_CONFLICT',
+            localQty: latestPositionFill(scope)?.quantity ?? 0, remoteQty,
+            approxDollarImpact: Math.max(SIGNIFICANT_MISMATCH_DOLLARS, Math.abs(remoteQty * price)) });
+        }
+        return true;
+      };
       const remoteCanon = new Set(remotePositions.map((p: any) => canonicalPortfolioSymbol(p.symbol)).filter(Boolean));
       const liveFaultKeys = new Set<string>();
 
@@ -191,18 +208,19 @@ export class PortfolioReconciliationWorker {
         const qty = pos.quantity;
         const avgPrice = pos.entryPrice;
         const price = pos.currentPrice || avgPrice;
+        if (rejectUnconfirmedPosition(symbol, qty, price)) continue;
 
         const local = findHolding(localHoldings, symbol);
         if (local && Math.abs((local.quantity ?? 0) - qty) <= QTY_TOLERANCE) {
           if (local.averagePrice !== avgPrice || local.currentPrice !== pos.currentPrice) {
-            await db.update(portfolio).set({
+            db.update(portfolio).set({
               quantity: qty,
               averagePrice: avgPrice,
               currentPrice: pos.currentPrice,
               unrealizedPnL: pos.unrealizedPnl,
               lastUpdated: new Date().toISOString(),
               brokerSource: broker.id,
-            }).where(eq(portfolio.symbol, local.symbol));
+            }).where(eq(portfolio.symbol, local.symbol)).run();
           }
           continue;
         }
@@ -214,6 +232,8 @@ export class PortfolioReconciliationWorker {
           QTY_TOLERANCE,
           loadLocalHoldings,
         );
+        // A confirmed fill may have landed while confirmMissingLocally awaited its fresh read.
+        if (rejectUnconfirmedPosition(symbol, qty, price)) continue;
 
         if (verdict === 'present_matching') {
           // Row landed after the in-memory snapshot (OMS/hydrate/this cycle's writer). Not a mismatch.
@@ -224,14 +244,14 @@ export class PortfolioReconciliationWorker {
         if (verdict === 'present_drift' || (local && Math.abs((local.quantity ?? 0) - qty) > QTY_TOLERANCE)) {
           const localQty = (findHolding(loadLocalHoldings(), symbol)?.quantity ?? local?.quantity) ?? 0;
           console.warn(`[PortfolioReconciliation] DRIFT ${symbol}: local qty ${localQty}, broker qty ${qty} — writing broker qty (not a pause by itself).`);
-          await db.update(portfolio).set({
+          db.update(portfolio).set({
             quantity: qty,
             averagePrice: avgPrice,
             currentPrice: pos.currentPrice,
             unrealizedPnL: pos.unrealizedPnl,
             lastUpdated: new Date().toISOString(),
             brokerSource: broker.id,
-          }).where(eq(portfolio.symbol, local?.symbol ?? symbol));
+          }).where(eq(portfolio.symbol, local?.symbol ?? symbol)).run();
           continue;
         }
 
@@ -241,7 +261,7 @@ export class PortfolioReconciliationWorker {
         console.warn(`[PortfolioReconciliation] Broker holds ${symbol} (${qty}) with no local record after fresh re-read - hydrating.`);
         let hydrated = false;
         try {
-          await db.insert(portfolio).values({
+          db.insert(portfolio).values({
             symbol,
             quantity: qty,
             averagePrice: avgPrice,
@@ -249,7 +269,7 @@ export class PortfolioReconciliationWorker {
             unrealizedPnL: pos.unrealizedPnl,
             lastUpdated: new Date().toISOString(),
             brokerSource: broker.id,
-          });
+          }).run();
           const verify = findHolding(loadLocalHoldings(), symbol);
           if (!verify || Math.abs((verify.quantity ?? 0) - qty) > QTY_TOLERANCE) {
             observeSafe(() => structuredLogger.error('reconciliation_hydrate_verify_failed', {
@@ -303,6 +323,7 @@ export class PortfolioReconciliationWorker {
           loadLocalHoldings,
         );
         if (!stillHeld) continue;
+        if (rejectUnconfirmedPosition(localCanon || local.symbol, 0, local.currentPrice || local.averagePrice)) continue;
         const faultKey = discrepancyFaultKey('MISSING_REMOTELY', localCanon || local.symbol);
         liveFaultKeys.add(faultKey);
         if (!confirmConsecutiveFault(this.consecutiveFaults, faultKey, PAUSE_CONSECUTIVE_CYCLES)) {
@@ -312,10 +333,10 @@ export class PortfolioReconciliationWorker {
         const price = local.currentPrice || local.averagePrice;
         mismatches.push({ symbol: localCanon || local.symbol, type: 'MISSING_REMOTELY', localQty: local.quantity, remoteQty: 0, approxDollarImpact: local.quantity * price });
         console.warn(`[PortfolioReconciliation] Local record for ${local.symbol} (${local.quantity}) has no matching broker position - clearing it.`);
-        await db.update(portfolio).set({
+        db.update(portfolio).set({
           quantity: 0,
           lastUpdated: new Date().toISOString()
-        }).where(eq(portfolio.symbol, local.symbol));
+        }).where(eq(portfolio.symbol, local.symbol)).run();
       }
       // pruneResolvedFaults() moved to after the open-order reconciliation block below (2026-09-14)
       // so both sections' fault keys share one prune pass - calling it here too would incorrectly
@@ -431,6 +452,14 @@ export class PortfolioReconciliationWorker {
         console.error('[PortfolioReconciliation] Account consistency check failed', e);
       }
 
+      // Broker order/account reads above may yield while a new fill commits. Never publish a
+      // clean MATCH for an earlier position snapshot in that case.
+      for (const pos of remotePositions) rejectUnconfirmedPosition(pos.symbol, pos.quantity, pos.currentPrice || pos.entryPrice);
+      for (const local of loadLocalHoldings()) {
+        if (!remoteCanon.has(canonicalPortfolioSymbol(local.symbol))) {
+          rejectUnconfirmedPosition(local.symbol, 0, local.currentPrice || local.averagePrice);
+        }
+      }
       const timestamp = positionsComparedAt;
       let actionTaken: string | null = null;
       let worstImpact = 0;
