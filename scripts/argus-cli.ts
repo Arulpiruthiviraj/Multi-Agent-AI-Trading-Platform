@@ -50,7 +50,7 @@ function cliAuthHeaders(): Record<string, string> {
   return buildCliAuthHeaders({ sessionPath: SESSION_PATH });
 }
 
-async function fetchJson(path: string, init?: RequestInit) {
+export async function fetchJson(path: string, init?: RequestInit) {
   // CLI/control-plane hardening (2026-09-23, real bug found and reproduced live): 10s was too
   // short for genuinely-healthy-but-momentarily-busy aggregation endpoints (status/health, which
   // fan out over pipeline agents, IBKR paths, and up to 10 AI-provider health checks) - a real
@@ -63,7 +63,12 @@ async function fetchJson(path: string, init?: RequestInit) {
   // STARTING/FAILED classification - simply raising a number is not treated as a fix there).
   const timeoutMs = Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 20_000);
   const signal = init?.signal ?? AbortSignal.timeout(timeoutMs);
-  const res = await fetch(`${BASE}${path}`, {
+  const started = Date.now();
+  let requestId: string | null = null;
+  let res: Response;
+  let text: string;
+  try {
+  res = await fetch(`${BASE}${path}`, {
     ...init,
     signal,
     headers: {
@@ -72,7 +77,16 @@ async function fetchJson(path: string, init?: RequestInit) {
       ...(init?.headers || {}),
     },
   });
-  const text = await res.text();
+  requestId = res.headers.get('x-request-id');
+  text = await res.text();
+  } catch (error) {
+    const code = (error as { cause?: { code?: string } }).cause?.code;
+    const reason = signal.aborted ? 'REQUEST_ABORTED_OR_TIMED_OUT'
+      : code === 'ECONNREFUSED' ? 'ENGINE_UNREACHABLE' : 'TRANSPORT_FAILED';
+    throw new Error(`${reason}: ${init?.method ?? 'GET'} ${path.split('?')[0]} after ${Date.now() - started}ms`
+      + (requestId ? ` (requestId=${requestId})` : '')
+      + '. No server completion was confirmed; this does not establish broker or order failure.');
+  }
   let body: unknown;
   try {
     body = JSON.parse(text);

@@ -33,9 +33,9 @@ async function closeWithTimeout(
   close: (callback?: (err?: Error) => void) => unknown,
   timeoutMs: number,
   forceClose?: () => void,
-): Promise<void> {
+): Promise<boolean> {
   let settled = false;
-  await new Promise<void>((resolve) => {
+  return new Promise<boolean>((resolve) => {
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
@@ -45,39 +45,42 @@ async function closeWithTimeout(
       } catch (e) {
         console.error(`[gracefulShutdown] ${label} forceClose failed`, e);
       }
-      resolve();
+      resolve(false);
     }, timeoutMs);
     try {
-      close(() => {
+      close((err) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        resolve();
+        resolve(!err);
       });
     } catch (e) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       console.error(`[gracefulShutdown] ${label}.close() threw`, e);
-      resolve();
+      resolve(false);
     }
   });
 }
 
 let installed = false;
-let draining = false;
+let drainPromise: Promise<void> | null = null;
 let registeredHandles: ShutdownHandles = {};
 
-export async function drainTradingProcess(handles: ShutdownHandles = {}): Promise<void> {
-  if (draining) return;
-  draining = true;
+export function drainTradingProcess(handles: ShutdownHandles = {}): Promise<void> {
+  // Every caller must await the SAME drain. A second signal must never return immediately
+  // and let its caller process.exit() while the first drain is still using SQLite.
+  return drainPromise ??= performDrain(handles);
+}
+
+async function performDrain(handles: ShutdownHandles): Promise<void> {
+  let drainFailed = false;
+  const failed = (message: string, error: unknown) => {
+    drainFailed = true;
+    console.error(message, error);
+  };
   console.log('[gracefulShutdown] Stopping new trades and draining workers...');
-  try {
-    const { markCleanShutdown } = await import('./sessionRecovery');
-    markCleanShutdown();
-  } catch (e) {
-    console.error('[gracefulShutdown] Failed to persist clean-shutdown marker', e);
-  }
   try {
     const { clearEnginePid } = await import('../app/enginePid');
     clearEnginePid();
@@ -91,31 +94,31 @@ export async function drainTradingProcess(handles: ShutdownHandles = {}): Promis
       actor: 'gracefulShutdown',
     });
   } catch (e) {
-    console.error('[gracefulShutdown] Failed to pause trading', e);
+    failed('[gracefulShutdown] Failed to pause trading', e);
   }
   try {
     const { system } = await import('./SystemBootstrap');
     system.stop();
   } catch (e) {
-    console.error('[gracefulShutdown] Failed to stop workers', e);
+    failed('[gracefulShutdown] Failed to stop workers', e);
   }
   try {
     const { marketDataWorker } = await import('../services/MarketDataWorker');
     marketDataWorker.stop();
   } catch (e) {
-    console.error('[gracefulShutdown] Failed to stop market data', e);
+    failed('[gracefulShutdown] Failed to stop market data', e);
   }
   try {
     const { newsEngine } = await import('../news/NewsEngine');
     newsEngine.stop();
   } catch (e) {
-    console.error('[gracefulShutdown] Failed to stop NewsEngine', e);
+    failed('[gracefulShutdown] Failed to stop NewsEngine', e);
   }
   try {
     const { portfolioReconciliationWorker } = await import('../services/PortfolioReconciliation');
     portfolioReconciliationWorker.stop();
   } catch (e) {
-    console.error('[gracefulShutdown] Failed to stop PortfolioReconciliation', e);
+    failed('[gracefulShutdown] Failed to stop PortfolioReconciliation', e);
   }
   // Real gap found and fixed this pass (2026-09-05, post-implementation forensic audit): none of
   // the workers below were ever stopped during drain, even though several of them (SessionLifecycle
@@ -131,25 +134,25 @@ export async function drainTradingProcess(handles: ShutdownHandles = {}): Promis
     const { sessionLifecycleWorker } = await import('../premarket/SessionLifecycle');
     sessionLifecycleWorker.stop();
   } catch (e) {
-    console.error('[gracefulShutdown] Failed to stop SessionLifecycle', e);
+    failed('[gracefulShutdown] Failed to stop SessionLifecycle', e);
   }
   try {
     const { javaQuantAdvisoryService } = await import('../services/JavaQuantAdvisoryService');
     javaQuantAdvisoryService.stop();
   } catch (e) {
-    console.error('[gracefulShutdown] Failed to stop JavaQuantAdvisoryService', e);
+    failed('[gracefulShutdown] Failed to stop JavaQuantAdvisoryService', e);
   }
   try {
     const { calibrationValidationWorker } = await import('../continuous/CalibrationValidationWorker');
     calibrationValidationWorker.stop();
   } catch (e) {
-    console.error('[gracefulShutdown] Failed to stop CalibrationValidationWorker', e);
+    failed('[gracefulShutdown] Failed to stop CalibrationValidationWorker', e);
   }
   try {
     const { marketUniverseScannerWorker } = await import('../continuous/MarketUniverseScanner');
     marketUniverseScannerWorker.stop();
   } catch (e) {
-    console.error('[gracefulShutdown] Failed to stop MarketUniverseScanner', e);
+    failed('[gracefulShutdown] Failed to stop MarketUniverseScanner', e);
   }
   try {
     // Crypto Expansion Phase 4 (2026-09-21): a new interval-driven worker - must stop before
@@ -158,37 +161,37 @@ export async function drainTradingProcess(handles: ShutdownHandles = {}): Promis
     const { cryptoMarketDataIngestionWorker } = await import('../services/CryptoMarketDataIngestion');
     cryptoMarketDataIngestionWorker.stop();
   } catch (e) {
-    console.error('[gracefulShutdown] Failed to stop CryptoMarketDataIngestionWorker', e);
+    failed('[gracefulShutdown] Failed to stop CryptoMarketDataIngestionWorker', e);
   }
   try {
     const { campaignTracker } = await import('../services/CampaignTracker');
     campaignTracker.stop(); // also stops campaignWatchlistBoostWorker and campaignOpeningSurgeWorker internally
   } catch (e) {
-    console.error('[gracefulShutdown] Failed to stop CampaignTracker', e);
+    failed('[gracefulShutdown] Failed to stop CampaignTracker', e);
   }
   try {
     const { autoTradeScheduler } = await import('../services/AutoTradeScheduler');
     autoTradeScheduler.stop();
   } catch (e) {
-    console.error('[gracefulShutdown] Failed to stop AutoTradeScheduler', e);
+    failed('[gracefulShutdown] Failed to stop AutoTradeScheduler', e);
   }
   try {
     const { marketOpenNewsConfluence } = await import('../news/MarketOpenNewsConfluence');
     marketOpenNewsConfluence.stop();
   } catch (e) {
-    console.error('[gracefulShutdown] Failed to stop MarketOpenNewsConfluence', e);
+    failed('[gracefulShutdown] Failed to stop MarketOpenNewsConfluence', e);
   }
   try {
     const { strategyEngineShadowRunner } = await import('../services/StrategyEngineShadowRunner');
     strategyEngineShadowRunner.stop();
   } catch (e) {
-    console.error('[gracefulShutdown] Failed to stop StrategyEngineShadowRunner', e);
+    failed('[gracefulShutdown] Failed to stop StrategyEngineShadowRunner', e);
   }
   try {
     const { openAliceVerificationService } = await import('../integrations/openalice/OpenAliceVerificationService');
     openAliceVerificationService.stopPolling();
   } catch (e) {
-    console.error('[gracefulShutdown] Failed to stop OpenAliceVerificationService', e);
+    failed('[gracefulShutdown] Failed to stop OpenAliceVerificationService', e);
   }
   try {
     // R2 remediation (2026-09-06) - added after DEF-27's own lesson: stop every interval-driven
@@ -196,7 +199,7 @@ export async function drainTradingProcess(handles: ShutdownHandles = {}): Promis
     const { stopHeartbeatWatchdog } = await import('./heartbeatWatchdog');
     stopHeartbeatWatchdog();
   } catch (e) {
-    console.error('[gracefulShutdown] Failed to stop HeartbeatWatchdog', e);
+    failed('[gracefulShutdown] Failed to stop HeartbeatWatchdog', e);
   }
   // Close WS then HTTP BEFORE SQLite (see header comment) - bounded so an in-flight/keep-alive
   // connection can never hang shutdown, and so no late request can ever hit a closed DB.
@@ -205,27 +208,31 @@ export async function drainTradingProcess(handles: ShutdownHandles = {}): Promis
     const { tradingSafety } = await import('../config/tradingSafety');
     drainTimeoutMs = tradingSafety.gracefulShutdownHttpDrainTimeoutMs;
   } catch (e) {
-    console.error('[gracefulShutdown] Failed to load tradingSafety config for drain timeout, using fallback', e);
+    failed('[gracefulShutdown] Failed to load tradingSafety config for drain timeout, using fallback', e);
   }
   if (handles.wss) {
-    await closeWithTimeout('wss', handles.wss.close, drainTimeoutMs);
+    if (!await closeWithTimeout('wss', handles.wss.close.bind(handles.wss), drainTimeoutMs)) drainFailed = true;
   }
   if (handles.httpServer) {
-    await closeWithTimeout(
+    if (!await closeWithTimeout(
       'httpServer',
-      handles.httpServer.close,
+      handles.httpServer.close.bind(handles.httpServer),
       drainTimeoutMs,
-      handles.httpServer.closeAllConnections,
-    );
+      handles.httpServer.closeAllConnections?.bind(handles.httpServer),
+    )) drainFailed = true;
   }
   try {
     const { sqliteDb } = await import('../db');
     sqliteDb.pragma('wal_checkpoint(TRUNCATE)');
     sqliteDb.close();
   } catch (e) {
-    console.error('[gracefulShutdown] Failed to close SQLite', e);
+    failed('[gracefulShutdown] Failed to close SQLite', e);
   }
-  console.log('[gracefulShutdown] Drain complete.');
+  if (!drainFailed) {
+    const { markCleanShutdown } = await import('./sessionRecovery');
+    markCleanShutdown();
+  }
+  console.log(`[gracefulShutdown] Drain complete; clean=${!drainFailed}.`);
 }
 
 export function installProcessShutdown(handles: ShutdownHandles = {}): void {
@@ -264,6 +271,6 @@ export async function requestGracefulShutdown(reason: string): Promise<void> {
 /** Test-only. */
 export function resetGracefulShutdownForTests(): void {
   installed = false;
-  draining = false;
+  drainPromise = null;
   registeredHandles = {};
 }

@@ -188,7 +188,9 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
     const cash = tags.TotalCashValue ?? tags.AvailableFunds ?? 0;
     const buyingPower = tags.BuyingPower ?? cash;
     const equity = tags.NetLiquidation ?? cash;
-    return { cash, buyingPower, equity, positions: await this.positions() };
+    const positions = await this.positions();
+    return { cash, buyingPower, equity, positions,
+      valuationStatus: positions.some(p => p.valuationStatus === 'UNAVAILABLE') ? 'PARTIAL' : 'VALUED' };
   }
 
   async positions(): Promise<Position[]> {
@@ -196,10 +198,13 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
       symbol: p.symbol,
       quantity: p.quantity,
       entryPrice: p.avgCost,
-      currentPrice: p.avgCost,
-      marketValue: p.quantity * p.avgCost,
-      unrealizedPnl: 0,
-      unrealizedPnlPercent: 0,
+      // reqPositions supplies quantity and basis, not a current market mark.
+      // Never turn cost basis into a quote or an invented zero unrealized P&L.
+      currentPrice: null,
+      marketValue: null,
+      unrealizedPnl: null,
+      unrealizedPnlPercent: null,
+      valuationStatus: 'UNAVAILABLE' as const,
     }));
   }
 

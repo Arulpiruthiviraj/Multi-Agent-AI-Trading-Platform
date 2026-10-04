@@ -153,6 +153,37 @@ describe('gracefulShutdown drain', () => {
     expect(marker.cleanShutdown).toBe(true);
   });
 
+  it('shares an unfinished drain and marks clean only after HTTP and SQLite have closed', async () => {
+    const { drainTradingProcess } = await import('./gracefulShutdown');
+    const { beginRuntimeSession } = await import('./sessionRecovery');
+    const { readFileSync } = await import('node:fs');
+    const { sqliteDb } = await import('../db');
+    beginRuntimeSession();
+    let release!: () => void;
+    let entered!: () => void;
+    const closing = new Promise<void>(resolve => { entered = resolve; });
+    const first = drainTradingProcess({ httpServer: { close(cb) { release = () => cb?.(); entered(); } } });
+    await closing;
+    const second = drainTradingProcess();
+    expect(second).toBe(first);
+    expect(JSON.parse(readFileSync(sessionPath, 'utf8')).cleanShutdown).toBe(false);
+    release();
+    await Promise.all([first, second]);
+    expect(sqliteDb.close).toHaveBeenCalled();
+    expect(JSON.parse(readFileSync(sessionPath, 'utf8')).cleanShutdown).toBe(true);
+  });
+
+  it('retains the dirty marker when the database close fails', async () => {
+    const { drainTradingProcess } = await import('./gracefulShutdown');
+    const { beginRuntimeSession } = await import('./sessionRecovery');
+    const { readFileSync } = await import('node:fs');
+    const { sqliteDb } = await import('../db');
+    beginRuntimeSession();
+    vi.mocked(sqliteDb.close).mockImplementationOnce(() => { throw new Error('close failed'); });
+    await drainTradingProcess();
+    expect(JSON.parse(readFileSync(sessionPath, 'utf8')).cleanShutdown).toBe(false);
+  });
+
   // Real bug found and fixed (2026-09-08): a lingering keep-alive HTTP connection must never hang
   // process shutdown forever. If httpServer.close()'s callback never fires within
   // gracefulShutdownHttpDrainTimeoutMs, the drain must force-close via closeAllConnections() and

@@ -225,14 +225,21 @@ export class QuantSignalAgent {
     return Math.min(32, Math.floor(n));
   }
 
+  // Control-plane fairness only: resume with symbols not reached before provider backoff.
+  // No strategy score, confidence, subscription cap or provider pacing is changed.
+  private nextCycleSymbol: string | null = null;
+
   private async runCycle(): Promise<void> {
     const active = marketDataWorker.getActiveSymbols();
     // Prefer liquid names that Quant needs most often — still only evaluates subscribed symbols.
     const priority = ['SPY', 'QQQ', 'NVDA', 'HOOD', 'COIN', 'AMD', 'RIOT', 'AAPL', 'MSFT', 'META'];
-    const symbols = [
+    const ordered = [
       ...priority.filter((s) => active.includes(s) || active.includes(s.toUpperCase())),
       ...active.filter((s) => !priority.includes(s.toUpperCase()) && !priority.includes(s)),
     ].map((s) => s.toUpperCase()).filter((s, i, arr) => arr.indexOf(s) === i);
+    const resumeAt = this.nextCycleSymbol ? Math.max(0, ordered.indexOf(this.nextCycleSymbol)) : 0;
+    const symbols = [...ordered.slice(resumeAt), ...ordered.slice(0, resumeAt)];
+    const cycleStarted = Date.now();
 
     if (symbols.length === 0) {
       console.log('[QuantSignalAgent] No actively-tracked symbols yet (MarketDataWorker has no subscriptions) - nothing to evaluate this cycle.');
@@ -243,14 +250,17 @@ export class QuantSignalAgent {
     let nextIndex = 0;
     let abortRateLimit = false;
     let anySuccess = false;
+    const attemptedSymbols: string[] = [];
+    const completedSymbols: string[] = [];
     const workers = Array.from({ length: concurrency }, async () => {
       while (!abortRateLimit) {
         const i = nextIndex++;
         if (i >= symbols.length) return;
         const symbol = symbols[i];
+        attemptedSymbols.push(symbol);
         try {
           const result = await this.evaluateSymbol(symbol);
-          if (result) anySuccess = true;
+          if (result) { anySuccess = true; completedSymbols.push(symbol); }
         } catch (e: any) {
           notePipelineAgentFailure('QuantEngine', e);
           console.error(`[QuantSignalAgent] Failed to evaluate ${symbol}`, e.message);
@@ -270,6 +280,13 @@ export class QuantSignalAgent {
       }
     });
     await Promise.all(workers);
+    const notAttemptedSymbols = symbols.slice(attemptedSymbols.length);
+    this.nextCycleSymbol = notAttemptedSymbols[0] ?? null;
+    observeSafe(() => structuredLogger.info('quant_cycle_completed', {
+      category: 'QUANT', eventType: 'QUANT_CYCLE_COMPLETED',
+      durationMs: Date.now() - cycleStarted, concurrency, attemptedSymbols, completedSymbols,
+      notAttemptedSymbols, reason: abortRateLimit ? 'PROVIDER_BACKOFF' : 'COMPLETED',
+    }));
     if (anySuccess) {
       notePipelineAgentSuccess('QuantEngine');
     } else if (abortRateLimit) {

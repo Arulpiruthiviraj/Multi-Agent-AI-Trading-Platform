@@ -2,6 +2,21 @@ import { describe, it, expect, vi } from 'vitest';
 import { IBGatewaySocketAdapter } from '../IBGatewaySocketAdapter';
 
 describe('IBGatewaySocketAdapter', () => {
+  it('preserves long/short inventory without inventing current marks or zero P&L from basis', async () => {
+    const a = new IBGatewaySocketAdapter();
+    vi.spyOn((a as any).session, 'getPositionsSnapshot').mockReturnValue([
+      { symbol: 'OKTA', quantity: -14, avgCost: 212.5341857 },
+      { symbol: 'AAPL', quantity: 5, avgCost: 200 },
+    ]);
+    const positions = await a.positions();
+    expect(positions.map(p => p.quantity)).toEqual([-14, 5]);
+    expect(positions[0].entryPrice).toBe(212.5341857);
+    for (const p of positions) {
+      expect(p).toMatchObject({ currentPrice: null, marketValue: null,
+        unrealizedPnl: null, unrealizedPnlPercent: null, valuationStatus: 'UNAVAILABLE' });
+    }
+    expect((await a.portfolio()).valuationStatus).toBe('PARTIAL');
+  });
   it('exposes socket capabilities without browser reauth', () => {
     const a = new IBGatewaySocketAdapter();
     expect(a.id).toBe('ibkr_gateway');

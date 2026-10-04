@@ -40,8 +40,10 @@ import { pauseReplay, resumeReplay, stopReplay, stepReplay, getReplayRun, getRep
 import { exportReplayManifest, readReplayArtifact, exportTradesCsv, exportEquityCsv, exportRejectionsCsv, exportMissedOpportunitiesCsv, exportMarkdownReport, exportZipArchive, isValidReplayId } from '../replay/replayStore';
 
 export function mountResearchRoutes(v2Router: Router): void {
-  v2Router.get('/research/vectorbt/status', async (_req, res) => {
+  v2Router.get('/research/vectorbt/status', async (_req, res, next) => {
+    try {
     const status = await getVectorBTStatus();
+    if (res.headersSent || res.destroyed) return;
     res.json({
       ok: true,
       ...status,
@@ -53,6 +55,9 @@ export function mountResearchRoutes(v2Router: Router): void {
       quantAutoEnabled: false,
       canPlaceOrders: false,
     });
+    } catch (error) {
+      if (!res.headersSent && !res.destroyed) next(error);
+    }
   });
 
   v2Router.get('/research/strategies', (_req, res) => {

@@ -3,7 +3,7 @@
  * Does not auto-resume TRADING_ENABLED. Does not skip recon. Holds *entry* ideas until
  * a RECONCILIATION_MATCH after an interrupted session. Risk-exit SELL is not held here.
  */
-import { writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { eventBus } from './EventBus';
 import { EVENTS } from './eventNames';
@@ -33,6 +33,7 @@ let started = false;
 let heartbeat: ReturnType<typeof setInterval> | null = null;
 let current: RuntimeSessionFile | null = null;
 let matchHandler: (() => void) | null = null;
+let markerReadFailed = false;
 
 export function setSessionRecoveryPathForTests(path: string): void {
   filePath = path;
@@ -42,6 +43,7 @@ export function resetSessionRecoveryForTests(): void {
   holdNewEntryIdeas = false;
   started = false;
   current = null;
+  markerReadFailed = false;
   if (heartbeat) {
     clearInterval(heartbeat);
     heartbeat = null;
@@ -56,16 +58,28 @@ export function resetSessionRecoveryForTests(): void {
 function write(row: RuntimeSessionFile): void {
   assertNotProductionRuntimePath(filePath, 'sessionRecovery runtime session file', DEFAULT_PATH);
   mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, JSON.stringify(row, null, 2), 'utf8');
+  // A killed process must leave either the old complete marker or the new one, not truncated JSON.
+  const temporary = `${filePath}.${process.pid}.tmp`;
+  try {
+    writeFileSync(temporary, JSON.stringify(row, null, 2), 'utf8');
+    renameSync(temporary, filePath);
+  } finally {
+    try { unlinkSync(temporary); } catch { /* renamed or absent */ }
+  }
 }
 
 function read(): RuntimeSessionFile | null {
+  markerReadFailed = false;
   assertNotProductionRuntimePath(filePath, 'sessionRecovery runtime session file', DEFAULT_PATH);
   try {
     const raw = JSON.parse(readFileSync(filePath, 'utf8')) as RuntimeSessionFile;
-    if (!raw || typeof raw.cleanShutdown !== 'boolean') return null;
+    if (!raw || typeof raw.cleanShutdown !== 'boolean') {
+      markerReadFailed = true;
+      return null;
+    }
     return raw;
-  } catch {
+  } catch (error) {
+    markerReadFailed = (error as NodeJS.ErrnoException).code !== 'ENOENT';
     return null;
   }
 }
@@ -73,8 +87,14 @@ function read(): RuntimeSessionFile | null {
 /** Call once at process start, before Autobot restore. */
 export function loadInterruptedSessionMarker(): boolean {
   const prev = read();
-  const interrupted = !!(prev && prev.cleanShutdown === false);
+  const interrupted = markerReadFailed || !!(prev && prev.cleanShutdown === false);
   holdNewEntryIdeas = interrupted;
+  if (markerReadFailed) {
+    structuredLogger.warn('Runtime session marker unreadable; entry hold requires reconciliation.', {
+      category: 'TRADING_SAFETY', eventType: 'UNCLEAN_SHUTDOWN_DETECTED',
+      component: 'sessionRecovery', reason: 'SESSION_MARKER_UNREADABLE', currentPid: process.pid,
+    });
+  }
   if (interrupted && prev) {
     console.warn('[sessionRecovery] Previous Argus session did not clean-shutdown. Holding new BUY ideas until RECONCILIATION_MATCH. Risk-exit SELL and recon still run. Not an auto-resume of a pause.');
     // Post-remediation-audit addition (Phase 5, crash forensics): the 2026-08-24 16:20:51Z death

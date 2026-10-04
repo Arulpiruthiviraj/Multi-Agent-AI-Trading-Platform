@@ -20,6 +20,22 @@ describe('v2Runtime routes', () => {
     expect(res.body).toHaveProperty('runtime');
   });
 
+  it.each([false, true])('does not send a second orders response after timeout (ledger rejection=%s)', async (reject) => {
+    const res: any = { headersSent: false, destroyed: false, setHeader: vi.fn(), once: vi.fn(), json: vi.fn(), status: vi.fn() };
+    res.status.mockReturnValue(res);
+    const read = vi.spyOn(argusApplication, 'recentTrades').mockImplementationOnce(async () => {
+      res.headersSent = true; // server deadline already sent its 504 while the ledger was pending
+      if (reject) throw new Error('late failure');
+      return [];
+    });
+    try {
+      const route = runtimeRouter.stack.find((layer: any) => layer.route?.path === '/orders') as any;
+      await route.route.stack[0].handle({ query: {} }, res, vi.fn());
+      expect(res.json).not.toHaveBeenCalled();
+      expect(res.status).not.toHaveBeenCalled();
+    } finally { read.mockRestore(); }
+  });
+
   it('traces orders latency and reports ledger failure without exposing exception details', async () => {
     const log = vi.spyOn(structuredLogger, 'info');
     const read = vi.spyOn(argusApplication, 'recentTrades').mockRejectedValueOnce(new Error('private database details'));

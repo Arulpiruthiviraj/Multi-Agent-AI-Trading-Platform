@@ -32,7 +32,8 @@ runtimeRouter.get('/status', (_req, res) => {
   });
 });
 
-runtimeRouter.get('/health', async (_req, res) => {
+runtimeRouter.get('/health', async (_req, res, next) => {
+  try {
   const health = argusRuntime.health();
   let activeBroker: {
     id: string;
@@ -75,6 +76,7 @@ runtimeRouter.get('/health', async (_req, res) => {
     aiAvailabilityState = undefined;
   }
   const quantAvailability = await computeQuantAvailability();
+  if (res.headersSent || res.destroyed) return;
   res.status(health.ok ? 200 : 503).json({
     ok: health.ok,
     health,
@@ -85,6 +87,9 @@ runtimeRouter.get('/health', async (_req, res) => {
     quantAvailability,
     live: evaluateLiveReadiness().result,
   });
+  } catch (error) {
+    if (!res.headersSent && !res.destroyed) next(error);
+  }
 });
 
 /**
@@ -439,6 +444,7 @@ runtimeRouter.get('/orders', async (req, res) => {
   } catch { /* */ }
   const brokerId = typeof req.query.brokerId === 'string' ? req.query.brokerId : liveId;
   const rows = await argusApplication.recentTrades(100, brokerId);
+  if (res.headersSent || res.destroyed) return;
   res.json({
     ok: true,
     orders: rows,
@@ -446,7 +452,9 @@ runtimeRouter.get('/orders', async (req, res) => {
     live: 'NO-GO',
   });
   } catch {
-    res.status(503).json({ ok: false, requestId, error: 'Order ledger temporarily unavailable.' });
+    if (!res.headersSent && !res.destroyed) {
+      res.status(503).json({ ok: false, requestId, error: 'Order ledger temporarily unavailable.' });
+    }
   }
 });
 

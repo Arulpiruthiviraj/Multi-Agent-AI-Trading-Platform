@@ -862,18 +862,21 @@ export class MarketDataWorker {
   }
 
   /**
-   * Real bid/ask spread in basis points, computed only when BOTH a bid (latestPrices) and an ask
-   * (latestAskPrices) exist AND the ask observation is no older than maxAgeMs relative to now -
+   * Real bid/ask spread in basis points, computed only when BOTH independently observed sides
+   * exist AND neither observation is older than maxAgeMs relative to now -
    * a bid from 4pm paired with an ask from 9am would be a fabricated spread, not a real one. Returns
    * null (never a fabricated 0 or a stale number) when either side is missing or the ask is stale.
    */
   getLatestSpreadBps(symbol: string, maxAgeMs: number): number | null {
     const key = quoteKey(symbol);
-    const bid = this.latestPrices.get(key) ?? this.latestPrices.get(symbol);
+    const bidEvidence = this.latestBidEvidence.get(key);
+    const bid = bidEvidence?.price;
     const ask = this.latestAskPrices.get(key) ?? this.latestAskPrices.get(symbol);
     const askAt = this.latestAskTimestamps.get(key) ?? this.latestAskTimestamps.get(symbol);
     if (typeof bid !== 'number' || typeof ask !== 'number' || typeof askAt !== 'number') return null;
-    if (Date.now() - askAt > maxAgeMs) return null;
+    const now = Date.now();
+    if (!bidEvidence || now - askAt > maxAgeMs || now - bidEvidence.observedAtMs > maxAgeMs
+      || askAt > now || bidEvidence.observedAtMs > now) return null;
     if (!(bid > 0) || !(ask > 0) || ask < bid) return null;
     const mid = (bid + ask) / 2;
     return mid > 0 ? ((ask - bid) / mid) * 10_000 : null;

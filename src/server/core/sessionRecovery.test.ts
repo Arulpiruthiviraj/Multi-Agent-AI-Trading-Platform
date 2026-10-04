@@ -78,6 +78,16 @@ describe('sessionRecovery interrupted session', () => {
     expect(allowsNewEntryIdeas()).toBe(true);
   });
 
+  it('treats truncated or invalid existing markers as interrupted, while a missing marker is first boot', () => {
+    expect(loadInterruptedSessionMarker()).toBe(false);
+    for (const invalid of ['{', '{}', '{"cleanShutdown":null}']) {
+      writeFileSync(markerPath, invalid);
+      expect(loadInterruptedSessionMarker()).toBe(true);
+      expect(allowsNewEntryIdeas()).toBe(false);
+      expect(evaluateRestartSafety(true, 'TRADING_ENABLED').shouldForcePause).toBe(true);
+    }
+  });
+
   it('Part 11 crash-forensics fix: beginRuntimeSession records the real pid and parent pid, and exitCode starts null (a process cannot know its own exit code before it happens)', () => {
     beginRuntimeSession();
     const row = JSON.parse(readFileSync(markerPath, 'utf8'));
