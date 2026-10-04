@@ -1,5 +1,33 @@
 # Argus Architecture
 
+## 2026-10-04: strategy trigger-gate contract (triggerMet)
+
+`StrategyEvaluation` (TS) and the Java `StrategyEvaluation` record now carry a required
+`triggerMet: boolean` — whether the strategy's DEFINING trigger event actually fired on the
+evaluated bar (structural break, boundary touch, RSI extreme, sweep + CHoCH, genuine intraday
+VWAP extension, …). This is selection-plane honesty, not a new calculation: setup quality and
+trigger eligibility are now separate concepts.
+
+`StrategyEngine.applyTriggerGate()` (TS) leaves the honest `setupScore` untouched but caps
+`confidence` at `config/tradingSafety.json:triggerAbsentConfidenceCap` (0.4, below the
+`minStrategyConfidenceToTrade` 0.6 trade bar) and appends an explicit contradiction when
+`triggerMet` is false. The gate is applied in all three evaluation paths: live
+`StrategyEngine.evaluateAll()`, `BacktestEngine`, and `argusStrategyReplay`. Previously a
+triggerless momentum breakout could score 88/0.88 and be emitted as a tradeable idea because
+`scoreFromConditions()` treated the trigger as one equally-weighted condition among many and
+`bestStrategyIdea()` accepted confidence ≥ 0.6.
+
+Related correctness fixes in the same change: `vwapMeanReversion` now requires genuine intraday
+VWAP (daily-bar VWAP degenerates to a single-bar typical price and is flagged
+`intradayBased: false` in `VWAPContext`) and uses side-aware no-ATR stop fallbacks;
+`relativeStrengthRotation` no longer coerces a missing RS input to bullish;
+`smcLiquiditySweep` truly requires sweep + CHoCH (score 0 without it);
+`statisticalMeanReversion` returns a null target instead of a zero-distance one when the
+Keltner mean is missing; `srBounce` adds contradictions for fades against the prevailing trend.
+All 5 CORE Java strategies re-port the `triggerMet` contract (parity tests assert it).
+
+No approval threshold, consensus math, RiskEngine gate, or OMS behavior was changed.
+
 ## 2026-10-04: remaining forensic correctness and operations fixes
 
 The existing trading spine and all approval thresholds remain unchanged. These changes extend
