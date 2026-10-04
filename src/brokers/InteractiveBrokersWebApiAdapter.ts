@@ -53,6 +53,50 @@ interface IBKRRequestOptions {
   body?: any;
 }
 
+/**
+ * P1-4 (2026-10-04 remediation): pure, directly-testable order-type mapping, extracted from
+ * placeOrder() for the same reason IbkrSocketSession.ts extracted buildIbkrOrder() - safety-
+ * relevant construction logic should be unit-testable without a live/mocked Gateway connection.
+ *
+ * This used to map anything other than LIMIT to MKT - a STOP or STOP_LIMIT order (a protective
+ * exit) would silently submit as an unprotected MARKET order, filling instantly at whatever price
+ * is available instead of waiting for its trigger. Faithful mapping only; anything this adapter
+ * cannot represent throws rather than downgrading. "STP"/"STOP_LIMIT" match IBKR's own order-type
+ * vocabulary used elsewhere in this codebase for the same broker family (IbkrSocketSession.ts's
+ * OrderType.STP / STP_LMT via @stoqey/ib), not an invented string; if IBKR's Client Portal REST
+ * endpoint rejects the exact literal, that is a loud HTTP error from the request this builds,
+ * never a silent order-type substitution. No production caller currently sends STOP/STOP_LIMIT
+ * through this adapter (OMS's resolveOrderConstruction() only ever produces MARKET or LIMIT), but
+ * this adapter must not be a trap for the first one that does.
+ */
+export function resolveIbkrWebOrderType(order: Partial<Pick<Order, 'type' | 'price' | 'stopPrice'>>): {
+  orderType: string;
+  price: number | undefined;
+  auxPrice: number | undefined;
+} {
+  const orderTypeMap: Record<string, string> = {
+    MARKET: 'MKT',
+    LIMIT: 'LMT',
+    STOP: 'STP',
+    STOP_LIMIT: 'STOP_LIMIT',
+  };
+  const requestedType = order.type || 'MARKET';
+  const ibkrOrderType = orderTypeMap[requestedType];
+  if (!ibkrOrderType) {
+    throw new Error(`UNSUPPORTED_ORDER_TYPE: InteractiveBrokersWebApiAdapter cannot represent order type '${requestedType}' - refusing rather than downgrading to MARKET.`);
+  }
+  const isStopFamily = requestedType === 'STOP' || requestedType === 'STOP_LIMIT';
+  const isLimitFamily = requestedType === 'LIMIT' || requestedType === 'STOP_LIMIT';
+  if (isStopFamily && !(Number.isFinite(order.stopPrice) && order.stopPrice! > 0)) {
+    throw new Error(`UNSUPPORTED_ORDER_TYPE: order type '${requestedType}' requires a valid stopPrice.`);
+  }
+  return {
+    orderType: ibkrOrderType,
+    price: isLimitFamily ? order.price : undefined,
+    auxPrice: isStopFamily ? order.stopPrice : undefined,
+  };
+}
+
 export class InteractiveBrokersWebApiAdapter implements BrokerPlugin {
   id = 'ibkr_web';
   name = 'IBKR Web API (Client Portal)';
@@ -296,12 +340,14 @@ export class InteractiveBrokersWebApiAdapter implements BrokerPlugin {
     }
     const conid = await this.resolveConid(order.symbol);
 
+    const mapped = resolveIbkrWebOrderType(order);
     const orderPayload = {
       conid,
-      orderType: order.type === 'LIMIT' ? 'LMT' : 'MKT',
+      orderType: mapped.orderType,
       side: order.side,
       quantity: order.quantity,
-      price: order.type === 'LIMIT' ? order.price : undefined,
+      price: mapped.price,
+      auxPrice: mapped.auxPrice,
       tif: 'DAY',
     };
 
