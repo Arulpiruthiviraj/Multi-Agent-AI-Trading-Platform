@@ -11,9 +11,8 @@ __pycache__/
 data/secrets.json
 data/.encryption_key
 data/.argus_cli_session
-data/*.db
-data/*.db-shm
-data/*.db-wal
+data/*.db*
+data/*.sqlite*
 data/audit_trail.jsonl
 data/shadow_portfolio.json
 data/backups/
