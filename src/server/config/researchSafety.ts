@@ -15,6 +15,8 @@ export interface ResearchSafetyConfig {
   minOosExpectancy: number;
   minWalkForwardWindows: number;
   permutationAlpha: number;
+  /** DSR selection gate for WFO promotion (0-1 probability). Config-driven, never a TS literal. */
+  dsrMinThreshold: number;
   costStressMaxMultipleStillProfitable: number;
   goldenSmaFast: number;
   goldenSmaSlow: number;
@@ -62,6 +64,7 @@ export const researchSafety: ResearchSafetyConfig = {
   minOosExpectancy: Number(raw.minOosExpectancy ?? 0),
   minWalkForwardWindows: Number(raw.minWalkForwardWindows ?? 3),
   permutationAlpha: Number(raw.permutationAlpha ?? 0.05),
+  dsrMinThreshold: Number(raw.dsrMinThreshold ?? 0.95),
   costStressMaxMultipleStillProfitable: Number(raw.costStressMaxMultipleStillProfitable ?? 2),
   goldenSmaFast: Number(raw.goldenSmaFast ?? 3),
   goldenSmaSlow: Number(raw.goldenSmaSlow ?? 8),

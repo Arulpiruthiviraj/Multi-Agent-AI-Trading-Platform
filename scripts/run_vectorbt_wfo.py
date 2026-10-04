@@ -98,6 +98,22 @@ def run_wfo(bars, strategy_id, params, cfg, min_oos):
     return folds
 
 
+def promotion_decision(ev, perm, dsr, dsr_min):
+    """WFO promotion gate (2026-10-04 audit fix): DSR is a real selection gate, not a
+    computed-and-stored diagnostic. A candidate promotes only if out-of-sample expectancy
+    is positive, the permutation test passes, AND the Deflated Sharpe Ratio clears the
+    configured multiple-testing-adjusted confidence bar. Returns (promote, reason)."""
+    if ev is None or ev <= 0:
+        return False, "OOS_EXPECTANCY_FAIL"
+    if not perm:
+        return False, "PERMUTATION_FAIL"
+    if dsr is None:
+        return False, "DSR_UNDEFINED"
+    if dsr < dsr_min:
+        return False, "DSR_BELOW_THRESHOLD"
+    return True, "PASS"
+
+
 def upsert_paper_testing(db_path, row):
     if row["status"] in FORBIDDEN or row["status"] != ALLOWED_STATUS:
         raise SystemExit("structurally forbidden status")
@@ -149,6 +165,7 @@ def main():
     safety = load_json("config/researchSafety.json")
     min_oos = int(safety.get("minOosTrades", 30))
     alpha = float(safety.get("permutationAlpha", 0.05))
+    dsr_min = float(safety.get("dsrMinThreshold", 0.95))
     argv = sys.argv[1:]
     use_golden = "--fixture" in argv or "--golden" in argv
     dataset_id = "golden_core_parity"
@@ -170,6 +187,7 @@ def main():
         "fullStrategyParity": False,
         "executionModel": "NEXT_BAR_OPEN",
         "datasetId": dataset_id,
+        "dsrMinThreshold": dsr_min,
         "error": err,
         "upserted": [],
         "skipped": [],
@@ -197,11 +215,12 @@ def main():
             dsr = deflated_sharpe(sr, len(train_pnls), n_trials) if sr is not None else None
             ev = (sum(test_pnls) / len(test_pnls)) if test_pnls else None
             perm = permutation_positive_expectancy(test_pnls, alpha) if test_pnls else False
+            promote, gate_reason = promotion_decision(ev, perm, dsr, dsr_min)
             if not allow_upsert:
-                report["skipped"].append({"strategyId": sid, "reason": err or "UPSERT_BLOCKED", "dsrTrain": dsr, "evOos": ev})
+                report["skipped"].append({"strategyId": sid, "reason": err or "UPSERT_BLOCKED", "dsrTrain": dsr, "dsrMinThreshold": dsr_min, "evOos": ev})
                 continue
-            if ev is None or ev <= 0 or not perm or dsr is None:
-                report["skipped"].append({"strategyId": sid, "reason": "OOS_OR_DSR_OR_PERM_FAIL", "dsrTrain": dsr, "evOos": ev, "permutationPass": perm})
+            if not promote:
+                report["skipped"].append({"strategyId": sid, "reason": gate_reason, "dsrTrain": dsr, "dsrMinThreshold": dsr_min, "evOos": ev, "permutationPass": perm})
                 continue
             row = {
                 "id": f"{sid}:ANY",

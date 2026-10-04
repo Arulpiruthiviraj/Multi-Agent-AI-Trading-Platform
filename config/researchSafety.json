@@ -1,5 +1,5 @@
 {
-  "$comment": "Research-only thresholds. Not live knobs. VectorBT cannot place orders. LIVE_CANDIDATE requires every boolean true. commissionPerShare/spreadBps/slippageBps are conservative research assumptions for promotion math, not a live broker fee schedule.",
+  "$comment": "Research-only thresholds. Not live knobs. VectorBT cannot place orders. LIVE_CANDIDATE requires every boolean true. commissionPerShare/spreadBps/slippageBps are conservative research assumptions for promotion math, not a live broker fee schedule. dsrMinThreshold is the Deflated Sharpe Ratio selection gate for WFO promotion (Bailey & Lopez de Prado): a candidate must clear this probability that its true Sharpe exceeds zero after multiple-testing correction. 0.95 is the standard 'confident' bar.",
   "pythonTimeoutMs": 25000,
   "minPaperTrades": 30,
   "minPaperSessions": 10,
@@ -11,6 +11,7 @@
   "minOosExpectancy": 0,
   "minWalkForwardWindows": 3,
   "permutationAlpha": 0.05,
+  "dsrMinThreshold": 0.95,
   "costStressMaxMultipleStillProfitable": 2,
   "goldenSmaFast": 3,
   "goldenSmaSlow": 8,
