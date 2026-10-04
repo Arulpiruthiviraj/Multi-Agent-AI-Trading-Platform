@@ -33,67 +33,91 @@
  * ==========================================================
  */
 
-import StrategyScanner from "./components/StrategyScanner";
-import QuantSignalsPanel from "./components/QuantSignalsPanel";
-import StrategyPerformancePanel from "./components/StrategyPerformancePanel";
-import EliteDeskPanel from "./components/EliteDeskPanel";
-import ResearchLabPanel from "./components/ResearchLabPanel";
-import StrategyResearchRecommendations from "./components/StrategyResearchRecommendations";
 import AwaitingSignal from "./components/shared/AwaitingSignal";
 import { SafeResponsiveContainer } from "./components/shared/SafeResponsiveContainer";
 import tradingSafetyConfig from "../config/tradingSafety.json";
 import { SystemValidationSuite } from "./components/SystemValidationSuite";
-import AgentEvaluationDashboard from "./components/AgentEvaluationDashboard";
-import ReplayResearchPanel from "./components/ReplayResearchPanel";
-import HistoricalReplayLab from "./components/HistoricalReplayLab";
-import MultiHorizonOutcomesPanel from "./components/MultiHorizonOutcomesPanel";
-import OpportunitySnapshotPanel from "./components/OpportunitySnapshotPanel";
+
 import { resumeAndConfirm } from "./lib/tradingSafetyActions";
 import { useWebSocket } from './context/WebSocketContext';
-import React, { useState, useEffect, useRef, useMemo } from "react";
-import DigitalTwinVisualizer from "./components/DigitalTwinVisualizer";
-import OrchestrationStatus from "./components/OrchestrationStatus";
-import AlpacaNewsTicker from "./components/AlpacaNewsTicker";
+
+// ---------------------------------------------------------------------------
+// Tab-level code splitting (2026-10-04): every component below is used ONLY
+// inside non-default tabs / on-demand modals, so it is lazy-loaded on first
+// visit instead of inflating the initial bundle. Components rendered on the
+// default "dashboard" tab or in always-mounted chrome stay eagerly imported
+// above. Each tab's content is wrapped in <Suspense> (see TabSkeleton).
+// ---------------------------------------------------------------------------
+const StrategyScanner = lazy(() => import("./components/StrategyScanner"));
+const QuantSignalsPanel = lazy(() => import("./components/QuantSignalsPanel"));
+const StrategyPerformancePanel = lazy(() => import("./components/StrategyPerformancePanel"));
+const EliteDeskPanel = lazy(() => import("./components/EliteDeskPanel"));
+const ResearchLabPanel = lazy(() => import("./components/ResearchLabPanel"));
+const StrategyResearchRecommendations = lazy(() => import("./components/StrategyResearchRecommendations"));
+const AgentEvaluationDashboard = lazy(() => import("./components/AgentEvaluationDashboard"));
+const ReplayResearchPanel = lazy(() => import("./components/ReplayResearchPanel"));
+const HistoricalReplayLab = lazy(() => import("./components/HistoricalReplayLab"));
+const MultiHorizonOutcomesPanel = lazy(() => import("./components/MultiHorizonOutcomesPanel"));
+const OpportunitySnapshotPanel = lazy(() => import("./components/OpportunitySnapshotPanel"));
+const DigitalTwinVisualizer = lazy(() => import("./components/DigitalTwinVisualizer"));
+const OrchestrationStatus = lazy(() => import("./components/OrchestrationStatus"));
+const AlpacaNewsTicker = lazy(() => import("./components/AlpacaNewsTicker"));
+const BrokerManagement = lazy(() => import("./components/BrokerManagement"));
+const AIProviderManagement = lazy(() => import("./components/AIProviderManagement"));
+const KronosDashboard = lazy(() => import("./components/KronosDashboard").then(m => ({ default: m.KronosDashboard })));
+const ConnectionStatusDashboard = lazy(() => import("./components/ConnectionStatusDashboard"));
+const ConnectionHealthBadge = lazy(() => import("./components/ConnectionHealthBadge"));
+const JavaQuantCoreDashboard = lazy(() => import("./components/JavaQuantCoreDashboard"));
+const QuantEngineCatalog = lazy(() => import("./components/QuantEngineCatalog"));
+const ConfluenceCenter = lazy(() => import("./components/ConfluenceCenter"));
+const ConsensusShadowPanel = lazy(() => import("./components/ConsensusShadowPanel"));
+const DiagnosticCenter = lazy(() => import("./components/DiagnosticCenter"));
+const WhyNotTradingStrip = lazy(() => import("./components/WhyNotTradingStrip"));
+const LiveReadinessBanner = lazy(() => import("./components/LiveReadinessBanner"));
+const GuardrailsPanel = lazy(() => import("./components/GuardrailsPanel"));
+const MarketSentimentTrend = lazy(() => import("./components/MarketSentimentTrend"));
+const ContextMemoryEngineering = lazy(() => import("./components/ContextMemoryEngineering"));
+const StrategySynergyMatrix = lazy(() => import("./components/StrategySynergyMatrix"));
+const PortfolioCorrelationPanel = lazy(() => import("./components/PortfolioCorrelationPanel"));
+const LiveBotTelemetryPanel = lazy(() => import("./components/LiveBotTelemetryPanel"));
+const ShadowPortfolioBenchmark = lazy(() => import("./components/ShadowPortfolioBenchmark"));
+const RiskAttributionTreemap = lazy(() => import("./components/RiskAttributionTreemap"));
+const RiskGateHistoryPanel = lazy(() => import("./components/RiskGateHistoryPanel"));
+const StrategyProfitSunburst = lazy(() => import("./components/StrategyProfitSunburst"));
+const TradeEfficiencyReport = lazy(() => import("./components/TradeEfficiencyReport"));
+const ExecutionQualityChart = lazy(() => import("./components/ExecutionQualityChart"));
+const TradeReplayModal = lazy(() => import("./components/TradeReplayModal"));
+const TransactionExplorer = lazy(() => import("./components/TransactionExplorer"));
+const DecisionTracePanel = lazy(() => import("./components/DecisionTracePanel"));
+const LiveTradeJourneyOverlay = lazy(() => import("./components/LiveTradeJourneyOverlay"));
+const DocumentationTab = lazy(() => import("./components/DocumentationTab"));
+const PremarketIntelligence = lazy(() => import("./components/PremarketIntelligence"));
+const EnvRuntimeSettingsPanel = lazy(() => import("./components/EnvRuntimeSettingsPanel").then(m => ({ default: m.EnvRuntimeSettingsPanel })));
+const UnavailableHint = lazy(() => import("./components/UnavailableHint").then(m => ({ default: m.UnavailableHint })));
+const NewsDashboardTab = lazy(() => import("./components/NewsDashboardTab").then(m => ({ default: m.NewsDashboardTab })));
+const AutonomousMissionControl = lazy(() => import("./components/AutonomousMissionControl").then(m => ({ default: m.AutonomousMissionControl })));
+const PositionsDataView = lazy(() => import("./components/responsive/PositionsDataView").then(m => ({ default: m.PositionsDataView })));
+const TradeHistoryDataView = lazy(() => import("./components/responsive/TradeHistoryDataView").then(m => ({ default: m.TradeHistoryDataView })));
+const AutonomousLaunchDialog = lazy(() => import("./components/AutonomousLaunchDialog").then(m => ({ default: m.AutonomousLaunchDialog })));
+
+import React, { useState, useEffect, useRef, useMemo , lazy, Suspense} from "react";
+
 import LiveMarketNewsTicker from "./components/LiveMarketNewsTicker";
-import BrokerManagement from "./components/BrokerManagement";
-import AIProviderManagement from "./components/AIProviderManagement";
-import { KronosDashboard } from "./components/KronosDashboard";
-import ConnectionStatusDashboard from "./components/ConnectionStatusDashboard";
-import ConnectionHealthBadge from "./components/ConnectionHealthBadge";
-import JavaQuantCoreDashboard from "./components/JavaQuantCoreDashboard";
-import QuantEngineCatalog from "./components/QuantEngineCatalog";
-import ConfluenceCenter from "./components/ConfluenceCenter";
-import ConsensusShadowPanel from "./components/ConsensusShadowPanel";
-import DiagnosticCenter from "./components/DiagnosticCenter";
-import WhyNotTradingStrip from "./components/WhyNotTradingStrip";
+
 import TradingPauseOperatorControls from "./components/TradingPauseOperatorControls";
-import LiveReadinessBanner from "./components/LiveReadinessBanner";
-import GuardrailsPanel from "./components/GuardrailsPanel";
-import MarketSentimentTrend from "./components/MarketSentimentTrend";
+
 import ChiefTraderAgent from "./components/ChiefTraderAgent";
-import ContextMemoryEngineering from "./components/ContextMemoryEngineering";
-import StrategySynergyMatrix from "./components/StrategySynergyMatrix";
-import PortfolioCorrelationPanel from "./components/PortfolioCorrelationPanel";
-import LiveBotTelemetryPanel from "./components/LiveBotTelemetryPanel";
-import ShadowPortfolioBenchmark from "./components/ShadowPortfolioBenchmark";
-import RiskAttributionTreemap from "./components/RiskAttributionTreemap";
-import RiskGateHistoryPanel from "./components/RiskGateHistoryPanel";
-import StrategyProfitSunburst from "./components/StrategyProfitSunburst";
-import TradeEfficiencyReport from "./components/TradeEfficiencyReport";
-import ExecutionQualityChart from "./components/ExecutionQualityChart";
-import TradeReplayModal from "./components/TradeReplayModal";
+
 import TransactionObservatory from "./components/TransactionObservatory";
-import TransactionExplorer from "./components/TransactionExplorer";
-import DecisionTracePanel from "./components/DecisionTracePanel";
-import LiveTradeJourneyOverlay from "./components/LiveTradeJourneyOverlay";
+
 import AgentComparisonModal from "./components/AgentComparisonModal";
 import GlobalSearch from "./components/GlobalSearch";
-import DocumentationTab from "./components/DocumentationTab";
-import PremarketIntelligence from "./components/PremarketIntelligence";
+
 import { ExplainerToggle } from "./components/ExplainerToggle";
-import { EnvRuntimeSettingsPanel } from "./components/EnvRuntimeSettingsPanel";
+
 import { Explainer } from "./components/ContextualTooltip";
-import { UnavailableHint } from "./components/UnavailableHint";
+import { PanelBoundary } from "./components/shared/ErrorBoundary";
+import { TabSkeleton } from "./components/shared/TabSkeleton";
 import {
   RIBBON_BROKER_UNAVAILABLE,
   RIBBON_HEALTH_UNAVAILABLE,
@@ -101,12 +125,10 @@ import {
   formatTransactionDecision,
   formatTransactionOutcome,
 } from "./components/observatoryHonesty";
-import { NewsDashboardTab } from "./components/NewsDashboardTab";
 import { AppWalkthrough } from "./components/AppWalkthrough";
 import { AICoachPanel } from "./components/AICoachPanel";
 import { SetupWizard } from "./components/SetupWizard";
 import { AutonomousDashboard } from "./components/AutonomousDashboard";
-import { AutonomousMissionControl } from "./components/AutonomousMissionControl";
 import MobileMissionControl from "./components/mobile/MobileMissionControl";
 import { useMobileLayout, MobileLayoutToggle } from "./components/mobile/useMobileLayout";
 import { MobilePullRefresh } from "./components/mobile/MobilePullRefresh";
@@ -115,11 +137,8 @@ import { ResponsiveBottomNav } from "./components/responsive/ResponsiveBottomNav
 import { ResponsiveNavDrawer } from "./components/responsive/ResponsiveNavDrawer";
 import { DesktopNavStrip } from "./components/responsive/DesktopNavStrip";
 import { ResponsiveStatsSection } from "./components/responsive/ResponsiveStatsSection";
-import { PositionsDataView } from "./components/responsive/PositionsDataView";
 import { toPositionLedgerRow } from "./components/responsive/positionLedgerRow";
-import { TradeHistoryDataView } from "./components/responsive/TradeHistoryDataView";
 import type { AppTabId } from "./components/responsive/responsiveNavConfig";
-import { AutonomousLaunchDialog } from "./components/AutonomousLaunchDialog";
 import VectorClusteringMap from "./components/VectorClusteringMap";
 import {
   LineChart,
@@ -657,7 +676,6 @@ export const RiskExposureDashboard = ({ dailyLossCap, positions }: { dailyLossCa
            <span className="text-[9px] text-slate-600">PREDICTIVE SWING ANALYSIS</span>
          </h4>
          
-
 
          {(() => {
            const assets = [
@@ -1789,7 +1807,6 @@ export default function App() {
   const [schedulerWeights, setSchedulerWeights] = useState('{"Technology": 40, "Financials": 20, "Healthcare": 20, "Energy": 20}');
   const [isAddingTask, setIsAddingTask] = useState(false);
 
-
   // --- Price Alerts Integration ---
   interface PriceAlert {
     id: string;
@@ -2218,9 +2235,10 @@ export default function App() {
   // Navigation & User inputs
   const [setupComplete, setSetupComplete] = useState(false);
   const [systemState, setSystemState] = useState<'STARTING' | 'INITIALIZING' | 'READY' | 'RUNNING' | 'STOPPED' | 'ERROR'>('STARTING');
-  const [activeTab, setActiveTab] = useState<
-    "dashboard" | "arena" | "portfolio" | "scanner" | "agents" | "memory" | "audit" | "opportunities" | "learning" | "command" | "activity" | "documentation" | "settings" | "validation" | "observatory" | "evaluation" | "diagnostics" | "news" | "kronos"
-  >("dashboard");
+  // Single source of truth for tab ids: AppTabId (responsiveNavConfig). The old
+  // hand-duplicated union here drifted (it omitted 'premarket', which the nav
+  // can select), producing type errors and an unreachable-tab inconsistency.
+  const [activeTab, setActiveTab] = useState<AppTabId>("dashboard");
   const activeTabRef = useRef(activeTab);
   activeTabRef.current = activeTab;
 
@@ -2805,7 +2823,6 @@ export default function App() {
       fetchSecrets();
     }
   }, [activeTab, isAuthenticated]);
-
 
   // Fetch dashboard snapshots. Browsers allow ~6 HTTP/1.1 connections per host; a 6s
   // setInterval that fires 12+ fetches without waiting for the previous Promise.all
@@ -3623,6 +3640,8 @@ export default function App() {
       <main className={`flex-1 p-4 md:p-6 argus-fluid-container ${compactNav ? 'pb-28' : ''}`} id="workspace-main">
         <MobilePullRefresh onRefresh={async () => { await fetchState({ includeCold: true }); }}>
         <div className="min-h-full">
+        <PanelBoundary label={`Tab: ${activeTab}`} resetKeys={[activeTab]}>
+        <Suspense fallback={<TabSkeleton label={activeTab} />}>
         {activeTab === "dashboard" && (
           <AutonomousDashboard 
              autoBotConfig={autoBotConfig} 
@@ -5385,7 +5404,9 @@ export default function App() {
                   <span className="text-[9px] font-mono">UNAVAILABLE</span>
                 </button>
                 <button
-                  onClick={fetchState}
+                  // NOTE: must wrap in an arrow fn — passing fetchState directly would
+                  // receive the MouseEvent as its `opts` argument.
+                  onClick={() => fetchState()}
                   className="text-[11px] bg-slate-800 hover:bg-slate-700 font-semibold px-3 py-1.5 border border-slate-700 text-slate-300 rounded flex items-center gap-1.5"
                 >
                   <RefreshCw size={12} />
@@ -6221,7 +6242,6 @@ export default function App() {
           </div>
         )}
 
-
         {activeTab === "audit" && (
           <div className="animate-fade-in flex flex-col gap-6" id="observability-view">
 
@@ -6313,7 +6333,6 @@ export default function App() {
 
           </div>
         )}
-
 
         {activeTab === "opportunities" && (
           <div className="animate-fade-in flex flex-col gap-6" id="opportunities-view">
@@ -8524,18 +8543,20 @@ export default function App() {
 
           </div>
         )}
+        </Suspense>
+        </PanelBoundary>
         </div>
         </MobilePullRefresh>
       </main>
 
       <ResponsiveNavDrawer
         open={navDrawerOpen}
-        activeTab={activeTab as AppTabId}
+        activeTab={activeTab}
         onClose={() => setNavDrawerOpen(false)}
         onSelectTab={(tab) => setActiveTab(tab)}
       />
       <ResponsiveBottomNav
-        activeTab={activeTab as AppTabId}
+        activeTab={activeTab}
         onSelectTab={(tab) => setActiveTab(tab)}
         onOpenDrawer={() => setNavDrawerOpen(true)}
         tradingMode={autoBotTradingMode}
