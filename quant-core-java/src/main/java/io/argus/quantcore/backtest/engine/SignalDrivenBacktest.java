@@ -66,12 +66,20 @@ public final class SignalDrivenBacktest {
                     open = new OpenPosition(i, bar.timestampMs(), fillPrice, quantity);
                 }
             } else if (open != null) {
-                boolean stopHit = bar.close() <= open.entryPrice() * (1 - STOP_LOSS_PCT);
+                // P1-8 (2026-10-04 remediation): a long stop must trigger on the bar's intrabar LOW,
+                // not only its close - a bar that dips through the stop and recovers to close above
+                // it previously never triggered. When the stop is hit intrabar, fill AT the stop
+                // price (the simplifying, honestly-documented assumption that the bar does not gap
+                // through it - see this module's known-limitations note; gap-through modeling is
+                // tracked separately, P3).
+                double stopPrice = open.entryPrice() * (1 - STOP_LOSS_PCT);
+                boolean stopHit = bar.low() <= stopPrice;
                 boolean signalReversed = signal == Signal.SELL;
                 if (stopHit || signalReversed) {
+                    double exitPrice = stopHit ? stopPrice : bar.close();
                     double slipPct = Slippage.calculateDynamicSlippagePct(
-                        Arrays.copyOfRange(highs, 0, i + 1), Arrays.copyOfRange(lows, 0, i + 1), window, bar.close(), open.quantity(), bar.volume());
-                    double fillPrice = bar.close() * (1 - slipPct);
+                        Arrays.copyOfRange(highs, 0, i + 1), Arrays.copyOfRange(lows, 0, i + 1), window, exitPrice, open.quantity(), bar.volume());
+                    double fillPrice = exitPrice * (1 - slipPct);
                     Commissions.Result commission = Commissions.calculate("SELL", open.quantity(), fillPrice);
                     double grossPnl = (fillPrice - open.entryPrice()) * open.quantity();
                     double netPnl = grossPnl - commission.total();
@@ -81,6 +89,22 @@ public final class SignalDrivenBacktest {
                     open = null;
                 }
             }
+        }
+
+        // P1-7 (2026-10-04 remediation): a position still open when the backtest window ends used
+        // to simply vanish from the trade list - no mark-to-market, no forced close, no record at
+        // all. Force-close at the final bar's close (same cost model as a real exit), tagged
+        // terminalLiquidation so callers can distinguish it from a signal/stop-driven exit.
+        if (open != null) {
+            Bar lastBar = bars.get(bars.size() - 1);
+            double[] window = closes;
+            double slipPct = Slippage.calculateDynamicSlippagePct(highs, lows, window, lastBar.close(), open.quantity(), lastBar.volume());
+            double fillPrice = lastBar.close() * (1 - slipPct);
+            Commissions.Result commission = Commissions.calculate("SELL", open.quantity(), fillPrice);
+            double grossPnl = (fillPrice - open.entryPrice()) * open.quantity();
+            double netPnl = grossPnl - commission.total();
+            trades.add(new TradeRecord(symbol, open.entryTimestampMs(), open.entryPrice(),
+                lastBar.timestampMs(), fillPrice, open.quantity(), netPnl, commission.total(), slipPct, true));
         }
 
         return trades;

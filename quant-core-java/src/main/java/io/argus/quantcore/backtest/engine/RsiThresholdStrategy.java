@@ -18,9 +18,18 @@ import java.util.List;
  * self-sufficient RSI indicator (needs closes only, no feature tree). Wiring the 5 CORE
  * strategies into this engine is tracked as follow-up work, not silently assumed done.
  *
- * Rule: enter long when 14-period RSI crosses below 30 (oversold) and no position is open; exit
- * when RSI crosses above 55 or a stop-loss (2% below entry) is hit. SAME_BAR_CLOSE fill model,
- * matching src/server/engines/backtest/BacktestEngine.ts's own documented (non-promotable) model.
+ * Rule: enter long when 14-period RSI is below 30 (oversold - a LEVEL condition, not a cross: this
+ * checks the current bar's RSI value only, with no comparison against the prior bar) and no
+ * position is open; exit when RSI is above 55 (same level-condition semantics) or a stop-loss (2%
+ * below entry) is hit. SAME_BAR_CLOSE fill model, matching
+ * src/server/engines/backtest/BacktestEngine.ts's own documented (non-promotable) model.
+ *
+ * P1-13 (2026-10-04 remediation): this doc previously said "crosses below"/"crosses above", which
+ * describes a cross condition (prior bar on one side of the threshold, current bar on the other).
+ * The actual code (`r < ENTRY_RSI`, `r > EXIT_RSI`) has always been a level condition. Corrected
+ * the documentation to match the real, already-researched behavior rather than changing the
+ * behavior to match the doc - changing to a true cross here would silently alter this strategy's
+ * entry/exit frequency and invalidate any existing research run against it.
  */
 public final class RsiThresholdStrategy {
 
@@ -67,14 +76,18 @@ public final class RsiThresholdStrategy {
                     open = new OpenPosition(i, bar.timestampMs(), fillPrice, quantity);
                 }
             } else if (open != null) {
-                boolean stopHit = bar.close() <= open.entryPrice() * (1 - STOP_LOSS_PCT);
+                // P1-8 (2026-10-04 remediation): see SignalDrivenBacktest.java's identical fix -
+                // the stop must trigger on the bar's intrabar low, not only its close.
+                double stopPrice = open.entryPrice() * (1 - STOP_LOSS_PCT);
+                boolean stopHit = bar.low() <= stopPrice;
                 boolean targetHit = r > EXIT_RSI;
                 if (stopHit || targetHit) {
+                    double exitPrice = stopHit ? stopPrice : bar.close();
                     double slipPct = Slippage.calculateDynamicSlippagePct(
                         java.util.Arrays.copyOfRange(highs, 0, i + 1),
                         java.util.Arrays.copyOfRange(lows, 0, i + 1),
-                        window, bar.close(), open.quantity(), bar.volume());
-                    double fillPrice = bar.close() * (1 - slipPct);
+                        window, exitPrice, open.quantity(), bar.volume());
+                    double fillPrice = exitPrice * (1 - slipPct);
                     Commissions.Result commission = Commissions.calculate("SELL", open.quantity(), fillPrice);
                     double grossPnl = (fillPrice - open.entryPrice()) * open.quantity();
                     double netPnl = grossPnl - commission.total();
@@ -84,6 +97,19 @@ public final class RsiThresholdStrategy {
                     open = null;
                 }
             }
+        }
+
+        // P1-7 (2026-10-04 remediation): see SignalDrivenBacktest.java's identical fix - a position
+        // still open when the window ends must be marked, not silently dropped.
+        if (open != null) {
+            Bar lastBar = bars.get(bars.size() - 1);
+            double slipPct = Slippage.calculateDynamicSlippagePct(highs, lows, closes, lastBar.close(), open.quantity(), lastBar.volume());
+            double fillPrice = lastBar.close() * (1 - slipPct);
+            Commissions.Result commission = Commissions.calculate("SELL", open.quantity(), fillPrice);
+            double grossPnl = (fillPrice - open.entryPrice()) * open.quantity();
+            double netPnl = grossPnl - commission.total();
+            trades.add(new TradeRecord(symbol, open.entryTimestampMs(), open.entryPrice(),
+                lastBar.timestampMs(), fillPrice, open.quantity(), netPnl, commission.total(), slipPct, true));
         }
 
         return trades;

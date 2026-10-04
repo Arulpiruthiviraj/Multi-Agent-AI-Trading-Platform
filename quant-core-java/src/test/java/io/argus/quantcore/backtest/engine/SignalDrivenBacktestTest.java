@@ -94,6 +94,74 @@ class SignalDrivenBacktestTest {
 
         List<TradeRecord> trades = SignalDrivenBacktest.run("TEST", bars, 100_000, 0.10, 5, alwaysBuy);
 
-        assertThat(trades).isEmpty(); // one open position, never closed, never a second entry recorded as a trade
+        // P1-7 (2026-10-04): the still-open position is now force-closed/recorded at the final bar
+        // (terminalLiquidation) rather than silently vanishing - this test's real assertion is "only
+        // ONE entry was ever opened" (no doubling), which the single terminal-liquidation record
+        // with the single-position's own quantity/basis proves just as well as an empty list did.
+        assertThat(trades).hasSize(1);
+        assertThat(trades.get(0).terminalLiquidation()).isTrue();
+        assertThat(trades.get(0).entryTimestampMs()).isEqualTo(5); // the one and only entry, at bar 5
+    }
+
+    // P1-7 regression: a signal-only exit path (no stop hit, no terminal liquidation) must never
+    // set terminalLiquidation - confirms the flag is a real distinguishing signal, not a default
+    // true/false mix-up.
+    @Test
+    void normalSignalExitIsNotMarkedAsTerminalLiquidation() {
+        List<Bar> bars = new ArrayList<>();
+        for (int i = 0; i < 5; i++) bars.add(bar(i, 100));
+        bars.add(bar(5, 100));
+        bars.add(bar(6, 110));
+        bars.add(bar(7, 120));
+        SignalDrivenBacktest.SignalFunction fn = (closes, idx) -> {
+            if (idx == 5) return SignalDrivenBacktest.Signal.BUY;
+            if (idx == 7) return SignalDrivenBacktest.Signal.SELL;
+            return SignalDrivenBacktest.Signal.NEUTRAL;
+        };
+        List<TradeRecord> trades = SignalDrivenBacktest.run("TEST", bars, 100_000, 0.10, 5, fn);
+        assertThat(trades).hasSize(1);
+        assertThat(trades.get(0).terminalLiquidation()).isFalse();
+    }
+
+    // P1-8 regression: a bar that dips through the stop intrabar and recovers to close ABOVE it
+    // must still trigger the stop - the close alone would have missed this entirely.
+    @Test
+    void stopTriggersOnIntrabarLowEvenWhenTheBarRecoversToCloseAboveTheStop() {
+        List<Bar> bars = new ArrayList<>();
+        for (int i = 0; i < 5; i++) bars.add(bar(i, 100));
+        bars.add(bar(5, 100)); // BUY at close 100; 5% stop = 95
+        // Bar 6: opens 100, dips intrabar to 90 (well through the 95 stop), recovers to close 99.
+        bars.add(new Bar(6, 100, 100.5, 90, 99, 1_000_000));
+        bars.add(bar(7, 105));
+
+        SignalDrivenBacktest.SignalFunction fn = (closes, idx) -> idx == 5 ? SignalDrivenBacktest.Signal.BUY : SignalDrivenBacktest.Signal.NEUTRAL;
+        List<TradeRecord> trades = SignalDrivenBacktest.run("TEST", bars, 100_000, 0.10, 5, fn);
+
+        assertThat(trades).hasSize(1);
+        assertThat(trades.get(0).exitTimestampMs()).isEqualTo(6); // stop fired on bar 6, not held to bar 7
+        assertThat(trades.get(0).terminalLiquidation()).isFalse();
+        // Filled at (approximately) the stop price, not the bar's close of 99.
+        assertThat(trades.get(0).exitPrice()).isLessThan(96);
+    }
+
+    // P1-8 regression: the inverse case - a bar whose CLOSE alone would have triggered the old
+    // close-only check must NOT trigger the stop if intrabar low never actually reached it. This
+    // guards against accidentally making the stop check "intrabar OR close" instead of a correct
+    // intrabar-aware check driven by the bar's real low.
+    @Test
+    void stopDoesNotTriggerWhenIntrabarLowNeverReachedTheStopPrice() {
+        List<Bar> bars = new ArrayList<>();
+        for (int i = 0; i < 5; i++) bars.add(bar(i, 100));
+        bars.add(bar(5, 100)); // BUY at close 100; 5% stop = 95
+        bars.add(new Bar(6, 100, 100.5, 96, 96, 1_000_000)); // low 96 - never reaches 95
+        bars.add(bar(7, 110));
+
+        SignalDrivenBacktest.SignalFunction fn = (closes, idx) -> idx == 5 ? SignalDrivenBacktest.Signal.BUY : SignalDrivenBacktest.Signal.NEUTRAL;
+        List<TradeRecord> trades = SignalDrivenBacktest.run("TEST", bars, 100_000, 0.10, 5, fn);
+
+        // Never stopped out, never signal-exited -> still open at the end -> terminal liquidation.
+        assertThat(trades).hasSize(1);
+        assertThat(trades.get(0).terminalLiquidation()).isTrue();
+        assertThat(trades.get(0).exitTimestampMs()).isEqualTo(7);
     }
 }
