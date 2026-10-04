@@ -191,11 +191,15 @@ export interface StrategyDerivedIdea {
  * Picks the single best real strategy signal (highest setupScore among evaluations clearing
  * MIN_STRATEGY_CONFIDENCE_TO_TRADE) to drive a trade idea - `null` when no strategy's real
  * conditions clear the bar, rather than forcing a pick from a weak field.
- * Note: evaluateAll() already caps confidence below this bar when a strategy's defining
- * trigger did not fire, so this function never sees a triggerless setup as eligible.
+ * Defense in depth: eligibility explicitly requires `triggerMet === true` here, not just
+ * downstream of evaluateAll()'s applyTriggerGate(). A future caller passing raw,
+ * ungated strategy evaluations can never get a tradeable idea out of a triggerless setup,
+ * no matter what confidence value it carries.
  */
 export function bestStrategyIdea(evaluations: StrategyEvaluation[]): StrategyDerivedIdea | null {
-  const eligible = evaluations.filter(e => e.confidence >= MIN_STRATEGY_CONFIDENCE_TO_TRADE);
+  const eligible = evaluations.filter(
+    e => e.triggerMet === true && e.confidence >= MIN_STRATEGY_CONFIDENCE_TO_TRADE,
+  );
   if (eligible.length === 0) return null;
   const best = eligible[0]; // evaluateAll already sorts by setupScore descending
   return {

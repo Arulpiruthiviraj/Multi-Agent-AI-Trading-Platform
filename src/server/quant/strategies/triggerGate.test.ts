@@ -243,3 +243,52 @@ describe('vwapMeanReversion stop fallback is side-aware', () => {
     expect(r.stop.price).toBe(95);
   });
 });
+
+describe('trigger gate - bestStrategyIdea defense in depth', () => {
+  function fakeEval(overrides: Partial<import('./types').StrategyEvaluation>) {
+    return {
+      strategy: 'TEST_STRATEGY',
+      side: 'BUY',
+      setupScore: 50,
+      confidence: 0.5,
+      triggerMet: true,
+      conditionsMet: [],
+      conditionsFailed: [],
+      contradictions: [],
+      invalidationConditions: [],
+      stop: { price: 90, basis: 'test' },
+      target: { price: 110, basis: 'test' },
+      applicableRegimes: [],
+      ...overrides,
+    } as import('./types').StrategyEvaluation;
+  }
+
+  it('returns null for a triggerless evaluation even with confidence 0.99 and setupScore 99', () => {
+    // Direct call with a RAW, ungated evaluation - the exact misuse the caller
+    // contract used to rely on not happening. Must be impossible, not just unlikely.
+    const phantom = fakeEval({ strategy: 'MOMENTUM_BREAKOUT', setupScore: 99, confidence: 0.99, triggerMet: false });
+    expect(bestStrategyIdea([phantom])).toBeNull();
+  });
+
+  it('a triggerless 95 never outranks a genuine triggered 70', () => {
+    const phantomA = fakeEval({ strategy: 'STRATEGY_A', setupScore: 95, confidence: 0.95, triggerMet: false });
+    const genuineB = fakeEval({ strategy: 'STRATEGY_B', setupScore: 70, confidence: 0.70, triggerMet: true });
+    const idea = bestStrategyIdea([phantomA, genuineB]);
+    expect(idea).not.toBeNull();
+    expect(idea!.strategy).toBe('STRATEGY_B');
+  });
+
+  it('still emits a genuine triggered setup clearing the confidence bar', () => {
+    const genuine = fakeEval({ strategy: 'MOMENTUM_BREAKOUT', setupScore: 88, confidence: 0.88, triggerMet: true });
+    const idea = bestStrategyIdea([genuine]);
+    expect(idea).not.toBeNull();
+    expect(idea!.strategy).toBe('MOMENTUM_BREAKOUT');
+    expect(idea!.confidence).toBe(0.88);
+  });
+
+  it('returns null when no evaluation clears the bar at all', () => {
+    const weak = fakeEval({ setupScore: 40, confidence: 0.40, triggerMet: true });
+    expect(bestStrategyIdea([weak])).toBeNull();
+    expect(bestStrategyIdea([])).toBeNull();
+  });
+});
