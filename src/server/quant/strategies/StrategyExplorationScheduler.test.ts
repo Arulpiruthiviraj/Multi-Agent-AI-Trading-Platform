@@ -4,7 +4,7 @@ import type { StrategyEvaluation } from './types';
 
 function makeEval(strategy: string, setupScore: number, confidence: number): StrategyEvaluation {
   return {
-    strategy, side: 'BUY', setupScore, confidence,
+    strategy, side: 'BUY', setupScore, confidence, triggerMet: true,
     conditionsMet: [], conditionsFailed: [], contradictions: [], invalidationConditions: [],
     stop: { price: null, basis: 'test' }, target: { price: null, basis: 'test' },
     applicableRegimes: ['BULLISH_TREND'],

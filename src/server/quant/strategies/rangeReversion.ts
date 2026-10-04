@@ -68,6 +68,8 @@ export const rangeReversion: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      // Price sitting at the range boundary IS this setup - mid-range price has nothing to fade.
+      triggerMet: nearBoundary !== null && Math.abs(nearBoundary.pct) <= NEAR_BOUNDARY_PCT,
       conditionsMet,
       conditionsFailed,
       contradictions,
@@ -76,7 +78,7 @@ export const rangeReversion: StrategyDefinition = {
         'A real volume spike accompanies the break (genuine breakout, not a fade-worthy range test).',
       ],
       stop: nearBoundary
-        ? { price: nearBoundary.level, basis: `Just beyond the real ${bullish ? 'support' : 'resistance'} boundary being faded.` }
+        ? { price: nearBoundary.level, basis: `At the real ${bullish ? 'support' : 'resistance'} boundary being faded (a close through it invalidates the range).` }
         : { price: null, basis: 'No real range boundary available yet to derive a stop.' },
       target: farBoundary
         ? { price: farBoundary.level, basis: `The opposite real range boundary - trading the width of the range.` }

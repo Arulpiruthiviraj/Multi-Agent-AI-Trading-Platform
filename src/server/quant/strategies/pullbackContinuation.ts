@@ -85,6 +85,10 @@ export const pullbackContinuation: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      // An established trend IS this setup - a "pullback" with no trend is just noise.
+      triggerMet: bullish
+        ? trend.structure.trend === 'UPTREND' && regime.regime === 'BULLISH_TREND'
+        : trend.structure.trend === 'DOWNTREND' && regime.regime === 'BEARISH_TREND',
       conditionsMet,
       conditionsFailed,
       contradictions,

@@ -72,7 +72,9 @@ export const statisticalMeanReversion: StrategyDefinition = {
 
     const totalConditions = conditionsMet.length + conditionsFailed.length;
     const setupScore = scoreFromConditions(conditionsMet, totalConditions);
-    const meanProxy = volatility.keltner?.middle ?? currentPrice;
+    // A zero-distance target (Keltner null -> currentPrice) used to be emitted here; a missing
+    // mean proxy is missing data, not a target at the entry price.
+    const keltnerMid = volatility.keltner?.middle ?? null;
     const atr = volatility.atr;
 
     return {
@@ -80,6 +82,8 @@ export const statisticalMeanReversion: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      // The z-score extreme IS this setup - a non-extreme z has nothing to revert.
+      triggerMet: stretchedDown || stretchedUp,
       conditionsMet,
       conditionsFailed,
       contradictions,
@@ -91,7 +95,9 @@ export const statisticalMeanReversion: StrategyDefinition = {
       stop: atr
         ? { price: currentPrice + (bullish ? -atr : atr), basis: '1x ATR beyond the stretched print.' }
         : { price: null, basis: 'No ATR for a stop.' },
-      target: { price: meanProxy, basis: 'Keltner middle as the mean proxy (z-score mean is the rolling SMA, not stored as a level).' },
+      target: keltnerMid !== null
+        ? { price: keltnerMid, basis: 'Keltner middle as the mean proxy (z-score mean is the rolling SMA, not stored as a level).' }
+        : { price: null, basis: 'No Keltner middle available - no honest mean level to target.' },
       applicableRegimes: statisticalMeanReversion.applicableRegimes,
     };
   },

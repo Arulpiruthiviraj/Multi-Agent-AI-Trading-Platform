@@ -14,7 +14,7 @@ function baseInput(): GroupedScoresInput {
     },
     momentum: { rsi: 50, macd: { macd: 0, signal: 0, histogram: 0 }, stochasticRSI: 50, roc: 0, momentum: 0, williamsR: -50, cci: 0 },
     volatility: { atr: 1, atrPercent: 1, historicalVolatilityPct: 20, volatilityPercentile: 50, bollingerBandWidthPct: 5, keltner: { middle: 100, upper: 105, lower: 95 }, regime: 'STABLE', closePriceZScore: 0 },
-    volume: { volumeSMA20: 1_000_000, relativeVolume: 1, isSpike: false, volumeROC: 0, obv: 0, mfi: 50, vwap: { vwap: 100, distancePct: 0, slopePct: 0, event: 'NONE' }, cmf: 0, ad: 0 },
+    volume: { volumeSMA20: 1_000_000, relativeVolume: 1, isSpike: false, volumeROC: 0, obv: 0, mfi: 50, vwap: { vwap: 100, distancePct: 0, slopePct: 0, event: 'NONE', intradayBased: false }, cmf: 0, ad: 0 },
     priceAction: { gap: { type: null, sizePct: null }, consolidating: false, rangeRegime: 'STABLE', candlestick: null },
     regime: { regime: 'SIDEWAYS_RANGE', trendStrength: 10, volatility: 'NORMAL', marketStructure: 'CHOPPY', confidence: 0.3, features: {} as any, insufficientData: false },
     marketContext: {
@@ -158,15 +158,15 @@ describe('computeGroupedScores - volumeScore', () => {
 describe('computeGroupedScores - vwapScore', () => {
   it('scores above neutral for BUY when price sits above session VWAP', () => {
     const input = baseInput();
-    input.volume.vwap = { vwap: 98, distancePct: 0.8, slopePct: 0.2, event: 'NONE' };
+    input.volume.vwap = { vwap: 98, distancePct: 0.8, slopePct: 0.2, event: 'NONE', intradayBased: true };
     expect(computeGroupedScores(input, 'BUY').vwapScore).toBeGreaterThan(50);
   });
 
   it('gives an additional real nudge for a RECLAIM event beyond the raw distance alone', () => {
     const withoutEvent = baseInput();
-    withoutEvent.volume.vwap = { vwap: 99, distancePct: 0.3, slopePct: 0, event: 'NONE' };
+    withoutEvent.volume.vwap = { vwap: 99, distancePct: 0.3, slopePct: 0, event: 'NONE', intradayBased: true };
     const withReclaim = baseInput();
-    withReclaim.volume.vwap = { vwap: 99, distancePct: 0.3, slopePct: 0, event: 'RECLAIM' };
+    withReclaim.volume.vwap = { vwap: 99, distancePct: 0.3, slopePct: 0, event: 'RECLAIM', intradayBased: true };
 
     const scoreWithout = computeGroupedScores(withoutEvent, 'BUY').vwapScore;
     const scoreWith = computeGroupedScores(withReclaim, 'BUY').vwapScore;
@@ -242,7 +242,7 @@ describe('computeGroupedScores - overallSetupScore', () => {
     strong.marketContext.sector = { name: 'Technology', etf: 'XLK', trend: { symbol: 'XLK', regime: bullishRegime(), source: 'test' } };
     strong.marketContext.relativeStrengthVsSPY = { vsSymbol: 'SPY', periodPct: 8, benchmarkPeriodPct: 2, relativeStrengthPct: 6, correlation: 0.5, beta: 1.2, source: 'test' };
     strong.volume.cmf = 0.15;
-    strong.volume.vwap = { vwap: 98, distancePct: 0.8, slopePct: 0.2, event: 'RECLAIM' };
+    strong.volume.vwap = { vwap: 98, distancePct: 0.8, slopePct: 0.2, event: 'RECLAIM', intradayBased: true };
     strong.trend.structure = { trend: 'UPTREND', event: 'BOS_BULLISH', lastSwingHigh: 105, lastSwingLow: 95 };
 
     const weakScore = computeGroupedScores(weak, 'BUY').overallSetupScore;

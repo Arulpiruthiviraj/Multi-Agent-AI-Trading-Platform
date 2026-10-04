@@ -132,6 +132,7 @@ describe('experimental family strategies + taxonomy', () => {
     ctx.priceAction.gap = { type: 'GAP_UP', sizePct: t.gapMinSizePct + 0.1 };
     ctx.volume.relativeVolume = t.rvolBreakout;
     ctx.volume.vwap.distancePct = 0.4;
+    ctx.volume.vwap.intradayBased = true; // scenario assumes genuine session VWAP
     ctx.regime.regime = 'BULLISH_TREND';
     const result = gapContinuation.evaluate(ctx);
     expect(result.side).toBe('BUY');

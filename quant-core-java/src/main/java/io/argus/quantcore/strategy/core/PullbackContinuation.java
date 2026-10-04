@@ -80,7 +80,11 @@ public final class PullbackContinuation {
             ? new LevelSuggestion(target.level(), "Nearest real " + (bullish ? "resistance" : "support") + " level - the prior trend " + (bullish ? "high" : "low") + " being retested.")
             : LevelSuggestion.none("No further real level available yet to derive a target.");
 
+        boolean triggerMet = bullish
+                ? "UPTREND".equals(trend.structure().trend()) && "BULLISH_TREND".equals(regime.regime())
+                : "DOWNTREND".equals(trend.structure().trend()) && "BEARISH_TREND".equals(regime.regime());
         return new StrategyEvaluation(ID, side, setupScore, setupScore / 100.0,
+            triggerMet, // trigger: an established trend IS this setup
             conditionsMet, conditionsFailed, contradictions,
             List.of(
                 "Price closes decisively " + (bullish ? "below" : "above") + " SMA20 / the pullback low" + (bullish ? "" : " (high)") + ".",

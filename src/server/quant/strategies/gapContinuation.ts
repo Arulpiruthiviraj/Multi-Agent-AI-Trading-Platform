@@ -44,7 +44,7 @@ export const gapContinuation: StrategyDefinition = {
     );
     check(
       bullish ? 'Price above session VWAP' : 'Price below session VWAP',
-      volume.vwap.distancePct !== null && (bullish ? volume.vwap.distancePct > 0 : volume.vwap.distancePct < 0),
+      volume.vwap.intradayBased && volume.vwap.distancePct !== null && (bullish ? volume.vwap.distancePct > 0 : volume.vwap.distancePct < 0),
     );
     check(
       'Favorable market regime',
@@ -64,6 +64,8 @@ export const gapContinuation: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      // A minimum-size gap IS this setup - no gap, no continuation.
+      triggerMet: (bullish ? gapUp : gapDown) && sizeOk,
       conditionsMet,
       conditionsFailed,
       contradictions,

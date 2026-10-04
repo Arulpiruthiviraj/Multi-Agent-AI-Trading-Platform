@@ -76,6 +76,8 @@ export const donchianBreakout: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      // The channel break IS this setup - no break, no breakout.
+      triggerMet: bullish ? brokeHigh : brokeLow,
       conditionsMet,
       conditionsFailed,
       contradictions,

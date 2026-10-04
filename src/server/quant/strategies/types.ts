@@ -47,6 +47,15 @@ export interface StrategyEvaluation {
   side: 'BUY' | 'SELL';
   setupScore: number; // 0-100 - real % of this strategy's own conditions that held
   confidence: number; // 0-1 - setupScore blended with real regime-fit (see StrategyEngine.ts)
+  /**
+   * Whether the strategy's DEFINING trigger event actually occurred on this bar
+   * (the BOS break, the gap, the sweep + CHoCH, the oscillator extreme, ...).
+   * Distinct from setupScore: a strategy can score 80+ on confirming conditions
+   * while its trigger never fired. evaluateAll() caps confidence below the trade
+   * bar when this is false, so confirming conditions can never outvote a missing
+   * trigger into a trade idea. Required - every strategy must declare it honestly.
+   */
+  triggerMet: boolean;
   conditionsMet: string[];
   conditionsFailed: string[];
   contradictions: string[]; // real internal conflicts (e.g. bullish momentum but price below VWAP), distinct from a simple unmet condition

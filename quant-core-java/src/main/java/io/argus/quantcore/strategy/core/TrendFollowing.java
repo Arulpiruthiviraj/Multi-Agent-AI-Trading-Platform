@@ -69,7 +69,10 @@ public final class TrendFollowing {
         LevelSuggestion target = LevelSuggestion.none(
             "Trend-following is intentionally open-ended - no fixed target; trail the stop (e.g. along SMA50) as the trend extends.");
 
+        boolean triggerMet = (bullish ? "BULLISH_TREND".equals(regime.regime()) : "BEARISH_TREND".equals(regime.regime()))
+            && regime.trendStrength() >= QuantThresholds.MIN_TREND_STRENGTH;
         return new StrategyEvaluation(ID, side, setupScore, setupScore / 100.0,
+            triggerMet, // trigger: a strong directional regime IS this setup
             conditionsMet, conditionsFailed, contradictions,
             List.of(
                 "ADX falls below 20 (real trend strength fading - market structure shifting toward RANGING/CHOPPY).",

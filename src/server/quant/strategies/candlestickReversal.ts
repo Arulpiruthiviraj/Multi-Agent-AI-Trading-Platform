@@ -85,6 +85,8 @@ export const candlestickReversal: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      // A detected reversal candle at the S/R level IS this setup - no pattern, no reversal.
+      triggerMet: candle !== null && (bullish ? bullishCandle && nearSupport : bearishCandle && nearResistance),
       conditionsMet,
       conditionsFailed,
       contradictions,

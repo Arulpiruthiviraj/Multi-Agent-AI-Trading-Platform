@@ -344,6 +344,14 @@ export interface TradingSafety {
   thesisInvalidationExitConfidence: number;
   regimeMismatchConfidenceMultiplier: number;
   minStrategyConfidenceToTrade: number;
+  /**
+   * Cap applied to a strategy evaluation whose defining trigger did not fire
+   * (StrategyEvaluation.triggerMet === false). Must stay below
+   * minStrategyConfidenceToTrade so a missing trigger can never emit a trade
+   * idea or enter exploration, while keeping the evaluation visible for
+   * research/diagnostics. See StrategyEngine.evaluateAll().
+   */
+  triggerAbsentConfidenceCap: number;
   agentWinRateAlertPct: number;
   agentWinRateAlertMinPredictions: number;
   autoFlattenOnReconciliationMismatch: boolean;
@@ -722,6 +730,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'thesisInvalidationExitConfidence',
   'regimeMismatchConfidenceMultiplier',
   'minStrategyConfidenceToTrade',
+  'triggerAbsentConfidenceCap',
   'agentWinRateAlertPct',
   'agentWinRateAlertMinPredictions',
   'oosSharpeDegradationMinRatio',

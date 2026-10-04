@@ -90,6 +90,7 @@ public final class MomentumBreakout {
                 : LevelSuggestion.none("No further real level or ATR available yet to derive a target.");
 
         return new StrategyEvaluation(ID, side, setupScore, setupScore / 100.0,
+            bullBreak || bearBreak, // trigger: the structural break IS this setup
             conditionsMet, conditionsFailed, contradictions,
             List.of(
                 "Price closes back " + (bullish ? "below" : "above") + " the broken level (false breakout).",

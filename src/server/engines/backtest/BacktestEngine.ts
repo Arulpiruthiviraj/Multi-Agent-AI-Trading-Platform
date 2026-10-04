@@ -39,7 +39,7 @@ import { computeMomentumFeatures } from '../../quant/indicators/momentum';
 import { computeVolumeFeatures } from '../../quant/indicators/volume';
 import { computeSupportResistanceFeatures } from '../../quant/indicators/supportResistance';
 import { computeSmcFeatures } from '../../quant/indicators/smc';
-import { ALL_STRATEGIES, EXPERIMENTAL_STRATEGIES, findStrategy, MIN_STRATEGY_CONFIDENCE_TO_TRADE } from '../../quant/strategies/StrategyEngine';
+import { ALL_STRATEGIES, EXPERIMENTAL_STRATEGIES, findStrategy, MIN_STRATEGY_CONFIDENCE_TO_TRADE, applyTriggerGate } from '../../quant/strategies/StrategyEngine';
 import { StrategyContext } from '../../quant/strategies/types';
 import { expectedValue, fractionalKelly, ExpectedValueResult, KellyResult } from '../../quant/risk/ExpectedValue';
 import { classifyTradeFailure, computeFailureBreakdown } from '../../quant/analysis/FailureClassification';
@@ -627,7 +627,7 @@ export class BacktestEngine {
           // Same SMC snapshot as live QuantSignalAgent so backtests of SMC_LIQUIDITY_SWEEP see real features.
           smc: computeSmcFeatures(visibleBars),
         };
-        const evaluation = strategy.evaluate(strategyContext);
+        const evaluation = applyTriggerGate(strategy.evaluate(strategyContext));
         const recentHighs = visibleBars.slice(-LOOKBACK).map(b => b.high);
         const recentLows = visibleBars.slice(-LOOKBACK).map(b => b.low);
         const recentCloses = visibleBars.slice(-LOOKBACK).map(b => b.close);

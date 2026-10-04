@@ -57,7 +57,11 @@ describe('smcLiquiditySweep', () => {
     const result = smcLiquiditySweep.evaluate(ctx);
     expect(result.conditionsFailed.some(c => c.startsWith('CHoCH confirmation'))).toBe(true);
     expect(result.contradictions.some(c => c.includes('Sweep without CHoCH'))).toBe(true);
-    expect(result.setupScore).toBe(100 - smcConfluence.chochConfirmed);
+    // CHoCH is the required confirmation: without it the setup scores 0 and the trigger
+    // is not met, so the engine can never emit or explore it.
+    expect(result.triggerMet).toBe(false);
+    expect(result.setupScore).toBe(0);
+    expect(result.confidence).toBe(0);
   });
 
   it('is not part of the live evaluateAll set by default', () => {

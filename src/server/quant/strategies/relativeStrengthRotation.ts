@@ -25,7 +25,10 @@ export const relativeStrengthRotation: StrategyDefinition = {
   evaluate(ctx: StrategyContext): StrategyEvaluation {
     const { marketContext, trend, volatility, regime, currentPrice } = ctx;
     const rs = marketContext.relativeStrengthVsSPY?.relativeStrengthPct;
-    const bullish = (rs ?? 0) >= 0 && regime.regime !== 'BEARISH_TREND';
+    const rsNum: number | null = rs ?? null;
+    // Never default bullish on missing data: a null RS previously coerced to 0 (non-negative)
+    // and the strategy emitted BUY ideas with its namesake input entirely absent.
+    const bullish = rsNum !== null && rsNum >= 0 && regime.regime !== 'BEARISH_TREND';
     const side: 'BUY' | 'SELL' = bullish ? 'BUY' : 'SELL';
 
     const conditionsMet: string[] = [];
@@ -100,6 +103,8 @@ export const relativeStrengthRotation: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      // Directional relative strength IS this setup - without the RS input there is nothing to rotate on.
+      triggerMet: rsNum !== null && (bullish ? rsNum > 0 : rsNum < 0),
       conditionsMet,
       conditionsFailed,
       contradictions,

@@ -77,6 +77,11 @@ export const oscillatorMomentum: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      // Aligned oscillators (RSI on the right side of midline AND MACD histogram agreeing)
+      // ARE this setup - a single mixed print is not momentum.
+      triggerMet: bullish
+        ? momentum.rsi > t.rsiMidline && momentum.macd.histogram > 0
+        : momentum.rsi < t.rsiMidline && momentum.macd.histogram < 0,
       conditionsMet,
       conditionsFailed,
       contradictions,

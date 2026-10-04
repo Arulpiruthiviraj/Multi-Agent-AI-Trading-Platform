@@ -25,7 +25,10 @@ export const vwapMeanReversion: StrategyDefinition = {
 
   evaluate(ctx: StrategyContext): StrategyEvaluation {
     const { volume, trend, priceAction, regime, volatility, supportResistance, currentPrice } = ctx;
-    const dist = volume.vwap.distancePct;
+    // A "session VWAP" built from daily bars degenerates to today's single-bar typical price -
+    // the extension read is only real with genuine intraday session VWAP.
+    const genuineVwap = volume.vwap.intradayBased && volume.vwap.vwap !== null;
+    const dist = genuineVwap ? volume.vwap.distancePct : null;
     const extendedDown = dist !== null && dist <= -t.vwapReversionDistancePct;
     const extendedUp = dist !== null && dist >= t.vwapReversionDistancePct;
     const bullish = extendedUp ? false : true;
@@ -74,17 +77,27 @@ export const vwapMeanReversion: StrategyDefinition = {
     if (!bullish && regime.regime === 'BULLISH_TREND') {
       contradictions.push('Fading a VWAP extension against BULLISH_TREND — mean reversion is not a trend-kill.');
     }
+    if (!genuineVwap) {
+      contradictions.push('No genuine session VWAP (real intraday bars required) — the extension read is not a real VWAP deviation.');
+    }
 
     const totalConditions = conditionsMet.length + conditionsFailed.length;
     const setupScore = scoreFromConditions(conditionsMet, totalConditions);
-    const vwap = volume.vwap.vwap;
+    const vwap = genuineVwap ? volume.vwap.vwap : null;
     const atr = volatility.atr;
+    // The no-ATR fallback must sit on the stop side of the trade: nearest support for a BUY,
+    // nearest resistance for a SELL. (It previously used nearest support for both sides.)
+    const stopFallbackLevel = bullish
+      ? supportResistance.nearest.nearestSupport?.level
+      : supportResistance.nearest.nearestResistance?.level;
 
     return {
       strategy: 'VWAP_MEAN_REVERSION',
       side,
       setupScore,
       confidence: setupScore / 100,
+      // A genuine VWAP extension IS this setup - without intraday session VWAP there is no anchor.
+      triggerMet: genuineVwap && (extendedDown || extendedUp),
       conditionsMet,
       conditionsFailed,
       contradictions,
@@ -94,10 +107,10 @@ export const vwapMeanReversion: StrategyDefinition = {
       ],
       stop: atr
         ? { price: currentPrice + (bullish ? -atr : atr), basis: '1x ATR beyond the extended print.' }
-        : { price: supportResistance.nearest.nearestSupport?.level ?? null, basis: 'No ATR; nearest structural level if present.' },
+        : { price: stopFallbackLevel ?? null, basis: 'No ATR; nearest structural level on the stop side if present.' },
       target: vwap !== null
         ? { price: vwap, basis: 'Session VWAP (the mean being reverted to).' }
-        : { price: null, basis: 'No session VWAP available.' },
+        : { price: null, basis: 'No genuine session VWAP available.' },
       applicableRegimes: vwapMeanReversion.applicableRegimes,
     };
   },

@@ -108,6 +108,26 @@ export function findStrategy(id: string): StrategyDefinition | undefined {
 // regime-fit is judged the same way rather than each module inventing its own penalty.
 const REGIME_MISMATCH_CONFIDENCE_MULTIPLIER = tradingSafety.regimeMismatchConfidenceMultiplier;
 
+// Trigger gate (2026-10-04): the defining trigger is what makes an evaluation this strategy's
+// setup. Without it, confirming conditions must never outvote their way into a trade idea -
+// confidence is capped below MIN_STRATEGY_CONFIDENCE_TO_TRADE and the cap is stated openly.
+// setupScore is left untouched: it still honestly reports the fraction of conditions that held.
+// Exported so every direct evaluate() consumer (BacktestEngine, research replay) applies the
+// identical gate instead of each inventing its own.
+const TRIGGER_ABSENT_CONFIDENCE_CAP = tradingSafety.triggerAbsentConfidenceCap;
+
+export function applyTriggerGate(evaluation: StrategyEvaluation): StrategyEvaluation {
+  if (evaluation.triggerMet || evaluation.confidence <= TRIGGER_ABSENT_CONFIDENCE_CAP) return evaluation;
+  return {
+    ...evaluation,
+    confidence: TRIGGER_ABSENT_CONFIDENCE_CAP,
+    contradictions: [
+      ...evaluation.contradictions,
+      'Defining trigger did not fire on this bar - confidence capped; not a tradeable setup.',
+    ],
+  };
+}
+
 export function evaluateAll(ctx: StrategyContext): StrategyEvaluation[] {
   // Research-param inbox may load rows; they are NOT merged into evaluate() (quantThresholds.json wins).
   const overlay = resolvePaperTestingOverlay(ctx.regime.regime);
@@ -116,7 +136,7 @@ export function evaluateAll(ctx: StrategyContext): StrategyEvaluation[] {
   }
   const evaluated = filterStrategiesForAsset(resolveStrategiesForLiveEvaluation(), ctx.assetClass)
     .map(strategy => {
-      const evaluation = strategy.evaluate(ctx);
+      const evaluation = applyTriggerGate(strategy.evaluate(ctx));
       const regimeMatches = evaluation.applicableRegimes.includes(ctx.regime.regime);
       const confidence = Math.round(evaluation.confidence * (regimeMatches ? 1 : REGIME_MISMATCH_CONFIDENCE_MULTIPLIER) * 100) / 100;
       return { ...evaluation, confidence };
@@ -171,6 +191,8 @@ export interface StrategyDerivedIdea {
  * Picks the single best real strategy signal (highest setupScore among evaluations clearing
  * MIN_STRATEGY_CONFIDENCE_TO_TRADE) to drive a trade idea - `null` when no strategy's real
  * conditions clear the bar, rather than forcing a pick from a weak field.
+ * Note: evaluateAll() already caps confidence below this bar when a strategy's defining
+ * trigger did not fire, so this function never sees a triggerless setup as eligible.
  */
 export function bestStrategyIdea(evaluations: StrategyEvaluation[]): StrategyDerivedIdea | null {
   const eligible = evaluations.filter(e => e.confidence >= MIN_STRATEGY_CONFIDENCE_TO_TRADE);

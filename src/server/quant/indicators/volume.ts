@@ -73,6 +73,13 @@ export interface VWAPContext {
   distancePct: number | null;
   slopePct: number | null; // change in session VWAP over the last few bars of the session
   event: 'RECLAIM' | 'REJECTION' | 'NONE'; // real crossing detection, see below
+  /**
+   * True only when built from real intraday bars (computeVolumeFeatures' intradayBars path).
+   * False means the "session VWAP" was built from daily bars and degenerates to today's
+   * single-bar typical price - strategies that need a genuine session anchor must treat
+   * this as absent, not as a real VWAP.
+   */
+  intradayBased: boolean;
 }
 
 /**
@@ -81,9 +88,12 @@ export interface VWAPContext {
  * Requires re-deriving VWAP at both the prior and current bar (VWAP is cumulative within the
  * session, so "VWAP one bar ago" is a real, different number, not the current value reused).
  */
-export function computeVWAPContext(bars: Bar[], sessionStartMs?: number): VWAPContext {
+export function computeVWAPContext(bars: Bar[], sessionStartMs?: number, intradayBased = false): VWAPContext {
   const vwap = calculateSessionVWAP(bars, sessionStartMs);
-  if (vwap === null || bars.length === 0) return { vwap: null, distancePct: null, slopePct: null, event: 'NONE' };
+  // A zero/NaN VWAP is corrupt data, not a level - never divide by it.
+  if (vwap === null || bars.length === 0 || !Number.isFinite(vwap) || vwap === 0) {
+    return { vwap: null, distancePct: null, slopePct: null, event: 'NONE', intradayBased };
+  }
 
   const currentPrice = bars[bars.length - 1].close;
   const distancePct = ((currentPrice - vwap) / vwap) * 100;
@@ -92,7 +102,7 @@ export function computeVWAPContext(bars: Bar[], sessionStartMs?: number): VWAPCo
   let slopePct: number | null = null;
   if (bars.length >= 2) {
     const priorVwap = calculateSessionVWAP(bars.slice(0, -1), sessionStartMs);
-    if (priorVwap !== null) {
+    if (priorVwap !== null && Number.isFinite(priorVwap) && priorVwap !== 0) {
       slopePct = ((vwap - priorVwap) / priorVwap) * 100;
       const priorClose = bars[bars.length - 2].close;
       if (priorClose < priorVwap && currentPrice > vwap) event = 'RECLAIM';
@@ -100,7 +110,7 @@ export function computeVWAPContext(bars: Bar[], sessionStartMs?: number): VWAPCo
     }
   }
 
-  return { vwap, distancePct, slopePct, event };
+  return { vwap, distancePct, slopePct, event, intradayBased };
 }
 
 /** Chaikin Money Flow over `period` bars - sum(Money Flow Multiplier * volume) / sum(volume).
@@ -176,7 +186,7 @@ export function computeVolumeFeatures(bars: Bar[], intradayBars?: Bar[]): Volume
     volumeROC: volumeROC(volumes),
     obv: TechnicalIndicators.calculateOBV(closes, volumes),
     mfi: TechnicalIndicators.calculateMFI(highs, lows, closes, volumes),
-    vwap: intradayBars && intradayBars.length > 0 ? computeVWAPContext(intradayBars) : computeVWAPContext(bars),
+    vwap: intradayBars && intradayBars.length > 0 ? computeVWAPContext(intradayBars, undefined, true) : computeVWAPContext(bars),
     cmf: calculateCMF(bars),
     ad: calculateAD(bars),
   };

@@ -72,6 +72,9 @@ export const bollingerVolatility: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      // Price outside the Keltner band (the expansion break) IS this setup - inside the
+      // channel there is no expansion to trade, whatever the default side says.
+      triggerMet: bullish ? aboveUpper : belowLower,
       conditionsMet,
       conditionsFailed,
       contradictions,

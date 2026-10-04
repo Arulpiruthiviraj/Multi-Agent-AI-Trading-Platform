@@ -73,6 +73,7 @@ public final class MeanReversion {
             : LevelSuggestion.none("No real Keltner Channel available yet to derive a mean-reversion target.");
 
         return new StrategyEvaluation(ID, side, setupScore, setupScore / 100.0,
+            bullish ? oversold : overbought, // trigger: the oscillator extreme IS this setup
             conditionsMet, conditionsFailed, contradictions,
             List.of(
                 "Price makes a real new " + (bullish ? "low" : "high") + " beyond the recent range (the range itself is breaking, not just reverting).",

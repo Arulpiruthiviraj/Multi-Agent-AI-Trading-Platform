@@ -8,7 +8,7 @@ describe('momentumBreakout', () => {
     ctx.trend.structure = { trend: 'UPTREND', event: 'BOS_BULLISH', lastSwingHigh: 105, lastSwingLow: 95 };
     ctx.volume.relativeVolume = 2.0;
     ctx.volatility.regime = 'EXPANDING';
-    ctx.volume.vwap = { vwap: 98, distancePct: 2, slopePct: 1, event: 'RECLAIM' };
+    ctx.volume.vwap = { vwap: 98, distancePct: 2, slopePct: 1, event: 'RECLAIM', intradayBased: true };
     ctx.regime.regime = 'BULLISH_TREND';
     ctx.marketContext.sector.trend = { symbol: 'XLK', regime: { regime: 'BULLISH_TREND', trendStrength: 80, volatility: 'NORMAL', marketStructure: 'TRENDING', confidence: 0.8, features: {} as any, insufficientData: false }, source: 'test' };
     ctx.marketContext.relativeStrengthVsSPY = { vsSymbol: 'SPY', periodPct: 5, benchmarkPeriodPct: 2, relativeStrengthPct: 3, correlation: 0.5, beta: 1.1, source: 'test' };
@@ -28,7 +28,7 @@ describe('momentumBreakout', () => {
     ctx.trend.structure = { trend: 'DOWNTREND', event: 'BOS_BEARISH', lastSwingHigh: 105, lastSwingLow: 95 };
     ctx.volume.relativeVolume = 2.0;
     ctx.volatility.regime = 'EXPANDING';
-    ctx.volume.vwap = { vwap: 102, distancePct: -2, slopePct: -1, event: 'REJECTION' };
+    ctx.volume.vwap = { vwap: 102, distancePct: -2, slopePct: -1, event: 'REJECTION', intradayBased: true };
     ctx.regime.regime = 'BEARISH_TREND';
     ctx.momentum.roc = -3;
 

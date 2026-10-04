@@ -44,7 +44,7 @@ export const momentumBreakout: StrategyDefinition = {
     check('ATR expansion (volatility regime EXPANDING)', volatility.regime === 'EXPANDING');
     check(
       bullish ? 'Price above session VWAP' : 'Price below session VWAP',
-      volume.vwap.distancePct !== null && (bullish ? volume.vwap.distancePct > 0 : volume.vwap.distancePct < 0)
+      volume.vwap.intradayBased && volume.vwap.distancePct !== null && (bullish ? volume.vwap.distancePct > 0 : volume.vwap.distancePct < 0)
     );
     check('Favorable market regime', bullish ? regime.regime === 'BULLISH_TREND' : regime.regime === 'BEARISH_TREND');
     check(
@@ -90,6 +90,8 @@ export const momentumBreakout: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      // The structural break IS this setup - without it the confirming conditions are just a bullish backdrop.
+      triggerMet: bullBreak || bearBreak,
       conditionsMet,
       conditionsFailed,
       contradictions,

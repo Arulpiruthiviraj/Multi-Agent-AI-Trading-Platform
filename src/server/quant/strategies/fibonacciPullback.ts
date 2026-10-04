@@ -65,6 +65,11 @@ export const fibonacciPullback: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      // Price at the 61.8% level in the trend direction IS this setup - a retracement level
+      // price never reached is not a pullback.
+      triggerMet: near618 && (bullish
+        ? trend.structure.trend === 'UPTREND' || regime.regime === 'BULLISH_TREND'
+        : trend.structure.trend === 'DOWNTREND' || regime.regime === 'BEARISH_TREND'),
       conditionsMet,
       conditionsFailed,
       contradictions,

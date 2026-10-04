@@ -6,7 +6,7 @@ import type { StrategyEvaluation } from './types';
 
 function evalFixture(strategy: string, setupScore: number, side: 'BUY' | 'SELL' = 'BUY'): StrategyEvaluation {
   return {
-    strategy, side, setupScore, confidence: 0.8, conditionsMet: [], conditionsFailed: [],
+    strategy, side, setupScore, confidence: 0.8, triggerMet: true, conditionsMet: [], conditionsFailed: [],
     contradictions: [], invalidationConditions: [], stop: { price: 0, reasoning: '' } as any,
     target: { price: 0, reasoning: '' } as any, applicableRegimes: ['BULL_TRENDING'] as any,
   };

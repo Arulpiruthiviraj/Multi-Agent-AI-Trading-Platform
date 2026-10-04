@@ -140,7 +140,9 @@ export function detectPriceOscillatorDivergence(price: number[], oscillator: num
 /** Trailing RSI aligned to `closes` length; earlier bars that lack a full RSI window are NaN. */
 export function alignedRsiSeries(closes: number[], rsiPeriod: number = 14): number[] {
   const out = new Array(closes.length).fill(Number.NaN);
-  for (let end = rsiPeriod; end <= closes.length; end++) {
+  // Start at rsiPeriod + 1: RSIEngine needs prices.length > period for a real value, and
+  // slice(0, rsiPeriod) would otherwise plant a fabricated 50 in the NaN prefix.
+  for (let end = rsiPeriod + 1; end <= closes.length; end++) {
     out[end - 1] = rsiEngine.calculate(closes.slice(0, end));
   }
   return out;

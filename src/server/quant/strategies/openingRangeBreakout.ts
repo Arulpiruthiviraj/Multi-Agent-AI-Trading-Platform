@@ -55,7 +55,7 @@ export const openingRangeBreakout: StrategyDefinition = {
     );
     check(
       bullish ? 'Price above session VWAP' : 'Price below session VWAP',
-      volume.vwap.distancePct !== null && (bullish ? volume.vwap.distancePct > 0 : volume.vwap.distancePct < 0),
+      volume.vwap.intradayBased && volume.vwap.distancePct !== null && (bullish ? volume.vwap.distancePct > 0 : volume.vwap.distancePct < 0),
     );
     check(
       'Directional regime (not fading a range as a default)',
@@ -88,6 +88,8 @@ export const openingRangeBreakout: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      // A resolved opening range AND its break IS this setup - on daily bars neither exists.
+      triggerMet: or.available && or.data !== null && (bullish ? brokeHigh : brokeLow),
       conditionsMet,
       conditionsFailed,
       contradictions,

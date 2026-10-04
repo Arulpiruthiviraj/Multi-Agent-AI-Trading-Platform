@@ -9,7 +9,7 @@ import { computeMomentumFeatures } from '../quant/indicators/momentum';
 import { computeVolumeFeatures } from '../quant/indicators/volume';
 import { computeSupportResistanceFeatures } from '../quant/indicators/supportResistance';
 import { computeSmcFeatures } from '../quant/indicators/smc';
-import { findStrategy } from '../quant/strategies/StrategyEngine';
+import { findStrategy, applyTriggerGate } from '../quant/strategies/StrategyEngine';
 import type { MarketContextResult, BenchmarkTrend } from '../quant/MarketContext';
 import type { StrategyEvaluation } from '../quant/strategies/types';
 import type { DataProvenance, ResearchBar } from './ohlcvTypes';
@@ -134,7 +134,7 @@ export function replayArgusStrategy(opts: {
     const visible = bars.slice(0, i + 1);
     const regime = classifyRegime(visible);
     const currentPrice = visible[visible.length - 1].close;
-    const evaluation = strategy.evaluate({
+    const evaluation = applyTriggerGate(strategy.evaluate({
       symbol: 'RESEARCH',
       currentPrice,
       trend: regime.features.trend,
@@ -146,7 +146,7 @@ export function replayArgusStrategy(opts: {
       regime,
       marketContext,
       smc: computeSmcFeatures(visible),
-    });
+    }));
     if (evaluation.confidence >= minConf) {
       signals.push({
         barIndex: i,
