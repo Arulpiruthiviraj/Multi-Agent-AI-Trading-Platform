@@ -64,6 +64,8 @@ export const previousPeriodBreakout: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      // The prior-day high/low break IS this setup - no break, no breakout.
+      triggerMet: bullish ? brokeHigh : brokeLow,
       conditionsMet,
       conditionsFailed,
       contradictions,

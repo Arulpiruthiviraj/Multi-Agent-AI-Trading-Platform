@@ -62,6 +62,8 @@ export const volumeConfirmation: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      // The volume spike IS this setup - aligned CMF/MFI without unusual volume is just a calm market.
+      triggerMet: volume.isSpike === true || (volume.relativeVolume !== null && volume.relativeVolume >= t.rvolBreakout),
       conditionsMet,
       conditionsFailed,
       contradictions,

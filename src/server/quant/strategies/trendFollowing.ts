@@ -72,6 +72,10 @@ export const trendFollowing: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      // A strong directional regime IS this setup - in a range there is no trend to follow.
+      triggerMet:
+        (bullish ? regime.regime === 'BULLISH_TREND' : regime.regime === 'BEARISH_TREND') &&
+        regime.trendStrength >= MIN_TREND_STRENGTH,
       conditionsMet,
       conditionsFailed,
       contradictions,

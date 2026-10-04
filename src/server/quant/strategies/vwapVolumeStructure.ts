@@ -34,7 +34,7 @@ export const vwapVolumeStructure: StrategyDefinition = {
     const contradictions: string[] = [];
     const check = (name: string, met: boolean) => (met ? conditionsMet.push(name) : conditionsFailed.push(name));
 
-    const dist = volume.vwap.distancePct;
+    const dist = volume.vwap.intradayBased ? volume.vwap.distancePct : null;
     const absDist = dist !== null ? Math.abs(dist) : null;
 
     check(
@@ -71,6 +71,9 @@ export const vwapVolumeStructure: StrategyDefinition = {
     if (!bullish && volume.vwap.event === 'RECLAIM') {
       contradictions.push('VWAP RECLAIM event while scoring a short pullback — structure may already be failing.');
     }
+    if (!volume.vwap.intradayBased) {
+      contradictions.push('No genuine session VWAP (real intraday bars required) — the VWAP anchor is not real on this bar set.');
+    }
 
     const totalConditions = conditionsMet.length + conditionsFailed.length;
     const setupScore = scoreFromConditions(conditionsMet, totalConditions);
@@ -82,6 +85,8 @@ export const vwapVolumeStructure: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      // An established structure trend IS this setup - without it there is no structure to pull back in.
+      triggerMet: bullish ? trend.structure.trend === 'UPTREND' : trend.structure.trend === 'DOWNTREND',
       conditionsMet,
       conditionsFailed,
       contradictions,

@@ -23,7 +23,7 @@ export const srBounce: StrategyDefinition = {
   applicableRegimes: ['SIDEWAYS_RANGE', 'BULLISH_TREND', 'BEARISH_TREND'],
 
   evaluate(ctx: StrategyContext): StrategyEvaluation {
-    const { supportResistance, priceAction, volume, volatility, currentPrice } = ctx;
+    const { supportResistance, priceAction, volume, volatility, regime, currentPrice } = ctx;
     const support = supportResistance.nearest.nearestSupport;
     const resistance = supportResistance.nearest.nearestResistance;
     const supportDist = support !== null ? Math.abs(support.pct) : Infinity;
@@ -58,11 +58,26 @@ export const srBounce: StrategyDefinition = {
     const setupScore = scoreFromConditions(conditionsMet, totalConditions);
     const atr = volatility.atr;
 
+    // A bounce fade with no trend-alignment check used to emit silently against real trends;
+    // flag it the way the mean-reversion strategies do.
+    if (bullish && regime.regime === 'BEARISH_TREND') {
+      contradictions.push('Buying a support bounce against BEARISH_TREND - a breakdown through the level is the higher-probability outcome.');
+    }
+    if (!bullish && regime.regime === 'BULLISH_TREND') {
+      contradictions.push('Selling a resistance bounce against BULLISH_TREND - a breakout through the level is the higher-probability outcome.');
+    }
+
+    const reversalCandle = bullish
+      ? priceAction.candlestick === 'HAMMER' || priceAction.candlestick === 'BULLISH_ENGULFING'
+      : priceAction.candlestick === 'SHOOTING_STAR' || priceAction.candlestick === 'BEARISH_ENGULFING';
+
     return {
       strategy: 'SR_BOUNCE',
       side,
       setupScore,
       confidence: setupScore / 100,
+      // Price at the level WITH a reversal candle IS this setup - proximity alone is just location.
+      triggerMet: near !== null && Math.abs(near.pct) <= t.nearLevelPct && reversalCandle,
       conditionsMet,
       conditionsFailed,
       contradictions,

@@ -72,6 +72,8 @@ export const maCrossover: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      // The MA stack IS this setup - without it there is no crossover regime to trade.
+      triggerMet: bullish ? goldenStack : deathStack,
       conditionsMet,
       conditionsFailed,
       contradictions,

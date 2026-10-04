@@ -26,9 +26,9 @@ export const meanReversion: StrategyDefinition = {
   evaluate(ctx: StrategyContext): StrategyEvaluation {
     const { momentum, volatility, volume, priceAction, supportResistance, regime, currentPrice } = ctx;
 
-    // Direction picked from which real extreme is actually present; RSI < 50 defaults to a bullish
-    // (oversold-fade) read when neither extreme is clearly hit, since that's this strategy's more
-    // common real-world case (fading dips) and every condition below is scored honestly regardless.
+    // Direction picked from which real extreme is actually present. When neither extreme is
+    // hit, this defaults to a bullish read (side BUY with the RSI-extreme condition failed and
+    // scored honestly) - the trigger gate then caps confidence, so the default never emits.
     const oversold = momentum.rsi <= RSI_OVERSOLD;
     const overbought = momentum.rsi >= RSI_OVERBOUGHT;
     const bullish = overbought ? false : true;
@@ -77,6 +77,8 @@ export const meanReversion: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      // The oscillator extreme IS this setup - fading a non-extreme RSI is not mean reversion.
+      triggerMet: bullish ? oversold : overbought,
       conditionsMet,
       conditionsFailed,
       contradictions,

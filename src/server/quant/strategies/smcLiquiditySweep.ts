@@ -118,7 +118,11 @@ export const smcLiquiditySweep: StrategyDefinition = {
       contradictions.push('Invariant violated: sweep.isTradeSignal must be false.');
     }
 
-    const setupScore = Math.min(100, Math.round(score));
+    // The sweep + CHoCH confirmation IS this setup - the condition text has always called it
+    // "required". Without both, confluence points are not a trade: score 0 instead of letting
+    // secondary conditions carry a triggerless setup over the bar.
+    const triggerMet = swept && chochOk;
+    const setupScore = triggerMet ? Math.min(100, Math.round(score)) : 0;
     const atr = ctx.volatility.atr;
     const extreme = smc.sweep.sweepExtreme;
     const opposing = side === 'BUY' ? smc.liquidity.buySide : smc.liquidity.sellSide;
@@ -128,6 +132,7 @@ export const smcLiquiditySweep: StrategyDefinition = {
       side,
       setupScore,
       confidence: setupScore / 100,
+      triggerMet,
       conditionsMet,
       conditionsFailed,
       contradictions,
