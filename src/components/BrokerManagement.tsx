@@ -78,7 +78,7 @@ export default function BrokerManagement() {
       setReconciliationLog(prev => [{
         id: `${data.timestamp}-${Math.random()}`,
         timestamp: data.timestamp,
-        type: 'mismatch',
+        type: 'mismatch' as const,
         broker: data.broker,
         detail: `${data.mismatches?.length || 0} mismatch(es), worst impact ~$${data.worstImpactDollars ?? '?'}`,
       }, ...prev].slice(0, 50));
@@ -87,7 +87,7 @@ export default function BrokerManagement() {
       setReconciliationLog(prev => [{
         id: `${data.timestamp}-${Math.random()}`,
         timestamp: data.timestamp,
-        type: 'match',
+        type: 'match' as const,
         broker: data.broker,
         detail: 'Positions reconciled, no drift.',
       }, ...prev].slice(0, 50));

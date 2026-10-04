@@ -104,6 +104,15 @@ export default function AlpacaNewsTicker({ targetSymbol }: AlpacaNewsTickerProps
     }
   };
 
+  // Manual refresh uses its own AbortController, mirroring the poll tick above.
+  // (Previously onClick={fetchAlpacaNews} passed the MouseEvent as `symbol`
+  // and undefined as `signal`, fetching "...?symbol=[object MouseEvent]" and
+  // then throwing on signal.aborted.)
+  const handleManualSync = () => {
+    const controller = new AbortController();
+    void fetchAlpacaNews(targetSymbol, controller.signal);
+  };
+
   const handleFallback = (reason: string) => {
     setErrorStatus(reason);
     setIsLive(false);
@@ -187,7 +196,7 @@ export default function AlpacaNewsTicker({ targetSymbol }: AlpacaNewsTickerProps
 
           {/* Refresh action */}
           <button 
-            onClick={fetchAlpacaNews}
+            onClick={handleManualSync}
             disabled={isLoading}
             className="hover:text-white transition-colors cursor-pointer flex items-center gap-1 active:scale-95"
           >

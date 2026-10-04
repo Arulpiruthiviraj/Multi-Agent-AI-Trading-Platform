@@ -44,6 +44,7 @@ import {
 } from "lucide-react";
 import tradingSafety from "../../config/tradingSafety.json";
 import agentWeights from "../../config/agentWeights.json";
+import type { AppTabId } from "./responsive/responsiveNavConfig";
 
 const pctLabel = (fraction: number) => `${Math.round(fraction * 100)}%`;
 const consensusPct = pctLabel(tradingSafety.consensusApprovalThreshold);
@@ -51,7 +52,7 @@ const stopPct = pctLabel(tradingSafety.stopLossAssumptionPct);
 const w = agentWeights.defaults;
 
 interface DocumentationTabProps {
-  setActiveTab: (tab: string) => void;
+  setActiveTab: (tab: AppTabId) => void;
 }
 
 type DocSection = {

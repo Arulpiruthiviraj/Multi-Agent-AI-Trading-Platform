@@ -39,13 +39,18 @@ import App from './App.tsx';
 import './index.css';
 import { WebSocketProvider } from './context/WebSocketContext';
 import { ExplainerSettingsProvider } from './context/ExplainerSettingsContext';
+import { ErrorBoundary } from './components/shared/ErrorBoundary';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <WebSocketProvider>
-      <ExplainerSettingsProvider>
-        <App />
-      </ExplainerSettingsProvider>
-    </WebSocketProvider>
+    {/* Root boundary: a crash anywhere outside tab panels (nav, providers,
+        auth gate) shows a recoverable fallback instead of a white screen. */}
+    <ErrorBoundary label="Argus terminal">
+      <WebSocketProvider>
+        <ExplainerSettingsProvider>
+          <App />
+        </ExplainerSettingsProvider>
+      </WebSocketProvider>
+    </ErrorBoundary>
   </StrictMode>,
 );

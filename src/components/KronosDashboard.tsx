@@ -20,6 +20,9 @@ type KronosStatusPayload = {
   timeframe?: string | null;
   confidenceThreshold?: number | null;
   multiAssetBatchMode?: boolean | null;
+  /** Sent by KronosModelManager.getStatus() — was missing from this type, so
+      the operationalHealth line below was flagged as an unknown property. */
+  operationalHealth?: 'STARTING' | 'RUNNING' | 'UNAVAILABLE' | 'FAILED' | string | null;
 };
 
 type KronosMetricsPayload = {
