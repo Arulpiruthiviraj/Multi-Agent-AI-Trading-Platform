@@ -33,7 +33,18 @@ import {
   writeSessionCookie,
 } from './cli/cliSession';
 
-const BASE = process.env.ARGUS_API_URL || 'http://127.0.0.1:3000';
+/** Default API base; may be overridden per-invocation by --api-url= (see dispatch). */
+let BASE = process.env.ARGUS_API_URL || 'http://127.0.0.1:3000';
+
+/** Resolve the effective API base URL (flag > env > default). Exported for tests. */
+export function apiBase(): string {
+  return BASE;
+}
+
+/** Apply the --api-url= global flag. Called once by the dispatch block. */
+export function setApiBaseOverride(url: string): void {
+  BASE = url;
+}
 /** Repo root even when cwd is elsewhere (./argus from another directory). */
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SESSION_PATH = process.env.ARGUS_CLI_SESSION_FILE || defaultSessionFilePath(ROOT);
@@ -44,6 +55,26 @@ class AuthRequiredError extends Error {
     super(unauthorizedMessage());
     this.name = 'AuthRequiredError';
   }
+}
+
+/** POSIX convention: exit 2 = command-line usage error (bad/missing args). */
+export const EXIT_USAGE = 2;
+
+export class UsageError extends Error {
+  readonly exitCode = EXIT_USAGE;
+  constructor(message: string) {
+    super(message);
+    this.name = 'UsageError';
+  }
+}
+
+/**
+ * Throw a usage error: printed to stderr with exit code 2 by the dispatch
+ * handler. Prefer this over `console.log('Usage: ...'); return;` (which
+ * misleadingly exits 0) for missing/invalid arguments.
+ */
+export function usageError(message: string): never {
+  throw new UsageError(message);
 }
 
 function cliAuthHeaders(): Record<string, string> {
@@ -767,12 +798,12 @@ const replayCommands: Record<string, () => Promise<void>> = {
   },
   async report() {
     const id = parseReplayArgs(process.argv.slice(4)).runId;
-    if (!id) throw new Error('Usage: argus replay report <runId>');
+    if (!id) usageError('Usage: argus replay report <runId>');
     console.log(JSON.stringify(await fetchJson(`/api/v2/historical-evaluations/${id}/report`), null, 2));
   },
   async export() {
     const id = parseReplayArgs(process.argv.slice(4)).runId;
-    if (!id) throw new Error('Usage: argus replay export <runId>');
+    if (!id) usageError('Usage: argus replay export <runId>');
     const res = await fetch(`${BASE}/api/v2/historical-evaluations/${id}/export?format=zip`, {
       headers: cliAuthHeaders(),
     });
@@ -783,7 +814,7 @@ const replayCommands: Record<string, () => Promise<void>> = {
   /** Forensic view of existing report evidence — does not invent analysis or change risk/consensus. */
   async analyze() {
     const id = parseReplayArgs(process.argv.slice(4)).runId;
-    if (!id) throw new Error('Usage: argus replay analyze <runId>');
+    if (!id) usageError('Usage: argus replay analyze <runId>');
     const report = await fetchJson(`/api/v2/historical-evaluations/${id}/report`);
     console.log(JSON.stringify({
       mode: 'historical_evaluation_analyze',
@@ -793,7 +824,7 @@ const replayCommands: Record<string, () => Promise<void>> = {
   },
   async diagnostics() {
     const id = parseReplayArgs(process.argv.slice(4)).runId;
-    if (!id) throw new Error('Usage: argus replay diagnostics <runId>');
+    if (!id) usageError('Usage: argus replay diagnostics <runId>');
     const meta = await fetchJson(`/api/v2/historical-evaluations/${id}`);
     let report: unknown = null;
     try {
@@ -810,6 +841,129 @@ const replayCommands: Record<string, () => Promise<void>> = {
     }, null, 2));
   },
 };
+
+/**
+ * Per-command help registry (2026-10-04). `argus <command> --help` prints the
+ * entry instead of running the command, so all 83 commands are self-
+ * documenting without opening the browser UI or reading source. Commands with
+ * richer native help (research) keep their own handler and are excluded from
+ * the global --help interception below.
+ */
+export const COMMAND_HELP: Record<string, string> = {
+  'version': 'Usage: argus version\nPrint CLI version and the API endpoint in use.',
+  'login': 'Usage: argus login\nAuthenticate the CLI. Reads ARGUS_CLI_USER + ARGUS_CLI_PASSWORD (or AUTH_USERNAME + AUTH_PASSWORD) from the environment and stores a session cookie. The password is never printed.',
+  'logout': 'Usage: argus logout\nClear the stored CLI session.',
+  'start': 'Usage: argus start [--enable-trading] [--dev]\nStart the Argus engine (headless daemon). Use `argus help` / ./argus for process-mode details.',
+  'stop': 'Usage: argus stop\nStop the Argus engine gracefully (waits for /health to stop answering).',
+  'restart': 'Usage: argus restart\nStop then start the engine.',
+  'watchdog-start': 'Usage: argus watchdog-start\nStart the detached auto-restart supervisor.',
+  'watchdog-stop': 'Usage: argus watchdog-stop\nStop the watchdog supervisor.',
+  'watchdog-restart': 'Usage: argus watchdog-restart\nRestart the watchdog supervisor.',
+  'watchdog-status': 'Usage: argus watchdog-status\nShow whether the watchdog is running and its PID.',
+  'status': 'Usage: argus status\nEngine runtime status (JSON).',
+  'health': 'Usage: argus health [--json]\nFull health report: runtime, broker, AI providers, Kronos/Chronos, QuantCore. --json prints pure JSON for scripting.',
+  'ready': 'Usage: argus ready\nLive-readiness snapshot (paper/live posture, gates).',
+  'wait-ready': 'Usage: argus wait-ready [--timeout-ms=N]\nBlock until the API answers /health (default timeout 240s). Prints progress.',
+  'resume': 'Usage: argus resume [--reason="..."]\nResume autonomous trading (operator-controlled; records the reason).',
+  'pause': 'Usage: argus pause [--reason="..."]\nPause autonomous trading (records the reason).',
+  'set-broker': 'Usage: argus set-broker <id>\nSwitch the active execution broker at runtime (e.g. alpaca, ibkr_gateway, internal_paper). Persists to settings.',
+  'brokers': 'Usage: argus brokers\nList broker capabilities and saved connections.',
+  'research-recommend': 'Usage: argus research-recommend [--strategy=<id>]\nShow research recommendations.',
+  'provider-health': 'Usage: argus provider-health\nAI provider pool health.',
+  'opportunity-snapshot': 'Usage: argus opportunity-snapshot [--limit=N]\nLatest opportunity snapshot.',
+  'execution-quality': 'Usage: argus execution-quality [--limit=N]\nExecution quality / slippage report.',
+  'trade-economic-attribution': 'Usage: argus trade-economic-attribution [--limit=N] [--scope=<scope>]\nPer-trade economic attribution.',
+  'daily-attribution': 'Usage: argus daily-attribution [--since=<date>]\nDaily P&L attribution.',
+  'forecast': 'Usage: argus forecast --agent=<agent> --symbol=<SYM> --direction=BUY|SELL [--strategyId=<id>] [--horizon=<h>]\nRequest a forecast from an agent (advisory only).',
+  'consensus-debate-health': 'Usage: argus consensus-debate-health [--hours=N]\nConsensus debate pipeline health.',
+  'consensus-report': 'Usage: argus consensus-report [--hours=N]\nConsensus report over the window.',
+  'risk-recent': 'Usage: argus risk-recent [--limit=N]\nRecent risk events.',
+  'trading-funnel': 'Usage: argus trading-funnel [--hours=N]\nTrading funnel conversion over the window.',
+  'quant-evidence': 'Usage: argus quant-evidence [--hours=N]\nQuant evidence summary.',
+  'portfolio-impact': 'Usage: argus portfolio-impact --symbol=<SYM> [--side=BUY|SELL] [--notional=1000] [--maxWeightPct=0.20] [--lookbackTradingDays=90]\nAdvisory-only portfolio impact estimate. Never places or sizes an order.',
+  'calibration-drift': 'Usage: argus calibration-drift\nCalibration drift report.',
+  'reflection-engine-health': 'Usage: argus reflection-engine-health\nReflection engine health.',
+  'extended-hours-spread': 'Usage: argus extended-hours-spread [--hours=N]\nExtended-hours spread diagnostics.',
+  'why-no-trade': 'Usage: argus why-no-trade [--symbol=<SYM>]\nExplain why Argus is not trading (blocking gates).',
+  'calibration-maturity': 'Usage: argus calibration-maturity\nCalibration maturity report.',
+  'agent-edge': 'Usage: argus agent-edge\nPer-agent edge estimates.',
+  'multi-horizon-outcomes': 'Usage: argus multi-horizon-outcomes\nMulti-horizon outcome tracking.',
+  'strategy-catalog': 'Usage: argus strategy-catalog\nStrategy catalog.',
+  'strategy-readiness': 'Usage: argus strategy-readiness\nStrategy readiness for promotion.',
+  'strategy-fairness': 'Usage: argus strategy-fairness\nStrategy fairness / comparison.',
+  'strategy-recertification': 'Usage: argus strategy-recertification\nStrategy recertification status.',
+  'strategy-score-normalization-comparison': 'Usage: argus strategy-score-normalization-comparison\nScore normalization comparison.',
+  'strategy-profitability': 'Usage: argus strategy-profitability\nStrategy profitability summary.',
+  'rescue-outcomes': 'Usage: argus rescue-outcomes\nRescue / intervention outcomes.',
+  'exploration-health': 'Usage: argus exploration-health\nExploration subsystem health.',
+  'rescue-occupants': 'Usage: argus rescue-occupants\nCurrent rescue occupants.',
+  'market-data-diagnostics': 'Usage: argus market-data-diagnostics [--symbols=AAPL,MSFT]\nMarket-data feed diagnostics.',
+  'ai-cost-governor': 'Usage: argus ai-cost-governor\nAI cost governor status.',
+  'discovery-challengers': 'Usage: argus discovery-challengers [--hours=N]\nDiscovery challenger strategies.',
+  'discovery-lineage': 'Usage: argus discovery-lineage --symbol=<SYM> [--hours=N]\nLineage of a discovered opportunity.',
+  'strategy-scorecard': 'Usage: argus strategy-scorecard\nStrategy scorecard.',
+  'pipeline-ready': 'Usage: argus pipeline-ready\nPipeline readiness check.',
+  'session-report': 'Usage: argus session-report\nSession report.',
+  'research': 'Usage: argus research <subcommand> [args]\nResearch intelligence (advisory only, never a trade). Run `argus research --help` for subcommands.',
+  'trading-audit': 'Usage: argus trading-audit\nTrading audit trail.',
+  'funnel': 'Usage: argus funnel <traceId>\nShow the trading funnel for a trace ID.',
+  'consensus-shadow': 'Usage: argus consensus-shadow [limit]\nLegacy-vs-shadow consensus divergence (shadow never influences real trades).',
+  'ranking': 'Usage: argus ranking [SYMBOL]\nLatest candidate ranking, or ranking history for SYMBOL.',
+  'subscription-queue': 'Usage: argus subscription-queue [decisions]\nSubscription priority queue snapshot; `decisions` shows promotion/eviction reasons.',
+  'trade-plan': 'Usage: argus trade-plan [date] [planId]\nPre-market trade plan (default: today); with planId shows revalidations.',
+  'missed-opportunities': 'Usage: argus missed-opportunities [sinceMs]\nDetected missed opportunities (default 24h lookback).',
+  'learning': 'Usage: argus learning <observations|versions|promotions|rollbacks|calibration [worker-status]> [args...]\nLearning / self-evolution observability.',
+  'session-lifecycle': 'Usage: argus session-lifecycle\nSession lifecycle snapshot + recent history.',
+  'config': 'Usage: argus config\nRuntime config (JSON).',
+  'paper-profile': 'Usage: argus paper-profile [--apply]\nPaper allocation profile. --apply requires confirmed PAPER mode, disabled Autobot and TRADING_PAUSED; otherwise dry-run.',
+  'positions': 'Usage: argus positions\nCurrent positions (JSON).',
+  'portfolio': 'Usage: argus portfolio\nPortfolio snapshot (JSON).',
+  'orders': 'Usage: argus orders\nRecent orders (JSON).',
+  'trades': 'Usage: argus trades\nRecent trades (JSON).',
+  'logs': 'Usage: argus logs\nRecent system logs (JSON, limit 50).',
+  'enable': 'Usage: argus enable\nEnable autonomous trading (operator-controlled).',
+  'disable': 'Usage: argus disable\nDisable autonomous trading (operator-controlled).',
+  'kill-switch': 'Usage: argus kill-switch --confirm [--reason="..."]\nEMERGENCY STOP: halts ALL trading immediately. Requires --confirm.',
+  'agents': 'Usage: argus agents\nPipeline agents and status.',
+  'events': 'Usage: argus events\nRecent system events (JSON, limit 50).',
+  'risk': 'Usage: argus risk\nRisk engine status.',
+  'quant-core': 'Usage: argus quant-core\nJava Quant Core connectivity and health.',
+  'parity': 'Usage: argus parity\nTS/Java shadow-parity divergences.',
+  'discovery': 'Usage: argus discovery\nContinuous-intelligence discovery status.',
+  'campaign': 'Usage: argus campaign\nDaily goal campaign status.',
+  'replay': 'Usage: argus replay <subcommand> [args]\nHistorical evaluation (MODE B). Run `argus replay help` for subcommands.',
+  'doctor': 'Usage: argus doctor\nEnvironment + API health checks (like `brew doctor`). Exits non-zero on critical failures.',
+  'completion': 'Usage: argus completion [bash|zsh]\nPrint a shell completion script for argus-cli command names.',
+  'help': 'Usage: argus help\nShow the categorized command list.',
+};
+
+/**
+ * Suggest similar command names for typos (git-style "did you mean?").
+ * Exported for tests.
+ */
+export function suggestCommands(input: string, names: string[], maxDistance = 3, maxResults = 3): string[] {
+  const distance = (a: string, b: string): number => {
+    const dp: number[][] = Array.from({ length: a.length + 1 }, (_, i) =>
+      Array.from({ length: b.length + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)),
+    );
+    for (let i = 1; i <= a.length; i++) {
+      for (let j = 1; j <= b.length; j++) {
+        dp[i][j] = Math.min(
+          dp[i - 1][j] + 1,
+          dp[i][j - 1] + 1,
+          dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+        );
+      }
+    }
+    return dp[a.length][b.length];
+  };
+  return names
+    .map((n) => ({ n, d: distance(input, n) }))
+    .filter(({ d }) => d > 0 && d <= maxDistance)
+    .sort((x, y) => x.d - y.d || x.n.localeCompare(y.n))
+    .slice(0, maxResults)
+    .map(({ n }) => n);
+}
 
 const commands: Record<string, () => Promise<void>> = {
   async version() {
@@ -922,7 +1076,7 @@ const commands: Record<string, () => Promise<void>> = {
    */
   async 'set-broker'() {
     const id = cliArgs()[0];
-    if (!id) throw new Error('Usage: argus-cli set-broker <id>  (e.g. alpaca, ibkr_gateway, internal_paper)');
+    if (!id) usageError('Usage: argus set-broker <id>  (e.g. alpaca, ibkr_gateway, internal_paper)');
     console.log(JSON.stringify(await fetchJson('/api/v1/brokers/active', {
       method: 'POST',
       body: JSON.stringify({ id }),
@@ -1496,8 +1650,7 @@ const commands: Record<string, () => Promise<void>> = {
   async funnel() {
     const traceId = cliArgs()[0];
     if (!traceId) {
-      console.log('Usage: argus funnel <traceId>');
-      return;
+      usageError('Usage: argus funnel <traceId>');
     }
     console.log(JSON.stringify(await fetchJson(`/api/v2/traces/${encodeURIComponent(traceId)}/funnel`), null, 2));
   },
@@ -1601,7 +1754,7 @@ const commands: Record<string, () => Promise<void>> = {
       console.log(JSON.stringify(await fetchJson('/api/v2/continuous-intelligence/learning/calibration/candidates'), null, 2));
       return;
     }
-    console.log('Usage: argus learning <observations|versions|promotions|rollbacks|calibration [worker-status]> [args...]');
+    usageError('Usage: argus learning <observations|versions|promotions|rollbacks|calibration [worker-status]> [args...]');
   },
   /** Phase 4J (Session Lifecycle persistence, 2026-08-27). Current snapshot + recent persisted history. */
   async 'session-lifecycle'() {
@@ -1637,9 +1790,23 @@ const commands: Record<string, () => Promise<void>> = {
     console.log(JSON.stringify(await fetchJson('/api/v2/runtime/trading/disable', { method: 'POST', body: '{}' }), null, 2));
   },
   async 'kill-switch'() {
+    // Safety: the emergency stop halts ALL trading immediately. It must never
+    // fire from a typo or a stray keypress — require explicit --confirm.
+    // (Industry standard for destructive one-shot commands: kubectl, terraform,
+    // gh all gate destroys behind --force/--confirm or interactive prompts.)
+    const args = process.argv.slice(3);
+    const reasonArg = args.find((a) => a.startsWith('--reason='));
+    const reason = reasonArg ? reasonArg.slice('--reason='.length) : 'CLI emergency stop';
+    if (!args.includes('--confirm')) {
+      usageError(
+        'Refusing to trigger the emergency stop without explicit confirmation.\n' +
+        'This halts ALL trading immediately. To proceed, run:\n' +
+        '  argus kill-switch --confirm [--reason="why"]',
+      );
+    }
     console.log(JSON.stringify(await fetchJson('/api/v1/system/emergency-stop', {
       method: 'POST',
-      body: JSON.stringify({ reason: 'CLI emergency stop' }),
+      body: JSON.stringify({ reason }),
     }), null, 2));
   },
   async agents() {
@@ -1719,8 +1886,22 @@ const commands: Record<string, () => Promise<void>> = {
   async replay() {
     const sub = cliArgs()[0];
     if (!sub || sub === 'run') return replayCommands.run();
+    if (sub === 'help' || sub === '--help' || sub === '-h') {
+      console.log([
+        'Usage: argus replay <subcommand> [args]',
+        '  list                      List historical evaluation runs',
+        '  run [--engine=node|java] [--universe=discovery|symbols|operator] [--symbols=AAPL,MSFT]',
+        '      [--capital=100000] [--start=2024-01-02] [--end=2024-12-31] [--provider=golden_replay]',
+        '                            Run a historical evaluation (MODE B)',
+        '  report <runId>            Show the evaluation report',
+        '  export <runId>            Export run artifacts',
+        '  analyze <runId>           Analyze a completed run',
+        '  diagnostics <runId>       Run diagnostics on a run',
+      ].join('\n'));
+      return;
+    }
     const handler = replayCommands[sub];
-    if (!handler) throw new Error(`Unknown replay subcommand: ${sub}`);
+    if (!handler) usageError(`Unknown replay subcommand: ${sub}\nRun 'argus replay help' for the subcommand list.`);
     return handler();
   },
   /**
@@ -1729,6 +1910,102 @@ const commands: Record<string, () => Promise<void>> = {
    * command-hierarchy rewrite - every name below still works exactly as a top-level `argus <name>`
    * invocation.
    */
+  /**
+   * doctor — environment + API health checks in the `brew doctor` tradition.
+   * Lets a headless operator (no browser UI) verify the machine is fit to run
+   * Argus. Pure Node (no bash), so it works on Windows too — unlike ./argus doctor.
+   * Exit 0: no critical failures. Exit 1: at least one critical failure.
+   */
+  async doctor() {
+    const { execFileSync } = await import('node:child_process');
+    let crit = 0;
+    let warn = 0;
+    const ok = (msg: string) => console.log(`PASS  ${msg}`);
+    const bad = (msg: string) => { console.log(`FAIL  ${msg}`); crit++; };
+    const meh = (msg: string) => { console.log(`WARN  ${msg}`); warn++; };
+    console.log('ARGUS DOCTOR');
+    console.log('');
+
+    // Runtime
+    try {
+      const v = execFileSync(process.execPath, ['--version'], { encoding: 'utf8' }).trim();
+      ok(`node ${v}`);
+    } catch { bad('node is not runnable'); }
+    try {
+      execFileSync('npm', ['--version'], { encoding: 'utf8', stdio: 'pipe' });
+      ok('npm available');
+    } catch { bad('npm missing'); }
+
+    // Repo layout
+    if (existsSync(join(ROOT, 'node_modules'))) ok('dependencies installed (node_modules present)');
+    else bad('dependencies missing (run npm install / npm ci)');
+    if (existsSync(join(ROOT, '.env'))) ok('.env present (values never printed)');
+    else meh('.env not found (copy from .env.example)');
+    if (existsSync(join(ROOT, 'dist', 'server.cjs'))) ok('production build present (dist/server.cjs)');
+    else meh('production build missing (optional for dev/tsx mode)');
+
+    // API reachability (short probe, never the full 20s CLI timeout)
+    try {
+      const probe = await fetch(`${apiBase()}/api/v2/runtime/health`, {
+        signal: AbortSignal.timeout(3000),
+        headers: cliAuthHeaders(),
+      });
+      if (probe.ok) ok(`API reachable at ${apiBase()} (runtime health OK)`);
+      else if (probe.status === 401 || probe.status === 403) meh(`API reachable but requires auth (run: argus login)`);
+      else meh(`API answered HTTP ${probe.status} on health probe`);
+    } catch {
+      meh(`API not reachable at ${apiBase()} (engine may be stopped — see: argus wait-ready)`);
+    }
+
+    // Engine pid file
+    const pidFile = join(ROOT, 'data', '.argus_engine.pid');
+    if (existsSync(pidFile)) {
+      const pid = Number(readFileSync(pidFile, 'utf8').trim());
+      let alive = false;
+      try { process.kill(pid, 0); alive = true; } catch { /* not alive */ }
+      if (pid > 0 && alive) ok(`engine PID file valid (pid ${pid} alive)`);
+      else meh('engine PID file stale (process not running)');
+    } else {
+      meh('no engine PID file (engine not started via CLI)');
+    }
+
+    // CLI session
+    if (existsSync(SESSION_PATH)) ok(`CLI session file present (${SESSION_PATH})`);
+    else meh('no CLI session file (run: argus login)');
+
+    console.log('');
+    console.log(`doctor: ${crit} critical, ${warn} warnings`);
+    if (crit > 0) process.exitCode = 1;
+  },
+  /**
+   * Print a shell completion script for argus-cli command names.
+   * Install: `argus completion bash >> ~/.bashrc` (or `zsh >> ~/.zshrc`).
+   */
+  async completion() {
+    const shell = (cliArgs()[0] || 'bash').toLowerCase();
+    const names = Object.keys(commands).sort().join(' ');
+    if (shell === 'zsh') {
+      console.log([
+        '#compdef argus',
+        '_argus() {',
+        '  local -a cmds',
+        `  cmds=(${Object.keys(commands).sort().join(' ')})`,
+        '  _describe "argus commands" cmds',
+        '}',
+        'compdef _argus argus',
+      ].join('\n'));
+      return;
+    }
+    // bash (default)
+    console.log([
+      '# argus-cli bash completion: argus completion bash >> ~/.bashrc',
+      '_argus_complete() {',
+      '  local cur="${COMP_WORDS[COMP_CWORD]}"',
+      `  COMPREPLY=($(compgen -W "${names}" -- "$cur"))`,
+      '}',
+      'complete -F _argus_complete argus',
+    ].join('\n'));
+  },
   async help() {
     console.log('Argus CLI - HTTP client only. Never imports RiskEngine/OMS/BrokerManager directly.\n');
     const groups: Array<[string, string[]]> = [
@@ -1741,6 +2018,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'trade-economic-attribution', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'discovery-challengers', 'strategy-scorecard', 'market-data-diagnostics', 'quant-evidence', 'reflection-engine-health', 'portfolio-impact']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
+      ['Doctor & shell integration', ['doctor', 'completion']],
     ];
     for (const [label, names] of groups) {
       const present = names.filter((n) => n in commands);
@@ -1751,6 +2029,11 @@ const commands: Record<string, () => Promise<void>> = {
     if (ungrouped.length > 0) console.log(`Other:\n  ${ungrouped.join(', ')}\n`);
   },
 };
+
+/** All registered command names — used by completion, help coverage tests, etc. */
+export function commandNames(): string[] {
+  return Object.keys(commands);
+}
 
 // Real bug found and fixed (2026-09-04, exposed by argus-cli.spawn.test.ts - the first test ever
 // to import this file as a module rather than only running it as a script): this dispatch used to
@@ -1763,23 +2046,51 @@ const commands: Record<string, () => Promise<void>> = {
 // check would: only run when this file is the actual entry point Node was invoked with.
 const isMainModule = process.argv[1] != null && fileURLToPath(import.meta.url) === process.argv[1];
 if (isMainModule) {
-  const cmd = process.argv[2] || 'status';
-  if (cmd === '--help' || cmd === '-h') {
-    await commands.help();
-    process.exit(0);
+  const rawArgs = process.argv.slice(2);
+  // Global flags (accepted before or after the command name).
+  const apiUrlFlag = rawArgs.find((a) => a.startsWith('--api-url='));
+  if (apiUrlFlag) setApiBaseOverride(apiUrlFlag.slice('--api-url='.length));
+
+  const cmd = rawArgs.find((a) => !a.startsWith('--')) || 'status';
+  const onlyFlags = !rawArgs.some((a) => !a.startsWith('--'));
+  if (onlyFlags) {
+    // `argus --help` / `argus --version` with no command name.
+    if (rawArgs.includes('--help') || rawArgs.includes('-h')) {
+      await commands.help();
+      process.exit(0);
+    }
+    if (rawArgs.includes('--version') || rawArgs.includes('-v')) {
+      await commands.version();
+      process.exit(0);
+    }
+    // Otherwise fall through to the default command (status).
   }
   if (!commands[cmd]) {
     console.error(`Unknown command: ${cmd}`);
-    console.error(`Available: ${Object.keys(commands).join(', ')}`);
+    const suggestions = suggestCommands(cmd, Object.keys(commands));
+    if (suggestions.length > 0) {
+      console.error(`Did you mean: ${suggestions.join(', ')}?`);
+    }
     console.error(`Run "argus help" for a categorized list.`);
     process.exit(1);
   }
 
+  // Per-command help: `argus <cmd> --help`. Commands with richer native help
+  // (research, replay) handle --help themselves and are excluded here.
+  const rest = process.argv.slice(3);
+  if ((rest.includes('--help') || rest.includes('-h')) && cmd !== 'research' && cmd !== 'replay') {
+    const entry = COMMAND_HELP[cmd];
+    if (entry) {
+      console.log(entry);
+      process.exit(0);
+    }
+  }
+
   commands[cmd]().catch((e) => {
     console.error(e.message || e);
-    if (e instanceof AuthRequiredError || (e && typeof e === 'object' && 'exitCode' in e && (e as { exitCode: number }).exitCode === EXIT_AUTH)) {
-      process.exit(EXIT_AUTH);
-    }
-    process.exit(1);
+    const code = e && typeof e === 'object' && 'exitCode' in e && typeof (e as { exitCode: unknown }).exitCode === 'number'
+      ? (e as { exitCode: number }).exitCode
+      : 1;
+    process.exit(code);
   });
 }

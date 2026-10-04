@@ -267,10 +267,23 @@ These commands do **not** bypass Argus safety protections. RiskEngine gates, tra
 ## 6. Emergency stop
 
 ```bash
-./argus kill-switch
+npm run argus-cli -- kill-switch --confirm [--reason="why"]
 ```
 
-Uses the existing engine kill-switch. The CLI does not implement a separate kill switch.
+Requires explicit `--confirm` — the emergency stop halts ALL trading immediately
+and must never fire from a typo. Uses the existing engine kill-switch. The CLI does not implement a separate kill switch.
+
+---
+
+## 6a. CLI conventions (2026-10-04)
+
+* `argus <command> --help` prints per-command usage (all 85 commands are self-documenting).
+* `argus --api-url=http://host:port <command>` overrides `ARGUS_API_URL` for one invocation.
+* `argus --version` prints the CLI version.
+* Unknown commands get `Did you mean: ...?` suggestions.
+* Exit codes: `0` success · `1` runtime failure · `2` usage error (bad/missing args) · `5` authentication required.
+* `argus doctor` runs environment + API health checks (`brew doctor` style); exits non-zero on critical failures.
+* `argus completion [bash|zsh]` prints a shell completion script: `argus completion bash >> ~/.bashrc`.
 
 ---
 
