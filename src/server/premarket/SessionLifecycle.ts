@@ -253,6 +253,7 @@ class SessionLifecycleManager {
     this.stop();
     this.current = null;
     this.lastPremarketFiredForDate = null;
+    this.lastPersistedSnapshotKey = null;
   }
 }
 

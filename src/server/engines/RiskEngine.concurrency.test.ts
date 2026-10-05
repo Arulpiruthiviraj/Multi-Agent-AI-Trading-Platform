@@ -30,14 +30,21 @@ const { mockDb, state, resetState } = vi.hoisted(() => {
       return Promise.resolve(getRows(this._table)).then(resolve, reject);
     },
   };
-  const mockDb = {
+  const mockDb: any = {
     select: () => builder.from(null),
     insert: (table: any) => ({
       values: (rowOrRows: any) => {
-        const rows = getRows(table);
-        if (Array.isArray(rowOrRows)) rows.push(...rowOrRows);
-        else rows.push(rowOrRows);
-        return Promise.resolve({});
+        const push = () => {
+          const rows = getRows(table);
+          if (Array.isArray(rowOrRows)) rows.push(...rowOrRows);
+          else rows.push(rowOrRows);
+        };
+        return {
+          // Synchronous path for db.transaction((tx) => { tx.insert(...).values(...).run(); }),
+          // matching better-sqlite3's real transaction semantics (RiskEngine.persistAssessment).
+          run: () => { push(); },
+          then: (resolve: any, reject: any) => { push(); return Promise.resolve({}).then(resolve, reject); },
+        };
       },
     }),
     update: (table: any) => ({
@@ -51,6 +58,7 @@ const { mockDb, state, resetState } = vi.hoisted(() => {
         },
       }),
     }),
+    transaction: (cb: (tx: any) => void) => cb(mockDb),
   };
   const resetState = () => state.tables.clear();
   return { mockDb, state, resetState };
