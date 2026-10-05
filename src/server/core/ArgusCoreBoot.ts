@@ -302,6 +302,17 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
   }
 
   try {
+    // 2026-10-05: paper-verification wiring for the institutional signal strategies.
+    // No-op unless QUANT_JAVA_CORE_ENABLED=true AND a strategy's own
+    // ARGUS_*_VOTE_ENABLED flag is true (all default false) - see
+    // InstitutionalStrategyVoteService.ts's header for the full gating chain.
+    const { institutionalStrategyVoteService } = await import('../services/InstitutionalStrategyVoteService');
+    institutionalStrategyVoteService.start();
+  } catch (e: any) {
+    console.warn(`[InstitutionalStrategyVoteService] Boot start failed: ${e.message}`);
+  }
+
+  try {
     const { modelRuntimeManager } = await import('../ai/ModelRuntimeManager');
     const models = await modelRuntimeManager.startAndProbe();
     for (const m of models) {

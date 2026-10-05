@@ -38,6 +38,14 @@ const runtimes: Record<string, AgentRuntime> = {
   // inline isPipelineAgentEnabled('JavaCoreEnsemble') check inside
   // JavaCoreEnsembleVoteService.emitJavaCoreEnsembleVoteIfEligible() itself.
   JavaCoreEnsemble: { start: () => { /* gated inline in emitJavaCoreEnsembleVoteIfEligible() */ }, stop: () => { /* same */ } },
+  // No independent worker (same shape as JavaFactorComposite above) - the round-robin
+  // evaluation timer is owned/started by InstitutionalStrategyVoteService itself via
+  // ArgusCoreBoot (gated on QUANT_JAVA_CORE_ENABLED plus each strategy's own
+  // ARGUS_*_VOTE_ENABLED flag). The real gate is the inline isPipelineAgentEnabled()
+  // check inside emitVoteIfEligible() - 2026-10-05 paper-verification wiring.
+  VolScaledMtfMomentum: { start: () => { /* gated inline in emitVoteIfEligible() */ }, stop: () => { /* same */ } },
+  TsMomentum12M: { start: () => { /* gated inline in emitVoteIfEligible() */ }, stop: () => { /* same */ } },
+  MultiFactorMomentum: { start: () => { /* gated inline in emitVoteIfEligible() */ }, stop: () => { /* same */ } },
 };
 
 let ideaWorkersArmed = false;

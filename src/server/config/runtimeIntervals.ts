@@ -56,6 +56,8 @@ export interface RuntimeIntervals {
   autoTradeSchedulerMs: number;
   strategyEngineShadowMs: number;
   javaQuantAdvisoryMs: number;
+  /** 2026-10-05: InstitutionalStrategyVoteService round-robin cadence (one symbol per tick). */
+  institutionalStrategyVoteMs: number;
   aiProviderHealthCheckMs: number;
   /** How often the live SessionLifecycle worker re-classifies PRE_MARKET/REGULAR/AFTER_HOURS/CLOSED. */
   sessionLifecycleEvalMs: number;
@@ -95,7 +97,7 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'eventStoreMaxRecentEvents', 'eventStoreMaxTraces', 'eventStoreSchemaVersion',
   'agentActivityWindowMs', 'opportunityWindowHours', 'omsFollowUpMinAgeMs', 'omsFollowUpIntervalMs',
   'omsPollForFillTimeoutMs', 'omsPollForFillIntervalMs', 'autoTradeSchedulerMs', 'strategyEngineShadowMs',
-  'javaQuantAdvisoryMs', 'aiProviderHealthCheckMs', 'sessionLifecycleEvalMs', 'calibrationValidationCycleMs',
+  'javaQuantAdvisoryMs', 'institutionalStrategyVoteMs', 'aiProviderHealthCheckMs', 'sessionLifecycleEvalMs', 'calibrationValidationCycleMs',
   'heartbeatWatchdogCheckMs', 'cryptoMarketDataIngestionMs',
   'candidateRankingsRetentionDays', 'candidateRankingsRetentionSweepMs',
   'candidateRankingsRetentionSweepBatchSize', 'candidateRankingsRetentionSweepMaxBatchesPerCall',

@@ -51,6 +51,24 @@
       "label": "Java CORE-Strategy Ensemble Vote",
       "description": "One TRADE_IDEA_GENERATED per QuantSignalAgent cycle from CoreStrategyRunner's real, canonical-bar-owning 5-CORE-strategy ensemble (RangeReversion/PullbackContinuation/MeanReversion/TrendFollowing/MomentumBreakout, correlation-adjusted via QuantEnsembleEngine.java) when status=HEALTHY, direction is not HOLD, and confidence clears javaCoreEnsembleVoteMinConfidence. Requires ARGUS_JAVA_CORE_ENSEMBLE_VOTE_ENABLED=true (2026-09-10, explicit operator override of this codebase's own documented shadow-tracking precondition - see JavaCoreEnsembleVoteService.ts's own header). A distinct signal source from JavaFactorComposite above - different Java engine, different features, no double-counting.",
       "requiresEnv": "ARGUS_JAVA_CORE_ENSEMBLE_VOTE_ENABLED"
+    },
+    {
+      "id": "VolScaledMtfMomentum",
+      "label": "Vol-Scaled MTF Momentum Vote",
+      "description": "One TRADE_IDEA_GENERATED per round-robin evaluation from Java's INSTITUTIONAL_VOL_SCALED_MTF_MOMENTUM (AQR-style vol-scaled 20/60d momentum, requires timeframe confluence and vol stability) when triggerMet and confidence clears javaQuantVoteMinConfidence. Requires ARGUS_VOL_SCALED_MTF_MOMENTUM_VOTE_ENABLED=true (2026-10-05). Paper-verification wiring; not profitability evidence.",
+      "requiresEnv": "ARGUS_VOL_SCALED_MTF_MOMENTUM_VOTE_ENABLED"
+    },
+    {
+      "id": "TsMomentum12M",
+      "label": "12-1 Time-Series Momentum Vote",
+      "description": "One TRADE_IDEA_GENERATED per round-robin evaluation from Java's INSTITUTIONAL_TS_MOMENTUM_12M (Moskowitz-Ooi-Pedersen 12-1 formation, skip-month reversal guard) when triggerMet and confidence clears javaQuantVoteMinConfidence. Requires ARGUS_TS_MOMENTUM_12M_VOTE_ENABLED=true (2026-10-05). Paper-verification wiring; not profitability evidence.",
+      "requiresEnv": "ARGUS_TS_MOMENTUM_12M_VOTE_ENABLED"
+    },
+    {
+      "id": "MultiFactorMomentum",
+      "label": "Multi-Factor Momentum Vote",
+      "description": "One TRADE_IDEA_GENERATED per round-robin evaluation from Java's INSTITUTIONAL_MULTI_FACTOR_MOMENTUM (existing institutional strategy, previously unwired) when triggerMet and confidence clears javaQuantVoteMinConfidence. Requires ARGUS_MULTI_FACTOR_MOMENTUM_VOTE_ENABLED=true (2026-10-05). Paper-verification wiring; not profitability evidence.",
+      "requiresEnv": "ARGUS_MULTI_FACTOR_MOMENTUM_VOTE_ENABLED"
     }
   ],
   "alwaysOn": [

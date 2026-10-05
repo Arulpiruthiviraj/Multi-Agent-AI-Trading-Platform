@@ -643,6 +643,31 @@ consolidation, not a fresh re-derivation, of two still-standalone audits:
 `docs/audits/JAVA_MIGRATION_COMPLETION_PLAN_SUPPLEMENT.md` (both out of scope here — cited, not
 restated).
 
+### 2026-10-05 — Institutional strategies wired to paper verification
+
+Two new institutional signal strategies implemented in Java (from a literature survey —
+Moskowitz-Ooi-Pedersen 2012, AQR vol-scaling practice, Daniel-Moskowitz momentum-crash
+research): `INSTITUTIONAL_VOL_SCALED_MTF_MOMENTUM` (20/60d drift, vol-normalized, confluence +
+vol-stability gates) and `INSTITUTIONAL_TS_MOMENTUM_12M` (12-1 formation, 21d skip, reversal
+guard). A third existing-but-unwired strategy, `INSTITUTIONAL_MULTI_FACTOR_MOMENTUM`, was
+included. All three are reachable via the generic
+`/api/v1/institutional/strategy/{strategyId}/{symbol}` dispatcher (new default case routes
+any `StrategyRegistry.INSTITUTIONAL` id through `evaluateInstitutional` and serializes the
+`StrategyEvaluation`).
+
+New `src/server/services/InstitutionalStrategyVoteService.ts` emits at most one independent
+`TRADE_IDEA_GENERATED` vote per strategy evaluation, gated on: strategy env flag
+(`ARGUS_VOL_SCALED_MTF_MOMENTUM_VOTE_ENABLED` / `ARGUS_TS_MOMENTUM_12M_VOTE_ENABLED` /
+`ARGUS_MULTI_FACTOR_MOMENTUM_VOTE_ENABLED`, all default `false`), Mission Control agent
+toggle, `isLiveIdeaGenerationEnabled()`, Java `triggerMet`, confidence >=
+`javaQuantVoteMinConfidence` (0.6), valid price. Downstream spine (ChiefTrader 0.75 bar,
+min-2-agents, all RiskEngine gates, OMS, PAPER-only) is unchanged. `INSTITUTIONAL_STAT_ARB`
+is deliberately excluded — pairs need a pair universe and short-selling.
+
+This is PAPER_TESTING infrastructure for the quant research program
+(`docs/research/quant-program/CHARTER.md`), not a profitability claim. 9 unit tests pass;
+Java compilation still unverified on this host (no JDK).
+
 ### The one-paragraph version (current state)
 
 `quant-core-java/` is a standalone Java 26 process (loopback-only, port 8085) that computes

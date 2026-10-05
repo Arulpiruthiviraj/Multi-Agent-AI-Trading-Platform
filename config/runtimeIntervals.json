@@ -44,6 +44,7 @@
   "autoTradeSchedulerMs": 60000,
   "strategyEngineShadowMs": 300000,
   "javaQuantAdvisoryMs": 90000,
+  "institutionalStrategyVoteMs": 120000,
   "aiProviderHealthCheckMs": 180000,
   "sessionLifecycleEvalMs": 60000,
   "calibrationValidationCycleMs": 900000,

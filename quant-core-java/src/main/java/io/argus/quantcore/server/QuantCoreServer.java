@@ -43,6 +43,7 @@ import io.argus.quantcore.logging.StructuredLogger;
 import io.argus.quantcore.logging.TraceContext;
 import io.argus.quantcore.server.json.Json;
 import io.argus.quantcore.strategy.StrategyRegistry;
+import io.argus.quantcore.strategy.institutional.InstitutionalStrategyContext;
 import io.argus.quantcore.strategy.types.StrategyContext;
 import io.argus.quantcore.strategy.types.StrategyEvaluation;
 
@@ -1713,7 +1714,29 @@ public final class QuantCoreServer {
                 out.put("evidence", java.util.List.of(result.evidence()));
             }
             default -> {
-                return null;
+                // Institutional signal strategies (StrategyRegistry.INSTITUTIONAL) are exposed
+                // generically: single-symbol context from the posted bars, StrategyEvaluation
+                // serialized below. Unregistered IDs still return null (404 upstream). Pair-based
+                // strategies (e.g. INSTITUTIONAL_STAT_ARB) receive a null pair and return
+                // no-signal by construction until a pair-aware caller is built.
+                if (!StrategyRegistry.isInstitutionalStrategy(strategyId)) {
+                    return null;
+                }
+                var instCtx = InstitutionalStrategyContext.singleSymbol(symbol, bars);
+                var instEval = StrategyRegistry.evaluateInstitutional(strategyId, instCtx);
+                if (instEval.isEmpty()) {
+                    return null;
+                }
+                var e = instEval.get();
+                out.put("side", e.side().name());
+                out.put("setupScore", (double) e.setupScore());
+                out.put("confidence", e.confidence());
+                out.put("triggerMet", e.triggerMet());
+                out.put("conditionsMet", new java.util.ArrayList<>(e.conditionsMet()));
+                out.put("conditionsFailed", new java.util.ArrayList<>(e.conditionsFailed()));
+                out.put("contradictions", new java.util.ArrayList<>(e.contradictions()));
+                out.put("invalidationConditions", new java.util.ArrayList<>(e.invalidationConditions()));
+                out.put("applicableRegimes", new java.util.ArrayList<>(e.applicableRegimes()));
             }
         }
         return out;

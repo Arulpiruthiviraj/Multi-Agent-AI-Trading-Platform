@@ -137,6 +137,12 @@ async function performDrain(handles: ShutdownHandles): Promise<void> {
     failed('[gracefulShutdown] Failed to stop JavaQuantAdvisoryService', e);
   }
   try {
+    const { institutionalStrategyVoteService } = await import('../services/InstitutionalStrategyVoteService');
+    institutionalStrategyVoteService.stop();
+  } catch (e) {
+    failed('[gracefulShutdown] Failed to stop InstitutionalStrategyVoteService', e);
+  }
+  try {
     const { calibrationValidationWorker } = await import('../continuous/CalibrationValidationWorker');
     calibrationValidationWorker.stop();
   } catch (e) {
