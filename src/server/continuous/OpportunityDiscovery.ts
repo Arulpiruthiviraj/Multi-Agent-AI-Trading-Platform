@@ -23,7 +23,7 @@ import { upsertCandidate, expireStaleCandidates } from './candidateLifecycle';
 import { recordCandidate } from '../core/recentCandidateRegistry';
 import { tradingSafety } from '../config/tradingSafety';
 import { getCachedBroadUniverseCandidatesWithVolume, getCachedBroadUniverseGapPct, getCachedBroadUniverseSnapshotFetchedAt, getCachedMoverSymbols, getCachedNewsCatalystSymbols, marketUniverseScannerWorker } from './MarketUniverseScanner';
-import { selectBroadUniverseCandidates } from './BroadUniverseSubscriptionAllocator';
+import { selectBroadUniverseCandidates, getAllocationRecord } from './BroadUniverseSubscriptionAllocator';
 import {
   getLastComposableScore,
   getLastSnapshotScore,
@@ -116,10 +116,52 @@ export function getOpportunityScanUniverse(): string[] {
   // deterministic, aging-aware selection that still favors liquidity but guarantees an eligible
   // candidate cannot be skipped forever. Same admitted-candidate pool, same final cap
   // (broadUniverseTopNPerScan) - only the selection rule inside that cap changed.
+  const broadUniverseConsidered = getCachedBroadUniverseCandidatesWithVolume();
   const broadUniverseSelected = selectBroadUniverseCandidates(
-    getCachedBroadUniverseCandidatesWithVolume(),
+    broadUniverseConsidered,
     continuousIntelligence.broadUniverseTopNPerScan,
   ).map((r) => r.symbol);
+  // 2026-10-05 (Admitted -> Challenger Eligibility Gap Forensic): this top-N cap is the exact,
+  // previously-silent point where an ADV-admitted broad-universe candidate (e.g. MPWR, confirmed
+  // live: admitted into the broad-universe cache twice on 2026-10-05 but never once selected here,
+  // so it never reached `shortlist`, the challenger scorer, or any subscription attempt - zero
+  // observability anywhere on that path). listAllocationRecords()/getAllocationRecord() already
+  // track exactly who got excluded and why (LIQUIDITY_RANK vs AGING_FAIRNESS, cyclesSkipped), but
+  // nothing ever logged it. Pure additive observability - does not change selection, the top-N
+  // cap, the aging formula, or any candidate's actual eligibility; wrapped in observeSafe so a
+  // logging failure can never affect the returned universe (including this function's existing
+  // synchronous test callers, which only assert on the return value).
+  if (broadUniverseConsidered.length > broadUniverseSelected.length) {
+    const selectedSet = new Set(broadUniverseSelected);
+    const excluded = broadUniverseConsidered.filter((c) => !selectedSet.has(c.symbol));
+    observeSafe(() => {
+      const round4 = (n: number): number => Math.round(n * 10000) / 10000;
+      structuredLogger.info('broad_universe_topn_truncated', {
+        category: 'DISCOVERY',
+        eventType: 'BROAD_UNIVERSE_TOPN_TRUNCATED',
+        reasoning: `admitted=${broadUniverseConsidered.length} selected=${broadUniverseSelected.length} `
+          + `excluded=${excluded.length} capacity=${continuousIntelligence.broadUniverseTopNPerScan}`,
+        admittedCount: broadUniverseConsidered.length,
+        selectedCount: broadUniverseSelected.length,
+        excludedCount: excluded.length,
+        capacity: continuousIntelligence.broadUniverseTopNPerScan,
+        // Bounded detail (top 25 by dollar volume among the excluded) - real values only, never
+        // the full excluded list unbounded.
+        excludedSample: excluded
+          .sort((a, b) => b.dollarVolume - a.dollarVolume)
+          .slice(0, 25)
+          .map((c) => {
+            const record = getAllocationRecord(c.symbol);
+            return {
+              symbol: c.symbol,
+              dollarVolume: round4(c.dollarVolume),
+              cyclesSkipped: record?.cyclesSkipped ?? null,
+              cyclesEligible: record?.cyclesEligible ?? null,
+            };
+          }),
+      });
+    });
+  }
   const names = [
     ...continuousIntelligence.seedSymbols,
     ...continuousIntelligence.watchUniverseSymbols,
