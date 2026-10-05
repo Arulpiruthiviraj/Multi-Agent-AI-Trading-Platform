@@ -222,7 +222,14 @@ export async function getAIProviderHealthSnapshot(): Promise<AIProviderHealthRec
       const decrypted = row.apiKeyEncrypted ? EncryptionService.decrypt(row.apiKeyEncrypted) : envKeyForProviderName(row.providerName);
       credentialPresent = !isPlaceholderApiKey(decrypted);
     } catch {
-      credentialPresent = false;
+      // DB key present but undecryptable (e.g. ENCRYPTION_SECRET was rotated) —
+      // fall back to the env key instead of reporting the provider unconfigured.
+      // The env file is a supported credential source (see envKeyForProviderName).
+      try {
+        credentialPresent = !isPlaceholderApiKey(envKeyForProviderName(row.providerName));
+      } catch {
+        credentialPresent = false;
+      }
     }
     const endpointHint = row.apiEndpoint || '';
     const isLocal = endpointHint.includes('localhost') || endpointHint.includes('127.0.0.1');

@@ -61,6 +61,15 @@ const trackEvent = (type: string) => (payload: any) => {
     || String(payload?.traceId || '').startsWith('telemetry-pulse-'));
   const correlationId: string | null = payload?.traceId || payload?.trace_id || payload?.correlationId || null;
   const transactionId: string | null = payload?.transactionId ?? null;
+  // Fast path for the hot tick family (every market-data tick): the payload is always the fixed
+  // flat {symbol, price, volume, timestamp} schema (see EventBus.emitMarketData and
+  // telemetryPulse.ts) which can never carry secrets, so the deep-clone + 4-regex redaction
+  // (measured ~21us/tick) is pure overhead. A shallow copy suffices - all values are primitives,
+  // so it isolates the ring entry from later subscriber mutation exactly like the deep clone
+  // would for this schema. The envelope still lands in the in-memory ring, so eventsPerSec and
+  // GET /api/v2/system/events behave exactly as before.
+  const isHotTick = type === EVENTS.MARKET_DATA || type === EVENTS.MARKET_DATA_UPDATED;
+  const redactedPayload = isHotTick ? { ...payload } : redactSecretsDeep(payload);
   // Real bug found and fixed this pass: this envelope's payload used to be stored/persisted
   // completely raw. queryTraces.ts's getDecisionTrace() redacts on its own read path, but three
   // other live routes (GET /api/v1/system/event-traces, GET /api/v2/system/events,
@@ -69,8 +78,8 @@ const trackEvent = (type: string) => (payload: any) => {
   // payload (e.g. an upstream fetch error string embedding a query-string API key) was persisted
   // in cleartext and served to any caller of those endpoints. Redacting once here, at write time,
   // protects every current and future read path uniformly instead of relying on each one to
-  // remember to redact independently.
-  const redactedPayload = redactSecretsDeep(payload);
+  // remember to redact independently. (Hot-tick payloads take the shallow-copy fast path above
+  // instead - their fixed schema cannot carry secrets.)
   const envelope: EventEnvelope = {
     eventId: uuidv4(),
     schemaVersion: SCHEMA_VERSION,

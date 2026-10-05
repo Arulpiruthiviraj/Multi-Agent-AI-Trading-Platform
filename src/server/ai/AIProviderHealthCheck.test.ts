@@ -312,4 +312,36 @@ describe('AIProviderHealthCheck', () => {
       vi.useRealTimers();
     }
   });
+
+  it('falls back to the env key when the DB-encrypted key is undecryptable (secret rotation)', async () => {
+    // Regression: after an ENCRYPTION_SECRET rotation, DB rows still carry the old
+    // ciphertext. The snapshot must consult the env fallback instead of reporting
+    // CONFIG_MISSING when a usable env key exists.
+    decrypt.mockImplementation(() => {
+      throw new Error('decryption failed');
+    });
+    process.env.GEMINI_API_KEY = 'env-managed-real-key-abcdef123456';
+    try {
+      dbRows.current = [dbRow({ providerName: 'Gemini', apiKeyEncrypted: 'stale-ciphertext' })];
+      const snapshot = await getAIProviderHealthSnapshot();
+      const rec = snapshot.find(r => r.providerId === 'p1')!;
+      expect(rec.credentialPresent).toBe(true);
+      expect(rec.configured).toBe(true);
+      expect(rec.status).not.toBe('CONFIG_MISSING');
+    } finally {
+      delete process.env.GEMINI_API_KEY;
+    }
+  });
+
+  it('still reports CONFIG_MISSING when neither DB nor env has a usable key', async () => {
+    decrypt.mockImplementation(() => {
+      throw new Error('decryption failed');
+    });
+    delete process.env.GEMINI_API_KEY;
+    dbRows.current = [dbRow({ providerName: 'Gemini', apiKeyEncrypted: 'stale-ciphertext' })];
+    const snapshot = await getAIProviderHealthSnapshot();
+    const rec = snapshot.find(r => r.providerId === 'p1')!;
+    expect(rec.credentialPresent).toBe(false);
+    expect(rec.status).toBe('CONFIG_MISSING');
+  });
 });

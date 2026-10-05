@@ -1,6 +1,8 @@
 import React from 'react';
 import { UnavailableHint } from '../UnavailableHint';
 import { ResponsiveDataCards, type DataColumn } from './ResponsiveDataCards';
+import { PriceFlash } from '../shared/PriceFlash';
+import { AnimatedNumber } from '../shared/AnimatedNumber';
 
 export type PositionRow = {
   symbol: string;
@@ -53,17 +55,23 @@ const columns: DataColumn<PositionRow>[] = [
       !Number.isFinite(p.unrealizedPnl) || !Number.isFinite(p.unrealizedPnlPercent) ? (
         <UnavailableHint reason="No real cost basis and/or live price for this position yet - P&L is not computed from a fabricated $0.">--</UnavailableHint>
       ) : (
-        <span className={`font-semibold ${p.isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
-          {p.isPositive ? '+' : ''}${p.unrealizedPnl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-          {' '}({p.isPositive ? '+' : ''}{(p.unrealizedPnlPercent as number).toFixed(2)}%)
-        </span>
+        <PriceFlash value={p.unrealizedPnl} className="inline-block px-1 -mx-1">
+          <span className={`font-semibold ${p.isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {p.isPositive ? '+' : ''}${p.unrealizedPnl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            {' '}({p.isPositive ? '+' : ''}{(p.unrealizedPnlPercent as number).toFixed(2)}%)
+          </span>
+        </PriceFlash>
       )
     ),
   },
   { key: 'sector', header: 'Sector', render: (p) => p.sector || <UnavailableHint reason="No GICS/sector field on this broker position row.">--</UnavailableHint> },
   { key: 'shares', header: 'Shares', render: (p) => Number.isFinite(p.quantity) ? p.quantity : <UnavailableHint reason="No share quantity on this broker position row.">--</UnavailableHint> },
   { key: 'entry', header: 'Entry Price', render: (p) => Number.isFinite(p.entryPrice) ? `$${p.entryPrice.toFixed(2)}` : <UnavailableHint reason="No entry price on this broker position row.">--</UnavailableHint> },
-  { key: 'live', header: 'Live Price', render: (p) => p.livePrice !== null ? `$${p.livePrice.toFixed(2)}` : <UnavailableHint reason="No live tick received yet for this symbol.">--</UnavailableHint> },
+  { key: 'live', header: 'Live Price', render: (p) => p.livePrice !== null ? (
+    <PriceFlash value={p.livePrice} className="inline-block px-1 -mx-1">
+      ${p.livePrice.toFixed(2)}
+    </PriceFlash>
+  ) : <UnavailableHint reason="No live tick received yet for this symbol.">--</UnavailableHint> },
   {
     key: 'stop',
     header: 'Stop-Loss',
@@ -95,11 +103,25 @@ export function PositionsDataView({ positions, cashBalance, emptyMessage }: Posi
         <>
           <div className="hidden xl:flex mt-0 bg-[#111822]/30 font-bold border border-t-0 border-slate-800 rounded-b-lg text-xs font-mono px-4 py-3 justify-between">
             <span className="text-slate-400">CASH · Liquidity Reservoir</span>
-            <span className="text-slate-200">{Number.isFinite(cashBalance) ? `$${cashBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}</span>
+            <span className="text-slate-200">
+              {Number.isFinite(cashBalance) ? (
+                <AnimatedNumber
+                  value={cashBalance as number}
+                  format={(n) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                />
+              ) : '—'}
+            </span>
           </div>
           <div className="mt-3 p-3 rounded-lg border border-slate-800 bg-[#111822]/30 flex justify-between text-xs font-mono xl:hidden">
             <span className="text-slate-400 font-bold">CASH · Liquidity Reservoir</span>
-            <span className="text-slate-200">{Number.isFinite(cashBalance) ? `$${cashBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}</span>
+            <span className="text-slate-200">
+              {Number.isFinite(cashBalance) ? (
+                <AnimatedNumber
+                  value={cashBalance as number}
+                  format={(n) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                />
+              ) : '—'}
+            </span>
           </div>
         </>
       )}

@@ -1046,30 +1046,35 @@ export class RiskEngine {
 
     private async persistAssessment(proposal: any, result: { approved: boolean, maxQuantity: number, reasoning: string, rejectionGate: string | null, accountEquity?: number, buyingPower?: number, gateResults: GateResult[] }): Promise<boolean> {
         try {
-            await db.insert(schema.riskAssessments).values({
-                transactionId: proposal.transactionId,
-                traceId: proposal.traceId,
-                symbol: proposal.symbol,
-                side: proposal.side,
-                approved: result.approved,
-                maxQuantity: result.maxQuantity,
-                rejectionGate: result.rejectionGate,
-                accountEquity: result.accountEquity,
-                buyingPower: result.buyingPower,
-                reasoning: stampExecutionEnvironment(result.reasoning || '', this.resolveAssessmentEnvironment()),
-                createdAt: new Date().toISOString(),
+            // One atomic transaction for the assessment + its gate rows (was two sequential
+            // autocommits): same rows, one commit, no partial-write window. This runs after the
+            // evaluation is fully computed - gate decisions are untouched.
+            db.transaction((tx) => {
+                tx.insert(schema.riskAssessments).values({
+                    transactionId: proposal.transactionId,
+                    traceId: proposal.traceId,
+                    symbol: proposal.symbol,
+                    side: proposal.side,
+                    approved: result.approved,
+                    maxQuantity: result.maxQuantity,
+                    rejectionGate: result.rejectionGate,
+                    accountEquity: result.accountEquity,
+                    buyingPower: result.buyingPower,
+                    reasoning: stampExecutionEnvironment(result.reasoning || '', this.resolveAssessmentEnvironment()),
+                    createdAt: new Date().toISOString(),
+                }).run();
+                if (result.gateResults.length > 0) {
+                    tx.insert(schema.riskGateResults).values(
+                        result.gateResults.map((g, i) => ({
+                            traceId: proposal.traceId,
+                            gateName: g.gate,
+                            sequence: i,
+                            passed: g.passed,
+                            detail: JSON.stringify(g.detail),
+                        }))
+                    ).run();
+                }
             });
-            if (result.gateResults.length > 0) {
-                await db.insert(schema.riskGateResults).values(
-                    result.gateResults.map((g, i) => ({
-                        traceId: proposal.traceId,
-                        gateName: g.gate,
-                        sequence: i,
-                        passed: g.passed,
-                        detail: JSON.stringify(g.detail),
-                    }))
-                );
-            }
             return true;
         } catch (e) {
             console.error('[Risk Engine] Failed to persist risk assessment', e);

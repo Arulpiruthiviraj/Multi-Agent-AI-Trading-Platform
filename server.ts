@@ -1889,19 +1889,28 @@ let portfolioState = loadPortfolio();
       });
     });
 
+    // AUTOBOT_STATE_UPDATED is polled every 2s but tradingEngine.state usually doesn't change
+    // between ticks. Serialize once and skip the per-client broadcast when the payload is
+    // byte-identical to the last send - the UI handler is idempotent and real transitions also
+    // arrive via the event-driven TRADING_STATE_CHANGED path, so nothing is lost. New clients
+    // get full state from INITIAL_STATE_SNAPSHOT on connect, not from this tick.
+    let lastAutobotStateJson: string | null = null;
     setInterval(() => {
+      const payload = JSON.stringify({
+        type: 'AUTOBOT_STATE_UPDATED',
+        data: {
+          ...tradingEngine.state,
+          enabled: tradingEngine.state.enabled,
+          autoBotEnabled: tradingEngine.state.enabled,
+          remaining: tradingEngine.state.budget - tradingEngine.state.spent,
+          scheduleWindow: tradingEngine.getScheduleWindowStatus(),
+        },
+      });
+      if (payload === lastAutobotStateJson) return;
+      lastAutobotStateJson = payload;
       wssLocal.clients.forEach((client) => {
         if (client.readyState === 1) {
-          client.send(JSON.stringify({
-            type: 'AUTOBOT_STATE_UPDATED',
-            data: {
-              ...tradingEngine.state,
-              enabled: tradingEngine.state.enabled,
-              autoBotEnabled: tradingEngine.state.enabled,
-              remaining: tradingEngine.state.budget - tradingEngine.state.spent,
-              scheduleWindow: tradingEngine.getScheduleWindowStatus(),
-            },
-          }));
+          client.send(payload);
         }
       });
     }, 2000);

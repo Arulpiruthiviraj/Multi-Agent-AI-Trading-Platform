@@ -41,6 +41,11 @@ import os from 'os';
 export class SystemMetricsWorker {
   private intervalId: NodeJS.Timeout | null = null;
   private processStats: Record<string, any> = {};
+  /** One shared debounce timer per worker for the Executing->Waiting decay. The old code
+   *  allocated a fresh 500ms setTimeout on EVERY event (hundreds/sec at tick rates) - but only
+   *  the last timer to fire ever had a visible effect, so a single re-armed timer per worker
+   *  produces byte-identical status transitions with at most 9 live timers. */
+  private decayTimers: Record<string, NodeJS.Timeout> = {};
 
   start() {
     if (this.intervalId) return;
@@ -66,6 +71,8 @@ export class SystemMetricsWorker {
       clearInterval(this.intervalId);
       this.intervalId = null;
     }
+    for (const w of Object.keys(this.decayTimers)) clearTimeout(this.decayTimers[w]);
+    this.decayTimers = {};
   }
 
   recordEvent(worker: string) {
@@ -75,8 +82,11 @@ export class SystemMetricsWorker {
       this.processStats[worker].status = 'Executing';
       this.processStats[worker].latency = 0; // Removed Math.random() mock
       
-      // Revert to sleeping after a bit
-      setTimeout(() => {
+      // Revert to Waiting 500ms after the LAST event (debounced, not one timer per event).
+      const prev = this.decayTimers[worker];
+      if (prev) clearTimeout(prev);
+      this.decayTimers[worker] = setTimeout(() => {
+          delete this.decayTimers[worker];
           if (this.processStats[worker]) {
              this.processStats[worker].status = 'Waiting';
           }

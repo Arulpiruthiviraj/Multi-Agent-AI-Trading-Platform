@@ -81,46 +81,52 @@ export async function recordConsensusTransaction(params: RecordConsensusParams):
   const agreements = params.evidence.filter(e => e.side === params.side);
   const disagreements = params.evidence.filter(e => e.side !== params.side);
 
-  await db.insert(schema.transactions).values({
-    id,
-    symbol: params.symbol,
-    openedAt: now,
-    closedAt: params.approved ? null : now,
-    status: params.approved ? 'OPEN' : 'NO_CONSENSUS',
-    finalDecision: params.approved ? params.side : null,
-    outcome: params.approved ? 'PENDING' : 'N_A',
-  });
+  // One atomic transaction for all three writes (was three sequential autocommits): same rows
+  // in the same order, one commit. Also closes the partial-write window where a crash between
+  // inserts left an orphaned `transactions` row with no decision/evidence. better-sqlite3
+  // transactions are synchronous, so the awaits become .run() calls inside the callback.
+  db.transaction((tx) => {
+    tx.insert(schema.transactions).values({
+      id,
+      symbol: params.symbol,
+      openedAt: now,
+      closedAt: params.approved ? null : now,
+      status: params.approved ? 'OPEN' : 'NO_CONSENSUS',
+      finalDecision: params.approved ? params.side : null,
+      outcome: params.approved ? 'PENDING' : 'N_A',
+    }).run();
 
-  await db.insert(schema.consensusDecisions).values({
-    transactionId: id,
-    symbol: params.symbol,
-    side: params.side,
-    weightedConfidence: params.weightedConfidence,
-    threshold: params.threshold,
-    approved: params.approved,
-    agreementsCount: agreements.length,
-    disagreementsCount: disagreements.length,
-    debateUsed: params.debateUsed ?? false,
-    debateProviderCount: params.debateProviderCount,
-    reasoning: params.reasoning,
-    createdAt: now,
-  });
+    tx.insert(schema.consensusDecisions).values({
+      transactionId: id,
+      symbol: params.symbol,
+      side: params.side,
+      weightedConfidence: params.weightedConfidence,
+      threshold: params.threshold,
+      approved: params.approved,
+      agreementsCount: agreements.length,
+      disagreementsCount: disagreements.length,
+      debateUsed: params.debateUsed ?? false,
+      debateProviderCount: params.debateProviderCount,
+      reasoning: params.reasoning,
+      createdAt: now,
+    }).run();
 
-  if (params.evidence.length > 0) {
-    await db.insert(schema.consensusEvidence).values(
-      params.evidence.map(e => ({
-        transactionId: id,
-        sourceTraceId: e.sourceTraceId,
-        agent: e.agent,
-        side: e.side,
-        confidence: e.confidence,
-        weight: e.weight,
-        reasoning: e.reasoning,
-        agreed: e.side === params.side,
-        currentPrice: e.currentPrice,
-      }))
-    );
-  }
+    if (params.evidence.length > 0) {
+      tx.insert(schema.consensusEvidence).values(
+        params.evidence.map(e => ({
+          transactionId: id,
+          sourceTraceId: e.sourceTraceId,
+          agent: e.agent,
+          side: e.side,
+          confidence: e.confidence,
+          weight: e.weight,
+          reasoning: e.reasoning,
+          agreed: e.side === params.side,
+          currentPrice: e.currentPrice,
+        }))
+      ).run();
+    }
+  });
 
   return id;
 }

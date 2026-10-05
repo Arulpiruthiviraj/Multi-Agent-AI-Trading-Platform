@@ -36,7 +36,11 @@
 import AwaitingSignal from "./components/shared/AwaitingSignal";
 import { SafeResponsiveContainer } from "./components/shared/SafeResponsiveContainer";
 import tradingSafetyConfig from "../config/tradingSafety.json";
-import { SystemValidationSuite } from "./components/SystemValidationSuite";
+// Perf (2026-10-04): SystemValidationSuite only renders inside the diagnostics tab;
+// lazy keeps it out of the initial bundle. Renders inside the tab-level <Suspense>.
+const SystemValidationSuite = lazy(() =>
+  import("./components/SystemValidationSuite").then((m) => ({ default: m.SystemValidationSuite })),
+);
 
 import { resumeAndConfirm } from "./lib/tradingSafetyActions";
 import { useWebSocket } from './context/WebSocketContext';
@@ -106,12 +110,15 @@ import LiveMarketNewsTicker from "./components/LiveMarketNewsTicker";
 
 import TradingPauseOperatorControls from "./components/TradingPauseOperatorControls";
 
-import ChiefTraderAgent from "./components/ChiefTraderAgent";
+// Perf (2026-10-04): heavy conditionally-rendered panels load on demand instead of
+// inflating the initial bundle. All render inside the tab-level <Suspense> (TabSkeleton
+// fallback) except GlobalSearch, which gets its own Suspense at the call site.
+const ChiefTraderAgent = lazy(() => import("./components/ChiefTraderAgent"));
 
-import TransactionObservatory from "./components/TransactionObservatory";
+const TransactionObservatory = lazy(() => import("./components/TransactionObservatory"));
 
-import AgentComparisonModal from "./components/AgentComparisonModal";
-import GlobalSearch from "./components/GlobalSearch";
+const AgentComparisonModal = lazy(() => import("./components/AgentComparisonModal"));
+const GlobalSearch = lazy(() => import("./components/GlobalSearch"));
 
 import { ExplainerToggle } from "./components/ExplainerToggle";
 
@@ -126,8 +133,14 @@ import {
   formatTransactionDecision,
   formatTransactionOutcome,
 } from "./components/observatoryHonesty";
-import { AppWalkthrough } from "./components/AppWalkthrough";
-import { AICoachPanel } from "./components/AICoachPanel";
+// Perf (2026-10-04): walkthrough + coach are conditional overlays; lazy keeps them
+// out of the initial bundle. Wrapped in Suspense at their call sites below.
+const AppWalkthrough = lazy(() =>
+  import("./components/AppWalkthrough").then((m) => ({ default: m.AppWalkthrough })),
+);
+const AICoachPanel = lazy(() =>
+  import("./components/AICoachPanel").then((m) => ({ default: m.AICoachPanel })),
+);
 import { SetupWizard } from "./components/SetupWizard";
 import { AutonomousDashboard } from "./components/AutonomousDashboard";
 import MobileMissionControl from "./components/mobile/MobileMissionControl";
@@ -2033,15 +2046,22 @@ export default function App() {
       }
   }, [isDrawdownCritical]);
 
-  // Keep assetPrices state synchronized with any positions current price from backend
+  // Keep assetPrices state synchronized with any positions current price from backend.
+  // Perf (2026-10-04): bail out when no price actually changed — the old version
+  // always built a fresh object, re-rendering every assetPrices consumer on each
+  // portfolioData poll even when every price was identical.
   useEffect(() => {
     if (portfolioData?.positions) {
       setAssetPrices(prev => {
+        let changed = false;
         const next = { ...prev };
         portfolioData.positions.forEach((p: any) => {
-          next[p.symbol] = p.currentPrice;
+          if (next[p.symbol] !== p.currentPrice) {
+            next[p.symbol] = p.currentPrice;
+            changed = true;
+          }
         });
-        return next;
+        return changed ? next : prev;
       });
     }
   }, [portfolioData]);
@@ -3257,7 +3277,9 @@ export default function App() {
             setSetupComplete(true);
           }} />
         )}
-        <AppWalkthrough />
+        <Suspense fallback={null}>
+          <AppWalkthrough />
+        </Suspense>
         {enginesHalted && (
           <div
             className="bg-rose-600 px-4 py-2 text-white text-xs font-mono tracking-wider flex flex-col gap-2"
@@ -3345,8 +3367,14 @@ export default function App() {
           setSetupComplete(true);
         }} />
       )}
-      <AppWalkthrough />
-      {showCoach && <AICoachPanel onClose={() => setShowCoach(false)} />}
+      <Suspense fallback={null}>
+        <AppWalkthrough />
+      </Suspense>
+      {showCoach && (
+        <Suspense fallback={null}>
+          <AICoachPanel onClose={() => setShowCoach(false)} />
+        </Suspense>
+      )}
       <LiveMarketNewsTicker />
       {enginesHalted && (
         <div className="bg-rose-600 px-4 py-2 flex flex-col gap-2 text-white w-full">
@@ -3609,11 +3637,13 @@ export default function App() {
       </header>
 
       {/* Global Search Component */}
-      <GlobalSearch 
-        isOpen={searchOpen} 
-        onClose={() => setSearchOpen(false)} 
-        setActiveTab={setActiveTab} 
-      />
+      <Suspense fallback={null}>
+        <GlobalSearch
+          isOpen={searchOpen}
+          onClose={() => setSearchOpen(false)}
+          setActiveTab={setActiveTab}
+        />
+      </Suspense>
 
       {/* Hero Stats Panel — carousel on compact, grid on desktop */}
       <ResponsiveStatsSection brokerRibbon={brokerRibbon} />
@@ -5396,7 +5426,7 @@ export default function App() {
                      } catch(e) {}
                   }}
                   disabled={!isDrawdownCritical || portfolioData?.positions?.length === 0}
-                  className={`text-[11px] font-bold px-3 py-1.5 border rounded flex items-center gap-1.5 transition-all outline-none shadow-sm ${isDrawdownCritical ? "bg-rose-600 hover:bg-rose-500 border-rose-500 text-white shadow-[0_0_10px_rgba(225,29,72,0.4)]" : "bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed"}`}
+                  className={`argus-btn-press text-[11px] font-bold px-3 py-1.5 border rounded flex items-center gap-1.5 transition-all outline-none shadow-sm ${isDrawdownCritical ? "bg-rose-600 hover:bg-rose-500 border-rose-500 text-white shadow-[0_0_10px_rgba(225,29,72,0.4)]" : "bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed"}`}
                 >
                   <AlertTriangle size={12} className={isDrawdownCritical ? "animate-pulse" : ""} />
                   EMERGENCY LIQUIDATION
@@ -5415,7 +5445,7 @@ export default function App() {
                   // NOTE: must wrap in an arrow fn — passing fetchState directly would
                   // receive the MouseEvent as its `opts` argument.
                   onClick={() => fetchState()}
-                  className="text-[11px] bg-slate-800 hover:bg-slate-700 font-semibold px-3 py-1.5 border border-slate-700 text-slate-300 rounded flex items-center gap-1.5"
+                  className="argus-btn-press text-[11px] bg-slate-800 hover:bg-slate-700 font-semibold px-3 py-1.5 border border-slate-700 text-slate-300 rounded flex items-center gap-1.5"
                 >
                   <RefreshCw size={12} />
                   REFRESH MARKET PRICING

@@ -76,43 +76,46 @@ const ALL_MAPPED_EVENT_TYPES = new Set(
   Object.values(SECTION_EVENT_TYPES).flatMap((fields) => Object.values(fields).flat()),
 );
 
-interface CountRow { key: string | null; n: number }
-
-/** Real bug found and fixed via ObservabilityStore.test.ts (2026-10-01): a row with a genuinely
- *  NULL event_type/category (a real, legitimate case - not every structuredLogger call sets
- *  eventType) was counted in sourceRowCount but silently dropped from eventTypeCounts/
- *  categoryCounts, breaking the sum(eventTypeCounts) === sourceRowCount invariant §8 requires. A
- *  literal '(none)' key keeps it exhaustive and visible rather than silently uncounted. */
-function toCountMap(rows: CountRow[]): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const r of rows) {
-    out[r.key ?? '(none)'] = r.n;
-  }
-  return out;
-}
+interface BreakdownRow { event_type: string | null; category: string | null; n: number; minTs: number | null; maxTs: number | null }
 
 export const observabilityEventsSource: DailyCompactionSource = {
   sourceType: OBSERVABILITY_EVENTS_SOURCE_TYPE,
   schemaVersion: OBSERVABILITY_EVENTS_SCHEMA_VERSION,
 
   async compact(windowStartMs: number, windowEndMs: number, tradingDate: string): Promise<SourceCompactionResult> {
-    // SQL-level aggregation throughout (never pulling raw rows into JS) so this stays fast at real
-    // volume (§17 performance requirement) - a GROUP BY over an indexed ts range is O(matching rows)
-    // regardless of how many distinct event types/categories exist. Raw sqliteDb.prepare() (the
-    // same pattern this codebase's own db tests already use), not drizzle's query builder, since
-    // this is a GROUP BY aggregate drizzle-orm's typed builder does not model directly.
-    const eventTypeRows = sqliteDb
-      .prepare('SELECT event_type AS key, COUNT(*) AS n FROM observability_events WHERE ts >= ? AND ts < ? GROUP BY event_type')
-      .all(windowStartMs, windowEndMs) as CountRow[];
-    const categoryRows = sqliteDb
-      .prepare('SELECT category AS key, COUNT(*) AS n FROM observability_events WHERE ts >= ? AND ts < ? GROUP BY category')
-      .all(windowStartMs, windowEndMs) as CountRow[];
-    const { n: sourceRowCount, minTs, maxTs } = sqliteDb
-      .prepare('SELECT COUNT(*) AS n, MIN(ts) AS minTs, MAX(ts) AS maxTs FROM observability_events WHERE ts >= ? AND ts < ?')
-      .get(windowStartMs, windowEndMs) as { n: number; minTs: number | null; maxTs: number | null };
+    // Single-pass SQL aggregation (one indexed ts range scan + temp b-tree GROUP BY) instead of
+    // three separate passes (GROUP BY event_type, GROUP BY category, COUNT/MIN/MAX). Marginals are
+    // derived in JS from the 2-D breakdown - provably identical counts to the old three-query form
+    // (same filtered row set, NULL keys still mapped to '(none)' per the §8 invariant fix), at
+    // ~1/3 the read I/O. Raw sqliteDb.prepare() (the same pattern this codebase's own db tests
+    // already use), not drizzle's query builder, since this is a GROUP BY aggregate drizzle-orm's
+    // typed builder does not model directly.
+    const breakdownRows = sqliteDb
+      .prepare(
+        'SELECT event_type, category, COUNT(*) AS n, MIN(ts) AS minTs, MAX(ts) AS maxTs ' +
+        'FROM observability_events WHERE ts >= ? AND ts < ? GROUP BY event_type, category',
+      )
+      .all(windowStartMs, windowEndMs) as BreakdownRow[];
 
-    const eventTypeCounts = toCountMap(eventTypeRows);
-    const categoryCounts = toCountMap(categoryRows);
+    // Marginalize the 2-D breakdown. NULL event_type/category (a real, legitimate case - not every
+    // structuredLogger call sets eventType) maps to a literal '(none)' key so the row is counted
+    // in the marginals rather than silently dropped - this preserves the
+    // sum(eventTypeCounts) === sourceRowCount invariant §8 requires (bug found and fixed via
+    // ObservabilityStore.test.ts, 2026-10-01).
+    const eventTypeCounts: Record<string, number> = {};
+    const categoryCounts: Record<string, number> = {};
+    let sourceRowCount = 0;
+    let minTs: number | null = null;
+    let maxTs: number | null = null;
+    for (const r of breakdownRows) {
+      const et = r.event_type ?? '(none)';
+      const cat = r.category ?? '(none)';
+      eventTypeCounts[et] = (eventTypeCounts[et] ?? 0) + r.n;
+      categoryCounts[cat] = (categoryCounts[cat] ?? 0) + r.n;
+      sourceRowCount += r.n;
+      if (r.minTs != null) minTs = minTs == null ? r.minTs : Math.min(minTs, r.minTs);
+      if (r.maxTs != null) maxTs = maxTs == null ? r.maxTs : Math.max(maxTs, r.maxTs);
+    }
     const eventTypesObserved = Object.keys(eventTypeCounts).sort();
 
     const sections: DailyCompactionSummary['sections'] = {};

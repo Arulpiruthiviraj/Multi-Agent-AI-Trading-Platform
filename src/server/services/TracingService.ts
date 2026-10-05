@@ -8,7 +8,7 @@ import { isTelemetryPulsePayload } from '../core/telemetryPulse';
 import { tracingConfig } from '../config/tracing';
 import { db } from '../db';
 import { agentReasoningLogs, transactionTraces, riskGateResults, riskAssessments } from '../db/schema';
-import { eq, asc } from 'drizzle-orm';
+import { eq, asc, inArray } from 'drizzle-orm';
 
 export type TraceLifecycleStatus =
   | 'INITIATED'
@@ -239,31 +239,52 @@ class TracingService {
     this.flushing = true;
     const batch = this.queue.splice(0, tracingConfig.maxBatchSize);
     try {
+      // Split the batch once: agent rows are pure inserts (bulk), trace rows need the
+      // read-then-merge path below. Reads are batched into a single SELECT; all writes go in
+      // one transaction (was one autocommit per row). The per-item merge semantics are
+      // preserved exactly, including read-after-write when two items in the same batch share
+      // a traceId (the in-memory map is updated as we go, mirroring the old sequential
+      // select-after-insert).
+      const agentRows: Array<typeof agentReasoningLogs.$inferInsert> = [];
+      const traceItems: PendingTraceUpsert[] = [];
       for (const item of batch) {
-        if (item.kind === 'agent') {
-          await db.insert(agentReasoningLogs).values(item.row);
-        } else {
-          const existing = await db.select().from(transactionTraces).where(eq(transactionTraces.traceId, item.row.traceId)).get();
+        if (item.kind === 'agent') agentRows.push(item.row);
+        else traceItems.push(item);
+      }
+      const existingById = new Map<string, any>();
+      if (traceItems.length > 0) {
+        const traceIds = [...new Set(traceItems.map((i) => i.row.traceId))];
+        const rows = await db.select().from(transactionTraces).where(inArray(transactionTraces.traceId, traceIds));
+        for (const r of rows) existingById.set(r.traceId, r);
+      }
+      db.transaction((tx) => {
+        if (agentRows.length > 0) tx.insert(agentReasoningLogs).values(agentRows).run();
+        for (const item of traceItems) {
+          const row = item.row;
+          const existing = existingById.get(row.traceId);
           if (!existing) {
-            await db.insert(transactionTraces).values(item.row);
+            tx.insert(transactionTraces).values(row).run();
+            existingById.set(row.traceId, { ...row });
           } else {
-            const mergedAgents = item.row.contributingAgents
-              ? mergeAgents(existing.contributingAgents, parseJson<string[]>(item.row.contributingAgents, []))
+            const mergedAgents = row.contributingAgents
+              ? mergeAgents(existing.contributingAgents, parseJson<string[]>(row.contributingAgents, []))
               : existing.contributingAgents;
-            await db.update(transactionTraces).set({
-              symbol: item.row.symbol !== 'UNKNOWN' ? item.row.symbol : existing.symbol,
-              lifecycleStatus: item.row.lifecycleStatus ?? existing.lifecycleStatus,
+            const merged = {
+              symbol: row.symbol !== 'UNKNOWN' ? row.symbol : existing.symbol,
+              lifecycleStatus: row.lifecycleStatus ?? existing.lifecycleStatus,
               contributingAgents: mergedAgents,
-              consensusScore: item.row.consensusScore ?? existing.consensusScore,
-              consensusThreshold: item.row.consensusThreshold ?? existing.consensusThreshold,
-              riskSummary: item.row.riskSummary ?? existing.riskSummary,
-              terminalReason: item.row.terminalReason ?? existing.terminalReason,
-              terminalReasonCode: item.row.terminalReasonCode ?? existing.terminalReasonCode,
-              orderId: item.row.orderId ?? existing.orderId,
-            }).where(eq(transactionTraces.traceId, item.row.traceId));
+              consensusScore: row.consensusScore ?? existing.consensusScore,
+              consensusThreshold: row.consensusThreshold ?? existing.consensusThreshold,
+              riskSummary: row.riskSummary ?? existing.riskSummary,
+              terminalReason: row.terminalReason ?? existing.terminalReason,
+              terminalReasonCode: row.terminalReasonCode ?? existing.terminalReasonCode,
+              orderId: row.orderId ?? existing.orderId,
+            };
+            tx.update(transactionTraces).set(merged).where(eq(transactionTraces.traceId, row.traceId)).run();
+            existingById.set(row.traceId, { ...existing, ...merged });
           }
         }
-      }
+      });
     } catch (e) {
       console.error('[TracingService] Batch flush failed', e);
       this.queue.unshift(...batch);

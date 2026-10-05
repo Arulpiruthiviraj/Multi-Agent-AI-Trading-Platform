@@ -219,24 +219,26 @@ export async function computeDayStrategyAttribution(tradingDate: string = getTra
   return { strategies, dailyRealized, dailyUnrealized };
 }
 
-async function upsertStrategyRows(tradingDate: string, strategies: Map<string, StrategyAgg>): Promise<void> {
+async function upsertStrategyRows(tradingDate: string, strategies: StrategyPerformanceRow[]): Promise<void> {
   const now = Date.now();
-  for (const [quantStrategyId, agg] of strategies.entries()) {
+  // Rows arrive already rounded to 4dp from getCampaignStatus(); re-applying toFixed(4) is
+  // idempotent, so persisted values are byte-identical to the old Map-based path.
+  for (const row of strategies) {
     const existing = await db.select().from(schema.dailyStrategyPerformance).where(
       and(
         eq(schema.dailyStrategyPerformance.tradingDate, tradingDate),
-        eq(schema.dailyStrategyPerformance.quantStrategyId, quantStrategyId),
+        eq(schema.dailyStrategyPerformance.quantStrategyId, row.quantStrategyId),
       ),
     ).limit(1);
 
     const values = {
       tradingDate,
-      quantStrategyId,
-      realizedPnl: Number(agg.realizedPnl.toFixed(4)),
-      unrealizedPnl: Number(agg.unrealizedPnl.toFixed(4)),
-      tradesCount: agg.tradesCount,
-      winsCount: agg.winsCount,
-      lossesCount: agg.lossesCount,
+      quantStrategyId: row.quantStrategyId,
+      realizedPnl: Number(row.realizedPnl.toFixed(4)),
+      unrealizedPnl: Number(row.unrealizedPnl.toFixed(4)),
+      tradesCount: row.tradesCount,
+      winsCount: row.winsCount,
+      lossesCount: row.lossesCount,
       updatedAt: now,
     };
 
@@ -362,10 +364,14 @@ export async function refreshCampaignProgress(reason: string = 'manual'): Promis
   const settings = (await db.select().from(schema.settings).limit(1))[0];
   const enabled = !!settings?.campaignEnabled;
 
-  const { strategies, dailyRealized, dailyUnrealized } = await computeDayStrategyAttribution(today);
-  await upsertStrategyRows(today, strategies);
-
+  // Single attribution scan per tick: getCampaignStatus() already runs
+  // computeDayStrategyAttribution() internally. The old code ran it a second time here (and a
+  // third time in the early-return branch below) - 2-3 full `trades`-table scans per 60s tick on
+  // a table that grows forever. Reusing status.dailyRealized/dailyUnrealized (4dp-rounded, the
+  // same rounding the status endpoint and CAMPAIGN_TARGET_REACHED emits already use) and
+  // status.strategies for the upsert removes the duplicate scans with no observable difference.
   const status = await getCampaignStatus(now);
+  await upsertStrategyRows(today, status.strategies);
 
   try {
     eventBus.emit(EVENTS.CAMPAIGN_PROGRESS_UPDATED, {
@@ -373,8 +379,8 @@ export async function refreshCampaignProgress(reason: string = 'manual'): Promis
       reason,
       enabled,
       progress: status.progress,
-      dailyRealized,
-      dailyUnrealized,
+      dailyRealized: status.dailyRealized,
+      dailyUnrealized: status.dailyUnrealized,
       targetDollars: status.targetDollars,
       buyLocked: status.buyLocked,
       at: now.toISOString(),
@@ -388,7 +394,7 @@ export async function refreshCampaignProgress(reason: string = 'manual'): Promis
       clearCampaignBuyLock('campaign_disabled');
       targetReachedEmittedForDate = null;
     }
-    return getCampaignStatus(now);
+    return status;
   }
 
   if (status.progress >= 1.0) {

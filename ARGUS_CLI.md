@@ -279,7 +279,12 @@ and must never fire from a typo. Uses the existing engine kill-switch. The CLI d
 
 * `argus <command> --help` prints per-command usage (all 85 commands are self-documenting).
 * `argus --api-url=http://host:port <command>` overrides `ARGUS_API_URL` for one invocation.
-* `argus --version` prints the CLI version.
+* `argus --json <command>` prints raw JSON instead of the default human-readable table
+  (entity commands: `positions`, `orders`, `trades`, `brokers`, `agents`, `events`, `logs`).
+  Tables are the default for humans; `--json` is the contract for scripts.
+* `argus --version` prints the CLI version; when `package.json` carries the placeholder
+  `0.0.0`, the current git commit hash is appended (e.g. `0.0.0+9a21e8e`) so the
+  build is still identifiable.
 * Unknown commands get `Did you mean: ...?` suggestions.
 * Exit codes: `0` success · `1` runtime failure · `2` usage error (bad/missing args) · `5` authentication required.
 * `argus doctor` runs environment + API health checks (`brew doctor` style); exits non-zero on critical failures.

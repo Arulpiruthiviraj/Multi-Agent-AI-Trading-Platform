@@ -30,6 +30,23 @@ const { mockDb, setTableRows, resetTableRows, setInsertFails } = vi.hoisted(() =
     // vi.fn() (not a plain arrow) so replay-isolation tests can assert the live settings write
     // path (db.update(schema.settings)...) was never reached during a replay evaluation.
     update: vi.fn(() => ({ set: () => ({ run: () => Promise.resolve({}) }) })),
+    // db.transaction (drizzle better-sqlite3): persist paths wrap sequential inserts in one
+    // atomic transaction. The mock runs the callback synchronously against a tx whose
+    // insert/update mirror the mocked ones, honoring setInsertFails the same way.
+    transaction: (fn: (tx: any) => void) => {
+      const tx = {
+        insert: () => ({
+          values: () => ({
+            run: () => {
+              if (insertFails) throw new Error('SQLITE_BUSY');
+              return {};
+            },
+          }),
+        }),
+        update: () => ({ set: () => ({ run: () => ({}) }) }),
+      };
+      return fn(tx);
+    },
   };
   return {
     mockDb,

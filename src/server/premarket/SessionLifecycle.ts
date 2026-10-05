@@ -148,8 +148,19 @@ class SessionLifecycleManager {
    * directly by unit tests - those must stay pure/DB-free, since they run without an isolated
    * ARGUS_DB_PATH and would otherwise write into the real data/argus.db (DEF-18 territory).
    */
+  /**
+   * Write-reduction: snapshots are evaluated every 60s but the classification only changes a few
+   * times per day. hydrateFromPersistedState() only ever needs the LATEST row for today, so
+   * persisting an identical row 1,440x/day is pure write amplification. Persist only when the
+   * meaningful fields differ from the last persisted snapshot (evaluatedAt is deliberately
+   * excluded - it changes every tick by construction).
+   */
+  private lastPersistedSnapshotKey: string | null = null;
+
   private async persistSnapshot(snapshot: SessionLifecycleSnapshot): Promise<void> {
     try {
+      const key = `${snapshot.tradingDate}|${snapshot.marketSession}|${snapshot.appState}|${this.lastPremarketFiredForDate ?? ''}`;
+      if (key === this.lastPersistedSnapshotKey) return;
       const { db } = await import('../db');
       const { sessionLifecycleSnapshots } = await import('../db/schema');
       await db.insert(sessionLifecycleSnapshots).values({
@@ -160,6 +171,7 @@ class SessionLifecycleManager {
         evaluatedAt: snapshot.evaluatedAt,
         createdAt: new Date().toISOString(),
       });
+      this.lastPersistedSnapshotKey = key;
     } catch (e) {
       console.error('[SessionLifecycle] failed to persist snapshot (does not affect live evaluation)', e);
     }

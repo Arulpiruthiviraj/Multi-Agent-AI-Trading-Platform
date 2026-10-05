@@ -115,4 +115,20 @@ describe('EventStore redacts secrets at write time', () => {
     expect(rows.find((r: any) => r.correlationId === spanTrace)).toBeUndefined();
     expect(rows.find((r: any) => r.correlationId === healthTrace)).toBeUndefined();
   });
+
+  it('hot-tick fast path: MARKET_DATA still lands in the ring with identical data, isolated from later mutation', () => {
+    const tick = { symbol: 'FASTPATH', price: 123.45, volume: 100, timestamp: '2026-10-04T12:00:00.000Z' };
+    eventBus.emit(EVENTS.MARKET_DATA, tick);
+    const envelope = recentEvents.find((e) => e.type === 'MARKET_DATA' && e.payload?.symbol === 'FASTPATH');
+    expect(envelope).toBeDefined();
+    expect(envelope.payload).toEqual(tick);
+    // The ring holds a copy, not a live reference: a subscriber mutating the payload after
+    // EventStore ran must not rewrite history.
+    tick.price = 999.99;
+    expect(envelope.payload.price).toBe(123.45);
+    // MARKET_DATA never durable-persists (NO_PERSIST_TYPES) - fast path must not change that.
+    return db.select().from(schema.eventTraces).then((rows: any[]) => {
+      expect(rows.find((r: any) => r.eventType === 'MARKET_DATA')).toBeUndefined();
+    });
+  });
 });

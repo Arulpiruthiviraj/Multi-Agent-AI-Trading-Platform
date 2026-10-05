@@ -45,6 +45,78 @@ export function apiBase(): string {
 export function setApiBaseOverride(url: string): void {
   BASE = url;
 }
+
+/**
+ * Global --json flag: entity commands (positions, orders, trades, brokers,
+ * agents, events, logs) print human-readable tables by default and raw JSON
+ * with --json — the kubectl/gh convention: humans get tables, scripts get JSON.
+ */
+let JSON_MODE = false;
+
+/** Whether --json was passed. Exported for tests and command implementations. */
+export function isJsonOutput(): boolean {
+  return JSON_MODE;
+}
+
+/** Apply the global --json flag. Called once by the dispatch block. */
+export function setJsonOutput(on: boolean): void {
+  JSON_MODE = on;
+}
+
+/** Print raw JSON (respects --json contract explicitly). */
+export function printJson(value: unknown): void {
+  console.log(JSON.stringify(value, null, 2));
+}
+
+/** One column of a human-readable table. pick() must never throw. */
+export interface TableColumn {
+  header: string;
+  pick: (row: any) => string;
+}
+
+function safeCell(row: any, pick: (row: any) => string): string {
+  try {
+    const v = pick(row);
+    return v === null || v === undefined ? '-' : String(v);
+  } catch {
+    return '-';
+  }
+}
+
+/**
+ * Print rows as an aligned human-readable table (stdout).
+ * Falls back to "(no rows)" for empty input. Long values are truncated so
+ * one wide cell can't blow out the layout.
+ */
+export function printTable(rows: any[], columns: TableColumn[]): void {
+  if (!rows || rows.length === 0) {
+    console.log('(no rows)');
+    return;
+  }
+  const maxWidth = 48;
+  const cells = rows.map((r) =>
+    columns.map((c) => {
+      const s = safeCell(r, c.pick);
+      return s.length > maxWidth ? s.slice(0, maxWidth - 1) + '…' : s;
+    }),
+  );
+  const widths = columns.map((c, i) =>
+    Math.max(c.header.length, ...cells.map((row) => row[i].length)),
+  );
+  const line = (vals: string[]) => vals.map((v, i) => v.padEnd(widths[i])).join('  ');
+  console.log(line(columns.map((c) => c.header)));
+  console.log(line(widths.map((w) => '-'.repeat(w))));
+  for (const row of cells) console.log(line(row));
+}
+
+/** Pick the first present field from a list of candidate names. */
+export function field(row: any, ...names: string[]): string {
+  for (const n of names) {
+    const v = row?.[n];
+    if (v !== null && v !== undefined && v !== '') return String(v);
+  }
+  return '-';
+}
 /** Repo root even when cwd is elsewhere (./argus from another directory). */
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SESSION_PATH = process.env.ARGUS_CLI_SESSION_FILE || defaultSessionFilePath(ROOT);
@@ -867,7 +939,7 @@ export const COMMAND_HELP: Record<string, string> = {
   'resume': 'Usage: argus resume [--reason="..."]\nResume autonomous trading (operator-controlled; records the reason).',
   'pause': 'Usage: argus pause [--reason="..."]\nPause autonomous trading (records the reason).',
   'set-broker': 'Usage: argus set-broker <id>\nSwitch the active execution broker at runtime (e.g. alpaca, ibkr_gateway, internal_paper). Persists to settings.',
-  'brokers': 'Usage: argus brokers\nList broker capabilities and saved connections.',
+  'brokers': 'Usage: argus brokers [--json]\nList broker capabilities and saved connections (table; --json for raw JSON).',
   'research-recommend': 'Usage: argus research-recommend [--strategy=<id>]\nShow research recommendations.',
   'provider-health': 'Usage: argus provider-health\nAI provider pool health.',
   'opportunity-snapshot': 'Usage: argus opportunity-snapshot [--limit=N]\nLatest opportunity snapshot.',
@@ -916,16 +988,16 @@ export const COMMAND_HELP: Record<string, string> = {
   'session-lifecycle': 'Usage: argus session-lifecycle\nSession lifecycle snapshot + recent history.',
   'config': 'Usage: argus config\nRuntime config (JSON).',
   'paper-profile': 'Usage: argus paper-profile [--apply]\nPaper allocation profile. --apply requires confirmed PAPER mode, disabled Autobot and TRADING_PAUSED; otherwise dry-run.',
-  'positions': 'Usage: argus positions\nCurrent positions (JSON).',
-  'portfolio': 'Usage: argus portfolio\nPortfolio snapshot (JSON).',
-  'orders': 'Usage: argus orders\nRecent orders (JSON).',
-  'trades': 'Usage: argus trades\nRecent trades (JSON).',
-  'logs': 'Usage: argus logs\nRecent system logs (JSON, limit 50).',
+  'positions': 'Usage: argus positions [--json]\nCurrent positions (table; --json for raw JSON).',
+  'portfolio': 'Usage: argus portfolio [--json]\nPortfolio snapshot (alias of positions; table; --json for raw JSON).',
+  'orders': 'Usage: argus orders [--json]\nRecent orders (table; --json for raw JSON).',
+  'trades': 'Usage: argus trades [--json]\nRecent trades (table; --json for raw JSON).',
+  'logs': 'Usage: argus logs [--json]\nRecent system logs, limit 50 (table; --json for raw JSON).',
   'enable': 'Usage: argus enable\nEnable autonomous trading (operator-controlled).',
   'disable': 'Usage: argus disable\nDisable autonomous trading (operator-controlled).',
   'kill-switch': 'Usage: argus kill-switch --confirm [--reason="..."]\nEMERGENCY STOP: halts ALL trading immediately. Requires --confirm.',
-  'agents': 'Usage: argus agents\nPipeline agents and status.',
-  'events': 'Usage: argus events\nRecent system events (JSON, limit 50).',
+  'agents': 'Usage: argus agents [--json]\nPipeline agents and status (table; --json for raw JSON).',
+  'events': 'Usage: argus events [--json]\nRecent system events, limit 50 (table; --json for raw JSON).',
   'risk': 'Usage: argus risk\nRisk engine status.',
   'quant-core': 'Usage: argus quant-core\nJava Quant Core connectivity and health.',
   'parity': 'Usage: argus parity\nTS/Java shadow-parity divergences.',
@@ -973,10 +1045,24 @@ const commands: Record<string, () => Promise<void>> = {
     } catch {
       /* ignore */
     }
+    // package.json carries 0.0.0 in this repo; report the git commit so
+    // `argus version` still identifies the running build (provenance matters
+    // for a trading system — the Monday gate asks what build is deployed).
+    let commit: string | null = null;
+    if (version === '0.0.0') {
+      try {
+        const { execSync } = await import('node:child_process');
+        commit = execSync('git rev-parse --short HEAD', { cwd: ROOT, timeout: 5000 })
+          .toString()
+          .trim() || null;
+      } catch {
+        /* not a git checkout or git unavailable */
+      }
+    }
     console.log(JSON.stringify({
       ok: true,
       name: 'argus-cli',
-      version,
+      version: commit ? `${version}+${commit}` : version,
       api: BASE,
       role: 'HTTP client for Argus Engine (not a trading brain)',
     }, null, 2));
@@ -1083,7 +1169,21 @@ const commands: Record<string, () => Promise<void>> = {
     }), null, 2));
   },
   async brokers() {
-    console.log(JSON.stringify(await fetchJson('/api/v1/brokers'), null, 2));
+    const data = await fetchJson('/api/v1/brokers') as { brokers?: any[]; activeBrokerId?: string } | any[];
+    if (isJsonOutput()) return printJson(data);
+    // The endpoint returns a bare array; tolerate a wrapped shape too.
+    const list = Array.isArray(data) ? data : (data.brokers ?? []);
+    const activeId = Array.isArray(data) ? undefined : data.activeBrokerId;
+    const rows = list.map((b: any) => ({
+      ...b,
+      _active: b.id === activeId || b.isActive ? 'ACTIVE' : '',
+    }));
+    printTable(rows, [
+      { header: 'ID', pick: (r) => field(r, 'id') },
+      { header: 'NAME', pick: (r) => field(r, 'name', 'label', 'displayName') },
+      { header: 'STATUS', pick: (r) => field(r, 'status', 'state', 'health') },
+      { header: '', pick: (r) => r._active ?? '' },
+    ]);
   },
   async 'research-recommend'() {
     // LangGraph research service (docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section)) - shadow-only,
@@ -1769,19 +1869,50 @@ const commands: Record<string, () => Promise<void>> = {
     console.log(JSON.stringify(await paperAllocationProfile(fetchJson, profile.budget, process.argv.includes('--apply')), null, 2));
   },
   async positions() {
-    console.log(JSON.stringify(await fetchJson('/api/v2/runtime/portfolio'), null, 2));
+    const data = await fetchJson('/api/v2/runtime/portfolio') as { portfolio?: any[] };
+    if (isJsonOutput()) return printJson(data);
+    printTable(data.portfolio ?? [], [
+      { header: 'SYMBOL', pick: (r) => field(r, 'symbol') },
+      { header: 'QTY', pick: (r) => field(r, 'quantity', 'qty', 'shares') },
+      { header: 'AVG PRICE', pick: (r) => field(r, 'averageCost', 'avgPrice', 'average_price') },
+      { header: 'MARKET VALUE', pick: (r) => field(r, 'marketValue', 'market_value') },
+      { header: 'P&L', pick: (r) => field(r, 'unrealizedPnl', 'pnl', 'profitLoss') },
+    ]);
   },
   async portfolio() {
     return commands.positions();
   },
   async orders() {
-    console.log(JSON.stringify(await fetchJson('/api/v2/runtime/orders'), null, 2));
+    const data = await fetchJson('/api/v2/runtime/orders') as { orders?: any[] };
+    if (isJsonOutput()) return printJson(data);
+    printTable(data.orders ?? [], [
+      { header: 'ID', pick: (r) => field(r, 'orderId', 'id', 'clientOrderId').slice(0, 12) },
+      { header: 'SYMBOL', pick: (r) => field(r, 'symbol') },
+      { header: 'SIDE', pick: (r) => field(r, 'side') },
+      { header: 'QTY', pick: (r) => field(r, 'quantity', 'qty', 'requestedQuantity') },
+      { header: 'STATUS', pick: (r) => field(r, 'status') },
+      { header: 'TIME', pick: (r) => field(r, 'createdAt', 'timestamp', 'submittedAt').slice(0, 19).replace('T', ' ') },
+    ]);
   },
   async trades() {
-    console.log(JSON.stringify(await fetchJson('/api/v2/runtime/trades'), null, 2));
+    const data = await fetchJson('/api/v2/runtime/trades') as { trades?: any[] };
+    if (isJsonOutput()) return printJson(data);
+    printTable(data.trades ?? [], [
+      { header: 'SYMBOL', pick: (r) => field(r, 'symbol') },
+      { header: 'SIDE', pick: (r) => field(r, 'side') },
+      { header: 'QTY', pick: (r) => field(r, 'quantity', 'qty', 'filledQuantity') },
+      { header: 'PRICE', pick: (r) => field(r, 'price', 'averageFillPrice', 'fillPrice') },
+      { header: 'TIME', pick: (r) => field(r, 'filledAt', 'timestamp', 'createdAt').slice(0, 19).replace('T', ' ') },
+    ]);
   },
   async logs() {
-    console.log(JSON.stringify(await fetchJson('/api/v2/system/logs/recent?limit=50'), null, 2));
+    const data = await fetchJson('/api/v2/system/logs/recent?limit=50') as { logs?: any[] };
+    if (isJsonOutput()) return printJson(data);
+    printTable(data.logs ?? [], [
+      { header: 'TIME', pick: (r) => field(r, 'ts', 'timestamp', 'createdAt').slice(0, 19).replace('T', ' ') },
+      { header: 'LEVEL', pick: (r) => field(r, 'level') },
+      { header: 'MESSAGE', pick: (r) => field(r, 'message', 'msg', 'event') },
+    ]);
   },
   async enable() {
     console.log(JSON.stringify(await fetchJson('/api/v2/runtime/trading/enable', { method: 'POST', body: '{}' }), null, 2));
@@ -1810,10 +1941,24 @@ const commands: Record<string, () => Promise<void>> = {
     }), null, 2));
   },
   async agents() {
-    console.log(JSON.stringify(await fetchJson('/api/v1/system/pipeline-agents'), null, 2));
+    const data = await fetchJson('/api/v1/system/pipeline-agents') as { togglable?: any[]; agents?: any[] };
+    if (isJsonOutput()) return printJson(data);
+    printTable(data.togglable ?? data.agents ?? [], [
+      { header: 'ID', pick: (r) => field(r, 'id') },
+      { header: 'LABEL', pick: (r) => field(r, 'label', 'name') },
+      { header: 'ENABLED', pick: (r) => (r.enabled ? 'yes' : 'no') },
+      { header: 'STATE', pick: (r) => field(r, 'currentState', 'state', 'status') },
+      { header: 'HEALTHY', pick: (r) => (r.healthy ? 'yes' : r.healthy === false ? 'no' : '-') },
+    ]);
   },
   async events() {
-    console.log(JSON.stringify(await fetchJson('/api/v2/system/events?limit=50'), null, 2));
+    const data = await fetchJson('/api/v2/system/events?limit=50') as { events?: any[] };
+    if (isJsonOutput()) return printJson(data);
+    printTable(data.events ?? [], [
+      { header: 'TIME', pick: (r) => field(r, 'ts', 'timestamp', 'createdAt').slice(0, 19).replace('T', ' ') },
+      { header: 'TYPE', pick: (r) => field(r, 'eventType', 'type', 'event') },
+      { header: 'DETAIL', pick: (r) => field(r, 'message', 'detail', 'summary', 'component') },
+    ]);
   },
   async risk() {
     console.log(JSON.stringify(await fetchJson('/api/v2/runtime/risk/status'), null, 2));
@@ -2008,6 +2153,11 @@ const commands: Record<string, () => Promise<void>> = {
   },
   async help() {
     console.log('Argus CLI - HTTP client only. Never imports RiskEngine/OMS/BrokerManager directly.\n');
+    console.log('Global flags (before or after the command):');
+    console.log('  --json            Print raw JSON instead of human-readable tables');
+    console.log('  --api-url=<url>    Override the API base (default http://127.0.0.1:3000)');
+    console.log('  -h, --help        Show help (global or per-command: argus <cmd> --help)');
+    console.log('');
     const groups: Array<[string, string[]]> = [
       ['System / lifecycle', ['status', 'health', 'start', 'stop', 'restart', 'wait-ready', 'config']],
       ['Watchdog (detached auto-restart supervisor)', ['watchdog-start', 'watchdog-stop', 'watchdog-restart', 'watchdog-status']],
@@ -2050,6 +2200,7 @@ if (isMainModule) {
   // Global flags (accepted before or after the command name).
   const apiUrlFlag = rawArgs.find((a) => a.startsWith('--api-url='));
   if (apiUrlFlag) setApiBaseOverride(apiUrlFlag.slice('--api-url='.length));
+  if (rawArgs.includes('--json')) setJsonOutput(true);
 
   const cmd = rawArgs.find((a) => !a.startsWith('--')) || 'status';
   const onlyFlags = !rawArgs.some((a) => !a.startsWith('--'));

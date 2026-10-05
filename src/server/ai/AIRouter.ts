@@ -637,7 +637,9 @@ export class AIRouter {
        try {
          apiKey = p.apiKeyEncrypted ? EncryptionService.decrypt(p.apiKeyEncrypted) : envKeyForProviderName(p.providerName);
        } catch {
-         continue;
+         // DB key undecryptable (e.g. ENCRYPTION_SECRET rotated) — the heal check
+         // below is specifically about usable env keys, so fall back to env here.
+         apiKey = envKeyForProviderName(p.providerName);
        }
        if (isLocalEndpoint || !isPlaceholderApiKey(apiKey)) {
          try {
@@ -657,8 +659,17 @@ export class AIRouter {
          let credentialSource: 'DB' | 'ENV' | 'NONE' = 'NONE';
          try {
            if (p.apiKeyEncrypted) {
-             apiKey = EncryptionService.decrypt(p.apiKeyEncrypted);
-             credentialSource = 'DB';
+             try {
+               apiKey = EncryptionService.decrypt(p.apiKeyEncrypted);
+               credentialSource = 'DB';
+             } catch {
+               // DB key undecryptable (e.g. ENCRYPTION_SECRET rotated) — fall back
+               // to the env key instead of skipping the provider entirely. The env
+               // file is a supported credential source.
+               console.error(`[AIRouter] DECRYPTION_FAILED for provider ${p.providerName} — falling back to env key.`);
+               apiKey = envKeyForProviderName(p.providerName);
+               credentialSource = apiKey ? 'ENV' : 'NONE';
+             }
            } else {
              apiKey = envKeyForProviderName(p.providerName);
              credentialSource = apiKey ? 'ENV' : 'NONE';
