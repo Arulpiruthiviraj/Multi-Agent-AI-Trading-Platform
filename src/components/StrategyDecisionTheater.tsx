@@ -179,7 +179,14 @@ export interface StrategyEvaluationReplay {
   side: 'BUY' | 'SELL' | 'HOLD';
   setupScore: number;
   confidence: number;
-  triggerMet: boolean;
+  /**
+   * Whether the strategy's defining trigger actually fired, as persisted in the
+   * backend evaluation (never inferred from conditionsMet - a strategy can meet
+   * conditions while its trigger stays false). null = unknown (historical rows
+   * written before the field was persisted); the verdict renders an explicit
+   * UNKNOWN state rather than guessing.
+   */
+  triggerMet: boolean | null;
   conditionsMet: string[];
   conditionsFailed: string[];
   contradictions: string[];
@@ -383,17 +390,32 @@ export function StrategyDecisionTheater({ replay, initialStrategyId }: Props) {
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           className={`p-4 rounded-lg border mb-4 ${
-            replay.triggerMet
+            replay.triggerMet === true
               ? 'border-emerald-500/40 bg-emerald-500/10'
-              : 'border-white/10 bg-white/[0.03]'
+              : replay.triggerMet === null
+                ? 'border-amber-500/40 bg-amber-500/10'
+                : 'border-white/10 bg-white/[0.03]'
           }`}
         >
           <div className="flex items-center gap-3">
-            <SideIcon size={22} className={replay.triggerMet ? 'text-emerald-400' : 'text-white/40'} />
+            <SideIcon size={22} className={
+              replay.triggerMet === true ? 'text-emerald-400'
+              : replay.triggerMet === null ? 'text-amber-400'
+              : 'text-white/40'
+            } />
             <div>
               <div className="text-sm font-semibold text-white">
-                {replay.triggerMet ? `TRIGGER — ${replay.side}` : 'NO SIGNAL'}
+                {replay.triggerMet === true
+                  ? `TRIGGER — ${replay.side}`
+                  : replay.triggerMet === null
+                    ? 'TRIGGER STATE UNKNOWN'
+                    : 'NO SIGNAL'}
               </div>
+              {replay.triggerMet === null && (
+                <div className="text-[11px] text-amber-300/80 mt-1">
+                  This evaluation was recorded before trigger state was persisted — the animation shows the real conditions, but whether the defining trigger fired is not known. Not inferred.
+                </div>
+              )}
               <div className="text-xs text-white/50">
                 Score {replay.setupScore.toFixed(1)} · Confidence {(replay.confidence * 100).toFixed(0)}%
                 {replay.contradictions.length > 0 && (

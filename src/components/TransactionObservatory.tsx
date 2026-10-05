@@ -48,6 +48,13 @@ interface StrategyEvaluation {
   side: 'BUY' | 'SELL';
   setupScore: number;
   confidence: number;
+  // DEFECT FIX (2026-10-05): the backend StrategyEvaluation type REQUIRES triggerMet
+  // (every strategy must declare honestly whether its defining trigger fired - see
+  // src/server/quant/strategies/types.ts). It is persisted in the strategy_evaluations
+  // JSON column and returned by the transaction-detail API. It is optional HERE only
+  // because historical rows written before the field existed may lack it - in that
+  // case the theater shows UNKNOWN rather than inferring from conditionsMet.
+  triggerMet?: boolean;
   conditionsMet: string[];
   conditionsFailed: string[];
   contradictions: string[];
@@ -419,7 +426,13 @@ export default function TransactionObservatory({ transactionId, onClose }: { tra
                                   side: s.side === 'BUY' ? 'BUY' : 'SELL',
                                   setupScore: s.setupScore,
                                   confidence: s.confidence,
-                                  triggerMet: s.conditionsMet.length > 0,
+                                  // DEFECT FIX (2026-10-05): propagate the REAL persisted
+                                  // triggerMet. The old code inferred
+                                  // `s.conditionsMet.length > 0`, which is wrong - a strategy
+                                  // can satisfy some conditions while its defining trigger
+                                  // never fired. Unknown (legacy rows) -> null -> the
+                                  // theater renders an explicit UNKNOWN state, never a guess.
+                                  triggerMet: s.triggerMet ?? null,
                                   conditionsMet: s.conditionsMet,
                                   conditionsFailed: s.conditionsFailed,
                                   contradictions: s.contradictions,
