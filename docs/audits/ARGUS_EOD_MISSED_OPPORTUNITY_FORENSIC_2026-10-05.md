@@ -98,7 +98,7 @@ speculative names. Not treated as misses per the user's own framing.
 | NVDA | 317 | 50 | 5,923 | 0 | Yes |
 | TER | 51 | 6 | **0** | 0 | No |
 | SPCX | 186 | 10 | 56 | 0 | Yes |
-| MPWR | 76 | **0** | **0** | 0 | No |
+| MPWR | 2 (corrected; was 76) | **0** | **0** | 0 | No |
 | ARM | 65 | 22 | 1,241 | 0 | No |
 | RKLB | 212 | 2 | 31 | 0 | No |
 | TSLA | 278 | 51 | 5,641 | **2,162** | Yes |
@@ -113,7 +113,7 @@ discovery funnel — it was never discovered as today's mover.
 **This table is the single most important artifact in this audit.** Every benchmark symbol with a real
 catalyst reached discovery admission in large numbers (PTC 88x, RXO 107x, XP 131x) — **universe coverage is
 not the problem.** The drop happens at **subscription** (PTC: 0 of 88 admissions ever got a live data
-subscription; MPWR: 0 of 76) and then again sharply at **evaluation** (RXO subscribed once but was never
+subscription; MPWR: 0 of 2 — corrected 2026-10-05, was incorrectly stated as 76 elsewhere in this file, see Section 36) and then again sharply at **evaluation** (RXO subscribed once but was never
 quant-assessed at all; PCVX barely discovered at all).
 
 ## Section 10–14 — Discovery, universe coverage, capacity

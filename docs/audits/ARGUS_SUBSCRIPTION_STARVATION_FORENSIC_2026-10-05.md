@@ -18,8 +18,8 @@ every cycle checked. The real, decisive finding is different from what either pr
   clustered by NewsEngine at 08:16 ET. By the time it finally entered the pool, its real move (the +33%
   M&A pop) had already fully happened at the open; the intraday-only scoring convention correctly, but
   unhelpfully, saw only the small residual movement after that.
-- **MPWR is a worse, distinct case: it never entered the challenger pool at all, the entire day** — 76
-  discovery admissions, zero challenger-scoring appearances.
+- **MPWR is a worse, distinct case: it never entered the challenger pool at all, the entire day** — 2
+  discovery admissions (corrected 2026-10-05; an earlier draft incorrectly said 76), zero challenger-scoring appearances.
 
 ## 1. The discovery-SPREAD defect claim is retracted (carried from the amended EOD report)
 
@@ -128,7 +128,7 @@ economically, even though the latency itself is real.
 | Symbol | Admitted | Challenger-pool appearances | Best score | First seen in pool |
 |---|---|---|---|---|
 | PTC | 94 | 25 (of 142 cycles checked) | 1.12 | 10:37 ET (catalyst known 08:16 ET) |
-| MPWR | 76 | **0 — never** | N/A | Never |
+| MPWR | 2 (corrected; was 76) | **0 — never** | N/A | Never |
 
 RXO, PCVX, XP, NVDA, TER, ARM, RKLB, TSLA, META, MSFT, CSCO not re-traced through the challenger-pool
 mechanism this pass (XP/TSLA/META/NVDA/ARM/CSCO/RKLB/SPCX were already confirmed subscribed and evaluated in
