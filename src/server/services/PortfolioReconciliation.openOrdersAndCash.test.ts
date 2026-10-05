@@ -130,6 +130,8 @@ describe('PortfolioReconciliationWorker - open orders and account consistency (P
     const originalPortfolio = broker.portfolio.bind(broker);
     (broker as any).portfolio = async () => ({ cash: NaN, buyingPower: 1000, equity: 1000, positions: [] });
 
+    // 2026-10-05 P1: account tripwires are debounced — needs 2 consecutive cycles.
+    await portfolioReconciliationWorker.reconcile();
     await portfolioReconciliationWorker.reconcile();
 
     const events = await db.select().from(schema.reconciliationEvents);
@@ -150,6 +152,8 @@ describe('PortfolioReconciliationWorker - open orders and account consistency (P
     // both the $50 floor and 1% tolerance.
     (broker as any).portfolio = async () => ({ cash: 1000, buyingPower: 1000, equity: 5000, positions: [] });
 
+    // 2026-10-05 P1: account tripwires are debounced — needs 2 consecutive cycles.
+    await portfolioReconciliationWorker.reconcile();
     await portfolioReconciliationWorker.reconcile();
 
     const events = await db.select().from(schema.reconciliationEvents);
