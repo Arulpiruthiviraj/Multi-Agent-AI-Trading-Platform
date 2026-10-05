@@ -9,7 +9,7 @@
  */
 import { db } from '../db';
 import { agentPredictions, agentPerformanceStats, agentConfidenceCalibration, trades, learnedRules, predictionOutcomes, kronosPredictions } from '../db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, or, isNull, notInArray, not, like, sql } from 'drizzle-orm';
 import { eventBus } from '../core/EventBus';
 import { AIRouter } from '../ai/AIRouter';
 import { bucketFor, calibratedConfidenceForBucket } from './ConfidenceCalibration';
@@ -167,11 +167,21 @@ export class ReflectionEngine {
       // REPLAY/BACKTEST - it must stay included, only the known-synthetic environments are
       // excluded.
       const tradesQueryStartedAt = Date.now();
-      const rawTradesRows = await db.select().from(trades).all();
+      // 2026-10-05 memory-investigation fix: the NON_LIVE_OPENING_TRADE_ENVS exclusion
+      // previously ran in JS AFTER materializing the entire table into V8. Pushed into SQL -
+      // row-for-row identical (NULL/legacy environments stay included via the IS NULL branch,
+      // matching the old `String(t.executionEnvironment || '')` JS semantics), so excluded
+      // synthetic rows never allocate V8 objects. tradesRowsScanned now counts rows actually
+      // materialized, which is the allocation cost this instrumentation watches.
+      const rawTradesRows = await db.select().from(trades).where(
+        or(
+          isNull(trades.executionEnvironment),
+          notInArray(sql<string>`upper(${trades.executionEnvironment})`, [...NON_LIVE_OPENING_TRADE_ENVS]),
+        ),
+      ).all();
       tradesQueryDurationMs = Date.now() - tradesQueryStartedAt;
       tradesRowsScanned = rawTradesRows.length;
-      const allTrades = rawTradesRows
-        .filter(t => !NON_LIVE_OPENING_TRADE_ENVS.has(String(t.executionEnvironment || '').toUpperCase()));
+      const allTrades = rawTradesRows;
       const now = Date.now();
 
       let successfulTradesCount = 0;
@@ -267,11 +277,19 @@ export class ReflectionEngine {
       // reflection cycle self-corrects agentPerformanceStats/agentConfidenceCalibration forward,
       // with no need to hand-edit already-persisted historical rows.
       const predictionsQueryStartedAt = Date.now();
-      const rawPredictionRows = await db.select().from(agentPredictions).all();
+      // 2026-10-05 memory-investigation fix: the telemetry-pulse traceId exclusion previously
+      // ran in JS AFTER materializing the entire agent_predictions table into V8. Pushed into
+      // SQL - row-for-row identical (NULL traceIds stay included via the IS NULL branch,
+      // matching the old `!p.traceId ||` JS semantics), so excluded rows never allocate.
+      const rawPredictionRows = await db.select().from(agentPredictions).where(
+        or(
+          isNull(agentPredictions.traceId),
+          not(like(agentPredictions.traceId, `${TELEMETRY_PULSE_TRACE_PREFIX}%`)),
+        ),
+      ).all();
       agentPredictionsQueryDurationMs = Date.now() - predictionsQueryStartedAt;
       agentPredictionsRowsScanned = rawPredictionRows.length;
-      const predictions = rawPredictionRows
-        .filter(p => !p.traceId || !p.traceId.startsWith(TELEMETRY_PULSE_TRACE_PREFIX));
+      const predictions = rawPredictionRows;
       const predictionById = new Map(predictions.map(p => [p.id, p]));
       const outcomes = await db.select().from(predictionOutcomes).where(eq(predictionOutcomes.sourceTable, 'agent_predictions'));
       for (const o of outcomes) {

@@ -1,5 +1,5 @@
 {
-  "$comment": "IBKR connection policy. Default is IB Gateway Desktop / TWS TCP socket (paper 4002 / 7497). Client Portal Web API (HTTPS :5000) is opt-in only via mode=web_api. Reviewed config — not a UI knob. Do not lower RiskEngine/OMS gates to compensate for broker transport.",
+  "$comment": "IBKR connection policy. Default is IB Gateway Desktop / TWS TCP socket (paper 4002 / 7497). Client Portal Web API (HTTPS :5000) is opt-in only via mode=web_api. Reviewed config \u2014 not a UI knob. Do not lower RiskEngine/OMS gates to compensate for broker transport.",
   "mode": "socket",
   "host": "127.0.0.1",
   "paperGatewayPort": 4002,
@@ -15,12 +15,23 @@
   "_webApiRequestTimeoutComment": "2026-10-04 remediation: the Web API adapter's https.request previously had no timeout at all - a Gateway that accepts the connection but never responds would leave placeOrder/cancelOrder hanging forever. Each request now fails closed after this long with a BROKER_TIMEOUT error; order placement treats it as UNKNOWN (never FAILED), reconciling by clientOrderId. Never auto-retried.",
   "webApiRequestTimeoutMs": 30000,
   "_marketDataRejectionComment": "2026-09-20 remediation for the Sept 18 rejection-triggered subscription desync (docs/audits): a reqMktData rejected with 354/10089 previously left the symbol permanently marked locally as already-subscribed, so it was never retried without an explicit external trigger. These keys govern the bounded per-symbol retry/backoff that replaces that silent-forever behavior. Deliberately a slower, coarser schedule than networkReconnectBackoffMs (transport reconnect) - an entitlement rejection is a different, slower-changing condition than a dropped socket.",
-  "marketDataRejectionRetryableCodes": [354, 10089],
-  "marketDataRejectionRetryBackoffMs": [60000, 120000, 300000, 600000, 900000],
+  "marketDataRejectionRetryableCodes": [
+    354,
+    10089
+  ],
+  "marketDataRejectionRetryBackoffMs": [
+    60000,
+    120000,
+    300000,
+    600000,
+    900000
+  ],
   "marketDataConfirmationTimeoutMs": 60000,
   "marketDataSubscriptionSweepIntervalMs": 30000,
   "_lifecycleHardeningComment": "2026-09-21 Phase 2 (post-adversarial-audit): marketDataConfirmationTimeoutMs above no longer causes a rejection - silence alone (no tick, no error, no IBKR acknowledgement callback) is real evidence of nothing, not evidence of failure, and is never allowed to trigger RETRY_WAIT. It now only flags an honest NO_ACKNOWLEDGEMENT diagnostic. marketDataUnconfirmedReprobeMs governs the much slower, bounded self-healing reissue for a symbol that stays unacknowledged (distinct from - and far less aggressive than - the explicit-rejection retry schedule above, since an unconfirmed request is weaker evidence of a real problem than an explicit 354/10089). The entitlement* keys govern the account-wide circuit breaker: only a genuine cluster of independent canary (protected-symbol) entitlement errors suppresses ordinary per-symbol retries, never a single symbol's own error.",
   "marketDataUnconfirmedReprobeMs": 300000,
   "entitlementDegradedCanaryThreshold": 2,
-  "entitlementDegradedWindowMs": 120000
+  "entitlementDegradedWindowMs": 120000,
+  "_trackedOrderMapMaxEntriesComment": "2026-10-05 memory-investigation fix: bounds IbkrSocketSession.trackedOrders (and its coherent index/commission maps). Only terminal orders (FILLED/CANCELED/REJECTED) are ever evicted, oldest-first; non-terminal orders are never evicted regardless of size.",
+  "trackedOrderMapMaxEntries": 1000
 }

@@ -1015,7 +1015,9 @@ export class MarketDataWorker {
   }
 
   private rejectTick(symbol: string, reason: string, detail: Record<string, unknown>): void {
-    const key = `${symbol}|${reason}`;
+    // Normalized key (2026-10-05): unsubscribe() purges this map by `${TICKER}|` prefix, so the
+    // symbol half must be in the same upper-cased form.
+    const key = `${quoteKey(symbol)}|${reason}`;
     const now = Date.now();
     const lastLog = this.lastRejectLogMs.get(key) ?? 0;
     if (now - lastLog < tradingSafety.marketDataRejectLogDedupMs) return;
@@ -1294,6 +1296,17 @@ export class MarketDataWorker {
     this.tickCounts.delete(ticker);
     this.subscribedAtMs.delete(ticker);
     this.marketDataErrors.delete(ticker);
+    // 2026-10-05 memory-investigation fix: these were missing from the unsubscribe
+    // cleanup, so entries accumulated per distinct symbol ever subscribed. delayedQuotes and
+    // lastNewsDiscoveryLogMs are keyed by the same upper-cased ticker (quoteKey(symbol) ===
+    // ticker for listed symbols); lastRejectLogMs is keyed `${symbol}|${reason}`, purged by
+    // prefix below.
+    this.delayedQuotes.delete(ticker);
+    this.lastNewsDiscoveryLogMs.delete(ticker);
+    const rejectPrefix = `${ticker}|`;
+    for (const key of this.lastRejectLogMs.keys()) {
+      if (key.startsWith(rejectPrefix)) this.lastRejectLogMs.delete(key);
+    }
     if (this.quoteBackend === 'ibkr_gateway' && this.ibkrBridge) {
       try { this.ibkrBridge.unsubscribe(ticker); } catch { /* ignore */ }
       return;

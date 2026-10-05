@@ -14,6 +14,8 @@
  * (unchanged) whenever no recent candidate qualifies.
  */
 
+import { tradingSafety } from '../config/tradingSafety';
+
 interface CandidateEntry {
   symbol: string;
   at: number;
@@ -22,6 +24,15 @@ interface CandidateEntry {
 const recent: Map<string, CandidateEntry> = new Map();
 
 export function recordCandidate(symbol: string, atMs: number = Date.now()): void {
+  // 2026-10-05 memory-investigation fix: entries were previously never deleted - the read
+  // path filtered by age but left stale entries in the map forever. Sweep entries older
+  // than the maximum age any production caller ever queries
+  // (tradingSafety.recentCandidatePriorityMaxAgeMs, used by Fundamental/MacroAgent), so no
+  // caller can observe a difference: anything swept could never have been returned.
+  const cutoff = atMs - tradingSafety.recentCandidatePriorityMaxAgeMs;
+  for (const [key, entry] of recent) {
+    if (entry.at < cutoff) recent.delete(key);
+  }
   recent.set(symbol.toUpperCase(), { symbol: symbol.toUpperCase(), at: atMs });
 }
 

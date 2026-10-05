@@ -54,6 +54,10 @@ export interface IbkrConnectionConfig {
   entitlementDegradedCanaryThreshold: number;
   /** 2026-09-21 Phase 2: clustering window for the canary threshold above. */
   entitlementDegradedWindowMs: number;
+  /** 2026-10-05 memory-investigation fix: bounds IbkrSocketSession.trackedOrders (and its
+   *  coherent clientOrderId/execId/commission maps). Only terminal orders are ever evicted,
+   *  oldest-first; non-terminal orders are never evicted regardless of size. */
+  trackedOrderMapMaxEntries: number;
 }
 
 function assertMode(v: unknown): IbkrConnectionMode {
@@ -123,6 +127,9 @@ export function loadIbkrConnection(): IbkrConnectionConfig {
     entitlementDegradedWindowMs: typeof raw.entitlementDegradedWindowMs === 'number' && raw.entitlementDegradedWindowMs > 0
       ? raw.entitlementDegradedWindowMs
       : 120000,
+    trackedOrderMapMaxEntries: typeof raw.trackedOrderMapMaxEntries === 'number' && Number.isInteger(raw.trackedOrderMapMaxEntries) && raw.trackedOrderMapMaxEntries > 0
+      ? raw.trackedOrderMapMaxEntries
+      : 1000,
   };
 }
 
