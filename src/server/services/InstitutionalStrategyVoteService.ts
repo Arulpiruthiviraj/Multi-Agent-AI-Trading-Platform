@@ -179,12 +179,48 @@ class InstitutionalStrategyVoteService {
     if (evaluation['triggerMet'] !== true) return { emitted: false, reason: 'TRIGGER_NOT_MET' };
     const side = evaluation['side'];
 
-    // 2026-10-05: Meta-label feature capture. Records the feature snapshot for EVERY
-    // triggered setup, BEFORE the confidence/price vote gates, so the future meta-model's
-    // training set sees the full triggered distribution (avoids selection bias). Fail-closed:
-    // recordMetaLabelFeatures logs and never throws. The traceId is generated here and reused
-    // for the vote emission below, so features join to agent_predictions.trace_id and from
-    // there to predictionOutcomes for labeled training rows. No meta-model is built here.
+    // ========================================================================
+    // 2026-10-05: Meta-label feature capture.
+    //
+    // QUANT CONTEXT: This is the data-collection point for the meta-labeling
+    // architecture (see MetaLabelStore.ts header for the full design). Every
+    // time a Java strategy's trigger conditions are met, we snapshot the
+    // features that a future meta-model will use to predict "will this setup
+    // be profitable after costs?"
+    //
+    // PLACEMENT — WHY HERE, WHY BEFORE THE GATES:
+    //   This hook sits after triggerMet=true but BEFORE the confidence gate
+    //   (0.6), the side check, and the price validation. This is the single
+    //   most important design decision in the capture pipeline: it ensures the
+    //   training distribution matches the deployment distribution. If we
+    //   captured only emitted votes, the meta-model would be trained on
+    //   "setups that passed all gates" but deployed on "all triggered setups"
+    //   — a textbook case of training-serving skew that would make its
+    //   predictions unreliable exactly on the marginal setups where they're
+    //   most needed.
+    //
+    // TRACEID THREADING:
+    //   We generate the traceId HERE (not at emission time) so the feature row
+    //   and the eventual vote share it deterministically. The same traceId is
+    //   reused in the emitTradeIdea() call below. This creates the join path:
+    //     meta_label_features.trace_id → agent_predictions.trace_id
+    //       → prediction_outcomes (the label)
+    //   For triggers that don't survive the gates below, the traceId never
+    //   appears in agent_predictions — those feature rows simply never join,
+    //   which is correct (no outcome exists to label them with).
+    //
+    // EVIDENCE SOURCE:
+    //   Hardcoded to 'PAPER' because this service only runs in the paper
+    //   trading path. If this capture pattern is ever reused in a backtest or
+    //   replay harness, the source MUST be parameterized — never let backtest
+    //   labels masquerade as paper labels in the training set.
+    //
+    // FAILURE MODE:
+    //   recordMetaLabelFeatures is fail-closed (catches, logs, never throws).
+    //   The outer try/catch here is defense-in-depth for the regime
+    //   classification, which runs user-adjacent math on the bar array.
+    //   A capture failure must never prevent a legitimate vote from emitting.
+    // ========================================================================
     const metaTraceId = generateTraceId(symbol);
     try {
       const regimeLabel = (() => {
