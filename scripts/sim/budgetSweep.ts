@@ -12,12 +12,12 @@
  *   The sweep reveals which constraint binds at each allocation level, and
  *   verifies the $0 edge case (no capital → no trades, cleanly, not crashing).
  *
- * BUDGET LEVELS (geometric progression, operator-specified):
- *   $0, $5k, $10k, $20k, $40k, $80k, $160k, $200k
- *   Geometric (doubling) because gate behavior changes logarithmically:
- *   the interesting transitions happen across orders of magnitude, not
- *   linear steps. $0 is the degenerate edge case. $200k is 2x the IBKR
- *   buying power, testing behavior when budget exceeds available capital.
+ * BUDGET LEVELS (random, operator-specified 2026-10-05):
+ *   Randomly sampled between $0 and $200k (uniform distribution, seeded PRNG
+ *   for reproducibility). Default 8 levels. Unlike fixed geometric steps,
+ *   random sampling avoids accidentally placing all levels on one side of a
+ *   gate threshold. $0 remains possible (degenerate edge case: no capital →
+ *   no trades, cleanly).
  *
  * METHODOLOGY (for comparability):
  *   - Same scenario, same seed, same universe, same duration for every level.
@@ -34,10 +34,14 @@
  *
  * Flags:
  *   --scenario=<id>   scenario to run at each level (default QUIET_OPEN)
- *   --seed=<n>        PRNG seed, same for all levels (default 12345)
+ *   --seed=<n>        PRNG seed, same for all levels AND for budget sampling
+ *                     (default 12345). Same seed → same budget levels.
  *   --duration=<min> session length per level (default 30, shorter than the
  *                    standard 90 — 8 levels × 90min would take very long)
  *   --symbols=<n>     universe size per level (default 5)
+ *   --levels=<n>      how many random budget levels to sample (default 8)
+ *   --min-budget=<n>  lower bound for random sampling (default 0)
+ *   --max-budget=<n>  upper bound for random sampling (default 200000)
  */
 
 import { spawn } from 'node:child_process';
@@ -49,8 +53,42 @@ import type { BudgetSweepMetrics } from './budgetSweepChild';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Geometric progression: the operator asked for 0 → 5k → 10k → 20k → ... → 200k.
-const BUDGET_LEVELS = [0, 5_000, 10_000, 20_000, 40_000, 80_000, 160_000, 200_000];
+/**
+ * 2026-10-05: Budget levels are RANDOMLY sampled, not fixed.
+ * Operator request: "all levels mean between 0 to 200k random number allocation."
+ *
+ * Why random (not geometric): the operator wants to observe behavior at
+ * arbitrary allocations, not just clean round numbers. Random sampling
+ * avoids the bias of hand-picked levels (which might accidentally sit on
+ * either side of a gate threshold without revealing it).
+ *
+ * Reproducibility: levels are drawn from a seeded PRNG (mulberry32) keyed
+ * off the main --seed, so the same seed always produces the same levels.
+ * Different --seed → different levels. This keeps the sweep deterministic
+ * (same input → same output) while still exploring the space randomly.
+ */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function generateRandomBudgetLevels(count: number, minBudget: number, maxBudget: number, seed: number): number[] {
+  const rand = mulberry32(seed);
+  const levels: number[] = [];
+  for (let i = 0; i < count; i++) {
+    // Round to the nearest dollar — fractional-cent budgets are meaningless.
+    const level = Math.round(minBudget + rand() * (maxBudget - minBudget));
+    levels.push(level);
+  }
+  // Sort ascending so the report reads naturally (small → large).
+  levels.sort((a, b) => a - b);
+  return levels;
+}
 
 function buildChildEnv(dbPath: string): NodeJS.ProcessEnv {
   const env = { ...process.env };
@@ -153,13 +191,20 @@ async function main() {
   const durationMinutes = Number(args['duration'] ?? 30);
   const symbols = Number(args['symbols'] ?? 5);
   const speed = 1;
+  // Random budget levels between $0 and $200k (operator request).
+  // --levels=N controls how many (default 8). --min-budget/--max-budget
+  // override the range. Levels are seeded from the main seed for reproducibility.
+  const levelCount = Number(args['levels'] ?? 8);
+  const minBudget = Number(args['min-budget'] ?? 0);
+  const maxBudget = Number(args['max-budget'] ?? 200_000);
+  const budgetLevels = generateRandomBudgetLevels(levelCount, minBudget, maxBudget, seed);
 
-  console.log(`\nBudget sweep: ${BUDGET_LEVELS.length} levels, scenario=${scenarioId}, seed=${seed}, ${durationMinutes}min each`);
-  console.log(`Levels: ${BUDGET_LEVELS.map((b) => '$' + b.toLocaleString()).join(', ')}`);
+  console.log(`\nBudget sweep: ${budgetLevels.length} RANDOM levels, scenario=${scenarioId}, seed=${seed}, ${durationMinutes}min each`);
+  console.log(`Levels: ${budgetLevels.map((b) => '$' + b.toLocaleString()).join(', ')}`);
   console.log('Same seed/scenario for all levels — only the budget varies.\n');
 
   const results: BudgetSweepMetrics[] = [];
-  for (const budget of BUDGET_LEVELS) {
+  for (const budget of budgetLevels) {
     const simulationId = `budget_sweep_${budget}_${Date.now()}`;
     try {
       const metrics = await runBudgetLevelInChild(
