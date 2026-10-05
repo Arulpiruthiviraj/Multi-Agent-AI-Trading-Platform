@@ -9,9 +9,19 @@ const { mockDb } = vi.hoisted(() => {
     all() { return Promise.resolve([]); },
     then(resolve: any, reject: any) { return Promise.resolve([]).then(resolve, reject); },
   };
-  const mockDb = {
+  // values() returns a thenable (existing async insert().values() call sites keep working)
+  // that is ALSO synchronously .run()-able, matching better-sqlite3's real transaction API
+  // used by recordConsensusTransaction()'s db.transaction((tx) => { tx.insert(...).values(...).run(); }).
+  const insertBuilder: any = {
+    values: () => ({
+      run: () => undefined,
+      then: (resolve: any, reject: any) => Promise.resolve({}).then(resolve, reject),
+    }),
+  };
+  const mockDb: any = {
     select: () => builder,
-    insert: () => ({ values: () => Promise.resolve({}) }),
+    insert: () => insertBuilder,
+    transaction: (cb: (tx: any) => void) => cb(mockDb),
   };
   return { mockDb };
 });

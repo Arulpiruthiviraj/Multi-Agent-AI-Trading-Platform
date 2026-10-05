@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 /**
  * PriceFlash — Bloomberg-style tick flash for price cells.
@@ -18,7 +18,7 @@ export function PriceFlash({
   /** Numeric value used only for direction detection (null/NaN = no flash). */
   value: number | null;
   /** Formatted price content to render. */
-  children: React.ReactNode;
+  children: ReactNode;
   className?: string;
 }) {
   const reduceMotion =
