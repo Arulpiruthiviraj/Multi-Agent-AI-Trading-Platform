@@ -146,3 +146,18 @@ New vs v0.1 (extends #16 data lineage). Qlib (MIT) is not adoptable as a platfor
 3. Portfolio robustness: shrinkage (Rec 2) → HRP (Rec 4) → vol targeting + risk budgets (companion entries).
 4. Strategy activation: the 5 research cards in priority order, each through the full charter lifecycle.
 5. View-dependent methods (Black–Litterman, Kelly-as-cap) unlock only after calibrated views / validated edge statistics exist.
+
+## v0.3 — Web research synthesis (2026-10-05)
+
+Three new knowledge-base entries from today's targeted web research. None contradict v0.1/v0.2; all refine sequencing.
+
+### New entries
+- `ml-meta-labeling.md` — **the #1 ML project for Argus.** ML predicts *whether a signal works* (classification on "was this trade profitable after costs"), never direction from scratch. S-curve bet sizing: size = 2·N((p−0.5)/√(p(1−p))) − 1. Keeps Java strategies as primary generators; ML only sizes. Gated on paper-trading outcomes flowing (labels need real fills).
+- `data-sec-edgar.md` — **cheapest high-value data upgrade: $0.** SEC EDGAR JSON API (10 req/s, public domain): Form 4 (insider buys, 2-day lag), 8-K Item 2.02 (earnings, 4-day lag), 13F (45-day lag). Unlocks the PEAD card's timing half; consensus estimates still need a vendor. Phase 1: Form 4 scraper.
+- `architecture-bayesian-confluence.md` — decision framing upgrade: posterior P(edge>0 | signals, regime) net of expected costs, not binary checklists. Concrete steps: calibrate agent confidences against paper outcomes → subtract expected cost in ChiefTrader → regime-conditional priors from HMM.
+
+### Sequencing update (v0.3)
+The v0.2 sequence stands. Insertions:
+- After shortfall measurement (step 2): Form 4 EDGAR scraper — it is pure data plumbing (TS acceptable), zero vendor cost, and feeds both a new signal family and the PEAD timing gate.
+- After validation hygiene (step 1): begin collecting the labeled outcome dataset meta-labeling needs — every paper trade logged with features at entry. The ML comes later; the *labels* must start now.
+- Bayesian confluence is a background architecture track, not a project: each of its 3 steps is independently testable and none require a rewrite.
