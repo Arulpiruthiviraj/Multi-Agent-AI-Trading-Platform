@@ -20,6 +20,10 @@ export interface IbkrConnectionConfig {
   preferredAccountId: string | null;
   webApiGatewayUrlDefault: string;
   openBrowserOnWebApiStartup: boolean;
+  /** 2026-10-04 remediation: per-request timeout for the Client Portal Web API adapter's
+   *  https.request (previously none existed - a silent Gateway hung the promise forever).
+   *  Timeout rejects as UNKNOWN, never FAILED; no auto-retry of order placement. */
+  webApiRequestTimeoutMs: number;
   /** 2026-09-20 remediation: IBKR error codes eligible for bounded subscription retry (entitlement-
    *  class rejections only - 354/10089). Never includes 200 (contract-resolution) or 10197
    *  (competing-session) - those keep their own existing, separate handling. */
@@ -95,6 +99,9 @@ export function loadIbkrConnection(): IbkrConnectionConfig {
       (typeof raw.webApiGatewayUrlDefault === 'string' && raw.webApiGatewayUrlDefault)
       || 'https://localhost:5000/v1/api',
     openBrowserOnWebApiStartup: raw.openBrowserOnWebApiStartup === true,
+    webApiRequestTimeoutMs: typeof raw.webApiRequestTimeoutMs === 'number' && raw.webApiRequestTimeoutMs > 0
+      ? raw.webApiRequestTimeoutMs
+      : 30000,
     marketDataRejectionRetryableCodes: Array.isArray(raw.marketDataRejectionRetryableCodes) && raw.marketDataRejectionRetryableCodes.every((n) => typeof n === 'number')
       ? raw.marketDataRejectionRetryableCodes as number[]
       : [354, 10089],
