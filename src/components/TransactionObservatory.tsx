@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { UnavailableHint } from './UnavailableHint';
 import { formatStatusHint, formatTransactionDecision, formatTransactionOutcome } from './observatoryHonesty';
+import { StrategyDecisionTheater, type StrategyEvaluationReplay } from './StrategyDecisionTheater';
 
 interface Evidence {
   id: number;
@@ -144,6 +145,8 @@ export default function TransactionObservatory({ transactionId, onClose }: { tra
   const [expandedGate, setExpandedGate] = useState<number | null>(null);
   const [showRawEvents, setShowRawEvents] = useState(false);
   const [expandedStrategy, setExpandedStrategy] = useState<string | null>(null);
+  // 2026-10-05: Strategy decision theater — replay a strategy's decision as an animation.
+  const [theaterReplay, setTheaterReplay] = useState<StrategyEvaluationReplay | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -408,6 +411,24 @@ export default function TransactionObservatory({ transactionId, onClose }: { tra
                               {s.invalidationConditions.length > 0 && (
                                 <div><span className="text-slate-500 font-bold uppercase tracking-widest text-[9px]">Invalidation: </span>{s.invalidationConditions.join(', ')}</div>
                               )}
+                              {/* 2026-10-05: Animated replay of this strategy's decision */}
+                              <button
+                                onClick={() => setTheaterReplay({
+                                  strategyId: s.strategy,
+                                  symbol: transaction?.symbol ?? '',
+                                  side: s.side === 'BUY' ? 'BUY' : 'SELL',
+                                  setupScore: s.setupScore,
+                                  confidence: s.confidence,
+                                  triggerMet: s.conditionsMet.length > 0,
+                                  conditionsMet: s.conditionsMet,
+                                  conditionsFailed: s.conditionsFailed,
+                                  contradictions: s.contradictions,
+                                })}
+                                className="mt-1 self-start text-[10px] px-2.5 py-1 rounded-full border border-sky-500/30 text-sky-300 hover:bg-sky-500/10 transition-colors flex items-center gap-1.5"
+                              >
+                                <Play size={10} />
+                                Watch how {s.strategy} decided
+                              </button>
                             </div>
                           )}
                         </div>
@@ -533,6 +554,25 @@ export default function TransactionObservatory({ transactionId, onClose }: { tra
           </div>
         </div>
       </div>
+
+      {/* 2026-10-05: Strategy decision theater modal */}
+      {theaterReplay && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => setTheaterReplay(null)}
+        >
+          <div onClick={(e) => e.stopPropagation()} className="relative">
+            <button
+              onClick={() => setTheaterReplay(null)}
+              className="absolute -top-2 -right-2 z-10 p-1.5 rounded-full bg-white/10 text-white/70 hover:text-white hover:bg-white/20 transition-colors"
+              aria-label="Close"
+            >
+              <X size={16} />
+            </button>
+            <StrategyDecisionTheater replay={theaterReplay} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
