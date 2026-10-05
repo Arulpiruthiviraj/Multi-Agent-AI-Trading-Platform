@@ -12,7 +12,9 @@ export type PortfolioDecisionState =
   | 'WATCH'
   | 'WARNING'
   | 'EXIT_CANDIDATE'
-  | 'NO_PRICE';
+  | 'NO_PRICE'
+  | 'STALE_PRICE'
+  | 'NO_BASIS';
 
 const lastExitEmitAt = new Map<string, number>();
 

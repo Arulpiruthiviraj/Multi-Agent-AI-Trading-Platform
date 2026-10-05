@@ -29,6 +29,19 @@ import { marketDataWorker } from './MarketDataWorker';
 const QTY_TOLERANCE = tradingSafety.reconQtyTolerance;
 const STALE_PRICE_THRESHOLD_MS = tradingSafety.stalePriceThresholdMs;
 export const SIGNIFICANT_MISMATCH_DOLLARS = tradingSafety.reconSignificantMismatchDollars;
+
+/**
+ * 2026-10-05 P1 fix: `qty * price` with a missing/non-finite price is NaN, and NaN poisons
+ * Math.max() — worstImpact becomes NaN, `NaN >= SIGNIFICANT_MISMATCH_DOLLARS` is false, and
+ * a CONFIRMED divergence can never trip the pause. A divergence whose dollar size cannot be
+ * computed must fail CLOSED (trip the gate), never slip through as NaN.
+ */
+export function safeDollarImpact(qty: number, price: number | null | undefined): number {
+  const q = typeof qty === 'number' && Number.isFinite(qty) ? Math.abs(qty) : 0;
+  const p = typeof price === 'number' && Number.isFinite(price) && price > 0 ? price : NaN;
+  const impact = q * p;
+  return Number.isFinite(impact) && impact > 0 ? impact : SIGNIFICANT_MISMATCH_DOLLARS;
+}
 const ACCOUNT_CONSISTENCY_TOLERANCE_PCT = tradingSafety.reconAccountConsistencyTolerancePct;
 const ACCOUNT_CONSISTENCY_TOLERANCE_FLOOR_DOLLARS = tradingSafety.reconAccountConsistencyToleranceFloorDollars;
 const PAUSE_CONSECUTIVE_CYCLES = tradingSafety.reconPauseConsecutiveMismatchCycles;
@@ -46,7 +59,8 @@ interface MismatchDetail {
   symbol: string;
   type: 'QUANTITY_DRIFT' | 'MISSING_LOCALLY' | 'MISSING_REMOTELY'
       | 'OPEN_ORDER_MISSING_LOCALLY' | 'OPEN_ORDER_MISSING_REMOTELY' | 'ACCOUNT_INCONSISTENCY' | 'ACCOUNT_VALUATION_UNAVAILABLE'
-      | 'FILLED_ORDER_MISSING_LOCALLY' | 'POSITION_FILL_CONFLICT' | 'POSITION_FILL_BASELINE_UNAVAILABLE';
+      | 'FILLED_ORDER_MISSING_LOCALLY' | 'POSITION_FILL_CONFLICT' | 'POSITION_FILL_BASELINE_UNAVAILABLE'
+      | 'SHORT_POSITION_UNMONITORED';
   localQty: number;
   remoteQty: number;
   approxDollarImpact: number;
@@ -197,7 +211,7 @@ export class PortfolioReconciliationWorker {
           mismatches.push({ symbol, type: reason === 'POSITION_FILL_BASELINE_UNAVAILABLE'
             ? 'POSITION_FILL_BASELINE_UNAVAILABLE' : 'POSITION_FILL_CONFLICT',
             localQty: latestPositionFill(scope)?.quantity ?? 0, remoteQty,
-            approxDollarImpact: Math.max(SIGNIFICANT_MISMATCH_DOLLARS, Math.abs(remoteQty * price)) });
+            approxDollarImpact: safeDollarImpact(remoteQty, price) });
         }
         return true;
       };
@@ -210,6 +224,23 @@ export class PortfolioReconciliationWorker {
         const qty = pos.quantity;
         const avgPrice = pos.entryPrice;
         const price = pos.currentPrice || avgPrice;
+        // 2026-10-05 P1 fix: a broker-side SHORT position (negative qty — manual trade,
+        // corporate action, or an unintended short like the 2026-10-01 incident) must never
+        // be hydrated or drift-written verbatim: PortfolioMonitor skips quantity <= 0 rows
+        // forever (no stop/target review) and the MISSING_REMOTELY loop skips them too, so
+        // writing one manufactures a false RECONCILIATION_MATCH for a position nothing
+        // monitors. Record it as an operator-alert mismatch instead; the normal
+        // worstImpact >= SIGNIFICANT_MISMATCH_DOLLARS gate pauses new trading until the
+        // operator resolves it. Dust below QTY_TOLERANCE is ignored.
+        if (typeof qty === 'number' && qty < -QTY_TOLERANCE) {
+          if (!mismatches.some(m => m.symbol === symbol && m.type === 'SHORT_POSITION_UNMONITORED')) {
+            mismatches.push({ symbol, type: 'SHORT_POSITION_UNMONITORED',
+              localQty: 0, remoteQty: qty,
+              approxDollarImpact: safeDollarImpact(qty, price) });
+          }
+          console.error(`[PortfolioReconciliation] ${symbol}: broker holds SHORT position (${qty}) — NOT hydrated (Argus has no short-monitoring path). Operator review required.`);
+          continue;
+        }
         if (rejectUnconfirmedPosition(symbol, qty, price)) continue;
 
         const local = findHolding(localHoldings, symbol);
@@ -310,7 +341,7 @@ export class PortfolioReconciliationWorker {
           console.warn(`[PortfolioReconciliation] ${symbol} MISSING_LOCALLY deferred (${this.consecutiveFaults.get(faultKey)}/${PAUSE_CONSECUTIVE_CYCLES}) — not pausing on a one-off fetch miss.`);
           continue;
         }
-        mismatches.push({ symbol, type: 'MISSING_LOCALLY', localQty: 0, remoteQty: qty, approxDollarImpact: qty * price });
+        mismatches.push({ symbol, type: 'MISSING_LOCALLY', localQty: 0, remoteQty: qty, approxDollarImpact: safeDollarImpact(qty, price) });
       }
 
       // Remove locals the broker no longer holds (canonical match, not raw string equality).
@@ -333,7 +364,7 @@ export class PortfolioReconciliationWorker {
           continue;
         }
         const price = local.currentPrice || local.averagePrice;
-        mismatches.push({ symbol: localCanon || local.symbol, type: 'MISSING_REMOTELY', localQty: local.quantity, remoteQty: 0, approxDollarImpact: local.quantity * price });
+        mismatches.push({ symbol: localCanon || local.symbol, type: 'MISSING_REMOTELY', localQty: local.quantity, remoteQty: 0, approxDollarImpact: safeDollarImpact(local.quantity, price) });
         console.warn(`[PortfolioReconciliation] Local record for ${local.symbol} (${local.quantity}) has no matching broker position - clearing it.`);
         db.update(portfolio).set({
           quantity: 0,
@@ -457,23 +488,46 @@ export class PortfolioReconciliationWorker {
         const resolvedMarks = new Map(remotePositions.map((p: any) => [p.symbol, resolveMark(p)]));
         const missingMarks = remotePositions.some((p: any) => p.quantity !== 0 && resolvedMarks.get(p.symbol) === null);
         const nonFinite = [cash, buyingPower, equity].some(v => typeof v !== 'number' || !Number.isFinite(v));
+        // 2026-10-05 P1 fix: the three account tripwires below previously paused trading on a
+        // SINGLE transient read (one bad equity tick, one adapter hiccup) with no auto-resume
+        // path. Every other pause-triggering mismatch in this worker requires
+        // PAUSE_CONSECUTIVE_CYCLES consecutive observations — the account tripwires get the
+        // same debounce, with dedicated fault keys so a transient blip never pauses trading.
         if (nonFinite) {
-          mismatches.push({ symbol: '__ACCOUNT__', type: 'ACCOUNT_INCONSISTENCY', localQty: 0, remoteQty: 0, approxDollarImpact: SIGNIFICANT_MISMATCH_DOLLARS });
-          console.error(`[PortfolioReconciliation] ${broker.name} reported a non-finite cash/buyingPower/equity value: cash=${cash} buyingPower=${buyingPower} equity=${equity}`);
+          const faultKey = discrepancyFaultKey('ACCOUNT_INCONSISTENCY', '__ACCOUNT_NONFINITE__');
+          liveFaultKeys.add(faultKey);
+          if (confirmConsecutiveFault(this.consecutiveFaults, faultKey, PAUSE_CONSECUTIVE_CYCLES)) {
+            mismatches.push({ symbol: '__ACCOUNT__', type: 'ACCOUNT_INCONSISTENCY', localQty: 0, remoteQty: 0, approxDollarImpact: SIGNIFICANT_MISMATCH_DOLLARS });
+            console.error(`[PortfolioReconciliation] ${broker.name} reported a non-finite cash/buyingPower/equity value: cash=${cash} buyingPower=${buyingPower} equity=${equity}`);
+          } else {
+            console.warn(`[PortfolioReconciliation] Non-finite account values deferred (${this.consecutiveFaults.get(faultKey)}/${PAUSE_CONSECUTIVE_CYCLES}) — not pausing on a one-off read.`);
+          }
         } else if (missingMarks) {
           // Cost basis is not market value. Unknown valuation cannot prove account consistency.
           // Reached only when NEITHER the broker NOR a fresh live tick can supply a mark - a
           // genuine data gap, not a misclassified startup race or a priced position.
-          mismatches.push({ symbol: '__ACCOUNT__', type: 'ACCOUNT_VALUATION_UNAVAILABLE', localQty: 0,
-            remoteQty: 0, approxDollarImpact: SIGNIFICANT_MISMATCH_DOLLARS });
+          const faultKey = discrepancyFaultKey('ACCOUNT_VALUATION_UNAVAILABLE', '__ACCOUNT__');
+          liveFaultKeys.add(faultKey);
+          if (confirmConsecutiveFault(this.consecutiveFaults, faultKey, PAUSE_CONSECUTIVE_CYCLES)) {
+            mismatches.push({ symbol: '__ACCOUNT__', type: 'ACCOUNT_VALUATION_UNAVAILABLE', localQty: 0,
+              remoteQty: 0, approxDollarImpact: SIGNIFICANT_MISMATCH_DOLLARS });
+          } else {
+            console.warn(`[PortfolioReconciliation] Missing valuation marks deferred (${this.consecutiveFaults.get(faultKey)}/${PAUSE_CONSECUTIVE_CYCLES}) — not pausing on a one-off gap.`);
+          }
         } else {
           const positionsValue = remotePositions.reduce((sum: number, p: any) => sum + (resolvedMarks.get(p.symbol) ?? 0) * p.quantity, 0);
           const expectedEquity = cash + positionsValue;
           const drift = Math.abs(equity - expectedEquity);
           const tolerance = Math.max(ACCOUNT_CONSISTENCY_TOLERANCE_FLOOR_DOLLARS, equity * ACCOUNT_CONSISTENCY_TOLERANCE_PCT);
           if (drift > tolerance) {
-            mismatches.push({ symbol: '__ACCOUNT__', type: 'ACCOUNT_INCONSISTENCY', localQty: 0, remoteQty: 0, approxDollarImpact: drift });
-            console.error(`[PortfolioReconciliation] ${broker.name}'s own reported equity ($${equity.toFixed(2)}) does not match cash+positions ($${expectedEquity.toFixed(2)}) - drift $${drift.toFixed(2)} exceeds tolerance $${tolerance.toFixed(2)}.`);
+            const faultKey = discrepancyFaultKey('ACCOUNT_INCONSISTENCY', '__ACCOUNT_DRIFT__');
+            liveFaultKeys.add(faultKey);
+            if (confirmConsecutiveFault(this.consecutiveFaults, faultKey, PAUSE_CONSECUTIVE_CYCLES)) {
+              mismatches.push({ symbol: '__ACCOUNT__', type: 'ACCOUNT_INCONSISTENCY', localQty: 0, remoteQty: 0, approxDollarImpact: drift });
+              console.error(`[PortfolioReconciliation] ${broker.name}'s own reported equity ($${equity.toFixed(2)}) does not match cash+positions ($${expectedEquity.toFixed(2)}) - drift $${drift.toFixed(2)} exceeds tolerance $${tolerance.toFixed(2)}.`);
+            } else {
+              console.warn(`[PortfolioReconciliation] Account drift deferred (${this.consecutiveFaults.get(faultKey)}/${PAUSE_CONSECUTIVE_CYCLES}) — not pausing on a one-off read.`);
+            }
           }
         }
       } catch (e) {

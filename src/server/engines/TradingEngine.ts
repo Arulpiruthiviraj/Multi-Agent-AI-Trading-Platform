@@ -594,7 +594,7 @@ class TradingEngine {
         }
 
         const verb = newState === 'TRADING_ENABLED' ? 'start' : 'veto';
-        this.logHistory(verb, `Trading state: ${fromState} -> ${newState}. Reason: ${opts.reason}${cancelledOrderIds.length ? ` (cancelled ${cancelledOrderIds.length} open order(s))` : ''}`);
+        this.logHistory(verb, `Trading state: ${fromState} -> ${newState}. Reason: ${opts.reason}${cancelledOrderIds.length ? ` (cancel requested for ${cancelledOrderIds.length} open order(s) — confirmation pending)` : ''}`);
 
         // Phase 12 (ARGUS_PRE_IMPLEMENTATION_BASELINE.md) - previously this method emitted no real
         // event at all, so nothing could subscribe to a real kill-switch transition without polling
@@ -642,12 +642,19 @@ class TradingEngine {
                     const ok = await broker.cancelOrder(t.brokerOrderId);
                     if (ok) {
                         cancelled.push(t.brokerOrderId);
-                        // Previously left this row at its stale pre-cancel status forever - the
-                        // broker-side cancellation was real, but Argus's own record of it wasn't.
+                        // 2026-10-05 P1 fix: `ok` means the cancel REQUEST was accepted by the
+                        // adapter, NOT that the broker confirmed cancellation. For IBKR the
+                        // adapter returns true on socket-write (confirmation arrives async via
+                        // orderStatus) and the fill can still win the race — stamping terminal
+                        // CANCELED here creates an impossible row (CANCELED with fills / a real
+                        // broker position) and overstates the kill-switch audit. Stamp
+                        // non-terminal CANCEL_REQUESTED; the OMS follow-up job treats it as
+                        // still-open (not in TERMINAL_ORDER_STATUSES) and reconciles it to
+                        // CANCELED or FILLED on broker confirmation.
                         try {
-                            await db.update(schema.trades).set({ status: 'CANCELED' }).where(eq(schema.trades.id, t.id));
+                            await db.update(schema.trades).set({ status: 'CANCEL_REQUESTED' }).where(eq(schema.trades.id, t.id));
                         } catch (e) {
-                            console.error(`[TradingEngine] Cancelled order ${t.brokerOrderId} at the broker but failed to update its trades row`, e);
+                            console.error(`[TradingEngine] Cancel requested for order ${t.brokerOrderId} but failed to update its trades row`, e);
                         }
                     }
                 } catch (e) {

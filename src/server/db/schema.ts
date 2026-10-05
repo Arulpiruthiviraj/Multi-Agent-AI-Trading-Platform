@@ -85,6 +85,13 @@ export const settings = sqliteTable('settings', {
   tradingState: text('trading_state').notNull().default('TRADING_ENABLED'), // TRADING_ENABLED | TRADING_PAUSED | EMERGENCY_STOP
   maxPortfolioDrawdownPct: real('max_portfolio_drawdown_pct').default(0.15), // peak-to-trough real equity drawdown cap
   peakEquity: real('peak_equity'), // running high-water-mark of real broker equity, null until first observed
+  // 2026-10-05 P1 fix: the daily-loss kill-switch baseline (dayStartEquity/dayStartDateStr)
+  // was in-memory only on TradingEngine.state — a mid-day restart captured the
+  // already-depressed equity as the day's baseline and zeroed currentDailyLoss, weakening
+  // the kill switch for the rest of the day. Persisted here like peakEquity/tradingState
+  // above so the baseline survives restarts.
+  dayStartEquity: real('day_start_equity'), // start-of-trading-day broker equity baseline, null until first observed
+  dayStartDateStr: text('day_start_date_str'), // America/New_York YYYY-MM-DD the baseline belongs to
   maxOpenPositions: integer('max_open_positions').default(10),
   maxOrdersPerMinute: integer('max_orders_per_minute').default(5),
 

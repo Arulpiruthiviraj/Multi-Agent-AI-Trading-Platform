@@ -1508,13 +1508,20 @@ export class MarketDataWorker {
           if (!this.acceptTickTimestamp(sym, timestampMs, msg.bp)) continue;
           this.lastTick.set(sym, { timestampMs, price: msg.bp });
           this.latestPrices.set(sym, msg.bp);
-          this.latestBidEvidence.set(sym, { price: msg.bp, observedAtMs: Date.now() });
-          this.latestPriceTimestamps.set(sym, Date.now());
+          // 2026-10-05 P1 fix: freshness must be measured from the EXCHANGE timestamp
+          // (timestampMs, parsed from msg.t above), not receipt time. Stamping Date.now()
+          // here let a burst of delayed quotes processed after a socket stall or GC pause
+          // look fresh to getLatestSpreadBps() and the RiskEngine extended-hours gate —
+          // the exact fabrication ("bid from 4pm paired with ask from 9am") the spread
+          // function's doc comment says it prevents. acceptTickTimestamp() above already
+          // rejects future/out-of-order exchange timestamps, so timestampMs <= now here.
+          this.latestBidEvidence.set(sym, { price: msg.bp, observedAtMs: timestampMs });
+          this.latestPriceTimestamps.set(sym, timestampMs);
           // Additive only - never gates isDuplicateTick/acceptTickTimestamp/maybeEmitMarketData
           // above, all of which stay keyed on the bid price exactly as before this field existed.
           if (typeof msg.ap === 'number' && Number.isFinite(msg.ap) && msg.ap > 0) {
             this.latestAskPrices.set(sym, msg.ap);
-            this.latestAskTimestamps.set(sym, Date.now());
+            this.latestAskTimestamps.set(sym, timestampMs);
           }
           this.tickCounts.set(sym, (this.tickCounts.get(sym) ?? 0) + 1);
           if (this.lastError && /symbol limit exceeded/i.test(this.lastError)) {
@@ -1529,7 +1536,9 @@ export class MarketDataWorker {
           if (!this.acceptTickTimestamp(sym, timestampMs, msg.p)) continue;
           this.lastTick.set(sym, { timestampMs, price: msg.p });
           this.latestPrices.set(sym, msg.p);
-          this.latestPriceTimestamps.set(sym, Date.now());
+          // 2026-10-05 P1 fix: same exchange-timestamp freshness as the "q" path above —
+          // receipt-time stamping let delayed trade bursts look fresh to getLatestPriceAgeMs().
+          this.latestPriceTimestamps.set(sym, timestampMs);
           this.tickCounts.set(sym, (this.tickCounts.get(sym) ?? 0) + 1);
           if (this.lastError && /symbol limit exceeded/i.test(this.lastError)) {
             this.lastError = null;

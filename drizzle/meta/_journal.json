@@ -610,6 +610,13 @@
       "when": 1791198000000,
       "tag": "0086_trace_id_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "6",
+      "when": 1791198000001,
+      "tag": "0087_daily_loss_baseline",
+      "breakpoints": true
     }
   ]
 }

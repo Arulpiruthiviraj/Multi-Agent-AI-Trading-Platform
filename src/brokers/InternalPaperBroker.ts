@@ -106,6 +106,10 @@ export class InternalPaperBroker implements BrokerPlugin {
   async placeOrder(orderData: Partial<Order>): Promise<Order> {
     const newOrder: Order = {
       id: `ord_${Date.now()}_${process.hrtime()[1]}`,
+      // 2026-10-05 P1 fix: preserve the OMS clientOrderId. Dropping it meant simulator
+      // fills could not reconcile to their local OMS rows and were misclassified as
+      // external manual activity.
+      clientOrderId: orderData.clientOrderId,
       symbol: orderData.symbol!,
       side: orderData.side!,
       type: orderData.type || 'MARKET',
@@ -119,6 +123,14 @@ export class InternalPaperBroker implements BrokerPlugin {
     };
     this._orders.set(newOrder.id, newOrder);
     return newOrder;
+  }
+
+  /** 2026-10-05 P1 fix: look up a simulator order by the OMS clientOrderId it was placed with. */
+  async getOrderByClientOrderId(clientOrderId: string): Promise<Order | null> {
+    for (const order of this._orders.values()) {
+      if (order.clientOrderId === clientOrderId) return order;
+    }
+    return null;
   }
   
   async modifyOrder(orderId: string, updates: Partial<Order>): Promise<Order> {
@@ -221,16 +233,22 @@ export class InternalPaperBroker implements BrokerPlugin {
                });
             }
           } else if (order.side === 'SELL') {
-             this.cash += cost;
+             // 2026-10-05 P1 fix: verify the position covers the sell BEFORE crediting cash.
+             // The old code credited cash first, then silently did nothing to the (missing or
+             // too-small) position — minting cash on over-sells. Long-only simulator: reject.
              const pos = this._positions.get(order.symbol);
-             if (pos) {
-                if (pos.quantity <= order.quantity) {
-                   this._positions.delete(order.symbol); // closed out
-                } else {
-                   pos.quantity -= order.quantity;
-                }
+             const heldQty = pos?.quantity ?? 0;
+             if (heldQty < order.quantity) {
+                order.status = 'REJECTED'; // Insufficient position: cannot sell more than held
+                order.updatedAt = new Date();
+                continue;
              }
-             // For short selling, we would handle negative quantity, but we assume long only for simplicity unless requested
+             this.cash += cost;
+             if (pos!.quantity <= order.quantity) {
+                this._positions.delete(order.symbol); // closed out
+             } else {
+                pos!.quantity -= order.quantity;
+             }
           }
         }
       }

@@ -42,7 +42,7 @@ import { EVENTS } from '../core/eventNames';
 import { isTelemetryPulsePayload } from '../core/telemetryPulse';
 import { createSingleFlightGuard } from '../core/singleFlightInterval';
 import { db } from '../db';
-import { trades, settings, brokerConnections, portfolio, reconciliationEvents } from '../db/schema';
+import { trades, settings, brokerConnections, portfolio, reconciliationEvents, fills } from '../db/schema';
 import { eq, and, notInArray, isNotNull, inArray, isNull, gte } from 'drizzle-orm';
 import crypto from 'crypto';
 import { BrokerManager } from '../../brokers/BrokerManager';
@@ -331,7 +331,10 @@ export class OrderManagementService {
       try {
         await db.update(trades)
           .set({ status: 'RECONCILIATION_REQUIRED' })
-          .where(and(eq(trades.id, orderId), notInArray(trades.status, ['FILLED', 'REJECTED', 'CANCELED'])));
+          // 2026-10-05 P1 fix: never downgrade audit/diagnostic rows — EXTERNAL_MANUAL and
+          // ARCHIVED_DIAGNOSTIC are quarantined by design; a rejected fill must not overwrite
+          // their quarantined status.
+          .where(and(eq(trades.id, orderId), notInArray(trades.status, ['FILLED', 'REJECTED', 'CANCELED', 'EXTERNAL_MANUAL', 'ARCHIVED_DIAGNOSTIC'])));
       } catch (updateErr) {
         console.error(`[OMS] Failed to mark order ${orderId} RECONCILIATION_REQUIRED after fill-ledger rejection`, updateErr);
       }
@@ -821,7 +824,16 @@ export class OrderManagementService {
           continue;
         }
 
-        if (match.status !== row.status || (match.filledQuantity ?? 0) > 0) {
+        // 2026-10-05 P1 fix: the old `(match.filledQuantity ?? 0) > 0` clause fired on EVERY
+        // 15s cycle for any partial fill, changed or not — and applyFollowUpUpdate()
+        // unconditionally re-emits ORDER_EXECUTED, producing an event storm for a still-open
+        // order (the 2026-10-01 unintended-short mechanism: a replayed SELL treated as
+        // unresolved). Gate on real change: a status transition, or broker filledQuantity
+        // beyond the fills-ledger watermark (max cumulativeQuantity recorded for this
+        // order). On watermark-read failure fall back to processing rather than risk
+        // missing fills.
+        const ledgerWatermark = await this.getFillsLedgerWatermark(row.id);
+        if (match.status !== row.status || (match.filledQuantity ?? 0) > ledgerWatermark) {
           await this.applyFollowUpUpdate(row, match);
         }
         if (age > FOLLOWUP_MAX_AGE_MS && !isTerminalOrderStatus(match.status)) {
@@ -903,6 +915,15 @@ export class OrderManagementService {
       const filledQty = o.filledQuantity ?? 0;
       const knownRow = byBrokerIdRow.get(o.id);
       if (knownRow) {
+        // 2026-10-05 P1 fix: audit/diagnostic rows (EXTERNAL_MANUAL quarantine,
+        // ARCHIVED_DIAGNOSTIC) are terminal by design — their broker/local status mismatch
+        // (broker FILLED vs local EXTERNAL_MANUAL) is the steady state, not a transition to
+        // correct. Running follow-up updates on them records fills for orders Argus must not
+        // touch and flips the quarantined row to FILLED. Never touch them here; the operator
+        // owns them.
+        if (knownRow.status === 'EXTERNAL_MANUAL' || knownRow.status === 'ARCHIVED_DIAGNOSTIC') {
+          continue;
+        }
         // FD-8 (2026-09-14 forensic audit, Phase 8 broker-submission-ambiguity): a broker order
         // already known locally by id must still be re-checked against its CURRENT broker-side
         // status, not unconditionally skipped. Real gap this closes: a locally-TERMINAL row (e.g.
@@ -1149,6 +1170,30 @@ export class OrderManagementService {
           }
         }
       }
+    }
+  }
+
+  /**
+   * 2026-10-05 P1 fix: max cumulativeQuantity recorded in the fills ledger for an order —
+   * the watermark followUpOpenOrders() compares broker filledQuantity against so unchanged
+   * partial fills don't re-trigger applyFollowUpUpdate() (and its ORDER_EXECUTED emit) every
+   * cycle. Returns 0 on read failure so the caller falls back to processing (never miss fills
+   * because the watermark read failed).
+   */
+  private async getFillsLedgerWatermark(orderId: string): Promise<number> {
+    try {
+      const rows = await db.select({ cumulativeQuantity: fills.cumulativeQuantity })
+        .from(fills)
+        .where(eq(fills.orderId, orderId));
+      let max = 0;
+      for (const r of rows) {
+        if (typeof r.cumulativeQuantity === 'number' && Number.isFinite(r.cumulativeQuantity)) {
+          max = Math.max(max, r.cumulativeQuantity);
+        }
+      }
+      return max;
+    } catch {
+      return 0;
     }
   }
 

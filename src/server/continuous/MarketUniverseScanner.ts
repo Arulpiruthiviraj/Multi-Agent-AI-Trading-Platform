@@ -49,6 +49,10 @@ interface AlpacaSnapshot {
   price: number;
   dollarVolume: number;
   spreadBps: number | null;
+  /** 2026-10-05 P1 fix: true when the snapshot quote was crossed (bid > ask) — corrupt quote
+   *  evidence that must never satisfy the spread ceiling (a negative spreadBps always would).
+   *  evaluateScreen() rejects these distinctly as SPREAD_CROSSED. */
+  spreadCrossed: boolean;
   /** Phase C (2026-09-02): today's real intraday gap vs the session open, e.g. 0.05 = +5%. Reuses
    *  the SAME already-fetched Alpaca snapshot response (dailyBar.o) - zero new API call, zero new
    *  cost. Null when the response carries no real open price to compute it from. */
@@ -115,7 +119,7 @@ let lastStats: BroadUniverseStats = {
   candidates: 0,
   error: null,
   at: new Date(0).toISOString(),
-  stage1RejectionCounts: { PRICE: 0, DOLLAR_VOLUME: 0, SPREAD: 0, NO_SNAPSHOT_DATA: 0 },
+  stage1RejectionCounts: { PRICE: 0, DOLLAR_VOLUME: 0, SPREAD: 0, SPREAD_CROSSED: 0, NO_SNAPSHOT_DATA: 0 },
 };
 
 /** Was `symbol` seen this session's most recent broad-universe cycle, and exactly where did it
@@ -195,7 +199,12 @@ export async function screenAssets(symbols: string[]): Promise<AlpacaSnapshot[]>
         if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) continue;
         if (typeof volume !== 'number' || !Number.isFinite(volume) || volume <= 0) continue;
         const dollarVolume = price * volume;
-        const spreadBps = (typeof bid === 'number' && typeof ask === 'number' && bid > 0 && ask > 0)
+        // 2026-10-05 P1 fix: a crossed quote (bid > ask — routine on IEX for thin names in
+        // volatility) yields a NEGATIVE spreadBps, which always passed the positive ceiling in
+        // evaluateScreen(), admitting the candidate on corrupt quote evidence. Flag it here;
+        // evaluateScreen() rejects crossed quotes distinctly as SPREAD_CROSSED.
+        const quoteCrossed = bid > 0 && ask > 0 && ask < bid;
+        const spreadBps = (typeof bid === 'number' && typeof ask === 'number' && bid > 0 && ask > 0 && !quoteCrossed)
           ? ((ask - bid) / ((ask + bid) / 2)) * 10000
           : null;
         const evidence: DiscoveryGapEvidence = {
@@ -208,7 +217,7 @@ export async function screenAssets(symbols: string[]): Promise<AlpacaSnapshot[]>
           corporateActionState: 'UNKNOWN',
         };
         const validated = validateDiscoveryGap(evidence);
-        results.push({ symbol, price, dollarVolume, spreadBps, gapPct: validated.gapPct,
+        results.push({ symbol, price, dollarVolume, spreadBps, spreadCrossed: quoteCrossed, gapPct: validated.gapPct,
           gapEvidence: { ...evidence, reason: validated.reason }, volume });
       }
     } catch (e) {
@@ -226,6 +235,9 @@ function evaluateScreen(snap: AlpacaSnapshot): { pass: boolean; reason: ScreenRe
   const cfg = continuousIntelligence;
   if (snap.price < cfg.broadUniverseMinPrice || snap.price > cfg.broadUniverseMaxPrice) return { pass: false, reason: 'PRICE' };
   if (snap.dollarVolume < cfg.broadUniverseMinDollarVolume) return { pass: false, reason: 'DOLLAR_VOLUME' };
+  // 2026-10-05 P1 fix: crossed quotes (bid > ask) are corrupt evidence, not tight spreads —
+  // reject distinctly before the ceiling check (a negative spreadBps would always pass it).
+  if (snap.spreadCrossed) return { pass: false, reason: 'SPREAD_CROSSED' };
   if (snap.spreadBps != null && snap.spreadBps > cfg.broadUniverseMaxSpreadBps) return { pass: false, reason: 'SPREAD' };
   return { pass: true, reason: null };
 }
@@ -440,7 +452,7 @@ function advRejectReason(symbol: string, advMap: Map<string, number>): 'ADV_BELO
 
 /** Full refresh: fetch tradable assets, screen them, cache the resulting candidate symbol list. */
 export async function refreshBroadUniverseCache(): Promise<BroadUniverseStats> {
-  const emptyStage1Counts = (): Record<ScreenRejectReason | 'NO_SNAPSHOT_DATA', number> => ({ PRICE: 0, DOLLAR_VOLUME: 0, SPREAD: 0, NO_SNAPSHOT_DATA: 0 });
+  const emptyStage1Counts = (): Record<ScreenRejectReason | 'NO_SNAPSHOT_DATA', number> => ({ PRICE: 0, DOLLAR_VOLUME: 0, SPREAD: 0, SPREAD_CROSSED: 0, NO_SNAPSHOT_DATA: 0 });
   if (!isBroadUniverseEnabled()) {
     lastStats = { ran: false, enabled: false, assetsFetched: 0, screened: 0, candidates: 0, error: null, at: new Date().toISOString(), stage1RejectionCounts: emptyStage1Counts() };
     return lastStats;
@@ -597,7 +609,7 @@ export function resetMarketUniverseScannerForTests(): void {
   snapshotCache = null;
   lastCycleSymbolLookup = null;
   inFlight = false;
-  lastStats = { ran: false, enabled: false, assetsFetched: 0, screened: 0, candidates: 0, error: null, at: new Date(0).toISOString(), stage1RejectionCounts: { PRICE: 0, DOLLAR_VOLUME: 0, SPREAD: 0, NO_SNAPSHOT_DATA: 0 } };
+  lastStats = { ran: false, enabled: false, assetsFetched: 0, screened: 0, candidates: 0, error: null, at: new Date(0).toISOString(), stage1RejectionCounts: { PRICE: 0, DOLLAR_VOLUME: 0, SPREAD: 0, SPREAD_CROSSED: 0, NO_SNAPSHOT_DATA: 0 } };
   moversCache = null;
   moversInFlight = false;
   lastMoverStats = { ran: false, enabled: false, gainersFetched: 0, losersFetched: 0, screened: 0, candidates: 0, error: null, at: new Date(0).toISOString() };

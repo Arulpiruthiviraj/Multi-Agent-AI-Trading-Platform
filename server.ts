@@ -111,7 +111,7 @@ import { resolvePositionStopTarget } from "./src/server/services/PortfolioMonito
 import { loadInternalNewsForTicker } from "./src/server/services/internalNewsForTicker";
 import { tradingSafety } from "./src/server/config/tradingSafety";
 import { dataTransportLimits } from "./src/server/config/dataTransportLimits";
-import { isAuthEnabled, validateCredentials as validateCredentialsPure, isSessionValid, enforceAuthConfigOrExit, allowUnauthenticatedRequest, isExemptLoopbackResearchEvidenceRequest } from "./src/server/core/AuthConfig";
+import { isAuthEnabled, validateCredentials as validateCredentialsPure, isSessionValid, enforceAuthConfigOrExit, resolveSessionTtlDays, allowUnauthenticatedRequest, isExemptLoopbackResearchEvidenceRequest } from "./src/server/core/AuthConfig";
 import { persistAllowlistedSecrets, secretsStatusFromEnvAndDb, SECRET_ALLOWLIST } from "./src/server/core/persistEncryptedSecrets";
 import { loginLimiter, aiLimiter, tradingLimiter, backtestLimiter, wsUpgradeLimiter, webhookLimiter } from "./src/server/core/RateLimiters";
 import http from "http";
@@ -329,7 +329,7 @@ const AUTH_ENV = {
 const AUTH_ENABLED = isAuthEnabled(AUTH_ENV);
 enforceAuthConfigOrExit(AUTH_ENV);
 
-const SESSION_TTL_MS = (Number(process.env.AUTH_SESSION_TTL_DAYS) || 3650) * 24 * 60 * 60 * 1000; // Default 10 years
+const SESSION_TTL_MS = resolveSessionTtlDays(process.env.AUTH_SESSION_TTL_DAYS) * 24 * 60 * 60 * 1000; // Unset: legacy 10-year default; invalid: fail-closed boot error
 const SESSION_COOKIE = "argus_session";
 
 function validateCredentials(username: string, password: string): boolean {

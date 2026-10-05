@@ -221,6 +221,20 @@ export class PortfolioMonitorWorker {
           continue;
         }
 
+        // 2026-10-05 P1 fix: exit math on a stale mark can fire phantom TARGET_REACHED /
+        // HARD_STOP or miss a real unfolding loss. Reconciliation fails closed on marks older
+        // than stalePriceThresholdMs; the monitor must agree — skip exits on stale marks.
+        const priceAgeMs = marketDataWorker.getLatestPriceAgeMs(holding.symbol);
+        if (priceAgeMs === null || priceAgeMs > tradingSafety.stalePriceThresholdMs) {
+          recordPortfolioDecision({
+            symbol: holding.symbol,
+            state: 'STALE_PRICE',
+            reason: `Latest tick is ${priceAgeMs === null ? 'missing its timestamp' : `${Math.round(priceAgeMs / 1000)}s old`} (threshold ${Math.round(tradingSafety.stalePriceThresholdMs / 1000)}s) — exit evaluation skipped, not fabricated.`,
+            currentPrice: currentLivePrice,
+          });
+          continue;
+        }
+
         // Phase 16B (ARGUS_PHASE16_READINESS_REPORT.md) - a QuantEngine-originated position
         // carries its own strategy's real stop/target, captured on the trade row at the exact
         // moment it was opened (ChiefTraderAgent's supportingQuantDetail, threaded through
@@ -240,12 +254,31 @@ export class PortfolioMonitorWorker {
 
         if (eodFlatten) {
           console.log(`[PortfolioWorker] Campaign EOD flatten window — risk-exit SELL idea for ${holding.symbol}`);
+          // 2026-10-05 P1 fix: the flatten decision is time-based and needs no basis, but the
+          // pnlPct metadata must not be ±Infinity on a zero basis (corrupts telemetry).
+          const eodPnlPct = holding.averagePrice > 0
+            ? ((currentLivePrice - holding.averagePrice) / holding.averagePrice) * 100
+            : 0;
           this.emitRiskExit({
             symbol: holding.symbol,
             currentPrice: currentLivePrice,
-            pnlPct: ((currentLivePrice - holding.averagePrice) / holding.averagePrice) * 100,
+            pnlPct: eodPnlPct,
             confidence: tradingSafety.quantStopExitConfidence,
             reasoning: `EXIT_CODE=EOD_FLATTEN Campaign closePositionsBeforeMarketClose — flatten before NY close to avoid overnight gap (still RiskEngine/OMS).`,
+          });
+          continue;
+        }
+
+        // 2026-10-05 P1 fix: every PnL division below (campaign scalp, generic stop/target)
+        // assumes a positive cost basis. A zero or negative basis (transferred-in position,
+        // corporate-action reset, adapter-mapped 0) yields ±Infinity and phantom-triggers
+        // TARGET_REACHED / HARD_STOP. Fail closed: skip exit math, record NO_BASIS.
+        if (!(holding.averagePrice > 0)) {
+          recordPortfolioDecision({
+            symbol: holding.symbol,
+            state: 'NO_BASIS',
+            reason: `No positive cost basis (averagePrice=${holding.averagePrice}) — stop/target math skipped, not fabricated. EOD flatten above still applies.`,
+            currentPrice: currentLivePrice,
           });
           continue;
         }

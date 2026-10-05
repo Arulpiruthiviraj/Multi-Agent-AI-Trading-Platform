@@ -515,8 +515,27 @@ export class RiskEngine {
             const equityNow = accountEquity;
             const todayStr = getTradingDateStr(new Date(nowMs));
             if (tradingEngine.state.dayStartDateStr !== todayStr) {
-                tradingEngine.state.dayStartDateStr = todayStr;
-                tradingEngine.state.dayStartEquity = equityNow;
+                // 2026-10-05 P1 fix: the baseline was in-memory only — a mid-day restart
+                // captured the already-depressed equity as the day's baseline and zeroed
+                // currentDailyLoss, weakening the kill switch for the rest of the day.
+                // Prefer the persisted baseline when it belongs to today (survives restarts);
+                // only capture fresh (and persist it) when no persisted baseline exists for
+                // today. accountEquity is guaranteed finite-positive here by the
+                // INVALID_ACCOUNT_EQUITY gate above.
+                const persistedDateStr = settings[0]?.dayStartDateStr ?? null;
+                const persistedEquity = settings[0]?.dayStartEquity ?? null;
+                if (persistedDateStr === todayStr && typeof persistedEquity === 'number' && Number.isFinite(persistedEquity) && persistedEquity > 0) {
+                    tradingEngine.state.dayStartDateStr = persistedDateStr;
+                    tradingEngine.state.dayStartEquity = persistedEquity;
+                } else {
+                    tradingEngine.state.dayStartDateStr = todayStr;
+                    tradingEngine.state.dayStartEquity = equityNow;
+                    try {
+                        await db.update(schema.settings).set({ dayStartEquity: equityNow, dayStartDateStr: todayStr }).run();
+                    } catch (e) {
+                        console.error('[RiskEngine] Failed to persist daily-loss baseline — kill switch degrades to in-memory-only until next capture', e);
+                    }
+                }
                 tradingEngine.state.currentDailyLoss = 0;
             }
             const dayStartEquity = tradingEngine.state.dayStartEquity ?? equityNow;

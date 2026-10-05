@@ -121,6 +121,25 @@ export function checkAuthConfig(env: AuthEnv): AuthConfigIssue[] {
   return issues;
 }
 
+/**
+ * 2026-10-05 P1 fix: strict-parse AUTH_SESSION_TTL_DAYS. The old
+ * `(Number(raw) || 3650)` fell through to a 10-YEAR session on ANY invalid input —
+ * `=0`, empty, or garbage — because 0/NaN are falsy. An invalid value is now a
+ * fail-closed boot error, not a silent decade-long session. Unset keeps the legacy
+ * 10-year default (explicit opt-out, not a typo).
+ */
+export function resolveSessionTtlDays(raw: string | undefined): number {
+  if (raw === undefined || raw === '') return 3650;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1 || n > 3650) {
+    throw new Error(
+      `AUTH_SESSION_TTL_DAYS is invalid ('${raw}'): must be an integer number of days ` +
+      `between 1 and 3650. Refusing to start with an ambiguous session lifetime.`,
+    );
+  }
+  return n;
+}
+
 /** Runs startup validation, logs every issue, and exits the process on any fatal one. */
 export function enforceAuthConfigOrExit(
   env: AuthEnv,

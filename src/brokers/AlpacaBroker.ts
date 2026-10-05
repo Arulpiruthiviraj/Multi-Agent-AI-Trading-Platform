@@ -313,15 +313,33 @@ export class AlpacaBroker implements BrokerPlugin {
     const account = await this.account();
     const positions = await this.fetchAlpaca('/v2/positions', { idempotentRetrySafe: true });
     
-    const mappedPositions = positions.map((p: any) => ({
-      symbol: p.symbol,
-      quantity: parseFloat(p.qty),
-      entryPrice: parseFloat(p.avg_entry_price),
-      currentPrice: parseFloat(p.current_price),
-      marketValue: parseFloat(p.market_value),
-      unrealizedPnl: parseFloat(p.unrealized_pl),
-      unrealizedPnlPercent: parseFloat(p.unrealized_plpc),
-    }));
+    // 2026-10-05 P1 fix: Alpaca returns numeric fields as strings; a malformed/empty value
+    // makes parseFloat() yield NaN. A NaN quantity violates the Position contract (F26:
+    // quantity is always a real number) and poisons downstream math — NaN !== 0 is true so
+    // reconciliation "sees" the position but can't measure it, while allocation silently
+    // zeroes it. Drop unquantifiable positions loudly instead of emitting NaN; map
+    // unparseable price fields to null (the F26-sanctioned "genuinely unavailable").
+    const numOrNull = (v: unknown): number | null => {
+      const n = typeof v === 'number' ? v : Number.parseFloat(String(v ?? ''));
+      return Number.isFinite(n) ? n : null;
+    };
+    const mappedPositions: Portfolio['positions'] = [];
+    for (const p of positions) {
+      const quantity = numOrNull(p.qty);
+      if (quantity === null) {
+        console.error(`[AlpacaBroker] Dropping position ${p.symbol}: unparseable quantity '${p.qty}' — refusing to emit NaN into allocation/reconciliation.`);
+        continue;
+      }
+      mappedPositions.push({
+        symbol: p.symbol,
+        quantity,
+        entryPrice: numOrNull(p.avg_entry_price),
+        currentPrice: numOrNull(p.current_price),
+        marketValue: numOrNull(p.market_value),
+        unrealizedPnl: numOrNull(p.unrealized_pl),
+        unrealizedPnlPercent: numOrNull(p.unrealized_plpc),
+      });
+    }
 
     const portfolio: Portfolio = {
       cash: parseFloat(account.cash),

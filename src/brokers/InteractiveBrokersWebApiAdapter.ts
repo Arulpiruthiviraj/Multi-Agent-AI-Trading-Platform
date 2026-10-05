@@ -285,15 +285,28 @@ export class InteractiveBrokersWebApiAdapter implements BrokerPlugin {
     const equity = summary?.netliquidation?.amount ?? cash;
 
     const rawPositions: any[] = await this.request(`/portfolio/${accountId}/positions/0`).catch(() => []);
-    const positions: Position[] = (rawPositions || []).map((p: any) => ({
-      symbol: p.contractDesc || p.ticker || String(p.conid),
-      quantity: p.position ?? 0,
-      entryPrice: p.avgCost ?? p.avgPrice ?? 0,
-      currentPrice: p.mktPrice ?? p.avgCost ?? 0,
-      marketValue: p.mktValue ?? 0,
-      unrealizedPnl: p.unrealizedPnl ?? 0,
-      unrealizedPnlPercent: p.avgCost ? ((p.unrealizedPnl ?? 0) / (Math.abs(p.position ?? 1) * p.avgCost)) : 0,
-    }));
+    // 2026-10-05 P1 fix: the Web API omits avgCost/mktPrice for some positions. The old `?? 0`
+    // fabricated a zero basis/mark — F26 explicitly forbids fabricated numeric zeros
+    // (null = genuinely unavailable). A fabricated 0 basis both trips
+    // CAPITAL_SNAPSHOT_DEGRADED permanently AND used to feed the phantom-exit div-by-zero
+    // in PortfolioMonitor. Report null honestly; downstream (reconciliation resolveMark,
+    // snapshotCapital degraded flag, PortfolioMonitor NO_BASIS) already handles null.
+    const positions: Position[] = (rawPositions || []).map((p: any) => {
+      const entryPrice = p.avgCost ?? p.avgPrice ?? null;
+      const currentPrice = p.mktPrice ?? p.avgCost ?? null;
+      const marketValue = p.mktValue ?? null;
+      const incomplete = entryPrice === null || currentPrice === null || marketValue === null;
+      return {
+        symbol: p.contractDesc || p.ticker || String(p.conid),
+        quantity: p.position ?? 0,
+        entryPrice,
+        currentPrice,
+        marketValue,
+        unrealizedPnl: p.unrealizedPnl ?? null,
+        unrealizedPnlPercent: p.avgCost ? ((p.unrealizedPnl ?? 0) / (Math.abs(p.position ?? 1) * p.avgCost)) : null,
+        ...(incomplete ? { valuationStatus: 'UNAVAILABLE' as const } : {}),
+      };
+    });
 
     return { cash, buyingPower, equity, positions };
   }

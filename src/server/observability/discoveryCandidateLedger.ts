@@ -12,7 +12,7 @@
  */
 import { observeSafe, structuredLogger } from './StructuredLogger';
 
-export type ScreenRejectReason = 'PRICE' | 'DOLLAR_VOLUME' | 'SPREAD';
+export type ScreenRejectReason = 'PRICE' | 'DOLLAR_VOLUME' | 'SPREAD' | 'SPREAD_CROSSED';
 
 /** 'NEWS' added Phase 28 (2026-09-02): a candidate whose entry into the discovery/subscription
  *  path was triggered by real news-catalyst evidence (NewsCatalystStore), not the Alpaca
