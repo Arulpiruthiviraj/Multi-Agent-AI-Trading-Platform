@@ -589,6 +589,27 @@
       "when": 1791152746403,
       "tag": "0083_ohlcv_bars_provisional",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "6",
+      "when": 1791190000000,
+      "tag": "0084_insider_transactions",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "6",
+      "when": 1791195000000,
+      "tag": "0085_meta_label_features",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "6",
+      "when": 1791198000000,
+      "tag": "0086_trace_id_indexes",
+      "breakpoints": true
     }
   ]
 }

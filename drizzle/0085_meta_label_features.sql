@@ -15,4 +15,5 @@ CREATE TABLE IF NOT EXISTS meta_label_features (
   evidence_source TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_meta_label_features_strategy_source ON meta_label_features (strategy_id, evidence_source);

@@ -13,4 +13,5 @@ CREATE TABLE IF NOT EXISTS insider_transactions (
   is_direct INTEGER,
   created_at TEXT NOT NULL
 );
+--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_insider_transactions_ticker_filing ON insider_transactions (ticker, filing_date);
