@@ -5,18 +5,27 @@ this report. PAPER only. `LIVE_NO_GO` unaffected throughout.
 
 ## Executive summary
 
+**Amended 2026-10-05 (post-publication correction — see Section 10–14 below for full detail).** The original
+version of this report claimed stale `gapEvidence` reference timestamps caused PTC's and CSCO's SPREAD
+rejections. That claim was traced against the actual source code and found to be **incorrect** — it has been
+retracted, not merely footnoted. The real findings, corrected:
+
 Argus produced zero trades today. This is **not** a single-cause story. Real, external-benchmark-backed evidence
 shows at least three independent, genuine findings, each affecting a different part of the pipeline:
 
-1. **A real, systemic data-staleness defect in discovery's gap/spread evidence.** Nearly every candidate's
-   `gapEvidence` this morning carried `previousCloseTimestamp`/`openTimestamp` values from **October 1–2**
-   — two to three days stale — while being compared against a fresh current price. This produced nonsensical
-   spread figures (PTC: 1206 bps, CSCO: 845 bps) that incorrectly rejected real candidates on a `SPREAD` filter
-   that was never measuring a real spread at all.
+1. **RETRACTED — was not a data-staleness defect.** PTC's and CSCO's wide `spreadBps` figures (1206bps,
+   845bps) are real bid/ask spreads computed purely from Alpaca's IEX-only top-of-book quotes — tracing
+   `MarketUniverseScanner.ts` shows the spread formula never touches `gapEvidence`'s reference-price fields.
+   **Corrected classification: `DATA_SOURCE_LIMITATION`** (IEX-only quotes can show venue-specific wide
+   spreads in volatile early moments even when the true NBBO spread is tighter), not a code defect.
+   **The real, confirmed finding for PTC is a subscription hot-swap capacity/prioritization issue** — see
+   `docs/audits/ARGUS_SUBSCRIPTION_STARVATION_FORENSIC_2026-10-05.md`.
 2. **A real catalyst-ingestion gap for at least one major benchmark mover.** PCVX (Vaxcyte, Phase 3 VAX-31,
    premarket, +32–54%) never produced a single `NEWS_*` event anywhere in Argus's logs today, unlike PTC,
-   TSLA, CSCO, and META, which all got real `NEWS_CATALYST` events. PCVX relied solely on the price-based
-   `MARKET_MOVER` path, which itself hit the stale-reference spread problem above.
+   TSLA, CSCO, and META, which all got real `NEWS_CATALYST` events. Confirmed narrower: zero raw
+   `news_articles` rows exist for this story at all (out of 233 ingested today), so the gap is **upstream of
+   entity/ticker extraction and classification** — the article itself never arrived via any configured
+   source this pass could verify.
 3. **A real, decisive, independently-confirmed consensus bottleneck, unrelated to the reconciliation pause.**
    4,427 real consensus rounds occurred today. **Zero were approved.** The single highest confidence any
    symbol reached all day was **0.70 against a 0.75 threshold** (CAT, TSLA), and even that near-miss had
@@ -25,9 +34,9 @@ shows at least three independent, genuine findings, each affecting a different p
    assessments) — it is conclusively not the bottleneck.**
 
 None of today's headline movers (PTC, RXO, XP, PCVX, NVDA) represent a case of "Argus saw a clear winner and
-RiskEngine or OMS blocked it." The real story is upstream: data staleness and catalyst-ingestion gaps narrowed
-what Argus could even look at, and even where it did look (XP, TSLA, META, NVDA — all real, repeated, deeply
-evaluated candidates), the evidence it assembled never became strong or independent enough to approve.
+RiskEngine or OMS blocked it." The real story is upstream: a subscription-scheduling capacity issue (PTC), a
+news-ingestion coverage gap (PCVX), and — for every symbol that *did* get a fair look (XP, TSLA, META, NVDA)
+— evidence that never became strong or independent enough to approve.
 
 ## Section 1 — Current system state (frozen before analysis)
 
@@ -108,25 +117,35 @@ quant-assessed at all; PCVX barely discovered at all).
 
 ## Section 10–14 — Discovery, universe coverage, capacity
 
+> **CORRECTION (2026-10-05, post-publication):** the claim below that stale `gapEvidence` reference
+> timestamps caused the SPREAD rejections has been **retracted after tracing the actual code**. It was
+> wrong. See the corrected finding immediately below, and
+> `docs/audits/ARGUS_SUBSCRIPTION_STARVATION_FORENSIC_2026-10-05.md` for the real root cause of PTC's
+> subscription loss (not a SPREAD/data problem at all — a hot-swap capacity/prioritization issue).
+
 - **Universe coverage: not the bottleneck.** Every Cohort A symbol checked was in Argus's scan universe and
   was admitted by discovery, often dozens to hundreds of times across the day (re-evaluated on repeat scan
   cycles).
-- **The real discovery-stage defect: stale reference-price data driving false SPREAD rejections.** PTC's
-  first three discovery attempts were rejected with `reason: "SPREAD"`, `spreadBps: 1206.37` — a 12% spread,
-  which is absurd for a NASDAQ large-cap. The `gapEvidence` attached to that same rejection shows why:
-  `previousCloseTimestamp: "2026-10-01T04:00:00Z"`, `openTimestamp: "2026-10-02T04:00:00Z"` — **both 3+ days
-  stale**, explicitly flagged by the system's own `reason: "STALE_OR_INCONSISTENT_REFERENCE_TIMESTAMP"` field.
-  CSCO shows the identical pattern (845 bps "spread" against the same stale Oct-2 reference). This is not a
-  real spread measurement — it's an artifact of comparing a fresh quote against days-old reference data,
-  and it is the literal reason the `SPREAD` filter rejected two real benchmark movers. **This pattern recurs
-  across nearly every symbol checked** (NVDA, TER, SPCX, TSLA, META all show the same stale-reference flag
-  in their `gapEvidence`, though for symbols with otherwise-passing dollar volume/spread this didn't block
-  admission the way it did for PTC/CSCO).
-- **Capacity:** PTC and MPWR were each admitted dozens of times and **never once subscribed** — not because
-  subscription lines were full (this was not independently verified via line-occupancy counts this pass,
-  flagged as a follow-up), but this is consistent with a prioritization gap worth investigating: an M&A-arb
-  name with no live-tradeable setup competing for the same subscription slots as names the strategy engine
-  can actually act on.
+- **CORRECTED: the SPREAD rejections were real bid/ask spreads, not a stale-reference-data bug.**
+  `MarketUniverseScanner.screenAssets()` computes `spreadBps` purely from Alpaca's reported bid/ask —
+  `((ask - bid) / midpoint) * 10000` — and `evaluateScreen()` rejects purely on that value against a config
+  ceiling. There is **no code path** where `gapEvidence`'s `previousClose`/`open` fields feed into the
+  spread calculation; they are structurally separate fields that happened to appear in the same log line.
+  The original version of this report incorrectly inferred a causal link between the two from that
+  co-occurrence. **Corrected classification: `DATA_SOURCE_LIMITATION`, not a confirmed code defect.** PTC's
+  1206bps and CSCO's 845bps most plausibly reflect genuine **IEX-only top-of-book** quotes (Alpaca's free
+  tier, not full NBBO) during a volatile first few minutes after a major catalyst — thin venue-specific
+  liquidity can show a wide spread on one exchange even when the true market-wide spread is tight. This is
+  a real, known data-source limitation, not something to fix in Argus's own spread-calculation code.
+  The stale `gapEvidence` reference-timestamp pattern is still real and still worth tracking (affects
+  `gapPct`, not spread), but no evidence connects it to any rejection outcome.
+- **Capacity — corrected and now root-caused, not speculative.** PTC was admitted 94 times and had its
+  subscription promotion **rejected 263 times, every single one with the identical reason
+  `SWAP_CAP_REACHED`** ("Hot-swap cap reached this cycle (1 slot(s)) before this candidate was reached").
+  This is not a vague "prioritization gap" — it is a concrete, confirmed mechanism: the discovery scheduler
+  allows only **one** hot-swap promotion per cycle, and PTC's `blendedHotSwapScore()` never ranked high
+  enough to win that single slot against its competition, cycle after cycle, all day. Full forensic:
+  `docs/audits/ARGUS_SUBSCRIPTION_STARVATION_FORENSIC_2026-10-05.md`.
 
 ## Section 15–17 — Market data, strategy coverage, trigger analysis
 
@@ -264,8 +283,11 @@ forensic trace above.
 Per the user's own explicit instruction and this audit's own evidence: do not lower the 0.75 consensus
 threshold, the minimum-independence floor, any RiskEngine gate, trigger gates, or data-freshness/spread
 requirements. Today's evidence shows the *inputs* feeding consensus were weak and under-diversified — not
-that the bar itself is miscalibrated. Fixing the stale-reference-price defect and the PCVX-class
-news-ingestion gap is upstream, additive work; it does not touch any safety gate.
+that the bar itself is miscalibrated. **Also do not weaken spread filtering based on the IEX-only-quote
+finding** — the spread values were real, not fabricated; the open question is data-source quality, not
+whether the filter should trust wide spreads more. Fixing the subscription hot-swap capacity/prioritization
+issue (PTC) and the PCVX-class news-ingestion gap is upstream, additive work; it does not touch any safety
+gate.
 
 ## Not executed this pass (honest scope limitation)
 
@@ -281,8 +303,9 @@ data), not inference.
 
 - **SYSTEM_EXECUTION:** DEGRADED (reconciliation auto-pause, already being remediated separately; execution
   path itself — OMS/broker — untested today, zero evidence reached it)
-- **OPPORTUNITY_DISCOVERY:** ADEQUATE (universe coverage and catalyst ingestion work for most names;
-  real, confirmed data-staleness defect affecting spread/gap evidence, and one confirmed news-ingestion gap)
+- **OPPORTUNITY_DISCOVERY:** ADEQUATE (universe coverage and catalyst ingestion work for most names; a
+  confirmed subscription hot-swap capacity/prioritization issue (not a data-staleness defect — that claim
+  was retracted), and one confirmed news-ingestion coverage gap)
 - **STRATEGY_COVERAGE:** WEAK (thousands of real evaluations across megacaps, zero or near-zero eligible
   setups found by any of the 21 TS strategies on a strong, broadly-positive tape)
 - **CONSENSUS:** OVERCONSERVATIVE is not proven — evidence shows genuine weak/under-independent inputs, not
@@ -292,11 +315,12 @@ data), not inference.
   not execution.
 
 **TOP 5 CHANGES (ranked by evidence):**
-1. Fix the stale-reference-price defect feeding discovery's gap/spread calculations (confirmed root cause of
-   PTC/CSCO false rejections; likely affects more symbols than directly observed).
-2. Investigate why PCVX's real, major, premarket-published catalyst produced zero `NEWS_*` events.
-3. Investigate why PTC (88 admissions) and MPWR (76 admissions) never once received a subscription — a real
-   admission-to-subscription gap independent of the spread defect.
+1. **Superseded by `ARGUS_SUBSCRIPTION_STARVATION_FORENSIC_2026-10-05.md`:** investigate the subscription
+   hot-swap cap/prioritization mechanism that caused PTC to lose 263 consecutive promotion attempts to
+   `SWAP_CAP_REACHED` — the confirmed, concrete root cause (not the retracted stale-reference-price claim).
+2. Investigate why PCVX's real, major, premarket-published catalyst produced zero `NEWS_*` events — confirmed
+   upstream of entity/ticker extraction (zero raw `news_articles` rows), exact provider-level cause still open.
+3. (Folded into #1) MPWR showed the same admitted-but-never-subscribed pattern as PTC.
 4. Research (not implement) a macro-theme-propagation capability for MacroAgent, using XP as the only
    available natural experiment so far.
 5. Research (not implement) why independent, multi-agent agreement is so rare even on a broadly positive,
@@ -320,7 +344,8 @@ data), not inference.
 22–23. Brazil catalyst / proactive news injection? **News-to-discovery injection demonstrably exists and
     worked for PTC (confirmed cluster → discovery path); no evidence of macro-theme→basket propagation for
     XP specifically.**
-29. Highest-leverage architecture improvement? **Fixing the stale-reference-price defect in discovery's
-    gap/spread evidence — it is the one confirmed, concrete, and cheaply-fixable defect found today.**
+29. Highest-leverage architecture improvement? **(Corrected) Fixing the subscription hot-swap
+    capacity/prioritization mechanism that caused PTC's 263 `SWAP_CAP_REACHED` rejections — the confirmed,
+    concrete finding, superseding the retracted stale-reference-price claim.**
 31. Highest-leverage architecture improvement vs. what should NOT be changed? **Do not touch consensus/risk
     thresholds — today's evidence does not support that as miscalibrated.**
