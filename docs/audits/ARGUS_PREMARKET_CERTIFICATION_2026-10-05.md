@@ -75,15 +75,71 @@ orders to LIVE. PAPER ISOLATION = PASS.**
 
 ## 7. Budget — HARD GATE
 
-**Result: `BUDGET_MISMATCH`.** VERIFIED:
-- `.env ARGUS_EXPECTED_BUDGET=2000` (the operator's own declared intended test allocation for this profile, set 2026-10-04).
-- `settings.budget = 100000`, `settings.max_trade_size = 3000` (the value actually governing `CapitalAllocation`/`argus_capital_allocation` gate 23 and `order_notional_cap` gate 16 right now).
-- These are internally consistent with each other (both are real, loaded config/DB values), but **not** consistent with the operator's stated intent. The new `TradingReadinessGate` capital-profile check exists in code (`c308c0f` lineage) specifically to catch this class of mismatch.
-- **DO NOT RESUME on budget alone until the operator either (a) raises `ARGUS_EXPECTED_BUDGET` to match the intended $100,000 allocation, or (b) lowers `settings.budget` to $2,000 and confirms `max_trade_size` is still sane for that allocation.** This is a one-line settings decision, not a code defect — but it is a hard gate and it is currently failing.
+**Result: `BUDGET_MISMATCH`, IN PROGRESS.** VERIFIED:
+- Operator decision (2026-10-05, this audit): intended Argus allocation ceiling for today is **$10,000**
+  — not the earlier $2,000 test figure, and not broker equity. `.env ARGUS_EXPECTED_BUDGET` has been
+  updated `2000 → 10000` accordingly.
+- A fresh, live IBKR Gateway query this same morning (polled every 20s over 100s, independent of the
+  Argus engine process, to rule out a stale post-connect snapshot) showed the real account `DUR959160`
+  buying power is **~$3,334,521**, equity **~$1,001,867** — far above either figure. This confirms
+  `settings.budget` was never meant to represent broker equity (`CapitalAllocation`/`argus_capital_allocation`
+  gate 23 is an Argus-side ceiling layered on top of whatever the broker reports), so this doesn't change
+  the $10,000 decision, but the earlier "$100,000 as per IBKR" assumption was itself inaccurate and is
+  corrected here.
+- `settings.budget` in the DB is **still `100000`** as of this writing — the `.env` change alone does not
+  update it. Per CLAUDE.md, this must be applied through the reviewed settings API
+  (`PATCH`-equivalent on `/api/v1/settings`, `configRoutes.ts`'s `SETTINGS_ALLOWED_FIELDS` allowlist
+  explicitly includes `budget`), not a raw DB write, so `TradingEngine`'s own budget-vs-buying-power
+  validation runs normally. This requires the engine running — **deferred to immediately after the
+  controlled restart**, before resume is considered. `max_trade_size` ($3,000) stays sane under a
+  $10,000 ceiling (allows up to ~3 concurrent positions before exhausting allocation, consistent with
+  the default `open_positions_cap` of 3) and does not need to change.
+- **Gate remains FAIL until `settings.budget` is actually set to 10000 via the API and `TradingReadinessGate` is re-run to confirm `BUDGET_CONSISTENT`.**
 
 ## 8. Historical OKTA incident — HARD GATE
 
-**Result: `RECONCILIATION_REQUIRED`, UNRESOLVED.** VERIFIED directly from `trades`/`reconciliation_events`/`reconciliation_acknowledgements`:
+**Result: `RESOLVED` (2026-10-05, this audit — updated from the original `RECONCILIATION_REQUIRED` finding below, which is preserved for the record).**
+
+Root cause, confirmed directly in the DB: all three OKTA `trades` rows had `position_quantity_before` /
+`position_average_price_before = NULL` — they predate migration `0082`'s fill-ledger baseline system, so
+every derived fill watermark (`fills.position_quantity_after`) was also `NULL` for this scope, which is
+exactly why `checkPositionFillEvidence()` correctly reported `POSITION_FILL_BASELINE_UNAVAILABLE` rather
+than a number. This was **not** an orphan/untracked broker order — `scripts/reconcile_broker_baseline.ts
+--dry-run` was run first and found 0 untracked orders, confirming Argus had already recorded all three
+real OKTA fills itself; the gap was purely in the derived-position computation, not missing order history.
+
+Fresh, live broker truth was pulled directly (polled every 20s over 100s, independent of the down Argus
+engine, since IBKR Gateway itself was reachable on port 4002 the whole time): **OKTA confirmed stably at
+−14 shares, real entry price ~212.53, zero non-terminal orders.** (The very first query immediately after
+connect showed 0 positions/0 equity — a stale pre-sync snapshot, same pattern as last night's `id 6013` vs
+`id 6014` — so this was not trusted on its own; the following 5 polls over 100s were stable at −14 before
+being accepted as real.)
+
+Fix applied: a new, scoped, dry-run-first tool (`scripts/backfill_legacy_position_baseline.ts`, operator-run
+from a local terminal since the sandboxed agent session is blocked from writes against this production DB)
+seeds the one legitimately known fact — OKTA's first-ever fill in this scope started from flat (0 qty, $0
+basis) — onto that first trade row, then replays the real fill-ledger math forward through the three
+historical fills in chronological order. (First attempt reused the live `applyPositionFill()` directly and
+failed safely — that function finds "the prior fill" by highest fill-id excluding itself, which only holds
+for real-time processing; a backfill replay has all rows pre-existing, so it grabbed the wrong row and
+correctly refused rather than computing garbage. No partial state survived; `--reset-partial` cleanly
+reverted the one touched column before a corrected, self-contained version of the script was re-run.)
+
+**Operator-verified result:** fill chain now reads `14@211.72 → 0@0 (realized +$10.78) → -14@212.60999999999999`
+— the local `portfolio` table and the fill-ledger watermark both now show `OKTA: -14 @ 212.61`, matching the
+live broker's `-14` exactly (quantity match is what the reconciliation gate checks; IB's own internally
+reported average cost, `212.5341857`, differs cosmetically from Argus's simple per-fill ledger value due to
+IB's own average-cost accounting convention around a long→flat→short flip — not a quantity discrepancy, not
+a safety issue, and `current_price`/`unrealizedPnL` remain correctly `null` since no live quote exists).
+**This will read as a clean `MATCH` on the next real `PortfolioReconciliation` cycle once the engine is
+restarted and reconnects to the broker — not yet confirmed via a live reconciliation run, since the engine
+is still down; confirming that is the first thing to check immediately after restart.**
+
+<details>
+<summary>Original 02:23 finding (superseded above, preserved for the record)</summary>
+
+**Result: `RECONCILIATION_REQUIRED`, UNRESOLVED** (as of initial read-only pass, before the fix above).
+VERIFIED directly from `trades`/`reconciliation_events`/`reconciliation_acknowledgements`:
 
 OKTA trade history (2026-10-01, all `FILLED`, `PAPER`):
 1. `18:30:01` BUY 14 @ 211.72
@@ -111,6 +167,8 @@ this morning), still short 14 shares of OKTA that Argus's local view does not re
 resolved, has not been acknowledged, and per CLAUDE.md must not be fixed with an automatic compensating
 order. **This alone fails the hard gate and blocks resume today** until an operator-approved reconciliation
 (not a code change, not an auto-trade) resolves it.
+
+</details>
 
 ## 9–10. Reconcile all positions / orders — HARD GATE
 
@@ -251,14 +309,14 @@ observe.
 
 | Item | Result |
 |---|---|
-| ENGINE | FAIL (down, unclean) |
-| WATCHDOG | FAIL (not running, 6-day-stale heartbeat) |
+| ENGINE | FAIL (still down, unclean — not yet restarted as of this writing) |
+| WATCHDOG | FAIL (not running yet — auto-start-with-engine fix exists in code, `argus-cli start`, not yet exercised) |
 | DATABASE | PASS (integrity_check: ok, WAL, 89 tables readable) |
 | PAPER ISOLATION | PASS (PAPER_TRADING_ONLY=true, DU-prefixed account, LIVE_NO_GO) |
-| BUDGET | **FAIL (BUDGET_MISMATCH: $2,000 intended vs $100,000 active)** |
-| POSITIONS | **FAIL (OKTA −14 at broker, unreconciled, unacknowledged)** |
+| BUDGET | **FAIL, IN PROGRESS ($10,000 operator-decided; `.env` updated; `settings.budget` still `100000` pending the API-applied change after restart)** |
+| POSITIONS | **RESOLVED (OKTA baseline backfilled and operator-verified to match broker's −14 exactly; not yet confirmed via a live post-restart reconciliation cycle)** |
 | ORDERS | PASS (zero non-terminal, zero UNKNOWN) |
-| OKTA INCIDENT STATE | **FAIL (RECONCILIATION_REQUIRED, open since 2026-10-01)** |
+| OKTA INCIDENT STATE | **RESOLVED (2026-10-05, this audit — see §8); pending live reconciliation confirmation after restart** |
 | MARKET DATA | PREMARKET_PENDING (not evaluable pre-open, engine down) |
 | AGENTS | UNKNOWN (AI_UNAVAILABLE per last health probe; not cross-validated against real calls this pass — see §26 note below) |
 | STRATEGY TRIGGERS | PASS (source-verified, not freshly re-run) |
@@ -272,27 +330,30 @@ observe.
 
 ## 33. Hard blockers (must all clear before resume)
 
-1. **Unresolved OKTA position divergence** (−14 at broker, 0 locally, $2,975.48 impact, zero operator acknowledgement).
-2. **Budget mismatch** ($2,000 intended vs. $100,000/$3,000-max-order active) — an explicit operator decision, not a code fix.
-3. **Watchdog not running** — unattended operation today would have no auto-recovery from a repeat of last night's failure mode.
+1. ~~Unresolved OKTA position divergence~~ — **CLEARED 2026-10-05** (baseline backfilled, verified
+   quantity match against a live broker query; still needs confirmation via a real post-restart
+   reconciliation cycle before being trusted as fully closed).
+2. **Budget not yet applied** — `.env` reflects the operator's $10,000 decision; `settings.budget` itself
+   (the value that actually governs sizing/allocation gates) is still `100000` and must be updated via the
+   reviewed settings API after restart, then re-verified with `TradingReadinessGate`.
+3. **Watchdog not running** — the auto-start-with-engine fix exists in code (`argus-cli start`) but has not
+   been exercised yet; unattended operation today has no auto-recovery until the engine is actually
+   restarted through that path.
 4. TypeScript typecheck regression (non-blocking for trading safety, but real — should not ship silently).
 
-No P0, RiskEngine, OMS, CLOSE_LONG-safety, or kill-switch defect was found this pass. The blockers above are
-not code defects in the live spine — they are exactly the three things the operator's own framing named as
-non-negotiable this morning, and all three are currently failing.
+No P0, RiskEngine, OMS, CLOSE_LONG-safety, or kill-switch defect was found this pass.
 
 ## 34. Resume decision
 
-**`NOT_READY_FIX_REQUIRED`**
+**`NOT_READY_FIX_REQUIRED`** (unchanged pending the remaining items below — OKTA alone being resolved does
+not flip the overall verdict, since budget application and watchdog start still require a restart that has
+not happened, and the OKTA fix itself still needs live confirmation).
 
-Do not resume trading today until, at minimum: (1) the OKTA position is reconciled through the reviewed
-process with explicit operator sign-off, (2) the budget is made internally consistent with actual intent,
-and (3) the watchdog is started. None of these require a code change — all three are operator actions. Once
-they're done, a short follow-up check (engine restart into `TRADING_PAUSED`, confirm reconciliation clean,
-confirm budget consistent, confirm watchdog heartbeat, then and only then consider resume) is appropriate
-before market open, if time allows; if not, a correct, safe outcome today is simply: **Argus stays paused,
-evaluates nothing, and trades nothing** — which is an acceptable and intended outcome per this audit's own
-operating principle.
+Remaining before resume: (1) restart the engine via `argus-cli start` (auto-starts the watchdog), (2) apply
+`settings.budget=10000` through the settings API and re-run `TradingReadinessGate` to confirm
+`BUDGET_CONSISTENT`, (3) let `PortfolioReconciliation` run fresh against the live broker and confirm OKTA
+now reads `MATCH`, (4) only then consider resume. If time runs out before market open, the correct, safe
+outcome remains: **Argus stays paused, evaluates nothing, and trades nothing.**
 
 ## 35–37. Resume procedure / monitoring plan
 
@@ -314,7 +375,7 @@ Unchanged: EDGE EVIDENCE = WEAK, EXPECTED VALUE = INSUFFICIENT_EVIDENCE. Not rev
 5. Is the broker definitely PAPER? **YES** (DU-prefixed IBKR account)
 6. Is LIVE_NO_GO confirmed? **YES**
 7. Is today's intended budget active everywhere? **NO**
-8. Is the historical OKTA −14 state resolved? **NO**
+8. Is the historical OKTA −14 state resolved? **YES** (baseline backfilled 2026-10-05, verified to match live broker quantity exactly; pending confirmation via a live post-restart reconciliation cycle)
 9. Are broker/Argus positions reconciled? **NO**
 10. Are broker/Argus orders reconciled? **YES** (orders only — zero non-terminal, zero UNKNOWN)
 11. Are there zero UNKNOWN broker orders? **YES**
