@@ -70,6 +70,9 @@ import { continuousIntelRouter } from './continuousIntelRoutes';
 import { settingsEffectiveRouter } from './settingsEffectiveRoutes';
 import { argusApplication } from '../app/ArgusApplication';
 import { runtimeRouter } from './v2Runtime';
+import { loadEngineOwnershipRegistry } from '../config/modelRegistry';
+import { isQuantJavaCoreEnabled, isJavaQuantVoteEnabled, isQuantIndependentQualificationEnabled } from '../config/tradingSafety';
+import { isLiveIdeaEmissionEnabled } from '../services/QuantCoreBridge';
 
 export const v2Router = Router();
 
@@ -2030,13 +2033,9 @@ function categorizeQuantModel(key: string): string {
   return 'Cross-Asset / Institutional Infrastructure';
 }
 
-v2Router.get('/quant-core/catalog', async (_req, res) => {
+v2Router.get('/quant-core/catalog', (_req, res) => {
   try {
-    const { loadEngineOwnershipRegistry } = await import('../config/modelRegistry');
-    const { isQuantJavaCoreEnabled } = await import('../config/tradingSafety');
-    const { isLiveIdeaEmissionEnabled } = await import('../services/QuantCoreBridge');
-    const { isJavaQuantVoteEnabled, isQuantIndependentQualificationEnabled } = await import('../config/tradingSafety');
-
+    // Local configuration only: resolve dependencies at router load, not during an HTTP request.
     const registry = loadEngineOwnershipRegistry();
     const sectionLabels: Record<string, string> = {
       indicators: 'Live TS Indicators',

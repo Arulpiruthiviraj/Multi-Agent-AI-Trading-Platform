@@ -30,6 +30,14 @@ No approval threshold, consensus math, RiskEngine gate, or OMS behavior was chan
 
 ## 2026-10-04: remaining forensic correctness and operations fixes
 
+The read-only `/api/v2/quant-core/catalog` route resolves its configuration dependencies when
+the router loads and responds synchronously. It no longer performs four request-time dynamic
+imports. Its regression suite exercises both synchronous completion with real registry data
+and the real HTTP route. The old test commentary attributing timeouts to parallel workers was
+removed: current Vitest configuration runs files sequentially, so that explanation was stale.
+This removes an asynchronous dependency from the request; it does not establish the cause of
+every prior full-suite timeout or change any trading-engine flag.
+
 The existing trading spine and all approval thresholds remain unchanged. These changes extend
 its data and control-plane boundaries; they introduce no strategy or quant calculation in Node.
 
