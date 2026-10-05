@@ -102,6 +102,21 @@ describe('/api/v2/quant-core routes', () => {
   });
 
   describe('GET /quant-core/catalog (2026-09-10)', () => {
+    // D10 FIX (2026-10-05): fetch the catalog ONCE per file instead of once per test.
+    // Six of the seven tests below used to each do their own supertest HTTP round-trip
+    // against the same deterministic endpoint; under full-suite parallel load, one of
+    // those round-trips exceeded vitest's 5s per-test timeout (proven non-hanging —
+    // 11/11 pass in isolation). Sharing a single fetched body removes 6 redundant
+    // round-trips without changing a single assertion. This is a test-efficiency fix,
+    // not a timeout bump: no timeout value was changed.
+    let catalogBody: any;
+    let catalogStatus: number;
+    beforeAll(async () => {
+      const res = await request(app).get('/api/v2/quant-core/catalog');
+      catalogStatus = res.status;
+      catalogBody = res.body;
+    });
+
     it('reads the real catalog synchronously without a request-time module load', () => {
       const layer = router.stack.find((entry: any) => entry.route?.path === '/quant-core/catalog');
       let payload: any;
@@ -114,18 +129,16 @@ describe('/api/v2/quant-core routes', () => {
     });
 
     it('returns the full registry as a flat, categorized engine list with real wiring flags', async () => {
-      const res = await request(app).get('/api/v2/quant-core/catalog');
-      expect(res.status).toBe(200);
-      expect(res.body.ok).toBe(true);
+      expect(catalogStatus).toBe(200);
+      expect(catalogBody.ok).toBe(true);
       // Real registry, not a fabricated count - just assert it's a real, non-trivial catalog.
-      expect(res.body.totalEngines).toBeGreaterThan(100);
-      expect(Array.isArray(res.body.engines)).toBe(true);
-      expect(res.body.engines.length).toBe(res.body.totalEngines);
+      expect(catalogBody.totalEngines).toBeGreaterThan(100);
+      expect(Array.isArray(catalogBody.engines)).toBe(true);
+      expect(catalogBody.engines.length).toBe(catalogBody.totalEngines);
     });
 
     it('every engine has a real key, name, category, and status field (or null status, never fabricated)', async () => {
-      const res = await request(app).get('/api/v2/quant-core/catalog');
-      for (const e of res.body.engines) {
+      for (const e of catalogBody.engines) {
         expect(typeof e.key).toBe('string');
         expect(e.key.length).toBeGreaterThan(0);
         expect(typeof e.name).toBe('string');
@@ -135,16 +148,14 @@ describe('/api/v2/quant-core routes', () => {
     });
 
     it('categorizes a known Options engine correctly', async () => {
-      const res = await request(app).get('/api/v2/quant-core/catalog');
-      const entry = res.body.engines.find((e: any) => e.key === 'option_iron_condor');
+      const entry = catalogBody.engines.find((e: any) => e.key === 'option_iron_condor');
       expect(entry).toBeDefined();
       expect(entry.category).toBe('Options');
     });
 
     it('categorizes the two most recently added Stocks/ETFs research engines correctly', async () => {
-      const res = await request(app).get('/api/v2/quant-core/catalog');
-      const positionAveraging = res.body.engines.find((e: any) => e.key === 'position_averaging');
-      const smartBeta = res.body.engines.find((e: any) => e.key === 'smart_beta_factor');
+      const positionAveraging = catalogBody.engines.find((e: any) => e.key === 'position_averaging');
+      const smartBeta = catalogBody.engines.find((e: any) => e.key === 'smart_beta_factor');
       expect(positionAveraging).toBeDefined();
       expect(smartBeta).toBeDefined();
       expect(positionAveraging.status).toBe('RESEARCH');
@@ -152,18 +163,16 @@ describe('/api/v2/quant-core routes', () => {
     });
 
     it('reports real (not fabricated) wiring-state flags reflecting the current env', async () => {
-      const res = await request(app).get('/api/v2/quant-core/catalog');
       // QUANT_JAVA_CORE_ENABLED is explicitly set 'false' in this test's beforeAll.
-      expect(res.body.wiring.javaQuantCoreEnabled).toBe(false);
-      expect(res.body.wiring.javaLiveIdeasEnabled).toBe(false);
-      expect(typeof res.body.wiring.javaFactorCompositeVoteEnabled).toBe('boolean');
-      expect(typeof res.body.wiring.quantIndependentQualificationEnabled).toBe('boolean');
+      expect(catalogBody.wiring.javaQuantCoreEnabled).toBe(false);
+      expect(catalogBody.wiring.javaLiveIdeasEnabled).toBe(false);
+      expect(typeof catalogBody.wiring.javaFactorCompositeVoteEnabled).toBe('boolean');
+      expect(typeof catalogBody.wiring.quantIndependentQualificationEnabled).toBe('boolean');
     });
 
     it('categoryCounts sums to totalEngines', async () => {
-      const res = await request(app).get('/api/v2/quant-core/catalog');
-      const sum = Object.values(res.body.categoryCounts).reduce((a: number, b: any) => a + b, 0);
-      expect(sum).toBe(res.body.totalEngines);
+      const sum = Object.values(catalogBody.categoryCounts).reduce((a: number, b: any) => a + b, 0);
+      expect(sum).toBe(catalogBody.totalEngines);
     });
   });
 });
