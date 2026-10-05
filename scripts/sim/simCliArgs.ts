@@ -80,4 +80,11 @@ export interface ScenarioRunSpec {
   /** Explicit, disclosed methodology change - see CalibrationHistorySeeder.ts. Undefined/empty by
    *  default (no seeding). */
   calibrationSeeds?: CalibrationSeedSpec[];
+  /**
+   * 2026-10-05: Allocated budget for this run (USD). Maps to SyntheticSessionOptions.initialCash,
+   * which becomes settings.budget in the isolated DB. Default 100_000 (matches the engine's own
+   * default). The budget sweep harness (budgetSweep.ts) varies this across runs to observe how
+   * capital-allocation gates (gate 23) and order-notional caps (gate 16) behave at each level.
+   */
+  budget?: number;
 }

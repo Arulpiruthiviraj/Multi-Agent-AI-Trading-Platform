@@ -75,6 +75,8 @@ async function runOneScenario(spec: ScenarioRunSpec): Promise<ChildResultMessage
     simulationId: spec.simulationId, scenarioId: spec.scenarioId, seed: spec.seed, speedMultiplier: spec.speed,
     sessionDurationMinutes: spec.durationMinutes, universeSize: spec.symbols,
     calibrationSeeds: spec.calibrationSeeds,
+    // 2026-10-05: budget sweep support — spec.budget becomes settings.budget in the isolated DB.
+    initialCash: spec.budget ?? 100_000,
   });
 
   console.log(`\n--- Behavioral timeline (${result.timeline.length} events) ---`);

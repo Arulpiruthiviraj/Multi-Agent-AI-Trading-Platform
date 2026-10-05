@@ -42,7 +42,8 @@
     "setup:ai": "python scripts/bootstrap_models.py",
     "ai:serve": "python scripts/local_ai_service.py",
     "db:migrate": "tsx database/migrate.ts",
-    "test:mutation": "stryker run"
+    "test:mutation": "stryker run",
+    "sim:budget-sweep": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/sim/budgetSweep.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
