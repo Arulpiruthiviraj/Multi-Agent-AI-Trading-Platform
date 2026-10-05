@@ -6,6 +6,7 @@ import {
   isSessionValid,
   checkAuthConfig,
   enforceAuthConfigOrExit,
+  resolveSessionTtlDays,
   DEFAULT_SESSION_SECRET,
   allowUnauthenticatedRequest,
   isExemptLoopbackResearchEvidenceRequest,
@@ -227,5 +228,24 @@ describe('AuthConfig - isExemptLoopbackResearchEvidenceRequest (LangGraph resear
 
   it('rejects a missing/undefined ip', () => {
     expect(isExemptLoopbackResearchEvidenceRequest('GET', '/api/v2/research/strategy-evidence/GOLDEN_SMA', undefined)).toBe(false);
+  });
+});
+
+describe('AuthConfig - resolveSessionTtlDays (2026-10-05 P1)', () => {
+  it('accepts valid positive integer day counts', () => {
+    expect(resolveSessionTtlDays('90')).toBe(90);
+    expect(resolveSessionTtlDays('1')).toBe(1);
+    expect(resolveSessionTtlDays('3650')).toBe(3650);
+  });
+
+  it('keeps the legacy 10-year default only when unset', () => {
+    expect(resolveSessionTtlDays(undefined)).toBe(3650);
+    expect(resolveSessionTtlDays('')).toBe(3650);
+  });
+
+  it('fails closed (throws) on zero, negative, fractional, or garbage input', () => {
+    for (const bad of ['0', '-5', '1.5', 'abc', 'NaN', '99999']) {
+      expect(() => resolveSessionTtlDays(bad)).toThrow(/AUTH_SESSION_TTL_DAYS is invalid/);
+    }
   });
 });

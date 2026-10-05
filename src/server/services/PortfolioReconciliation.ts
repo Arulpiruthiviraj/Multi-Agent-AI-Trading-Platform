@@ -28,19 +28,13 @@ import { marketDataWorker } from './MarketDataWorker';
 
 const QTY_TOLERANCE = tradingSafety.reconQtyTolerance;
 const STALE_PRICE_THRESHOLD_MS = tradingSafety.stalePriceThresholdMs;
+import { safeDollarImpact } from './reconciliationMath';
+// Re-exported for AlertingService.ts (imports it from this module).
 export const SIGNIFICANT_MISMATCH_DOLLARS = tradingSafety.reconSignificantMismatchDollars;
 
-/**
- * 2026-10-05 P1 fix: `qty * price` with a missing/non-finite price is NaN, and NaN poisons
- * Math.max() — worstImpact becomes NaN, `NaN >= SIGNIFICANT_MISMATCH_DOLLARS` is false, and
- * a CONFIRMED divergence can never trip the pause. A divergence whose dollar size cannot be
- * computed must fail CLOSED (trip the gate), never slip through as NaN.
- */
-export function safeDollarImpact(qty: number, price: number | null | undefined): number {
-  const q = typeof qty === 'number' && Number.isFinite(qty) ? Math.abs(qty) : 0;
-  const p = typeof price === 'number' && Number.isFinite(price) && price > 0 ? price : NaN;
-  const impact = q * p;
-  return Number.isFinite(impact) && impact > 0 ? impact : SIGNIFICANT_MISMATCH_DOLLARS;
+/** Bound safeDollarImpact to this worker's significant-mismatch threshold. */
+function dollarImpact(qty: number, price: number | null | undefined): number {
+  return safeDollarImpact(qty, price, SIGNIFICANT_MISMATCH_DOLLARS);
 }
 const ACCOUNT_CONSISTENCY_TOLERANCE_PCT = tradingSafety.reconAccountConsistencyTolerancePct;
 const ACCOUNT_CONSISTENCY_TOLERANCE_FLOOR_DOLLARS = tradingSafety.reconAccountConsistencyToleranceFloorDollars;
@@ -211,7 +205,7 @@ export class PortfolioReconciliationWorker {
           mismatches.push({ symbol, type: reason === 'POSITION_FILL_BASELINE_UNAVAILABLE'
             ? 'POSITION_FILL_BASELINE_UNAVAILABLE' : 'POSITION_FILL_CONFLICT',
             localQty: latestPositionFill(scope)?.quantity ?? 0, remoteQty,
-            approxDollarImpact: safeDollarImpact(remoteQty, price) });
+            approxDollarImpact: dollarImpact(remoteQty, price) });
         }
         return true;
       };
@@ -236,7 +230,7 @@ export class PortfolioReconciliationWorker {
           if (!mismatches.some(m => m.symbol === symbol && m.type === 'SHORT_POSITION_UNMONITORED')) {
             mismatches.push({ symbol, type: 'SHORT_POSITION_UNMONITORED',
               localQty: 0, remoteQty: qty,
-              approxDollarImpact: safeDollarImpact(qty, price) });
+              approxDollarImpact: dollarImpact(qty, price) });
           }
           console.error(`[PortfolioReconciliation] ${symbol}: broker holds SHORT position (${qty}) — NOT hydrated (Argus has no short-monitoring path). Operator review required.`);
           continue;
@@ -341,7 +335,7 @@ export class PortfolioReconciliationWorker {
           console.warn(`[PortfolioReconciliation] ${symbol} MISSING_LOCALLY deferred (${this.consecutiveFaults.get(faultKey)}/${PAUSE_CONSECUTIVE_CYCLES}) — not pausing on a one-off fetch miss.`);
           continue;
         }
-        mismatches.push({ symbol, type: 'MISSING_LOCALLY', localQty: 0, remoteQty: qty, approxDollarImpact: safeDollarImpact(qty, price) });
+        mismatches.push({ symbol, type: 'MISSING_LOCALLY', localQty: 0, remoteQty: qty, approxDollarImpact: dollarImpact(qty, price) });
       }
 
       // Remove locals the broker no longer holds (canonical match, not raw string equality).
@@ -364,7 +358,7 @@ export class PortfolioReconciliationWorker {
           continue;
         }
         const price = local.currentPrice || local.averagePrice;
-        mismatches.push({ symbol: localCanon || local.symbol, type: 'MISSING_REMOTELY', localQty: local.quantity, remoteQty: 0, approxDollarImpact: safeDollarImpact(local.quantity, price) });
+        mismatches.push({ symbol: localCanon || local.symbol, type: 'MISSING_REMOTELY', localQty: local.quantity, remoteQty: 0, approxDollarImpact: dollarImpact(local.quantity, price) });
         console.warn(`[PortfolioReconciliation] Local record for ${local.symbol} (${local.quantity}) has no matching broker position - clearing it.`);
         db.update(portfolio).set({
           quantity: 0,

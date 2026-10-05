@@ -32,3 +32,31 @@ describe('DailyBuyNotional', () => {
     expect(evaluateDailyBuyNotional({ cap: null, side: 'BUY', alreadyDeployed: 999, requestedNotional: 1 }).skipped).toBe(true);
   });
 });
+
+describe('DailyBuyNotional P1 fail-closed (2026-10-05)', () => {
+  it('fails CLOSED to $0 (not null/uncapped) on a non-positive configured cap', () => {
+    const orig = tradingSafety.maxDailyBuyNotionalDollars;
+    try {
+      (tradingSafety as any).maxDailyBuyNotionalDollars = 0;
+      expect(resolveDailyBuyNotionalCap('PAPER')).toBe(0);
+      (tradingSafety as any).maxDailyBuyNotionalDollars = -500;
+      expect(resolveDailyBuyNotionalCap('PAPER')).toBe(0);
+      // A $0 cap blocks every BUY: projected > 0 can never be <= 0.
+      const r = evaluateDailyBuyNotional({ cap: 0, side: 'BUY', alreadyDeployed: 0, requestedNotional: 1 });
+      expect(r.passed).toBe(false);
+      expect(r.skipped).toBe(false);
+    } finally {
+      (tradingSafety as any).maxDailyBuyNotionalDollars = orig;
+    }
+  });
+
+  it('skips non-positive price/quantity rows instead of letting them reduce deployed notional', () => {
+    const sum = sumDailyBuyNotional([
+      { side: 'BUY', status: 'FILLED', price: 10, quantity: 2, timestamp: '2026-08-15T18:00:00.000Z' },
+      { side: 'BUY', status: 'FILLED', price: -10, quantity: 2, timestamp: '2026-08-15T18:00:00.000Z' },
+      { side: 'BUY', status: 'FILLED', price: 10, quantity: -2, timestamp: '2026-08-15T18:00:00.000Z' },
+      { side: 'BUY', status: 'FILLED', price: 0, quantity: 5, timestamp: '2026-08-15T18:00:00.000Z' },
+    ], '2026-08-15');
+    expect(sum).toBe(20);
+  });
+});

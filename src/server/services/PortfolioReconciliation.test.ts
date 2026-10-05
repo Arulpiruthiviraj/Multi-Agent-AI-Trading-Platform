@@ -245,3 +245,26 @@ describe('PortfolioReconciliationWorker.reconcile persistence (Phase 3)', () => 
     expect(eventsAfter.length).toBe(eventsBefore.length + 1);
   });
 });
+
+describe('safeDollarImpact P1 fail-closed (2026-10-05)', () => {
+  const FALLBACK = 100; // test threshold; production passes tradingSafety.reconSignificantMismatchDollars
+
+  it('trips the pause gate (returns fallback) when the price is missing/non-finite', async () => {
+    const { safeDollarImpact } = await import('./reconciliationMath');
+    expect(safeDollarImpact(10, null, FALLBACK)).toBe(FALLBACK);
+    expect(safeDollarImpact(10, undefined, FALLBACK)).toBe(FALLBACK);
+    expect(safeDollarImpact(10, NaN, FALLBACK)).toBe(FALLBACK);
+    expect(safeDollarImpact(10, 0, FALLBACK)).toBe(FALLBACK);
+    expect(safeDollarImpact(NaN, 100, FALLBACK)).toBe(FALLBACK);
+    // Never NaN: NaN would poison Math.max() and disable the pause comparison.
+    for (const v of [safeDollarImpact(10, null, FALLBACK), safeDollarImpact(NaN, NaN, FALLBACK)]) {
+      expect(Number.isFinite(v)).toBe(true);
+    }
+  });
+
+  it('computes qty*price normally when both are valid', async () => {
+    const { safeDollarImpact } = await import('./reconciliationMath');
+    expect(safeDollarImpact(10, 25, FALLBACK)).toBe(250);
+    expect(safeDollarImpact(-4, 25, FALLBACK)).toBe(100);
+  });
+});

@@ -826,6 +826,10 @@ describe('RiskEngine.evaluateRisk', () => {
     it('5. existing live (non-replay) drawdown behavior is unchanged by this fix', async () => {
       mockBrokerHolder.broker = makeBroker(basePortfolio({ equity: 170000, buyingPower: 170000, positions: [] }));
       setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 100000, maxPortfolioDrawdownPct: 0.10, peakEquity: 200000 }]);
+      // 2026-10-05: pre-establish today's loss baseline so the (new, legitimate)
+      // dayStartEquity persist doesn't fire — this test is about peakEquity writes.
+      mockTradingEngine.state.dayStartDateStr = getTradingDateStr();
+      mockTradingEngine.state.dayStartEquity = 170000;
 
       await riskEngine.evaluateRisk({ traceId: 't-drawdown-still-works', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
 
@@ -833,6 +837,27 @@ describe('RiskEngine.evaluateRisk', () => {
       expect(assessment.approved).toBe(false);
       expect(assessment.reasoning).toMatch(/drawdown/i);
       expect(mockDb.update).not.toHaveBeenCalled(); // 170000 < 200000 peak, so no new-high write occurs
+    });
+
+    it('6. live date rollover persists the daily-loss baseline; replay rollover does not (2026-10-05 P1)', async () => {
+      // Live: stale baseline date -> capture + persist.
+      setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 100000, maxPortfolioDrawdownPct: 0.15, peakEquity: 500000 }]);
+      mockTradingEngine.state.dayStartDateStr = '2000-01-01'; // force rollover
+      mockTradingEngine.state.dayStartEquity = null;
+      mockBrokerHolder.broker = makeBroker(basePortfolio({ equity: 900000, buyingPower: 900000, positions: [] }));
+      await riskEngine.evaluateRisk({ traceId: 'live-baseline-persist', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+      expect(mockDb.update).toHaveBeenCalled();
+      expect(mockTradingEngine.state.dayStartDateStr).toBe(getTradingDateStr());
+      expect(mockTradingEngine.state.dayStartEquity).toBe(900000);
+
+      // Replay: same rollover condition -> in-memory capture only, no settings write.
+      (mockDb.update as any).mockClear();
+      const session = await buildFakeReplaySessionWithPeak(100000);
+      setActiveReplaySession(session);
+      mockTradingEngine.state.dayStartDateStr = '2000-01-01'; // force rollover again
+      mockTradingEngine.state.dayStartEquity = null;
+      await riskEngine.evaluateRisk({ traceId: 'replay-baseline-no-persist', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+      expect(mockDb.update).not.toHaveBeenCalled();
     });
   });
 

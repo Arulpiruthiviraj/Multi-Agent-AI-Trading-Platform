@@ -530,10 +530,15 @@ export class RiskEngine {
                 } else {
                     tradingEngine.state.dayStartDateStr = todayStr;
                     tradingEngine.state.dayStartEquity = equityNow;
-                    try {
-                        await db.update(schema.settings).set({ dayStartEquity: equityNow, dayStartDateStr: todayStr }).run();
-                    } catch (e) {
-                        console.error('[RiskEngine] Failed to persist daily-loss baseline — kill switch degrades to in-memory-only until next capture', e);
+                    // Never persist from a replay session — the 2026-08-24 replay/live
+                    // isolation guarantee: simulated equity must not touch the live
+                    // settings row.
+                    if (!replay) {
+                        try {
+                            await db.update(schema.settings).set({ dayStartEquity: equityNow, dayStartDateStr: todayStr }).run();
+                        } catch (e) {
+                            console.error('[RiskEngine] Failed to persist daily-loss baseline — kill switch degrades to in-memory-only until next capture', e);
+                        }
                     }
                 }
                 tradingEngine.state.currentDailyLoss = 0;
