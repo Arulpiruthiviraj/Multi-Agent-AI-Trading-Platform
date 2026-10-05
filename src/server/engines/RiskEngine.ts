@@ -16,7 +16,7 @@ import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { db } from '../db';
 import * as schema from '../db/schema';
-import { desc, isNotNull, isNull, and, eq, gte, like, or } from 'drizzle-orm';
+import { desc, isNotNull, isNull, and, eq, gte, like, ne, not, notInArray, or } from 'drizzle-orm';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { tradingEngine } from './TradingEngine';
 import { marketDataWorker } from '../services/MarketDataWorker';
@@ -93,6 +93,15 @@ async function getRecentCloses(symbol: string): Promise<number[] | null> {
         }
         if (bars.length < CORRELATION_MIN_OVERLAP) return null;
         const closes = bars.map(b => b.close);
+        // 2026-10-05 memory-investigation fix: entries were previously never deleted - only
+        // overwritten on re-fetch - so this module-level map grew by one entry per distinct
+        // symbol ever risk-evaluated. Sweep entries older than twice the cache TTL on every
+        // insert; the survivors are exactly the recent working set. Deleting during Map
+        // iteration is safe.
+        const evictBefore = Date.now() - MARKET_CLOCK_CACHE_MS * 2;
+        for (const [key, entry] of closesCache) {
+            if (entry.fetchedAt < evictBefore) closesCache.delete(key);
+        }
         closesCache.set(symbol, { closes, fetchedAt: Date.now() });
         return closes;
     } catch (e) {
@@ -803,16 +812,34 @@ export class RiskEngine {
                     ? replay.config.allocationBudget
                     : (settings[0]?.budget ?? tradingEngine.state.budget);
                 const allocated = isPositiveFiniteMoney(rawBudget) ? rawBudget : Number.NaN;
+                // 2026-10-05 memory-investigation fix: the live branch previously materialized
+                // the ENTIRE trades table into V8 on every risk evaluation (a synchronous
+                // better-sqlite3 full-table scan plus a full-table JS array) and sliced it in JS
+                // twice below (pendingBuys, dailyNotionalRows). Both downstream uses are now
+                // scoped queries with the exact same predicates pushed into SQL - semantics are
+                // unchanged. NULL-safe equivalences, matching the old JS `!==` / `|| ''`
+                // semantics on legacy rows: executionEnvironment !== 'REPLAY' becomes
+                // (IS NULL OR <> 'REPLAY'); !String(traceId||'').startsWith(prefix) becomes
+                // (IS NULL OR NOT LIKE '<prefix>%'); `t.status &&` becomes IS NOT NULL AND
+                // NOT IN (...) (SQL NOT IN on NULL yields NULL -> excluded, same as JS).
                 // Same replay-scoped-query fix as the same_symbol_cooldown fetch above - avoids a
                 // second unscoped full-table fetch per risk evaluation for replay runs.
-                const allTrades = replay
-                    ? await db.select().from(schema.trades).where(like(schema.trades.traceId, `%${replay.replayId}%`))
-                    : (await db.select().from(schema.trades)).filter((t: any) =>
-                        t.executionEnvironment !== 'REPLAY' && !String(t.traceId || '').startsWith(replaySafety.replayTracePrefix)
-                      );
-                const pendingBuys = (allTrades || []).filter((t: any) =>
-                    t.side === 'BUY' && t.status && !['FILLED', 'REJECTED', 'CANCELED', 'CANCELLED'].includes(t.status)
+                const liveTradeScope = and(
+                    eq(schema.trades.side, 'BUY'),
+                    or(isNull(schema.trades.executionEnvironment), ne(schema.trades.executionEnvironment, 'REPLAY')),
+                    or(isNull(schema.trades.traceId), not(like(schema.trades.traceId, `${replaySafety.replayTracePrefix}%`))),
                 );
+                const pendingBuys = replay
+                    ? (await db.select().from(schema.trades).where(like(schema.trades.traceId, `%${replay.replayId}%`))).filter((t: any) =>
+                        t.side === 'BUY' && t.status && !['FILLED', 'REJECTED', 'CANCELED', 'CANCELLED'].includes(t.status)
+                      )
+                    : await db.select().from(schema.trades).where(
+                        and(
+                          liveTradeScope,
+                          isNotNull(schema.trades.status),
+                          notInArray(schema.trades.status, ['FILLED', 'REJECTED', 'CANCELED', 'CANCELLED']),
+                        ),
+                      );
                 const capitalSnap = snapshotCapital({
                     allocated: isPositiveFiniteMoney(allocated) ? allocated : 0,
                     positions: portfolio.positions || [],
@@ -847,7 +874,9 @@ export class RiskEngine {
                 // Crypto Expansion Phase 3: same asset-class scoping as daily_trade_limit above -
                 // a crypto proposal's daily buy notional only counts crypto BUYs, using the UTC
                 // day boundary; equity behavior (the default todayNy param) is unchanged.
-                const dailyNotionalRows = (allTrades || []).filter((t: any) => !!getCryptoInstrument(t.symbol) === proposalIsCrypto);
+                const dailyNotionalRows = replay
+                    ? (await db.select().from(schema.trades).where(like(schema.trades.traceId, `%${replay.replayId}%`))).filter((t: any) => !!getCryptoInstrument(t.symbol) === proposalIsCrypto)
+                    : (await db.select().from(schema.trades).where(liveTradeScope)).filter((t: any) => !!getCryptoInstrument(t.symbol) === proposalIsCrypto);
                 const alreadyToday = proposalIsCrypto
                     ? sumDailyBuyNotional(dailyNotionalRows, getCryptoTradingDateStr(new Date(nowMs)))
                     : sumDailyBuyNotional(dailyNotionalRows);

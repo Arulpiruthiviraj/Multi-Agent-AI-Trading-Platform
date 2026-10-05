@@ -822,7 +822,14 @@ export class ChiefTraderAgent {
     const prior = this.consensusQueues.get(symbol) || Promise.resolve();
     const run = prior.then(() => this.evaluateConsensusSerialized(symbol, traceId));
     // Never let one evaluation's rejection break the queue for evaluations queued after it.
-    this.consensusQueues.set(symbol, run.then(() => undefined, () => undefined));
+    const chained = run.then(() => undefined, () => undefined);
+    this.consensusQueues.set(symbol, chained);
+    // 2026-10-05 memory-investigation fix: entries were previously never deleted, pinning one
+    // promise chain (and its evaluation closure) per symbol for process lifetime. Remove the
+    // entry once it settles, but only if no newer evaluation chained behind it in the meantime.
+    void chained.then(() => {
+      if (this.consensusQueues.get(symbol) === chained) this.consensusQueues.delete(symbol);
+    });
     return run;
   }
 

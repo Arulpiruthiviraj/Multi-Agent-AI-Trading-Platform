@@ -5,5 +5,8 @@
   "historyPageSize": 10000,
   "advCalendarLookbackMultiplier": 3,
   "webhookTimeoutMs": 5000,
-  "webhookMaxConcurrent": 4
+  "webhookMaxConcurrent": 4,
+  "wsSendHighWaterBytes": 1048576,
+  "wsKeepaliveIntervalMs": 30000,
+  "wsCongestedIntervalsBeforeTerminate": 4
 }

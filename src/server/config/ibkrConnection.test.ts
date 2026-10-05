@@ -20,4 +20,16 @@ describe('ibkrConnection config (socket primary)', () => {
       else process.env.IBKR_CONNECTION_MODE = prev;
     }
   });
+
+  it('exposes trackedOrderMapMaxEntries (2026-10-05 memory fix: bounds order tracking maps)', () => {
+    const prev = process.env.IBKR_CONNECTION_MODE;
+    delete process.env.IBKR_CONNECTION_MODE;
+    try {
+      const cfg = loadIbkrConnection();
+      expect(cfg.trackedOrderMapMaxEntries).toBe(1000);
+    } finally {
+      if (prev === undefined) delete process.env.IBKR_CONNECTION_MODE;
+      else process.env.IBKR_CONNECTION_MODE = prev;
+    }
+  });
 });

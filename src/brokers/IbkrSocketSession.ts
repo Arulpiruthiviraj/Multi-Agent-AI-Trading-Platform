@@ -297,6 +297,36 @@ export class IbkrSocketSession {
    *  eagerly) so a duplicate/replayed commissionReport for the same execId is an idempotent
    *  overwrite, never a double-count - see getAggregateCommissionForOrder() below. */
   private commissionByExecId = new Map<string, number>();
+  /**
+   * 2026-10-05 memory-investigation fix: trackedOrders (and its coherent index/commission
+   * maps) previously grew by one entry per order ever seen, for process lifetime - terminal
+   * FILLED/CANCELED/REJECTED orders were never removed. Evicts oldest-terminal-first when
+   * over the configured cap. Non-terminal orders are never evicted: crash-recovery
+   * rehydration and live order lookups depend on them.
+   */
+  private evictTerminalOrdersIfOverCap(): void {
+    const max = this.cfg.trackedOrderMapMaxEntries;
+    if (this.trackedOrders.size <= max) return;
+    const terminal = [...this.trackedOrders.values()]
+      .filter((o) => o.status === 'FILLED' || o.status === 'CANCELED' || o.status === 'REJECTED')
+      .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime());
+    let overBy = this.trackedOrders.size - max;
+    for (const order of terminal) {
+      if (overBy <= 0) break;
+      this.trackedOrders.delete(order.id);
+      // Coherent eviction: drop index/commission entries that point at the evicted order.
+      for (const [clientOrderId, orderId] of this.clientOrderIdIndex) {
+        if (orderId === order.id) this.clientOrderIdIndex.delete(clientOrderId);
+      }
+      for (const [execId, orderId] of this.execIdToOrderId) {
+        if (orderId === order.id) {
+          this.execIdToOrderId.delete(execId);
+          this.commissionByExecId.delete(execId);
+        }
+      }
+      overBy--;
+    }
+  }
   private accountId: string | null = null;
   private serverTime: string | null = null;
   private port: number | null = null;
@@ -1021,6 +1051,7 @@ export class IbkrSocketSession {
           seenExecutionIds: new Set<string>(),
         };
         this.trackedOrders.set(orderId, rehydrated);
+        this.evictTerminalOrdersIfOverCap();
         if (clientOrderId) this.clientOrderIdIndex.set(clientOrderId, orderId);
         console.warn(
           `[IBKR Socket] Rehydrated order ${orderId} (${rehydrated.symbol} ${side} x${totalQuantity}, status=${rehydrated.status}` +
@@ -1070,6 +1101,7 @@ export class IbkrSocketSession {
             seenExecutionIds: new Set<string>(),
           };
           this.trackedOrders.set(orderId, row);
+          this.evictTerminalOrdersIfOverCap();
           if (execClientOrderId) this.clientOrderIdIndex.set(execClientOrderId, orderId);
           console.warn(
             `[IBKR Socket] Rehydrated order ${orderId} from a bare execution (no openOrder seen)` +
@@ -1334,6 +1366,7 @@ export class IbkrSocketSession {
       execDetailsCumulative: 0,
       seenExecutionIds: new Set<string>(),
     });
+    this.evictTerminalOrdersIfOverCap();
     if (opts.clientOrderId) {
       this.clientOrderIdIndex.set(opts.clientOrderId, orderId);
     }

@@ -110,6 +110,7 @@ import { brokerPortfolioError, withTimeout } from "./src/server/services/brokerP
 import { resolvePositionStopTarget } from "./src/server/services/PortfolioMonitor";
 import { loadInternalNewsForTicker } from "./src/server/services/internalNewsForTicker";
 import { tradingSafety } from "./src/server/config/tradingSafety";
+import { dataTransportLimits } from "./src/server/config/dataTransportLimits";
 import { isAuthEnabled, validateCredentials as validateCredentialsPure, isSessionValid, enforceAuthConfigOrExit, allowUnauthenticatedRequest, isExemptLoopbackResearchEvidenceRequest } from "./src/server/core/AuthConfig";
 import { persistAllowlistedSecrets, secretsStatusFromEnvAndDb, SECRET_ALLOWLIST } from "./src/server/core/persistEncryptedSecrets";
 import { loginLimiter, aiLimiter, tradingLimiter, backtestLimiter, wsUpgradeLimiter, webhookLimiter } from "./src/server/core/RateLimiters";
@@ -1851,8 +1852,21 @@ let portfolioState = loadPortfolio();
       })();
     });
     setGlobalWss(wssLocal);
+    // Per-connection liveness/backpressure state for the keepalive below. WeakMap so a
+    // socket that somehow escapes the 'close'/'error' cleanup cannot pin its state forever.
+    const wsClientStates = new WeakMap<WebSocket, { isAlive: boolean; congestedTicks: number; droppedEvents: number }>();
     wssLocal.on('connection', (ws) => {
       console.log('[WS] Client connected');
+      // 2026-10-05 memory-investigation fix: a stalled or half-open client previously
+      // accumulated an unbounded ws send buffer (every EventBus event stringified into it)
+      // and its wildcard subscription was only removed on a clean 'close', which a dead
+      // TCP connection never delivers.
+      const clientState = { isAlive: true, congestedTicks: 0, droppedEvents: 0 };
+      wsClientStates.set(ws, clientState);
+
+      const cleanupWildcard = () => {
+        eventBus.off('*', wildcardHandler);
+      };
 
       void (async () => {
         try {
@@ -1876,18 +1890,54 @@ let portfolioState = loadPortfolio();
         } catch { /* ignore malformed client frames */ }
       });
 
+      // Protocol-level pong answers the server-side keepalive below. The app-level
+      // ping/pong 'message' handler above is client-initiated and cannot reap dead sockets.
+      ws.on('pong', () => { clientState.isAlive = true; });
+
       const wildcardHandler = (eventName: string, payload: any) => {
-        if (ws.readyState === 1) {
-          ws.send(JSON.stringify({ type: eventName, data: payload }));
+        if (ws.readyState !== 1) return;
+        // Backpressure guard: drop this event for this client instead of letting the ws
+        // send buffer grow without bound when the client is not draining it.
+        if (ws.bufferedAmount > dataTransportLimits.wsSendHighWaterBytes) {
+          clientState.droppedEvents++;
+          return;
         }
+        ws.send(JSON.stringify({ type: eventName, data: payload }));
       };
       eventBus.on('*', wildcardHandler);
 
       ws.on('close', () => {
-        console.log('[WS] Client disconnected');
-        eventBus.off('*', wildcardHandler);
+        console.log(`[WS] Client disconnected${clientState.droppedEvents > 0 ? ` (dropped ${clientState.droppedEvents} events under backpressure)` : ''}`);
+        cleanupWildcard();
+      });
+      ws.on('error', (err) => {
+        console.warn('[WS] Client socket error:', (err as Error)?.message ?? err);
+        cleanupWildcard();
+        // 'close' normally follows an error; terminate defensively in case it does not,
+        // so a broken socket cannot retain its wildcard subscription or send buffer.
+        try { ws.terminate(); } catch { /* already dead */ }
       });
     });
+
+    // Server-side keepalive (2026-10-05 memory investigation): ping every interval and
+    // terminate sockets that miss their pong or whose send buffer stays above the
+    // high-water mark for consecutive intervals. Termination triggers 'close', which
+    // runs the wildcard cleanup above - no ghost subscriptions or buffers survive.
+    setInterval(() => {
+      wssLocal.clients.forEach((client) => {
+        const state = wsClientStates.get(client);
+        if (!state) return;
+        const congested = client.bufferedAmount > dataTransportLimits.wsSendHighWaterBytes;
+        state.congestedTicks = congested ? state.congestedTicks + 1 : 0;
+        if (!state.isAlive || state.congestedTicks >= dataTransportLimits.wsCongestedIntervalsBeforeTerminate) {
+          console.warn(`[WS] Terminating unresponsive/congested client (isAlive=${state.isAlive}, congestedTicks=${state.congestedTicks}, bufferedAmount=${client.bufferedAmount}, droppedEvents=${state.droppedEvents})`);
+          try { client.terminate(); } catch { /* already dead */ }
+          return;
+        }
+        state.isAlive = false;
+        try { client.ping(); } catch { /* reaped on the next interval if the socket is dead */ }
+      });
+    }, dataTransportLimits.wsKeepaliveIntervalMs);
 
     // AUTOBOT_STATE_UPDATED is polled every 2s but tradingEngine.state usually doesn't change
     // between ticks. Serialize once and skip the per-client broadcast when the payload is
