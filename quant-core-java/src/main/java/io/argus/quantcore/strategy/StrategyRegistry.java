@@ -4,6 +4,8 @@ import io.argus.quantcore.strategy.core.*;
 import io.argus.quantcore.strategy.institutional.InstitutionalStatArbStrategy;
 import io.argus.quantcore.strategy.institutional.InstitutionalStrategyContext;
 import io.argus.quantcore.strategy.institutional.MultiFactorMomentumStrategy;
+import io.argus.quantcore.strategy.institutional.TimeSeriesMomentum12MStrategy;
+import io.argus.quantcore.strategy.institutional.VolScaledMtfMomentumStrategy;
 import io.argus.quantcore.strategy.types.StrategyContext;
 import io.argus.quantcore.strategy.types.StrategyEvaluation;
 
@@ -36,7 +38,9 @@ public final class StrategyRegistry {
 
     private static final Map<String, Function<InstitutionalStrategyContext, StrategyEvaluation>> INSTITUTIONAL = Map.of(
         InstitutionalStatArbStrategy.ID, ctx -> new InstitutionalStatArbStrategy().evaluate(ctx),
-        MultiFactorMomentumStrategy.ID, ctx -> new MultiFactorMomentumStrategy().evaluate(ctx)
+        MultiFactorMomentumStrategy.ID, ctx -> new MultiFactorMomentumStrategy().evaluate(ctx),
+        VolScaledMtfMomentumStrategy.ID, ctx -> new VolScaledMtfMomentumStrategy().evaluate(ctx),
+        TimeSeriesMomentum12MStrategy.ID, ctx -> new TimeSeriesMomentum12MStrategy().evaluate(ctx)
     );
 
     private StrategyRegistry() {
