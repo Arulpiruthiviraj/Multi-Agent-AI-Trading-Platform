@@ -396,7 +396,15 @@ describe('Architecture protection: incident-remediation contracts', () => {
     const text = readFileSync(join(ROOT, 'server.ts'), 'utf8');
     const closeHandlerMatch = text.match(/ws\.on\('close',\s*\(\)\s*=>\s*\{([\s\S]*?)\}\);/);
     expect(closeHandlerMatch, "expected to find server.ts's ws.on('close', ...) handler").toBeTruthy();
-    const closeHandlerBody = closeHandlerMatch![1];
+    let closeHandlerBody = closeHandlerMatch![1];
+    // 2026-10-05: the handler was refactored to call cleanupWildcard() (which does the
+    // eventBus.off internally) — follow the indirection so this test asserts on the real
+    // cleanup behavior, not the literal call site.
+    if (/cleanupWildcard\(\)/.test(closeHandlerBody)) {
+      const cleanupMatch = text.match(/const cleanupWildcard = \(\) => \{([\s\S]*?)\};/);
+      expect(cleanupMatch, "expected to find server.ts's cleanupWildcard() helper").toBeTruthy();
+      closeHandlerBody += cleanupMatch![1];
+    }
     expect(closeHandlerBody).not.toMatch(/tradingEngine\.(toggle|setTradingState)/);
     expect(closeHandlerBody).not.toMatch(/riskEngine|RiskEngine/);
     expect(closeHandlerBody).not.toMatch(/placeOrder|BrokerManager/);
