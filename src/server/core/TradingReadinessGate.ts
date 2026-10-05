@@ -19,6 +19,7 @@ import { getPipelineAgentSnapshot } from './pipelineAgentSnapshot';
 import { getAIProviderHealthSnapshot, type AIProviderHealthRecord } from '../ai/AIProviderHealthCheck';
 import { db } from '../db';
 import * as schema from '../db/schema';
+import { desc } from 'drizzle-orm';
 import { getMarketDataReadiness } from './marketDataReadiness';
 import { classifyMarketSession } from '../replay/marketSession';
 import { TRADING_TIMEZONE } from './TradingCalendar';
@@ -170,9 +171,26 @@ export async function getTradingReadinessSnapshot(): Promise<TradingReadinessSna
     pipeline = null;
   }
   const entryReady = pipeline?.liveIdeaGenerationEnabled === true;
+  // Real observability gap found 2026-10-05 (morning paper-session audit): this detail string was
+  // the single most-checked readiness surface, and for a non-enabled tradingState it said only
+  // "trading state TRADING_PAUSED" - no reason, no actor, no timestamp. A real auto-pause
+  // (PortfolioReconciliation, 09:10:58 ET) sat unnoticed for the rest of that morning because
+  // nothing here distinguished "paused, reason unknown" from "paused, here's exactly why and when".
+  // kill_switch_events is the existing, durable, already-authoritative audit trail for every
+  // transition - this surfaces its own latest row rather than inventing a second source of truth.
+  let pauseContext = '';
+  if (pipeline && pipeline.tradingState !== 'TRADING_ENABLED') {
+    try {
+      const [lastTransition] = await db.select().from(schema.killSwitchEvents)
+        .orderBy(desc(schema.killSwitchEvents.id)).limit(1);
+      if (lastTransition && lastTransition.toState === pipeline.tradingState) {
+        pauseContext = ` [${lastTransition.actor} @ ${lastTransition.createdAt}: ${lastTransition.reason}]`;
+      }
+    } catch { /* best-effort enrichment only - never block readiness evaluation on this */ }
+  }
   const entryDetail = pipeline === null ? 'entry gate evidence unavailable'
     : pipeline.interruptedSessionHold ? 'unclean restart: awaiting a real reconciliation match'
-    : pipeline.tradingState !== 'TRADING_ENABLED' ? `trading state ${pipeline.tradingState}`
+    : pipeline.tradingState !== 'TRADING_ENABLED' ? `trading state ${pipeline.tradingState}${pauseContext}`
     : !pipeline.autobotEnabled ? 'Autobot disabled'
     : pipeline.forensicCheckpointBuyLock?.locked ? 'first-fill forensic checkpoint holds new entries'
     : entryReady ? 'entry generation enabled; consensus and risk checks still required'

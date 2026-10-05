@@ -24,8 +24,10 @@ import { observeSafe, structuredLogger } from '../observability/StructuredLogger
 import { checkPositionFillEvidence, latestPositionFill } from './positionFillEvidence';
 import { resolveOmsExecutionEnvironment } from '../research/organicPaper';
 import { normalizeTradingMode } from '../core/tradingModeEnv';
+import { marketDataWorker } from './MarketDataWorker';
 
 const QTY_TOLERANCE = tradingSafety.reconQtyTolerance;
+const STALE_PRICE_THRESHOLD_MS = tradingSafety.stalePriceThresholdMs;
 export const SIGNIFICANT_MISMATCH_DOLLARS = tradingSafety.reconSignificantMismatchDollars;
 const ACCOUNT_CONSISTENCY_TOLERANCE_PCT = tradingSafety.reconAccountConsistencyTolerancePct;
 const ACCOUNT_CONSISTENCY_TOLERANCE_FLOOR_DOLLARS = tradingSafety.reconAccountConsistencyToleranceFloorDollars;
@@ -434,18 +436,38 @@ export class PortfolioReconciliationWorker {
       // problem) - not something to silently trust.
       try {
         const { cash, buyingPower, equity } = brokerPortfolio;
-        const missingMarks = remotePositions.some(p => p.quantity !== 0
-          && !(typeof p.currentPrice === 'number' && Number.isFinite(p.currentPrice) && p.currentPrice > 0));
+        // Real defect found 2026-10-05 (morning paper-session audit): some broker adapters'
+        // positions() NEVER populate currentPrice at all - IBGatewaySocketAdapter's own comment
+        // explains why (reqPositions supplies quantity/basis, not a live mark, and it correctly
+        // refuses to fabricate one). That is the right call for positions(), but it means this
+        // check was permanently, structurally unable to see a mark for ANY IBKR position, for as
+        // long as that position stayed open - not a transient startup race, and nothing to do with
+        // real account valuation. Argus already has a real, independently-sourced live mark for
+        // these symbols (the same tick feed RiskEngine/gate 13 use) whenever a subscription is
+        // active. Falling back to it here - fresh only, never stale, never fabricated - lets a
+        // position with a perfectly good live quote be correctly valued instead of permanently
+        // misclassified as ACCOUNT_VALUATION_UNAVAILABLE.
+        const resolveMark = (p: { symbol: string; currentPrice: number | null | undefined }): number | null => {
+          if (typeof p.currentPrice === 'number' && Number.isFinite(p.currentPrice) && p.currentPrice > 0) return p.currentPrice;
+          const liveAgeMs = marketDataWorker.getLatestPriceAgeMs(p.symbol);
+          if (liveAgeMs === null || liveAgeMs > STALE_PRICE_THRESHOLD_MS) return null;
+          const livePrice = marketDataWorker.getLatestPrice(p.symbol);
+          return typeof livePrice === 'number' && Number.isFinite(livePrice) && livePrice > 0 ? livePrice : null;
+        };
+        const resolvedMarks = new Map(remotePositions.map((p: any) => [p.symbol, resolveMark(p)]));
+        const missingMarks = remotePositions.some((p: any) => p.quantity !== 0 && resolvedMarks.get(p.symbol) === null);
         const nonFinite = [cash, buyingPower, equity].some(v => typeof v !== 'number' || !Number.isFinite(v));
         if (nonFinite) {
           mismatches.push({ symbol: '__ACCOUNT__', type: 'ACCOUNT_INCONSISTENCY', localQty: 0, remoteQty: 0, approxDollarImpact: SIGNIFICANT_MISMATCH_DOLLARS });
           console.error(`[PortfolioReconciliation] ${broker.name} reported a non-finite cash/buyingPower/equity value: cash=${cash} buyingPower=${buyingPower} equity=${equity}`);
         } else if (missingMarks) {
           // Cost basis is not market value. Unknown valuation cannot prove account consistency.
+          // Reached only when NEITHER the broker NOR a fresh live tick can supply a mark - a
+          // genuine data gap, not a misclassified startup race or a priced position.
           mismatches.push({ symbol: '__ACCOUNT__', type: 'ACCOUNT_VALUATION_UNAVAILABLE', localQty: 0,
             remoteQty: 0, approxDollarImpact: SIGNIFICANT_MISMATCH_DOLLARS });
         } else {
-          const positionsValue = remotePositions.reduce((sum: number, p: any) => sum + (p.currentPrice ?? 0) * p.quantity, 0);
+          const positionsValue = remotePositions.reduce((sum: number, p: any) => sum + (resolvedMarks.get(p.symbol) ?? 0) * p.quantity, 0);
           const expectedEquity = cash + positionsValue;
           const drift = Math.abs(equity - expectedEquity);
           const tolerance = Math.max(ACCOUNT_CONSISTENCY_TOLERANCE_FLOOR_DOLLARS, equity * ACCOUNT_CONSISTENCY_TOLERANCE_PCT);

@@ -74,6 +74,57 @@ describe('PortfolioReconciliationWorker.reconcile persistence (Phase 3)', () => 
     }
   });
 
+  it('real defect fix (2026-10-05): uses a fresh live tick as the mark when the broker never supplies currentPrice, instead of permanently flagging ACCOUNT_VALUATION_UNAVAILABLE', async () => {
+    // Reproduces IBGatewaySocketAdapter's actual, permanent behavior: positions() never populates
+    // currentPrice at all (reqPositions has no live mark) - this held an open OKTA-like position
+    // paused for an entire real trading morning because the account-consistency check only ever
+    // looked at the broker's own (always-null) currentPrice, never at Argus's own live tick cache.
+    const { marketDataWorker } = await import('./MarketDataWorker');
+    const broker = (await import('../../brokers/BrokerManager')).BrokerManager.getInstance().getActiveBroker();
+    const original = broker.portfolio;
+    broker.portfolio = async () => ({ cash: 1000, buyingPower: 1000, equity: 1140, positions: [
+      { symbol: 'LIVEMRK', quantity: 1, entryPrice: 100, currentPrice: null, marketValue: null,
+        unrealizedPnl: null, unrealizedPnlPercent: null, valuationStatus: 'UNAVAILABLE' },
+    ] });
+    marketDataWorker.cacheObservedQuote('LIVEMRK', 140, Date.now());
+    try {
+      await portfolioReconciliationWorker.reconcile();
+      const events = await db.select().from(schema.reconciliationEvents);
+      const last = events.at(-1);
+      const mismatches = last.mismatches ? JSON.parse(last.mismatches) : [];
+      expect(mismatches).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'ACCOUNT_VALUATION_UNAVAILABLE' }),
+      ]));
+    } finally {
+      broker.portfolio = original;
+      await db.delete(schema.portfolio).where(eq(schema.portfolio.symbol, 'LIVEMRK'));
+    }
+  });
+
+  it('negative control: a stale live tick must NOT be used as a mark - still flags ACCOUNT_VALUATION_UNAVAILABLE', async () => {
+    const { marketDataWorker } = await import('./MarketDataWorker');
+    const { tradingSafety } = await import('../config/tradingSafety');
+    const broker = (await import('../../brokers/BrokerManager')).BrokerManager.getInstance().getActiveBroker();
+    const original = broker.portfolio;
+    broker.portfolio = async () => ({ cash: 1000, buyingPower: 1000, equity: 1140, positions: [
+      { symbol: 'STALEMRK', quantity: 1, entryPrice: 100, currentPrice: null, marketValue: null,
+        unrealizedPnl: null, unrealizedPnlPercent: null, valuationStatus: 'UNAVAILABLE' },
+    ] });
+    marketDataWorker.cacheObservedQuote('STALEMRK', 140, Date.now() - tradingSafety.stalePriceThresholdMs - 60000);
+    try {
+      await portfolioReconciliationWorker.reconcile();
+      const events = await db.select().from(schema.reconciliationEvents);
+      const last = events.at(-1);
+      const mismatches = last.mismatches ? JSON.parse(last.mismatches) : [];
+      expect(mismatches).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'ACCOUNT_VALUATION_UNAVAILABLE' }),
+      ]));
+    } finally {
+      broker.portfolio = original;
+      await db.delete(schema.portfolio).where(eq(schema.portfolio.symbol, 'STALEMRK'));
+    }
+  });
+
   it('persists a MATCH row and hydrates local when the broker holds a position Argus does not yet have', async () => {
     const broker = (await import('../../brokers/BrokerManager')).BrokerManager.getInstance().getActiveBroker();
     // Monkey-patch portfolio() to simulate a broker-side position Argus's local table doesn't
