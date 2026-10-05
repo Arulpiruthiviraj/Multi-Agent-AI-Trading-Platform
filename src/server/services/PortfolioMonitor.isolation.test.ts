@@ -57,6 +57,6 @@ describe('PortfolioMonitorWorker.reviewPortfolio - per-holding exception isolati
     const monitored = emitSpy.mock.calls.filter((c: any) => c[0] === EVENTS.POSITION_MONITORED);
     const healthy = monitored.find((c: any) => c[1]?.symbol === 'ZZZ_HEALTHY');
     expect(healthy).toBeTruthy();
-    expect(healthy![1].pnlPct).toBeCloseTo(1, 5);
+    expect((healthy as any)[1].pnlPct).toBeCloseTo(1, 5);
   });
 });

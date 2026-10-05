@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeAll } from 'vitest';
 
 /**
  * Batch 2 timer/reentrancy sweep (2026-09-23): OrderManagementService.start() now runs
@@ -10,8 +10,17 @@ import { describe, it, expect, vi } from 'vitest';
  * here directly against the real class, without touching reconciliation semantics.
  */
 describe('OrderManagementService reentrancy guards', () => {
+  // 2026-10-04: OrderManagement.ts's import graph (DB migrations, AI model seeding, dotenv)
+  // can exceed the 5s default test timeout on a loaded box. Import once in beforeAll (which
+  // already enjoys the 60s hookTimeout) instead of inline in each test: the first test's
+  // inline import was timing out mid-evaluation, leaving the second test a partially
+  // initialized module ("OrderManagementService is not a constructor").
+  let OrderManagementService: any;
+  beforeAll(async () => {
+    ({ OrderManagementService } = await import('./OrderManagement'));
+  });
+
   it('followUpGuard coalesces a second overlapping followUpOpenOrders call', async () => {
-    const { OrderManagementService } = await import('./OrderManagement');
     const oms = new OrderManagementService();
 
     let resolveFirst: () => void = () => {};
@@ -32,7 +41,6 @@ describe('OrderManagementService reentrancy guards', () => {
   });
 
   it('crashRecoveryGuard coalesces a second overlapping crash-recovery cycle', async () => {
-    const { OrderManagementService } = await import('./OrderManagement');
     const oms = new OrderManagementService();
 
     let resolveFirst: () => void = () => {};

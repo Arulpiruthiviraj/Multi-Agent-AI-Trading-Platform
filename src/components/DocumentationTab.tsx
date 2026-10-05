@@ -546,7 +546,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
               <span className="text-[10px] font-mono text-slate-300 uppercase font-bold block mb-1">Gate 11: Argus Capital Allocation</span>
               <h3 className="text-sm font-bold text-white mb-2">settings.budget Is Not Broker Equity</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
-                <code className="text-[10px]">argus_capital_allocation</code> enforces the Argus allocated budget vs buying power. TradingEngine.toggle() also rejects enable if allocated budget exceeds broker buyingPower/cash.
+                <code className="text-[10px]">argus_capital_allocation</code> enforces the Argus allocated budget vs buying power. TradingEngine.toggle() also rejects enable if allocated budget exceeds broker buyingPower/cash. The pre-market readiness gate adds a <code className="text-[10px]">capitalProfile</code> node asserting <code className="text-[10px]">settings.budget</code> equals the declared <code className="text-[10px]">ARGUS_EXPECTED_BUDGET</code> — a mismatch fails trading readiness with <code className="text-[10px]">BUDGET_MISMATCH</code> instead of trading on the wrong number.
               </p>
             </div>
 

@@ -14,12 +14,12 @@ export function TabSkeleton({ label }: { label?: string }) {
         {[0, 1, 2].map((i) => (
           <div
             key={i}
-            className="h-28 animate-pulse rounded-lg border border-slate-800 bg-[#1A1F2B]"
+            className="h-28 animate-shimmer rounded-lg border border-slate-800"
           />
         ))}
       </div>
       <div
-        className="h-96 animate-pulse rounded-lg border border-slate-800 bg-[#1A1F2B]"
+        className="h-96 animate-shimmer rounded-lg border border-slate-800"
         aria-hidden
       />
     </div>

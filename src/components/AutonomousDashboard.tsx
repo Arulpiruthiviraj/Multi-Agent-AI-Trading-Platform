@@ -36,6 +36,8 @@ import { SafeResponsiveContainer } from "./shared/SafeResponsiveContainer";
 import { Explainer } from "./ContextualTooltip";
 import { UnavailableHint } from "./UnavailableHint";
 import { GoalCampaignCard } from "./dashboard/GoalCampaignCard";
+import { AnimatedNumber } from "./shared/AnimatedNumber";
+import { Reveal } from "./shared/Reveal";
 
 /** Ledger fill/submit time for Recent Executed Trades. Prefers filledAt; never fabricates a clock. */
 const formatTradeTimestamp = (ts: string | number | null | undefined): string => {
@@ -454,7 +456,8 @@ export function AutonomousDashboard({
         <div className="xl:col-span-2 space-y-6">
           {/* Key Metrics */}
           <div className="grid grid-cols-3 gap-4">
-            <div className="bg-[#1A1F2B] border border-slate-800 rounded-xl p-5 shadow-sm relative z-10">
+            <Reveal delay={0}>
+            <div className="bg-[#1A1F2B] border border-slate-800 rounded-xl p-5 shadow-sm relative z-10 argus-card-hover">
               <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-2 flex justify-between items-center">
                 <Explainer id="allocatedCapital">Allocated Capital</Explainer>
                 <button
@@ -469,25 +472,29 @@ export function AutonomousDashboard({
               </div>
               <div className="text-3xl font-bold text-white">
                 {typeof allocatedBudget === "number"
-                  ? `$${Number(allocatedBudget).toLocaleString("en-US", { maximumFractionDigits: 0 })}`
+                  ? <AnimatedNumber value={Number(allocatedBudget)} format={(n) => `$${n.toLocaleString("en-US", { maximumFractionDigits: 0 })}`} />
                   : <UnavailableHint reason="settings.budget has not loaded from GET /api/v1/autobot yet.">--</UnavailableHint>}
               </div>
             </div>
-            
-            <div className="bg-[#1A1F2B] border border-slate-800 rounded-xl p-5 shadow-sm">
+            </Reveal>
+
+            <Reveal delay={0.06}>
+            <div className="bg-[#1A1F2B] border border-slate-800 rounded-xl p-5 shadow-sm argus-card-hover">
               <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-2">
                 <Explainer id="portfolioValuation">Portfolio Valuation</Explainer>
               </div>
               <div className="text-3xl font-bold text-indigo-400">
                 {typeof portfolioEquity === "number"
-                  ? `$${Number(portfolioEquity).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                  ? <AnimatedNumber value={Number(portfolioEquity)} format={(n) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
                   : <UnavailableHint reason={portfolioError
                     ? `GET /api/v1/portfolio failed: ${portfolioError} This is not Argus allocated capital.`
                     : "Broker equity/cash has not returned from GET /api/v1/portfolio. This is not Argus allocated capital."}>--</UnavailableHint>}
               </div>
             </div>
+            </Reveal>
 
-            <div className={`bg-[#1A1F2B] border rounded-xl p-5 shadow-sm ${
+            <Reveal delay={0.12}>
+            <div className={`bg-[#1A1F2B] border rounded-xl p-5 shadow-sm argus-card-hover ${
               isPnlPositive ? 'border-emerald-500/20 shadow-[0_0_20px_rgba(16,185,129,0.05)]' : 'border-rose-500/20 shadow-[0_0_20px_rgba(244,63,94,0.05)]'
             }`}>
               <div className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${isPnlPositive ? 'text-emerald-500/70' : 'text-rose-500/70'}`}>
@@ -498,7 +505,10 @@ export function AutonomousDashboard({
                   <UnavailableHint reason="Today's P/L waits on the broker portfolio snapshot. $0.00 is only shown after a real book is loaded.">--</UnavailableHint>
                 ) : (
                   <>
-                {isPnlPositive ? '+' : ''}${Number(todaysPnl).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                <AnimatedNumber
+                  value={Number(todaysPnl)}
+                  format={(n) => `${n >= 0 ? '+' : ''}$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                />
                 <span className="text-xs font-mono ml-2 font-normal opacity-80">
                   ({isPnlPositive ? '+' : ''}{pnlPercent.toFixed(2)}%)
                 </span>
@@ -506,6 +516,7 @@ export function AutonomousDashboard({
                 )}
               </div>
             </div>
+            </Reveal>
           </div>
 
           {/* Performance Chart */}

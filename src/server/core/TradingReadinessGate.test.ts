@@ -43,7 +43,7 @@ function healthyDefaults() {
     { providerId: 'p1', providerName: 'Gemini', status: 'HEALTHY' },
     { providerId: 'p2', providerName: 'OpenAI', status: 'AUTH_FAILED' },
   ]);
-  dbSelectResult.value = Promise.resolve([{}]);
+  dbSelectResult.value = Promise.resolve([{ budget: 2000 }]);
 }
 
 describe('TradingReadinessGate', () => {
@@ -74,17 +74,75 @@ describe('TradingReadinessGate', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-18T15:00:00Z'));
+    vi.stubEnv('ARGUS_EXPECTED_BUDGET', '2000');
     health.mockReset();
     getPipelineAgentSnapshot.mockReset();
     getAIProviderHealthSnapshot.mockReset();
     healthyDefaults();
   });
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
   it('reports tradingReady=true when every dependency (including at least one healthy AI provider) is healthy', async () => {
     const snapshot = await getTradingReadinessSnapshot();
     expect(snapshot.tradingReady).toBe(true);
     expect(snapshot.reasons).toEqual([]);
+  });
+
+  describe('capital profile / budget consistency (2026-10-05)', () => {
+    it('marks the capital node ready when settings.budget matches the declared intent', async () => {
+      const snapshot = await getTradingReadinessSnapshot();
+      const node = snapshot.nodes.find((n) => n.id === 'capitalProfile')!;
+      expect(node.ready).toBe(true);
+      expect(node.notApplicable).toBeFalsy();
+      expect(node.detail).toContain('$2,000');
+      expect(snapshot.tradingReady).toBe(true);
+    });
+
+    it('fails closed with BUDGET_MISMATCH when runtime budget differs from declared intent', async () => {
+      dbSelectResult.value = Promise.resolve([{ budget: 100000 }]);
+      const snapshot = await getTradingReadinessSnapshot();
+      const node = snapshot.nodes.find((n) => n.id === 'capitalProfile')!;
+      expect(node.ready).toBe(false);
+      expect(node.detail).toContain('BUDGET_MISMATCH');
+      expect(node.detail).toContain('$100,000');
+      expect(node.detail).toContain('$2,000');
+      expect(snapshot.tradingReady).toBe(false);
+      expect(snapshot.reasons.some((r) => r.includes('BUDGET_MISMATCH'))).toBe(true);
+    });
+
+    it('fails closed when settings.budget is missing or not positive', async () => {
+      dbSelectResult.value = Promise.resolve([{}]);
+      const snapshot = await getTradingReadinessSnapshot();
+      const node = snapshot.nodes.find((n) => n.id === 'capitalProfile')!;
+      expect(node.ready).toBe(false);
+      expect(snapshot.tradingReady).toBe(false);
+    });
+
+    it('is notApplicable (passing) when no intent is declared via ARGUS_EXPECTED_BUDGET', async () => {
+      vi.stubEnv('ARGUS_EXPECTED_BUDGET', '');
+      const snapshot = await getTradingReadinessSnapshot();
+      const node = snapshot.nodes.find((n) => n.id === 'capitalProfile')!;
+      expect(node.ready).toBe(true);
+      expect(node.notApplicable).toBe(true);
+      expect(snapshot.tradingReady).toBe(true);
+    });
+
+    it('fails closed when ARGUS_EXPECTED_BUDGET itself is not a positive number', async () => {
+      vi.stubEnv('ARGUS_EXPECTED_BUDGET', 'banana');
+      const snapshot = await getTradingReadinessSnapshot();
+      const node = snapshot.nodes.find((n) => n.id === 'capitalProfile')!;
+      expect(node.ready).toBe(false);
+      expect(snapshot.tradingReady).toBe(false);
+    });
+
+    it('never throws when the settings read fails - reports not-ready instead', async () => {
+      const rejected = Promise.reject(new Error('SQLITE_BUSY'));
+      rejected.catch(() => {});
+      dbSelectResult.value = rejected;
+      const snapshot = await getTradingReadinessSnapshot();
+      expect(snapshot.nodes.find((n) => n.id === 'capitalProfile')!.ready).toBe(false);
+      expect(snapshot.tradingReady).toBe(false);
+    });
   });
 
   it('reports tradingReady=false when the AI provider layer has zero healthy providers - the exact zero-trade-audit scenario', async () => {

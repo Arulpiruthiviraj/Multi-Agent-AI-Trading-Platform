@@ -118,6 +118,7 @@ import { ExplainerToggle } from "./components/ExplainerToggle";
 import { Explainer } from "./components/ContextualTooltip";
 import { PanelBoundary } from "./components/shared/ErrorBoundary";
 import { TabSkeleton } from "./components/shared/TabSkeleton";
+import { motion } from "motion/react";
 import {
   RIBBON_BROKER_UNAVAILABLE,
   RIBBON_HEALTH_UNAVAILABLE,
@@ -3642,6 +3643,13 @@ export default function App() {
         <div className="min-h-full">
         <PanelBoundary label={`Tab: ${activeTab}`} resetKeys={[activeTab]}>
         <Suspense fallback={<TabSkeleton label={activeTab} />}>
+        {/* Keyed entrance: each tab fades/slides in on switch instead of popping. */}
+        <motion.div
+          key={activeTab}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+        >
         {activeTab === "dashboard" && (
           <AutonomousDashboard 
              autoBotConfig={autoBotConfig} 
@@ -8543,6 +8551,7 @@ export default function App() {
 
           </div>
         )}
+        </motion.div>
         </Suspense>
         </PanelBoundary>
         </div>

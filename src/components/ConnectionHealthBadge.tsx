@@ -8,6 +8,7 @@
 import React from 'react';
 import { Wifi, WifiOff, RotateCw, AlertTriangle } from 'lucide-react';
 import { useWebSocket } from '../context/WebSocketContext';
+import { LiveDot } from './shared/LiveDot';
 
 const STATUS_META: Record<string, { label: string; icon: typeof Wifi; color: string; bg: string }> = {
   connected: { label: 'Live', icon: Wifi, color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/30' },
@@ -37,7 +38,20 @@ export default function ConnectionHealthBadge() {
 
   return (
     <div className={`flex items-center gap-3 border rounded-lg px-4 py-2.5 font-mono ${meta.bg}`}>
-      <Icon size={14} className={`${meta.color} ${status === 'reconnecting' || status === 'connecting' ? 'animate-spin' : ''}`} />
+      <span className="flex items-center gap-2">
+        <LiveDot
+          status={
+            status === 'connected'
+              ? 'live'
+              : status === 'stale' || status === 'reconnecting' || status === 'connecting'
+                ? 'degraded'
+                : status === 'disconnected'
+                  ? 'down'
+                  : 'idle'
+          }
+        />
+        <Icon size={14} className={`${meta.color} ${status === 'reconnecting' || status === 'connecting' ? 'animate-spin' : ''}`} />
+      </span>
       <div>
         <div className={`text-xs font-bold uppercase tracking-widest ${meta.color}`}>
           Live feed &middot; {meta.label}

@@ -342,10 +342,15 @@ describe('BrokerManager.setActiveBroker paper + IBKR preflight', () => {
   });
 
   it('switches to alpaca without inventing a second order path (OMS still sole placeOrder)', async () => {
+    // 2026-09-29 execution-capability gate: selecting the alpaca adapter requires the deployment
+    // opt-in ALPACA_EXECUTION_ENABLED=true. Stub it so this test exercises adapter selection
+    // (not the opt-in gate itself, which resolveExecutionCapability's own tests cover).
+    vi.stubEnv('ALPACA_EXECUTION_ENABLED', 'true');
     const manager = BrokerManager.getInstance();
     manager.registerBroker(fakeBroker('alpaca', {}));
     const ok = await manager.setActiveBroker('alpaca', { apiKey: 'k', secretKey: 's' });
     expect(ok).toBe(true);
     expect(manager.getActiveBroker().id).toBe('alpaca');
+    vi.unstubAllEnvs();
   });
 });

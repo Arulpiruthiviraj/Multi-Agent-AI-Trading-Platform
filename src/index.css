@@ -123,3 +123,80 @@ a.argus-touch-target {
     width: 100%;
   }
 }
+
+/* ── Motion system ───────────────────────────────────────────────────────
+   Terminal-wide animation utilities. Note: `animate-fade-in` was already
+   referenced by TabSkeleton but never defined — it now actually works. */
+
+/* Fade-in used by tab transitions and skeleton mounts */
+@keyframes argus-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.animate-fade-in {
+  animation: argus-fade-in 0.28s ease-out both;
+}
+
+/* Shimmer skeleton — replaces flat animate-pulse blocks for a live feel */
+@keyframes argus-shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.animate-shimmer {
+  background: linear-gradient(90deg, #1a1f2b 25%, #252d40 37%, #1a1f2b 63%);
+  background-size: 800px 100%;
+  animation: argus-shimmer 1.6s linear infinite;
+}
+
+/* Soft pulse for status text / badges that should breathe, not blink */
+@keyframes argus-pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.animate-pulse-soft {
+  animation: argus-pulse-soft 2s ease-in-out infinite;
+}
+
+/* Seamless marquee for tickers — content must be duplicated 2x in the DOM */
+@keyframes argus-ticker {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.animate-ticker {
+  animation: argus-ticker 40s linear infinite;
+}
+.animate-ticker:hover {
+  animation-play-state: paused;
+}
+
+/* Card hover lift — the standard "interactive panel" affordance */
+.argus-card-hover {
+  transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+}
+.argus-card-hover:hover {
+  transform: translateY(-2px);
+  border-color: rgba(99, 102, 241, 0.35);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+}
+
+/* Stagger delays for CSS-driven entrance sequences */
+.stagger-1 { animation-delay: 0.05s; }
+.stagger-2 { animation-delay: 0.1s; }
+.stagger-3 { animation-delay: 0.15s; }
+.stagger-4 { animation-delay: 0.2s; }
+.stagger-5 { animation-delay: 0.25s; }
+.stagger-6 { animation-delay: 0.3s; }
+
+/* Respect users who prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .animate-ticker {
+    animation: none;
+  }
+}

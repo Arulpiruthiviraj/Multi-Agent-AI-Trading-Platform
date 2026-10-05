@@ -122,6 +122,11 @@ describe('BrokerManager recovery after failed startup', () => {
   });
 
   it('treats a false boot authentication result as FAILED, never READY', async () => {
+    // 2026-09-29 execution-capability gate: Alpaca boot selection is only attempted when the
+    // deployment has opted in via ALPACA_EXECUTION_ENABLED=true. Stub it so this test exercises
+    // the intended path (Alpaca selected, authentication attempted, false result) instead of
+    // the fail-closed fallback to the Internal Paper Simulator.
+    vi.stubEnv('ALPACA_EXECUTION_ENABLED', 'true');
     for (const adapter of [AlpacaBroker, InternalPaperBroker, QuestradeBroker, IBGatewaySocketAdapter,
       InteractiveBrokersWebApiAdapter, CoinbaseBroker, CryptoPaperBroker]) {
       vi.spyOn(adapter.prototype, 'initialize').mockResolvedValue(undefined);

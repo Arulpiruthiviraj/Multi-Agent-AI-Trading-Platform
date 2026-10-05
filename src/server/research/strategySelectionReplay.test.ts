@@ -53,8 +53,8 @@ describe('strategySelectionReplay', () => {
     const regime = { regime: 'BULLISH_TREND', confidence: 0.8, volatility: 'NORMAL', insufficientData: false };
     for (let i = 0; i < 30; i++) {
       await seedQuantAssessment(`qa-starved-${i}`, 'STARVESYM', regime, [
-        { strategy: 'MOMENTUM_BREAKOUT', side: 'BUY', setupScore: 30, confidence: 0.65, conditionsMet: [], conditionsFailed: [], contradictions: [], invalidationConditions: [], stop: { price: null, basis: '' }, target: { price: null, basis: '' }, applicableRegimes: ['BULLISH_TREND', 'BEARISH_TREND'] },
-        { strategy: 'PULLBACK_CONTINUATION', side: 'BUY', setupScore: 90, confidence: 0.95, conditionsMet: [], conditionsFailed: [], contradictions: [], invalidationConditions: [], stop: { price: null, basis: '' }, target: { price: null, basis: '' }, applicableRegimes: ['BULLISH_TREND', 'BEARISH_TREND'] },
+        { strategy: 'MOMENTUM_BREAKOUT', side: 'BUY', setupScore: 30, confidence: 0.65, triggerMet: true, conditionsMet: [], conditionsFailed: [], contradictions: [], invalidationConditions: [], stop: { price: null, basis: '' }, target: { price: null, basis: '' }, applicableRegimes: ['BULLISH_TREND', 'BEARISH_TREND'] },
+        { strategy: 'PULLBACK_CONTINUATION', side: 'BUY', setupScore: 90, confidence: 0.95, triggerMet: true, conditionsMet: [], conditionsFailed: [], contradictions: [], invalidationConditions: [], stop: { price: null, basis: '' }, target: { price: null, basis: '' }, applicableRegimes: ['BULLISH_TREND', 'BEARISH_TREND'] },
       ]);
     }
     const rows = await mod.buildStrategyFairnessReport();
@@ -71,8 +71,8 @@ describe('strategySelectionReplay', () => {
     const regime = { regime: 'SIDEWAYS_RANGE', confidence: 0.7, volatility: 'NORMAL', insufficientData: false };
     for (let i = 0; i < 30; i++) {
       await seedQuantAssessment(`qa-selected-${i}`, 'SELECTEDSYM', regime, [
-        { strategy: 'MEAN_REVERSION', side: 'BUY', setupScore: 20, confidence: 0.3, conditionsMet: [], conditionsFailed: [], contradictions: [], invalidationConditions: [], stop: { price: null, basis: '' }, target: { price: null, basis: '' }, applicableRegimes: ['SIDEWAYS_RANGE'] },
-        { strategy: 'RANGE_REVERSION', side: 'BUY', setupScore: 95, confidence: 0.94, conditionsMet: [], conditionsFailed: [], contradictions: [], invalidationConditions: [], stop: { price: null, basis: '' }, target: { price: null, basis: '' }, applicableRegimes: ['SIDEWAYS_RANGE'] },
+        { strategy: 'MEAN_REVERSION', side: 'BUY', setupScore: 20, confidence: 0.3, triggerMet: true, conditionsMet: [], conditionsFailed: [], contradictions: [], invalidationConditions: [], stop: { price: null, basis: '' }, target: { price: null, basis: '' }, applicableRegimes: ['SIDEWAYS_RANGE'] },
+        { strategy: 'RANGE_REVERSION', side: 'BUY', setupScore: 95, confidence: 0.94, triggerMet: true, conditionsMet: [], conditionsFailed: [], contradictions: [], invalidationConditions: [], stop: { price: null, basis: '' }, target: { price: null, basis: '' }, applicableRegimes: ['SIDEWAYS_RANGE'] },
       ]);
     }
     // No agent_predictions rows seeded for RANGE_REVERSION at all - real ground truth: zero emissions.

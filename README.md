@@ -10,7 +10,7 @@ With an authenticated, reachable engine in PAPER, trading paused and Autobot dis
 the existing settings API. This does not resume trading or reconcile legacy positions. Complete
 the inventory/baseline checks in `docs/architecture/ARGUS_ARCHITECTURE.md` before a PAPER session.
 
-**Harness (CODE-VERIFIED 2026-10-04):** `npm run lint` exit 0 · `npm test` **633** files / **5316** tests (5307 passed, 1 skipped; 7 failures reproduce identically on the base commit — pre-existing, unrelated to this change set) · Node **≥24.18** (package `engines.node`) · schema **87** SQLite tables.
+**Harness (CODE-VERIFIED 2026-10-04):** `npm run lint` exit 0 · `npm test` **634** files / **5317** tests (5313 passed at the latest full run; 5 remediated files re-verified individually 38/38 — triggerMet-era replay fixtures, 2 BrokerManager `ALPACA_EXECUTION_ENABLED` opt-in stubs, OMS reentrancy import hoisted to `beforeAll` after a real 5s-timeout root cause — plus the readiness-gate suite (23/23, incl. 6 new capital-profile tests); 4 remaining failures: 2 SSRF-guard tests fail because this sandbox's DNS resolves external hostnames to `198.18.x.x` and the guard correctly fails closed, 1 property test hit the 5s timeout under parallel load but passes isolated 2/2, and the tier-4 compaction soak is a **real unresolved performance failure** — 1M-row aggregation 6.2–9.1s vs the <5s budget) · `tsc --noEmit` clean · Node **≥24.18** (package `engines.node`) · schema **87** SQLite tables.
 
 ### Why "ARGUS"?
 

@@ -1,5 +1,66 @@
 # Argus Architecture
 
+## 2026-10-05: test-remediation follow-up and discovery-path verification
+
+**Test remediation (no production code changed).** Five of the eight failing files from the
+2026-10-05 full run (`npm test`, 633 files / 5316 tests) are fixed. `strategySelectionReplay.test.ts`
+fixtures now carry `triggerMet` — they predated the trigger-gate contract, so the replay's real
+`bestStrategyIdea()` call (correctly) selected nothing. The two BrokerManager tests stub
+`ALPACA_EXECUTION_ENABLED=true` so they exercise adapter selection/authentication instead of
+the 2026-09-29 execution-capability fail-closed fallback to the paper simulator.
+`OrderManagement.reentrancy.test.ts` hoists the heavyweight `OrderManagement` import into
+`beforeAll`: the real root cause was the first test's inline dynamic import (DB migrations + AI
+model seeding) exceeding the 5s default test timeout, which left the second test a
+partially-initialized module (`OrderManagementService is not a constructor`) — not a reentrancy
+defect. A `tsc --noEmit` error in `PortfolioMonitor.isolation.test.ts` (`pnlPct` on `unknown`)
+is also fixed. Four failures remain in the latest full run (634 files / 5317 tests, 5313
+passed) — three are proven environment/load artifacts, one is a real unresolved defect:
+(1) `urlSafety.test.ts` and (2) `webhooks.test.ts` fail because this sandbox's DNS resolves
+external hostnames to `198.18.x.x` (RFC 2544 benchmarking range, verified via nslookup) — the
+SSRF guard correctly fails closed on the non-public IP, so the tests' "real public hostname"
+premise cannot hold here; not an Argus defect. (3) `positionFillEvidence.property.test.ts`
+hit the 5s vitest timeout under full-suite parallel load and passes in isolation (2/2) — a
+load artifact, not an oversell defect. (4) **Real failure:** the tier-4 compaction soak's 1M-row
+aggregation took 6,207 ms in the full run (9,138 ms in a targeted run with adequate temp
+space) against the <5,000 ms budget — a genuine performance failure, not a `/tmp`-size
+artifact. No thresholds, gates, consensus math, OMS behavior, or kill-switch logic touched.
+
+**Discovery path verified end to end (code inspection, 2026-10-05).** The master switch is
+`ARGUS_OPPORTUNITY_LOOP_ENABLED`: `OpportunityDiscovery.runOpportunityScan()` returns before
+any scan/shortlist/subscription work when it is off, while the broad-universe / movers /
+news-catalyst caches refresh on their own independent flags. `opportunityDiscoveryWorker`
+starts at boot (`ArgusCoreBoot`/`SystemBootstrap`); `getOpportunityScanUniverse()` merges the
+curated seed/watch/momentum lists with broad-universe candidates, Alpaca movers, and news
+catalysts; `blendedHotSwapScore()` / `scoreBroadUniverseChallenger()` let broad-universe
+admissions compete for streaming slots on real gap evidence; `PostMarketAnalysis` already
+classifies per-symbol funnel outcomes (`TRUE_UNIVERSE_MISS` / `NEWS_BLIND_SPOT` /
+`LIQUIDITY_EXCLUDED` / …). Deliberate abstentions stand: `MarketUniverseScanner.computeRvol()`
+returns null because real-time IEX partial volume and historical consolidated ADV are not
+comparable — no RVOL ranking until a same-provenance volume source exists. Static curated
+universe is ~122 unique names. Agreed PAPER discovery configuration:
+`ARGUS_OPPORTUNITY_LOOP_ENABLED=true`, `ARGUS_BROAD_UNIVERSE_ENABLED=true`,
+`ARGUS_MARKET_MOVERS_ENABLED=true`, `ARGUS_NEWS_CATALYST_DISCOVERY_ENABLED=true`,
+`ARGUS_OPPORTUNITY_IDEAS_ENABLED=false` (the screener's tick-return vote stays off — widening
+observation must not add a new BUY vote or weaken ChiefTrader/RiskEngine). Operating order:
+enable the four flags → measure PAPER sessions against the discovery funnel → identify the
+exact leakage stage → build only the missing capability. No new scanner, no top-N increase,
+no polling change until measurement says so.
+
+## 2026-10-04 (evening): capital-profile consistency in the pre-market readiness gate
+
+**Production change (additive observability, fail-closed).** `TradingReadinessGate` gained a
+`capitalProfile` node (`src/server/core/TradingReadinessGate.ts`) that asserts `settings.budget` —
+the exact value RiskEngine gate 23 (`argus_capital_allocation`) enforces against — equals the
+operator-declared `ARGUS_EXPECTED_BUDGET` env var (new, optional, documented in `.env.example`).
+Any mismatch fails `tradingReady` with an explicit `BUDGET_MISMATCH` reason naming both values;
+a missing/non-positive budget fails closed (gate 23 refuses every BUY anyway, so the pipeline is
+not well-formed for trading); an unset intent is `notApplicable` (cannot verify, still passing).
+This closes the $2K-intended vs $100K-runtime incident class, which previously had zero tripwire
+(see `docs/audits/ARGUS_SYNTHETIC_FRAMEWORK_FORENSIC_2026-10-04.md` §1 blind spot #1). It changes
+no threshold, gate, consensus math, sizing, OMS behavior, or kill-switch logic — pure
+observability on the existing readiness surface (`GET /api/v2/runtime/trading-readiness`,
+`argus-cli pipeline-ready`). 6 new tests (`TradingReadinessGate.test.ts`, 23/23 green).
+
 ## 2026-10-04: strategy trigger-gate contract (triggerMet)
 
 `StrategyEvaluation` (TS) and the Java `StrategyEvaluation` record now carry a required

@@ -50,6 +50,57 @@ async function checkDatabase(): Promise<{ ready: boolean; detail: string }> {
   }
 }
 
+/**
+ * Capital-profile consistency (2026-10-04 synthetic-framework forensic audit, blind spot #1).
+ * The $2K-intended vs $100K-runtime incident class had zero tripwire: nothing asserted the
+ * budget RiskEngine actually enforces (settings.budget, gate 23's own source) matches the
+ * operator's declared intent. This node closes that gap as pure observability:
+ * - settings.budget missing/not-positive -> NOT READY (fail closed; gate 23 refuses every BUY
+ *   anyway, so the pipeline is not well-formed for trading)
+ * - ARGUS_EXPECTED_BUDGET unset -> notApplicable (intent unknown, cannot verify)
+ * - mismatch -> NOT READY with an explicit BUDGET_MISMATCH reason
+ * It never changes a threshold, never blocks an order itself, never touches RiskEngine/OMS.
+ */
+async function checkCapitalProfile(): Promise<ReadinessNode> {
+  const base = { id: 'capitalProfile', label: 'Capital Profile' } as const;
+  let budget: number | null = null;
+  try {
+    const rows = (await db.select().from(schema.settings).limit(1)) as Array<{ budget?: unknown }>;
+    const n = Number(rows?.[0]?.budget);
+    budget = Number.isFinite(n) && n > 0 ? n : null;
+  } catch (e: unknown) {
+    return { ...base, ready: false, detail: `settings.budget unreadable: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  if (budget === null) {
+    return {
+      ...base,
+      ready: false,
+      detail: 'settings.budget missing or not positive — RiskEngine gate 23 will refuse every BUY; set the Argus allocation before trading',
+    };
+  }
+  const expectedRaw = process.env.ARGUS_EXPECTED_BUDGET;
+  if (expectedRaw === undefined || expectedRaw === '') {
+    return {
+      ...base,
+      ready: true,
+      notApplicable: true,
+      detail: `settings.budget=$${budget.toLocaleString('en-US')} (no ARGUS_EXPECTED_BUDGET declared — operator intent unverified)`,
+    };
+  }
+  const expected = Number(expectedRaw);
+  if (!Number.isFinite(expected) || expected <= 0) {
+    return { ...base, ready: false, detail: `ARGUS_EXPECTED_BUDGET=${expectedRaw} is not a positive number` };
+  }
+  if (budget !== expected) {
+    return {
+      ...base,
+      ready: false,
+      detail: `BUDGET_MISMATCH: settings.budget=$${budget.toLocaleString('en-US')} but ARGUS_EXPECTED_BUDGET=$${expected.toLocaleString('en-US')} — resolve the intended allocation before trading`,
+    };
+  }
+  return { ...base, ready: true, detail: `settings.budget=$${budget.toLocaleString('en-US')} matches declared intent` };
+}
+
 function aiProviderLayerNode(providers: AIProviderHealthRecord[]): ReadinessNode {
   const children: ReadinessNode[] = providers.map((p) => ({
     id: p.providerId,
@@ -90,6 +141,10 @@ export async function getTradingReadinessSnapshot(): Promise<TradingReadinessSna
   const dbCheck = await checkDatabase();
   nodes.push({ id: 'database', label: 'Database', ready: dbCheck.ready, detail: dbCheck.detail });
   if (!dbCheck.ready) reasons.push('Database unreachable');
+
+  const capitalNode = await checkCapitalProfile();
+  nodes.push(capitalNode);
+  if (!capitalNode.ready && !capitalNode.notApplicable) reasons.push(`Capital profile: ${capitalNode.detail}`);
 
   let marketData = { ready: false, detail: 'quote evidence unavailable' };
   try { marketData = getMarketDataReadiness(); } catch { /* fail closed */ }

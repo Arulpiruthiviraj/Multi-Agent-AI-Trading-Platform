@@ -10,14 +10,16 @@ import type { AppTabId } from './responsiveNavConfig';
 import { NavTabTooltip } from './NavTabTooltip';
 
 const TAB_BTN =
-  'whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5';
+  'relative whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5';
 
 function tabClass(active: boolean, accent: 'emerald' | 'amber' = 'emerald'): string {
+  // The active underline is drawn by a shared layoutId motion.span (slides
+  // between tabs); the border stays transparent to avoid a doubled line.
   if (active && accent === 'amber') {
-    return `${TAB_BTN} border-amber-500 text-amber-400 bg-amber-500/[0.02]`;
+    return `${TAB_BTN} border-transparent text-amber-400 bg-amber-500/[0.02]`;
   }
   if (active) {
-    return `${TAB_BTN} border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]`;
+    return `${TAB_BTN} border-transparent text-emerald-400 bg-emerald-500/[0.02]`;
   }
   return `${TAB_BTN} border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800`;
 }
@@ -142,6 +144,7 @@ export function DesktopNavStrip({
               );
             }
             const Icon = item.icon;
+            const isActive = activeTab === item.id;
             return (
               <React.Fragment key={item.id}>
                 <NavTabTooltip tabId={item.id}>
@@ -149,10 +152,19 @@ export function DesktopNavStrip({
                     id={item.buttonId}
                     type="button"
                     onClick={() => onSelectTab(item.id)}
-                    className={tabClass(activeTab === item.id, item.accent)}
+                    className={tabClass(isActive, item.accent)}
                   >
                     <Icon size={14} />
                     {item.label}
+                    {isActive && (
+                      <motion.span
+                        layoutId="nav-strip-active-underline"
+                        className={`absolute -bottom-[2px] left-1 right-1 h-[2px] rounded-full ${
+                          item.accent === 'amber' ? 'bg-amber-500' : 'bg-emerald-500'
+                        }`}
+                        transition={{ type: 'spring', stiffness: 550, damping: 40 }}
+                      />
+                    )}
                   </button>
                 </NavTabTooltip>
               </React.Fragment>
