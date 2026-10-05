@@ -443,7 +443,7 @@ export function mountResearchRoutes(v2Router: Router): void {
       });
       res.json({ ok: true, meta, canPlaceOrders: false });
     } catch (e: any) {
-      res.status(400).json({ ok: false, error: e.message, canPlaceOrders: false });
+      if (!res.headersSent) res.status(400).json({ ok: false, error: e.message, canPlaceOrders: false });
     }
   });
 
@@ -481,7 +481,7 @@ export function mountResearchRoutes(v2Router: Router): void {
       });
       res.json({ ok: true, ...result, execution: getExecutionModel(), canPlaceOrders: false });
     } catch (e: any) {
-      res.status(400).json({ ok: false, error: e.message, canPlaceOrders: false });
+      if (!res.headersSent) res.status(400).json({ ok: false, error: e.message, canPlaceOrders: false });
     }
   });
 
@@ -577,7 +577,7 @@ export function mountResearchRoutes(v2Router: Router): void {
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : String(e);
       console.error('[organic-paper] handler failed:', message);
-      res.status(500).json({ ok: false, error: message, canPlaceOrders: false, live: 'NO-GO' });
+      if (!res.headersSent) res.status(500).json({ ok: false, error: message, canPlaceOrders: false, live: 'NO-GO' });
     }
   });
 
@@ -598,7 +598,7 @@ export function mountResearchRoutes(v2Router: Router): void {
         canPlaceOrders: false,
       });
     } catch (e: any) {
-      res.status(400).json({ ok: false, error: e.message, canPlaceOrders: false });
+      if (!res.headersSent) res.status(400).json({ ok: false, error: e.message, canPlaceOrders: false });
     }
   });
 
@@ -710,7 +710,7 @@ export function mountResearchRoutes(v2Router: Router): void {
         live: 'NO-GO',
       });
     } catch (e: any) {
-      res.status(400).json({ ok: false, error: e.message, canPlaceOrders: false });
+      if (!res.headersSent) res.status(400).json({ ok: false, error: e.message, canPlaceOrders: false });
     }
   });
 

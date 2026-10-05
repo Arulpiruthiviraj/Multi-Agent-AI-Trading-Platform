@@ -202,7 +202,7 @@ runtimeRouter.get('/component-health', async (req, res) => {
     }
     res.json({ ok: true, components, live: 'NO-GO' });
   } catch (e: unknown) {
-    res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
   }
 });
 
@@ -212,7 +212,7 @@ runtimeRouter.get('/ai/providers/health', async (_req, res) => {
     const providers = await getAIProviderHealthSnapshot();
     res.json({ ok: true, providers, live: 'NO-GO' });
   } catch (e: unknown) {
-    res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
   }
 });
 
@@ -230,7 +230,7 @@ runtimeRouter.get('/trading-readiness', async (req, res) => {
     }
     res.json({ ok: true, ...snapshot, live: 'NO-GO' });
   } catch (e: unknown) {
-    res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
   }
 });
 
@@ -253,7 +253,7 @@ runtimeRouter.get('/trading-session-report', async (req, res) => {
     }
     res.json({ ok: true, ...report, live: 'NO-GO' });
   } catch (e: unknown) {
-    res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
   }
 });
 
@@ -265,7 +265,7 @@ runtimeRouter.post('/ai/providers/health/check', tradingLimiter, async (req, res
     const providers = await runAIProviderHealthCheckNow(providerId);
     res.json({ ok: true, providers, live: 'NO-GO' });
   } catch (e: unknown) {
-    res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
   }
 });
 
@@ -275,7 +275,7 @@ runtimeRouter.post('/start', tradingLimiter, async (_req, res) => {
     await argusRuntime.start();
     res.json({ ok: true, runtime: argusRuntime.getSnapshot(), health: argusRuntime.health() });
   } catch (e: unknown) {
-    res.status(500).json({
+    if (!res.headersSent) res.status(500).json({
       ok: false,
       error: e instanceof Error ? e.message : String(e),
       runtime: argusRuntime.getSnapshot(),

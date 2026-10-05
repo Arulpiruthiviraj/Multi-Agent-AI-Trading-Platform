@@ -31,3 +31,13 @@ Operator/admin stop+resume, not an automated oscillator. Do not “fix” by rem
 **Fix (still in force):** every logging call in `globalErrorHandlers.ts`/`crashLog.ts` now falls back to a raw fd write if `console.error` itself fails, plus a storm circuit-breaker (`>4` process-level errors in 5s → clean `process.exit(1)`). **Production-verified:** recurred once after the fix shipped and exited cleanly instead of hanging.
 
 **Not fixed:** why the write stream breaks at all, and why `./argus restart` (SIGTERM) is itself logged by the successor process as an unclean shutdown (DEF-26) — see `CLAUDE.md`'s Active known issues.
+
+## Live `npm install` froze the engine (2026-10-05, D4)
+
+**Symptom:** engine froze completely — `/health` unresponsive, new better-sqlite3 connections hung, process alive but unresponsive (sockets piling in `CLOSE_WAIT`). No crash.log entry (a true hang has no caught exception).
+
+**Cause:** `npm install` was run against the live engine's own `node_modules` while the process held the native `better-sqlite3` binding open. Windows file-lock contention blocked the engine's single-threaded event loop on a now-contended synchronous call.
+
+**Recovery (validates the watchdog):** watchdog detected 10 consecutive bad ticks (`FROZEN_CONFIRMED`), force-killed the stuck process, and auto-restarted via `argus-cli start` back into `TRADING_PAUSED`. All safety state (`settings.budget`, `autoBotEnabled=false`, `tradingState`) persisted correctly across the crash.
+
+**Standing rule (in force):** NEVER run `npm install` (or any package install / node_modules mutation) against a live engine's working directory. Stop the engine first, install, then start. This is operational discipline, not a code defect — no source fix applies.
