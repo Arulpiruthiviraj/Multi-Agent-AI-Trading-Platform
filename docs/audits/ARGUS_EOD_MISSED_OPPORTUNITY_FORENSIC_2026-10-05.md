@@ -255,11 +255,18 @@ evidence). RiskEngine and OMS/broker lost nothing today because nothing reached 
 1. **CONSENSUS_CALIBRATION / INSUFFICIENT_INDEPENDENCE** — for every symbol that reached real, repeated
    evaluation (XP, TSLA, META, NVDA), the ceiling was weak, single-agent-dominated evidence. This is the
    larger-volume failure (4,427 real rounds, 0 approved).
-2. **DISCOVERY_TO_CHALLENGER_ELIGIBILITY_LATENCY (PTC, and more severely MPWR) + CATALYST_DISCOVERY
-   (PCVX gap)** — not a data-quality defect (that claim is retracted); smaller in volume than #1 but
-   directly explains why PTC and PCVX barely got a fair look. See
-   `ARGUS_ADMITTED_TO_CHALLENGER_FORENSIC_2026-10-05.md` for the full root-cause trace, including MPWR's
-   more diagnostic case (76 admissions, zero challenger-pool appearances all day).
+2. **DISCOVERY_TO_CHALLENGER_ELIGIBILITY_LATENCY (PTC) + BROAD_UNIVERSE_TOPN_TRUNCATION (MPWR) +
+   CATALYST_DISCOVERY (PCVX gap)** — not a data-quality defect (that claim is retracted); smaller in
+   volume than #1 but directly explains why PTC and PCVX barely got a fair look. See
+   `ARGUS_ADMITTED_TO_CHALLENGER_FORENSIC_2026-10-05.md` for the full root-cause trace. **Correction
+   (2026-10-05, same-day follow-up):** an earlier draft of that companion forensic claimed MPWR was
+   "admitted 76 times" — re-verified directly against `observability_events.symbol` (a dedicated column,
+   not embedded in the payload JSON this report's own earlier queries matched against); the real count is
+   2 admissions and 1 ADV-data-unavailable filter, not 76. MPWR's diagnostic value is unchanged — it was
+   admitted twice and reached zero challenger-pool appearances both times — but the mechanism is a
+   confirmed top-N truncation at `getOpportunityScanUniverse()`'s `broadUniverseTopNPerScan` cap (fixed:
+   this silent exclusion now logs `BROAD_UNIVERSE_TOPN_TRUNCATED`), not a latency gap of the kind PTC
+   showed.
 
 RiskEngine, OMS, execution: **not implicated** — zero evidence reached them.
 
@@ -324,7 +331,9 @@ data), not inference.
    `SWAP_CAP_REACHED` — the confirmed, concrete root cause (not the retracted stale-reference-price claim).
 2. Investigate why PCVX's real, major, premarket-published catalyst produced zero `NEWS_*` events — confirmed
    upstream of entity/ticker extraction (zero raw `news_articles` rows), exact provider-level cause still open.
-3. (Folded into #1) MPWR showed the same admitted-but-never-subscribed pattern as PTC.
+3. (Folded into #1, distinct mechanism) MPWR showed the same admitted-but-never-subscribed outcome as
+   PTC, via a different root cause: a confirmed, now-fixed silent top-N truncation at
+   `getOpportunityScanUniverse()`, not a latency/timing gap.
 4. Research (not implement) a macro-theme-propagation capability for MacroAgent, using XP as the only
    available natural experiment so far.
 5. Research (not implement) why independent, multi-agent agreement is so rare even on a broadly positive,
