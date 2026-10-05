@@ -313,6 +313,15 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
   }
 
   try {
+    // 2026-10-05: SEC EDGAR Form 4 scraper - no-op unless ARGUS_SEC_EDGAR_FORM4_ENABLED=true.
+    // Data plumbing only (public-domain SEC API); emits no trade ideas.
+    const { secEdgarForm4Scraper } = await import('../data/SecEdgarForm4Scraper');
+    secEdgarForm4Scraper.start();
+  } catch (e: any) {
+    console.warn(`[SecEdgarForm4Scraper] Boot start failed: ${e.message}`);
+  }
+
+  try {
     const { modelRuntimeManager } = await import('../ai/ModelRuntimeManager');
     const models = await modelRuntimeManager.startAndProbe();
     for (const m of models) {

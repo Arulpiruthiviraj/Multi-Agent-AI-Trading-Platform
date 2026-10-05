@@ -143,6 +143,12 @@ async function performDrain(handles: ShutdownHandles): Promise<void> {
     failed('[gracefulShutdown] Failed to stop InstitutionalStrategyVoteService', e);
   }
   try {
+    const { secEdgarForm4Scraper } = await import('../data/SecEdgarForm4Scraper');
+    secEdgarForm4Scraper.stop();
+  } catch (e) {
+    failed('[gracefulShutdown] Failed to stop SecEdgarForm4Scraper', e);
+  }
+  try {
     const { calibrationValidationWorker } = await import('../continuous/CalibrationValidationWorker');
     calibrationValidationWorker.stop();
   } catch (e) {

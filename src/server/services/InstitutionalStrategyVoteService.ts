@@ -43,6 +43,8 @@ import { quantCoreBridge } from './QuantCoreBridge';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { eventBus } from '../core/EventBus';
 import { generateTraceId } from '../core/traceId';
+import { recordMetaLabelFeatures } from '../research/MetaLabelStore';
+import { classifyRegime } from '../quant/RegimeEngine';
 import { createSingleFlightGuard } from '../core/singleFlightInterval';
 import type { ResearchBar } from '../research/ohlcvTypes';
 
@@ -159,7 +161,7 @@ class InstitutionalStrategyVoteService {
     if (bars.length < spec.minBars) return;
 
     const result = await quantCoreBridge.fetchResearchStrategy(spec.strategyId, symbol, bars);
-    this.emitVoteIfEligible(symbol, spec, result, bars[bars.length - 1].close);
+    this.emitVoteIfEligible(symbol, spec, result, bars[bars.length - 1].close, bars);
   }
 
   /** Exported for unit tests - the gating/vote decision without network or timers. */
@@ -168,6 +170,7 @@ class InstitutionalStrategyVoteService {
     spec: InstitutionalStrategySpec,
     evaluation: Record<string, unknown> | null,
     currentPrice: number | null,
+    bars?: ResearchBar[],
   ): InstitutionalVoteResult {
     if (!isStrategyVoteEnabled(spec)) return { emitted: false, reason: 'FLAG_OFF' };
     if (!isPipelineAgentEnabled(spec.agentName)) return { emitted: false, reason: 'AGENT_DISABLED' };
@@ -175,6 +178,37 @@ class InstitutionalStrategyVoteService {
     if (evaluation === null) return { emitted: false, reason: 'JAVA_ERROR' };
     if (evaluation['triggerMet'] !== true) return { emitted: false, reason: 'TRIGGER_NOT_MET' };
     const side = evaluation['side'];
+
+    // 2026-10-05: Meta-label feature capture. Records the feature snapshot for EVERY
+    // triggered setup, BEFORE the confidence/price vote gates, so the future meta-model's
+    // training set sees the full triggered distribution (avoids selection bias). Fail-closed:
+    // recordMetaLabelFeatures logs and never throws. The traceId is generated here and reused
+    // for the vote emission below, so features join to agent_predictions.trace_id and from
+    // there to predictionOutcomes for labeled training rows. No meta-model is built here.
+    const metaTraceId = generateTraceId(symbol);
+    try {
+      const regimeLabel = (() => {
+        try {
+          if (!bars || bars.length === 0) return null;
+          const r = classifyRegime(bars);
+          return typeof r?.regime === 'string' ? r.regime : null;
+        } catch { return null; }
+      })();
+      recordMetaLabelFeatures({
+        traceId: metaTraceId,
+        strategyId: spec.strategyId,
+        symbol,
+        signalScore: asFiniteNumber(evaluation['setupScore']),
+        signalConfidence: asFiniteNumber(evaluation['confidence']),
+        regime: regimeLabel,
+        decisionPrice: currentPrice,
+        barCount: bars?.length ?? null,
+        conditionsMet: Array.isArray(evaluation['conditionsMet']) ? evaluation['conditionsMet'] as string[] : [],
+        conditionsFailed: Array.isArray(evaluation['conditionsFailed']) ? evaluation['conditionsFailed'] as string[] : [],
+        evidenceSource: 'PAPER',
+      });
+    } catch { /* recordMetaLabelFeatures is already fail-closed; belt and suspenders */ }
+
     if (side !== 'BUY' && side !== 'SELL') return { emitted: false, reason: 'NEUTRAL_SIDE' };
     const confidence = asFiniteNumber(evaluation['confidence']);
     if (confidence === null || confidence < tradingSafety.javaQuantVoteMinConfidence) {
@@ -186,7 +220,7 @@ class InstitutionalStrategyVoteService {
 
     const conditionsMet = Array.isArray(evaluation['conditionsMet']) ? evaluation['conditionsMet'] : [];
     eventBus.emitTradeIdea({
-      traceId: generateTraceId(symbol),
+      traceId: metaTraceId, // same traceId as the meta-label feature row recorded above
       symbol,
       side,
       confidence,

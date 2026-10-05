@@ -58,6 +58,8 @@ export interface RuntimeIntervals {
   javaQuantAdvisoryMs: number;
   /** 2026-10-05: InstitutionalStrategyVoteService round-robin cadence (one symbol per tick). */
   institutionalStrategyVoteMs: number;
+  /** 2026-10-05: SecEdgarForm4Scraper poll cadence. */
+  secEdgarForm4Ms: number;
   aiProviderHealthCheckMs: number;
   /** How often the live SessionLifecycle worker re-classifies PRE_MARKET/REGULAR/AFTER_HOURS/CLOSED. */
   sessionLifecycleEvalMs: number;
@@ -97,7 +99,7 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'eventStoreMaxRecentEvents', 'eventStoreMaxTraces', 'eventStoreSchemaVersion',
   'agentActivityWindowMs', 'opportunityWindowHours', 'omsFollowUpMinAgeMs', 'omsFollowUpIntervalMs',
   'omsPollForFillTimeoutMs', 'omsPollForFillIntervalMs', 'autoTradeSchedulerMs', 'strategyEngineShadowMs',
-  'javaQuantAdvisoryMs', 'institutionalStrategyVoteMs', 'aiProviderHealthCheckMs', 'sessionLifecycleEvalMs', 'calibrationValidationCycleMs',
+  'javaQuantAdvisoryMs', 'institutionalStrategyVoteMs', 'secEdgarForm4Ms', 'aiProviderHealthCheckMs', 'sessionLifecycleEvalMs', 'calibrationValidationCycleMs',
   'heartbeatWatchdogCheckMs', 'cryptoMarketDataIngestionMs',
   'candidateRankingsRetentionDays', 'candidateRankingsRetentionSweepMs',
   'candidateRankingsRetentionSweepBatchSize', 'candidateRankingsRetentionSweepMaxBatchesPerCall',

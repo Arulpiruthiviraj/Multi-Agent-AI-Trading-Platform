@@ -2159,3 +2159,41 @@ export const cryptoPaperOrders = sqliteTable('crypto_paper_orders', {
   clientOrderIdIdx: uniqueIndex('idx_crypto_paper_orders_client_order_id').on(table.clientOrderId),
   symbolStatusIdx: index('idx_crypto_paper_orders_symbol_status').on(table.symbol, table.status),
 }));
+
+export const insiderTransactions = sqliteTable('insider_transactions', {
+  accessionNumber: text('accession_number').primaryKey(),
+  cik: text('cik').notNull(),
+  ticker: text('ticker').notNull(),
+  filingDate: text('filing_date').notNull(),
+  transactionDate: text('transaction_date'),
+  insiderName: text('insider_name'),
+  insiderTitle: text('insider_title'),
+  transactionCode: text('transaction_code'), // P = purchase, S = sale, etc.
+  shares: real('shares'),
+  pricePerShare: real('price_per_share'),
+  sharesOwnedAfter: real('shares_owned_after'),
+  isDirect: integer('is_direct'), // 1 = direct ownership, 0 = indirect
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  tickerFilingIdx: index('idx_insider_transactions_ticker_filing').on(table.ticker, table.filingDate),
+}));
+
+export const metaLabelFeatures = sqliteTable('meta_label_features', {
+  id: text('id').primaryKey(),
+  traceId: text('trace_id'), // join key to agent_predictions.trace_id; null for sub-threshold triggers
+  strategyId: text('strategy_id').notNull(),
+  symbol: text('symbol').notNull(),
+  signalScore: real('signal_score'),
+  signalConfidence: real('signal_confidence'),
+  regime: text('regime'),
+  decisionPrice: real('decision_price'),
+  barCount: integer('bar_count'),
+  conditionsMet: text('conditions_met'), // JSON array
+  conditionsFailed: text('conditions_failed'), // JSON array
+  featureTimestamp: text('feature_timestamp').notNull(),
+  schemaVersion: integer('schema_version').notNull(),
+  evidenceSource: text('evidence_source').notNull(), // PAPER | BACKTEST | REPLAY | LIVE - never mix in training
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  strategySourceIdx: index('idx_meta_label_features_strategy_source').on(table.strategyId, table.evidenceSource),
+}));

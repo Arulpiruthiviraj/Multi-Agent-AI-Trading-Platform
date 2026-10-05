@@ -1,5 +1,24 @@
 # Argus Architecture
 
+## 2026-10-05: quant research implementation - Form 4 scraper, meta-label capture, S-curve sizing
+
+**SEC EDGAR Form 4 scraper** (`src/server/data/SecEdgarForm4Scraper.ts`). Polls the free SEC EDGAR
+JSON API for Form 4 (insider transaction) filings on Argus's tracked symbols; parses the
+ownershipDocument XML; stores to `insider_transactions` (dedupe on accession number). Respects
+SEC rate limits (sequential, 500ms spacing, proper User-Agent). Gated by
+`ARGUS_SEC_EDGAR_FORM4_ENABLED` (default false). Data plumbing only - emits no trade ideas.
+
+**Meta-label feature capture** (`src/server/research/MetaLabelStore.ts`). Records a feature snapshot
+(strategy, scores, regime, decision price, conditions) to `meta_label_features` for EVERY triggered
+institutional setup, before the confidence vote gates (avoids selection bias). Joins to outcomes via
+traceId -> agent_predictions.trace_id -> predictionOutcomes. `evidence_source` (PAPER/BACKTEST/REPLAY/LIVE)
+is mandatory and must never be mixed in training. No meta-model is built - this is training-data
+capture only; `countLabeledRows()` reports when sufficient real labels exist.
+
+**S-curve bet sizing** (`quant-core-java/.../risk/MetaLabelSizing.java`). Pure math primitive:
+`size = 2*Phi((p-0.5)/sqrt(p*(1-p))) - 1`. NOT wired into any live sizing path - activates only
+when a calibrated meta-model exists with sufficient PAPER evidence.
+
 ## 2026-10-05: test-remediation follow-up and discovery-path verification
 
 **Test remediation (no production code changed).** Five of the eight failing files from the
