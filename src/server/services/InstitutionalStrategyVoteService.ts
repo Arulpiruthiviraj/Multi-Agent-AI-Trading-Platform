@@ -44,6 +44,7 @@ import { observeSafe, structuredLogger } from '../observability/StructuredLogger
 import { eventBus } from '../core/EventBus';
 import { generateTraceId } from '../core/traceId';
 import { createSingleFlightGuard } from '../core/singleFlightInterval';
+import type { ResearchBar } from '../research/ohlcvTypes';
 
 interface InstitutionalStrategySpec {
   strategyId: string;
@@ -137,7 +138,7 @@ class InstitutionalStrategyVoteService {
   }
 
   private async evaluateStrategy(symbol: string, spec: InstitutionalStrategySpec): Promise<void> {
-    let bars: { close: number }[];
+    let bars: ResearchBar[];
     try {
       const endMs = Date.now();
       const startMs = endMs - spec.lookbackDays * 24 * 60 * 60 * 1000;
@@ -157,7 +158,7 @@ class InstitutionalStrategyVoteService {
     }
     if (bars.length < spec.minBars) return;
 
-    const result = await quantCoreBridge.fetchResearchStrategy(spec.strategyId, symbol, bars as never);
+    const result = await quantCoreBridge.fetchResearchStrategy(spec.strategyId, symbol, bars);
     this.emitVoteIfEligible(symbol, spec, result, bars[bars.length - 1].close);
   }
 

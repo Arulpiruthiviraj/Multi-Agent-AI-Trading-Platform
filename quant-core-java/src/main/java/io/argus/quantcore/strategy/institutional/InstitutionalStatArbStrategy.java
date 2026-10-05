@@ -92,7 +92,7 @@ public final class InstitutionalStatArbStrategy {
     }
 
     private StrategyEvaluation noSignal(List<String> met, List<String> failed, List<String> contradictions) {
-        return new StrategyEvaluation(ID, StrategyEvaluation.Side.BUY, 0, 0.0,
+        return new StrategyEvaluation(ID, StrategyEvaluation.Side.HOLD, 0, 0.0,
             false, // no signal by construction
             met, failed, contradictions,
             List.of(),

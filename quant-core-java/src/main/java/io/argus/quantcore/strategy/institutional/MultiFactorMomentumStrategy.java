@@ -33,7 +33,7 @@ public final class MultiFactorMomentumStrategy {
 
         if (scores == null) {
             conditionsFailed.add("Not enough bar history for the requested factor windows.");
-            return new StrategyEvaluation(ID, StrategyEvaluation.Side.BUY, 0, 0.0,
+            return new StrategyEvaluation(ID, StrategyEvaluation.Side.HOLD, 0, 0.0,
                 false, // insufficient history: no signal by construction
                 conditionsMet, conditionsFailed, contradictions,
                 List.of(), LevelSuggestion.none("No signal."), LevelSuggestion.none("No signal."),

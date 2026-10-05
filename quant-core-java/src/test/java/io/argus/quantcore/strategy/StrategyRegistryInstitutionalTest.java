@@ -70,4 +70,16 @@ class StrategyRegistryInstitutionalTest {
         var ctx = InstitutionalStrategyContext.singleSymbol("AAPL", trendBars(150, 4244, 0.003));
         assertThat(StrategyRegistry.evaluateInstitutional("NO_SUCH_STRATEGY", ctx)).isEmpty();
     }
+
+    @Test
+    void noSignalEvaluationsReportHoldNeverBuy() {
+        // Defect found 2026-10-05: noSignal() previously reported Side.BUY with
+        // triggerMet=false - a consumer reading only the side would misread it as a
+        // buy signal. No-signal must be HOLD. Forced via insufficient bar history.
+        var shortCtx = InstitutionalStrategyContext.singleSymbol("AAPL", trendBars(10, 4245, 0.003));
+        var eval = StrategyRegistry.evaluateInstitutional(VolScaledMtfMomentumStrategy.ID, shortCtx);
+        assertThat(eval).isPresent();
+        assertThat(eval.get().triggerMet()).isFalse();
+        assertThat(eval.get().side()).isEqualTo(StrategyEvaluation.Side.HOLD);
+    }
 }

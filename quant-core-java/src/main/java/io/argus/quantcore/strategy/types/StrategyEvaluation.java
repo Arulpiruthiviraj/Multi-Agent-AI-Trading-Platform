@@ -22,5 +22,5 @@ public record StrategyEvaluation(
     LevelSuggestion target,
     List<String> applicableRegimes
 ) {
-    public enum Side { BUY, SELL }
+    public enum Side { BUY, SELL, HOLD }
 }

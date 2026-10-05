@@ -151,7 +151,7 @@ public final class TimeSeriesMomentum12MStrategy {
     }
 
     private static StrategyEvaluation noSignal(List<String> met, List<String> failed, List<String> contradictions) {
-        return new StrategyEvaluation(ID, StrategyEvaluation.Side.BUY, 0, 0.0,
+        return new StrategyEvaluation(ID, StrategyEvaluation.Side.HOLD, 0, 0.0,
             false, met, failed, contradictions,
             List.of(), LevelSuggestion.none("No signal."), LevelSuggestion.none("No signal."),
             List.of("ANY_REGIME"));
