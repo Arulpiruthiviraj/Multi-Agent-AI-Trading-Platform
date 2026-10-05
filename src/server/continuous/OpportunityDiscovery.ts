@@ -267,6 +267,32 @@ export function blendedHotSwapScore(sym: string, baseScoreOf: (symbol: string) =
  * move can now compete on that evidence alone, never fabricated when gapPct is null (contributes
  * exactly 0, not treated as "no move").
  */
+/**
+ * 2026-10-05 (challenger zero-score visibility): classifies WHY a shortlist candidate's
+ * challenger score failed the finalScore > 0 eligibility filter. Reason codes are derived
+ * from the actual scoring branches in blendedHotSwapScore()/scoreBroadUniverseChallenger(),
+ * not invented — each maps to a specific missing/invalid component.
+ */
+export function classifyExclusionReason(
+  symbol: string,
+  breakdown: { finalScore: number; baseScore: number; gapPct: number | null; gapTerm: number; hasGapEvidence: boolean },
+  moverSymbols: Set<string>,
+): string {
+  const { finalScore, baseScore, gapTerm, hasGapEvidence } = breakdown;
+  if (Number.isNaN(finalScore)) return 'NAN_SCORE';
+  if (!Number.isFinite(finalScore)) return 'INFINITE_SCORE';
+  // The IOVA case: not scored by SnapshotScanner/MarketDataWorker (base 0), not a verified
+  // mover, no composable score, no gap evidence — literally nothing to score on.
+  const isVerifiedMover = moverSymbols.has(symbol.toUpperCase());
+  if (baseScore === 0 && gapTerm === 0 && !isVerifiedMover && !hasGapEvidence) {
+    return 'NO_SCORE_EVIDENCE';
+  }
+  if (baseScore === 0) return 'NO_BASE_SCORE';
+  if (!hasGapEvidence) return 'NO_GAP_EVIDENCE';
+  if (gapTerm === 0) return 'ZERO_GAP_TERM';
+  return 'NON_POSITIVE_FINAL_SCORE';
+}
+
 export function scoreBroadUniverseChallenger(
   sym: string,
   gapPct: number | null,
@@ -501,13 +527,45 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
         return 'SEED_OR_WATCH_OR_UNKNOWN';
       };
 
-      const broadUniverseEligibleWithBreakdown = shortlist
+      const scoredCandidates = shortlist
         .filter((row) => !active.has(row.symbol) && !topSymbols.has(row.symbol))
-        .map((row) => ({ symbol: row.symbol, breakdown: priorityScoreBreakdownOf(row.symbol) }))
+        .map((row) => ({ symbol: row.symbol, breakdown: priorityScoreBreakdownOf(row.symbol) }));
+      const broadUniverseEligibleWithBreakdown = scoredCandidates
         .filter((c) => c.breakdown.finalScore > 0)
         .sort((a, b) => b.breakdown.finalScore - a.breakdown.finalScore);
-      const zeroOrExcludedCandidateCount = shortlist.filter((row) => !active.has(row.symbol) && !topSymbols.has(row.symbol)).length
-        - broadUniverseEligibleWithBreakdown.length;
+      // 2026-10-05 (challenger zero-score visibility): the candidates excluded by the
+      // finalScore > 0 filter above were previously only counted in aggregate
+      // (zeroScoreOrExcludedCount). Capture per-symbol reason codes here — purely
+      // additive observability, does not change which candidates are eligible.
+      const zeroScoreExcluded = scoredCandidates.filter((c) => !(c.breakdown.finalScore > 0));
+      if (zeroScoreExcluded.length > 0) {
+        const moverSymbols = new Set(getCachedMoverSymbols().map((s: string) => s.toUpperCase()));
+        observeSafe(() => {
+          structuredLogger.info('discovery_challenger_excluded', {
+            category: 'DISCOVERY',
+            eventType: 'BROAD_UNIVERSE_CHALLENGER_EXCLUDED',
+            reasoning: `cycleId=${cycleId} excluded=${zeroScoreExcluded.length} ` +
+              `reasons=${[...new Set(zeroScoreExcluded.map((c) => classifyExclusionReason(c.symbol, c.breakdown, moverSymbols)))].join(',')}`,
+            cycleId,
+            excludedCount: zeroScoreExcluded.length,
+            // Bounded: top 25 by absolute gap (most "interesting" exclusions first), never unbounded.
+            excluded: zeroScoreExcluded.slice(0, 25).map((c) => {
+              const composableScore = getLastComposableScore(c.symbol);
+              return {
+                symbol: c.symbol,
+                source: inferredDiscoverySourceOf(c.symbol),
+                reasonCode: classifyExclusionReason(c.symbol, c.breakdown, moverSymbols),
+                baseScore: c.breakdown.baseScore,
+                gapPct: c.breakdown.gapPct,
+                gapTerm: c.breakdown.gapTerm,
+                composableScore,
+                finalPriorityScore: c.breakdown.finalScore,
+              };
+            }),
+          });
+        });
+      }
+      const zeroOrExcludedCandidateCount = zeroScoreExcluded.length;
       const challengerLimit = continuousIntelligence.broadUniverseHotSwapChallengerLimit;
       const broadUniverseChallengers: SnapshotCandidate[] = broadUniverseEligibleWithBreakdown
         .slice(0, challengerLimit)
