@@ -15,7 +15,7 @@
  */
 import { CORE_STRATEGIES, EXPERIMENTAL_STRATEGIES, isExperimentalStrategyLive } from '../quant/strategies/StrategyEngine';
 import { experimentalStrategyRow } from '../config/quantExperimentalStrategies';
-import { familyForStrategyId, JAVA_RESEARCH_STRATEGY_IDS, type QuantFamilyId } from '../quant/strategyFamilies';
+import { familyForStrategyId, JAVA_RESEARCH_STRATEGY_IDS, INSTITUTIONAL_VOTE_ENV_VARS, type QuantFamilyId } from '../quant/strategyFamilies';
 import { getModelEntry, type ModelRegistryEntry } from '../config/modelRegistry';
 import { getStrategyLifecycleStatus, type StrategyLifecycleStatus } from '../quant/strategies/StrategyEmissionEligibility';
 import { isQuantJavaCoreEnabled } from '../config/tradingSafety';
@@ -73,12 +73,17 @@ export async function buildStrategyCatalog(): Promise<StrategyCatalogRow[]> {
 
   const javaLive = isQuantJavaCoreEnabled();
   for (const strategyId of JAVA_RESEARCH_STRATEGY_IDS) {
+    // 2026-10-05: institutional strategies wired to paper verification carry their own
+    // vote flag - vote-eligible only when BOTH the Java bridge and the per-strategy flag
+    // are on. Research-only institutional ids (e.g. INSTITUTIONAL_STAT_ARB) keep the
+    // bridge-level semantics: HTTP-reachable, never vote.
+    const voteEnvVar = INSTITUTIONAL_VOTE_ENV_VARS[strategyId] ?? null;
     rows.push({
       strategyId,
       tier: 'JAVA_RESEARCH',
       family: familyForStrategyId(strategyId),
-      liveEligible: javaLive,
-      enabledEnvVar: tradingSafety.quantJavaCoreEnabledEnvVar,
+      liveEligible: voteEnvVar !== null ? javaLive && process.env[voteEnvVar] === 'true' : javaLive,
+      enabledEnvVar: voteEnvVar ?? tradingSafety.quantJavaCoreEnabledEnvVar,
       ownership: getModelEntry('strategies', ownershipKey(strategyId)),
       lifecycleStatus: await getStrategyLifecycleStatus(strategyId),
     });

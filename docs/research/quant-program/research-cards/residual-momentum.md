@@ -1,7 +1,7 @@
 ---
 strategy: "Residual (idiosyncratic) momentum"
 family: "momentum"
-source: { paper: "Residual Momentum", authors: "Blitz, Huij, Martens", year: 2011, url: "", license: "academic (Journal of Empirical Finance; verify DOI before citing)" }
+source: { paper: "Residual Momentum", authors: "Blitz, Huij, Martens", year: 2011, url: "https://doi.org/10.1016/j.jempfin.2011.01.003", license: "academic (Journal of Empirical Finance)" }
 status: RESEARCHED
 argus_status: EXISTS_INCOMPLETE
 evidence_quality: 75

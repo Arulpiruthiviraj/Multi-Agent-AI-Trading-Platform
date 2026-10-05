@@ -7,7 +7,7 @@ argus_refs:
   - src/server/engines/backtest/Slippage.ts
   - src/server/engines/PositionSizing.ts
 sources:
-  - { title: "The Implementation Shortfall: Paper vs. Reality", authors: "André Perold", year: 1988, url: "", license: "academic (Journal of Portfolio Management 14(3); verify DOI before citing)" }
+  - { title: "The Implementation Shortfall: Paper vs. Reality", authors: "André Perold", year: 1988, url: "https://doi.org/10.3905/jpm.1988.409150", license: "academic (Journal of Portfolio Management)" }
 evidence_quality: 80
 data_requirements: [daily-OHLCV]
 feasibility_daily_bars: true

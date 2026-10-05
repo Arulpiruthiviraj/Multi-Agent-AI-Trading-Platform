@@ -1,7 +1,7 @@
 ---
 strategy: "52-week-high momentum"
 family: "momentum"
-source: { paper: "The 52-Week High and Momentum Investing", authors: "George, Hwang", year: 2004, url: "", license: "academic (Journal of Finance 59(5); verify DOI before citing)" }
+source: { paper: "The 52-Week High and Momentum Investing", authors: "George, Hwang", year: 2004, url: "https://doi.org/10.1111/j.1540-6261.2004.00695.x", license: "academic (Journal of Finance 59(5))" }
 status: RESEARCHED
 argus_status: EXISTS_INCOMPLETE
 evidence_quality: 75

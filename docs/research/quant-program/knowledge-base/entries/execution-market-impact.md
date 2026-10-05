@@ -6,7 +6,7 @@ argus_status: EXISTS_INCOMPLETE
 argus_refs:
   - src/server/engines/backtest/Slippage.ts
 sources:
-  - { title: "Optimal Execution of Portfolio Transactions", authors: "Robert Almgren, Neil Chriss", year: 2000, url: "", license: "academic (Journal of Risk 3(2); verify DOI before citing)" }
+  - { title: "Optimal Execution of Portfolio Transactions", authors: "Robert Almgren, Neil Chriss", year: 2000, url: "https://doi.org/10.21314/jor.2001.041", license: "academic (Journal of Risk)" }
   - { title: "Direct Estimation of Equity Market Impact", authors: "Almgren, Thum, Hauptmann, Li", year: 2005, url: "", license: "academic" }
 evidence_quality: 80
 data_requirements: [daily-OHLCV]

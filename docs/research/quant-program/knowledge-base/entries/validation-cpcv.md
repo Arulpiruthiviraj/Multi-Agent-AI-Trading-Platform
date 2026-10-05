@@ -8,8 +8,8 @@ argus_refs:
   - scripts/run_vectorbt_wfo.py
   - python/argus_research/stats.py
 sources:
-  - { title: "Advances in Financial Machine Learning", authors: "Marcos López de Prado", year: 2018, url: "", license: "book (Wiley; verify ISBN before citing)" }
-  - { title: "The Probability of Backtest Overfitting", authors: "Bailey, Borwein, López de Prado, Zhu", year: 2014, url: "", license: "academic (Journal of Computational Finance; verify DOI before citing)" }
+  - { title: "Advances in Financial Machine Learning", authors: "Marcos López de Prado", year: 2018, url: "https://www.wiley.com/en-us/Advances+in+Financial+Machine+Learning-p-9781119482086", license: "book (Wiley, 2018)" }
+  - { title: "The Probability of Backtest Overfitting", authors: "Bailey, Borwein, López de Prado, Zhu", year: 2014, url: "https://doi.org/10.21314/jcf.2016.322", license: "academic (Journal of Computational Finance)" }
 evidence_quality: 80
 data_requirements: [daily-OHLCV]
 feasibility_daily_bars: true

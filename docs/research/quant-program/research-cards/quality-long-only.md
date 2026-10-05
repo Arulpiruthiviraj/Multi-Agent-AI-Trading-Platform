@@ -1,7 +1,7 @@
 ---
 strategy: "Quality factor, long-only tilt (QMJ long leg)"
 family: "factor"
-source: { paper: "Quality Minus Junk", authors: "Asness, Frazzini, Pedersen", year: 2019, url: "", license: "academic (Review of Accounting Studies; verify DOI before citing)" }
+source: { paper: "Quality Minus Junk", authors: "Asness, Frazzini, Pedersen", year: 2019, url: "https://doi.org/10.2469/dig.v44.n1.18", license: "academic (CFA Digest summary of the 2013 AQR working paper; journal version Review of Accounting Studies 2019)" }
 status: RESEARCHED
 argus_status: EXISTS_INCOMPLETE
 evidence_quality: 80

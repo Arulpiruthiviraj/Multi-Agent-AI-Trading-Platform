@@ -1,7 +1,7 @@
 ---
 strategy: "Post-earnings-announcement drift (PEAD)"
 family: "factor"
-source: { paper: "Post-Earnings-Announcement Drift: Delayed Price Response or Risk Premium?", authors: "Bernard, Thomas", year: 1989, url: "", license: "academic (Journal of Accounting Research; verify DOI before citing)" }
+source: { paper: "Post-Earnings-Announcement Drift: Delayed Price Response or Risk Premium?", authors: "Bernard, Thomas", year: 1989, url: "https://doi.org/10.2307/2491062", license: "academic (Journal of Accounting Research)" }
 status: RESEARCHED
 argus_status: MISSING_HIGH
 evidence_quality: 90

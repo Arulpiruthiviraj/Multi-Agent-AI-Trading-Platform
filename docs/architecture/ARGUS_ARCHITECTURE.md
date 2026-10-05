@@ -665,8 +665,13 @@ min-2-agents, all RiskEngine gates, OMS, PAPER-only) is unchanged. `INSTITUTIONA
 is deliberately excluded — pairs need a pair universe and short-selling.
 
 This is PAPER_TESTING infrastructure for the quant research program
-(`docs/research/quant-program/CHARTER.md`), not a profitability claim. 9 unit tests pass;
-Java compilation still unverified on this host (no JDK).
+(`docs/research/quant-program/CHARTER.md`), not a profitability claim. 9 unit tests pass.
+Java verification (2026-10-05, this host): JDK 26 (Temurin) + Maven 3.9.9 installed to
+`~/workspace/tools/`; all 225 main sources and 190 test sources compile clean; the 13 new
+tests (2 strategies + registry dispatch) pass; full suite 841/843 (2 failures are
+`SqliteBarLoaderTest` needing the real `data/argus.db` market-data artifact absent here;
+5 HTTP-server test classes excluded - the sandbox blocks their TCP loopback). Zero
+failures in the new code.
 
 ### The one-paragraph version (current state)
 

@@ -68,6 +68,28 @@ describe('strategyCatalog', () => {
     expect(row.liveEligible).toBe(false); // QUANT_JAVA_CORE_ENABLED not set in this test env
   });
 
+  it('lists institutional strategies in the catalog with their per-strategy vote env vars', async () => {
+    const rows = await mod.buildStrategyCatalog();
+    const expectations: Array<[string, string]> = [
+      ['INSTITUTIONAL_VOL_SCALED_MTF_MOMENTUM', 'ARGUS_VOL_SCALED_MTF_MOMENTUM_VOTE_ENABLED'],
+      ['INSTITUTIONAL_TS_MOMENTUM_12M', 'ARGUS_TS_MOMENTUM_12M_VOTE_ENABLED'],
+      ['INSTITUTIONAL_MULTI_FACTOR_MOMENTUM', 'ARGUS_MULTI_FACTOR_MOMENTUM_VOTE_ENABLED'],
+    ];
+    for (const [id, envVar] of expectations) {
+      const row = rows.find((r) => r.strategyId === id)!;
+      expect(row).toBeDefined();
+      expect(row.tier).toBe('JAVA_RESEARCH');
+      expect(row.family).toBe('TREND_MOMENTUM');
+      expect(row.enabledEnvVar).toBe(envVar);
+      expect(row.liveEligible).toBe(false); // neither bridge nor vote flag set in test env
+    }
+    // STAT_ARB is research-only: cataloged, but with no vote flag (never vote-eligible).
+    const statArb = rows.find((r) => r.strategyId === 'INSTITUTIONAL_STAT_ARB')!;
+    expect(statArb).toBeDefined();
+    expect(statArb.family).toBe('STATISTICAL_ARBITRAGE');
+    expect(statArb.liveEligible).toBe(false);
+  });
+
   it('formatStrategyCatalog renders a readable text table', async () => {
     const rows = await mod.buildStrategyCatalog();
     const text = mod.formatStrategyCatalog(rows);

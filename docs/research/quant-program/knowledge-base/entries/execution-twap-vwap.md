@@ -7,7 +7,7 @@ argus_refs:
   - src/server/engines/backtest/Slippage.ts
   - src/brokers/AlpacaBroker.ts
 sources:
-  - { title: "Algorithmic Trading and DMA (industry standard reference)", authors: "Barry Johnson", year: 2010, url: "", license: "book (verify ISBN/DOI before citing)" }
+  - { title: "Algorithmic Trading and DMA (industry standard reference)", authors: "Barry Johnson", year: 2010, license: "book (4MyelomaPress, 2010; no Crossref DOI)" }
 evidence_quality: 75
 data_requirements: [daily-OHLCV]
 feasibility_daily_bars: true

@@ -7,7 +7,7 @@ argus_refs:
   - quant-core-java/src/main/java/io/argus/quantcore/institutional/models/OjAlgoPortfolioRiskEngine.java  # notes risk-parity as unimplemented
 sources:
   - { title: "Risk Parity Portfolios", authors: "Edward Qian", year: 2005, url: "", license: "industry whitepaper (PanAgora)" }
-  - { title: "Leverage Aversion and Risk Parity", authors: "Asness, Frazzini, Pedersen", year: 2012, url: "", license: "academic (Journal of Financial Economics 103(1); verify DOI before citing)" }
+  - { title: "Leverage Aversion and Risk Parity", authors: "Asness, Frazzini, Pedersen", year: 2012, url: "https://doi.org/10.2469/faj.v68.n1.1", license: "academic (Financial Analysts Journal 68(1); published version of the 2012 JFE working paper)" }
 evidence_quality: 70
 data_requirements: [daily-OHLCV]
 feasibility_daily_bars: true

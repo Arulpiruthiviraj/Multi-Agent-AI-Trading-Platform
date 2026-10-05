@@ -7,9 +7,9 @@ argus_refs:
   - src/server/engines/backtest/Slippage.ts
   - src/server/services/MarketUniverseScanner.ts
 sources:
-  - { title: "Market Microstructure Theory", authors: "Maureen O'Hara", year: 1995, url: "", license: "book (Blackwell; verify ISBN before citing)" }
-  - { title: "A Simple Implicit Measure of the Effective Bid-Ask Spread in an Efficient Market", authors: "Richard Roll", year: 1984, url: "", license: "academic (Journal of Finance; verify DOI before citing)" }
-  - { title: "A Simple Way to Estimate Bid-Ask Spreads from Daily High and Low Prices", authors: "Shane Corwin, Paul Schultz", year: 2012, url: "", license: "academic (Journal of Finance 67(2); verify DOI before citing)" }
+  - { title: "Market Microstructure Theory", authors: "Maureen O'Hara", year: 1995, url: "", license: "book (Blackwell, 1995)" }
+  - { title: "A Simple Implicit Measure of the Effective Bid-Ask Spread in an Efficient Market", authors: "Richard Roll", year: 1984, url: "", url: "https://doi.org/10.1111/j.1540-6261.1984.tb03897.x", license: "academic (Journal of Finance)" }
+  - { title: "A Simple Way to Estimate Bid-Ask Spreads from Daily High and Low Prices", authors: "Shane Corwin, Paul Schultz", year: 2012, url: "", url: "https://doi.org/10.1111/j.1540-6261.2012.01729.x", license: "academic (Journal of Finance 67(2))" }
   - { title: "Illiquidity and Stock Returns", authors: "Yakov Amihud", year: 2002, url: "https://doi.org/10.1016/S1386-4181(01)00024-6", license: "academic" }
 evidence_quality: 80
 data_requirements: [daily-OHLCV]

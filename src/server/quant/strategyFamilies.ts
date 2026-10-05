@@ -68,6 +68,26 @@ const JAVA_RESEARCH_STRATEGY_FAMILIES: Record<string, QuantFamilyId> = {
   stochastic_oscillator: 'MEAN_REVERSION_FAMILY',
   time_series_momentum: 'TREND_MOMENTUM',
   volume_signal: 'MARKET_STRUCTURE_FLOW',
+  // 2026-10-05: institutional signal strategies (StrategyRegistry.INSTITUTIONAL).
+  // The three momentum strategies are wired to paper verification via
+  // InstitutionalStrategyVoteService (per-strategy vote flags); STAT_ARB is
+  // research-only (needs pair universe + short-selling).
+  INSTITUTIONAL_VOL_SCALED_MTF_MOMENTUM: 'TREND_MOMENTUM',
+  INSTITUTIONAL_TS_MOMENTUM_12M: 'TREND_MOMENTUM',
+  INSTITUTIONAL_MULTI_FACTOR_MOMENTUM: 'TREND_MOMENTUM',
+  INSTITUTIONAL_STAT_ARB: 'STATISTICAL_ARBITRAGE',
+};
+
+/**
+ * 2026-10-05: per-strategy vote env vars for institutional strategies wired to paper
+ * verification. A strategy listed here is vote-eligible only when BOTH the Java bridge
+ * (QUANT_JAVA_CORE_ENABLED) and its own vote flag are on. Strategies absent from this
+ * map (e.g. INSTITUTIONAL_STAT_ARB) are research-only - reachable over HTTP, no votes.
+ */
+export const INSTITUTIONAL_VOTE_ENV_VARS: Record<string, string> = {
+  INSTITUTIONAL_VOL_SCALED_MTF_MOMENTUM: 'ARGUS_VOL_SCALED_MTF_MOMENTUM_VOTE_ENABLED',
+  INSTITUTIONAL_TS_MOMENTUM_12M: 'ARGUS_TS_MOMENTUM_12M_VOTE_ENABLED',
+  INSTITUTIONAL_MULTI_FACTOR_MOMENTUM: 'ARGUS_MULTI_FACTOR_MOMENTUM_VOTE_ENABLED',
 };
 
 /** Returns null (never a guessed family) for an id this map doesn't recognize. */
