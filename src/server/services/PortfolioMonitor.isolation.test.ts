@@ -49,6 +49,8 @@ describe('PortfolioMonitorWorker.reviewPortfolio - per-holding exception isolati
       if (symbol === 'ZZZ_HEALTHY') return 101; // +1% - healthy, no exit
       return null;
     });
+    // 2026-10-05 P1: exits require a fresh mark — mock a fresh timestamp for the healthy holding.
+    vi.spyOn(marketDataWorker, 'getLatestPriceAgeMs').mockReturnValue(1_000);
     const emitSpy = vi.spyOn(eventBus, 'emit').mockImplementation(() => {});
 
     await portfolioMonitor.reviewPortfolio();

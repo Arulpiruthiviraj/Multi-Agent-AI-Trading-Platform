@@ -151,7 +151,10 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
   it('getLatestAsk/getLatestSpreadBps: captures a real ask price from a quote message and computes a real spread', () => {
     const ws = instances[0];
     authenticate(ws);
-    sendMessage(ws, { T: 'q', S: 'AAPL', bp: 150.00, ap: 150.30, bs: 100, t: '2026-01-15T14:30:00.000000000Z' });
+    // 2026-10-05 P1: freshness is measured from the EXCHANGE timestamp (msg.t), not receipt
+    // time — so the test quote must carry a current timestamp, not a stale one.
+    const nowIso = new Date().toISOString();
+    sendMessage(ws, { T: 'q', S: 'AAPL', bp: 150.00, ap: 150.30, bs: 100, t: nowIso });
 
     expect(worker.getLatestAsk('AAPL')).toBe(150.30);
     // mid = 150.15, spread = 0.30/150.15 * 10000 ≈ 19.98 bps
@@ -1589,5 +1592,53 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       expect(call![1].source).toBe('MARKET_MOVER');
       logSpy.mockRestore();
     });
+  });
+});
+
+describe('MarketDataWorker - P1 exchange-timestamp freshness (2026-10-05)', () => {
+  let worker: MarketDataWorker;
+
+  beforeEach(() => {
+    worker = new MarketDataWorker();
+  });
+
+  afterEach(() => {
+    worker.setNowForTests(null);
+    worker.stop();
+  });
+
+  it('treats a quote with an old EXCHANGE timestamp as stale, even if just received', () => {
+    // Simulates the fixed handler: observedAtMs = exchange timestamp (msg.t), not receipt time.
+    // A burst of delayed quotes processed after a socket stall must NOT look fresh.
+    const exchangeTs = Date.now() - 10 * 60_000; // 10 minutes old at the exchange
+    (worker as any).latestBidEvidence.set('STALEQ', { price: 100, observedAtMs: exchangeTs });
+    (worker as any).latestAskPrices.set('STALEQ', 100.10);
+    (worker as any).latestAskTimestamps.set('STALEQ', exchangeTs);
+
+    // maxAgeMs = 5 minutes — the 10-minute-old exchange timestamp must fail.
+    expect(worker.getLatestSpreadBps('STALEQ', 5 * 60_000)).toBeNull();
+  });
+
+  it('accepts a quote with a fresh exchange timestamp (control)', () => {
+    const exchangeTs = Date.now() - 30_000; // 30 seconds old — fresh
+    (worker as any).latestBidEvidence.set('FRESHQ', { price: 100, observedAtMs: exchangeTs });
+    (worker as any).latestAskPrices.set('FRESHQ', 100.10);
+    (worker as any).latestAskTimestamps.set('FRESHQ', exchangeTs);
+
+    const spread = worker.getLatestSpreadBps('FRESHQ', 5 * 60_000);
+    expect(spread).not.toBeNull();
+    expect(spread!).toBeGreaterThan(0);
+  });
+
+  it('getObservedQuoteEvidence reports the exchange timestamp, not receipt time', () => {
+    const exchangeTs = Date.now() - 8 * 60_000;
+    (worker as any).latestBidEvidence.set('EVIDQ', { price: 100, observedAtMs: exchangeTs });
+    (worker as any).latestPrices.set('EVIDQ', 100);
+    (worker as any).latestPriceTimestamps.set('EVIDQ', exchangeTs);
+
+    const evidence = worker.getObservedQuoteEvidence('EVIDQ');
+    expect(evidence.bidObservedAtMs).toBe(exchangeTs);
+    // Age reflects exchange time — an 8-minute-old quote is not "just observed".
+    expect(evidence.priceAgeMs).toBeGreaterThan(7 * 60_000);
   });
 });

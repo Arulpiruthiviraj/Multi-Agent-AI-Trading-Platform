@@ -55,6 +55,7 @@ describe('PortfolioMonitorWorker.reviewPortfolio - settings-driven exit threshol
     await seedHolding('UP10', 10, 100);
 
     vi.spyOn(marketDataWorker, 'getLatestPrice').mockImplementation((symbol: string) => {
+    vi.spyOn(marketDataWorker, 'getLatestPriceAgeMs').mockReturnValue(1_000); // 2026-10-05 P1: fresh mark
       if (symbol === 'DOWN4') return 96; // -4% - inside the new -8% stop, outside the old -3%
       if (symbol === 'UP10') return 110; // +10% - inside the new +25% target, outside the old +5%
       return null;
@@ -69,6 +70,7 @@ describe('PortfolioMonitorWorker.reviewPortfolio - settings-driven exit threshol
   it('emits POSITION_MONITORED for each live-priced holding independently of a new entry idea', async () => {
     await seedHolding('WATCH1', 5, 100);
     vi.spyOn(marketDataWorker, 'getLatestPrice').mockImplementation((symbol: string) => symbol === 'WATCH1' ? 97 : null);
+    vi.spyOn(marketDataWorker, 'getLatestPriceAgeMs').mockReturnValue(1_000); // 2026-10-05 P1: fresh mark
     const emitSpy = vi.spyOn(eventBus, 'emit').mockImplementation(() => {});
 
     await portfolioMonitor.reviewPortfolio();
@@ -81,6 +83,7 @@ describe('PortfolioMonitorWorker.reviewPortfolio - settings-driven exit threshol
 
   it('DOES exit once price crosses the new -8%/+25% settings-driven thresholds', async () => {
     vi.spyOn(marketDataWorker, 'getLatestPrice').mockImplementation((symbol: string) => {
+    vi.spyOn(marketDataWorker, 'getLatestPriceAgeMs').mockReturnValue(1_000); // 2026-10-05 P1: fresh mark
       if (symbol === 'DOWN4') return 91; // -9% - past the new -8% stop
       if (symbol === 'UP10') return 126; // +26% - past the new +25% target
       return null;
@@ -189,6 +192,7 @@ describe('PortfolioMonitorWorker.reviewPortfolio - quant strategy-aware exits (P
     await seedOpeningTrade('QSTOP', 100, { quantStrategyId: 'TREND_FOLLOWING', quantStopPrice: 95, quantTargetPrice: 130 });
 
     vi.spyOn(marketDataWorker, 'getLatestPrice').mockImplementation((symbol: string) => symbol === 'QSTOP' ? 94 : null); // -6%, would NOT trip the generic -50% stop
+    vi.spyOn(marketDataWorker, 'getLatestPriceAgeMs').mockReturnValue(1_000); // 2026-10-05 P1: fresh mark
     const emitSpy = vi.spyOn(eventBus, 'emitTradeIdea').mockImplementation(() => {});
 
     await portfolioMonitor.reviewPortfolio();
@@ -203,6 +207,7 @@ describe('PortfolioMonitorWorker.reviewPortfolio - quant strategy-aware exits (P
     await seedOpeningTrade('QTARGET', 100, { quantStrategyId: 'MOMENTUM_BREAKOUT', quantStopPrice: 90, quantTargetPrice: 112 });
 
     vi.spyOn(marketDataWorker, 'getLatestPrice').mockImplementation((symbol: string) => symbol === 'QTARGET' ? 113 : null); // +13%, would NOT trip the generic +50% target
+    vi.spyOn(marketDataWorker, 'getLatestPriceAgeMs').mockReturnValue(1_000); // 2026-10-05 P1: fresh mark
     const emitSpy = vi.spyOn(eventBus, 'emitTradeIdea').mockImplementation(() => {});
 
     await portfolioMonitor.reviewPortfolio();
@@ -217,6 +222,7 @@ describe('PortfolioMonitorWorker.reviewPortfolio - quant strategy-aware exits (P
     await seedOpeningTrade('QHOLD', 100, { quantStrategyId: 'PULLBACK_CONTINUATION', quantStopPrice: 90, quantTargetPrice: 120 });
 
     vi.spyOn(marketDataWorker, 'getLatestPrice').mockImplementation((symbol: string) => symbol === 'QHOLD' ? 105 : null);
+    vi.spyOn(marketDataWorker, 'getLatestPriceAgeMs').mockReturnValue(1_000); // 2026-10-05 P1: fresh mark
     const emitSpy = vi.spyOn(eventBus, 'emitTradeIdea').mockImplementation(() => {});
 
     await portfolioMonitor.reviewPortfolio();
@@ -229,6 +235,7 @@ describe('PortfolioMonitorWorker.reviewPortfolio - quant strategy-aware exits (P
     await seedOpeningTrade('PLAIN', 100, {}); // TechnicalAgent/News/Fundamental-style trade - no quant fields
 
     vi.spyOn(marketDataWorker, 'getLatestPrice').mockImplementation((symbol: string) => symbol === 'PLAIN' ? 200 : null); // +100% - past the generic +50% target
+    vi.spyOn(marketDataWorker, 'getLatestPriceAgeMs').mockReturnValue(1_000); // 2026-10-05 P1: fresh mark
     const emitSpy = vi.spyOn(eventBus, 'emitTradeIdea').mockImplementation(() => {});
 
     await portfolioMonitor.reviewPortfolio();
@@ -259,6 +266,7 @@ describe('PortfolioMonitorWorker.reviewPortfolio - quant strategy-aware exits (P
     }));
     vi.spyOn(historicalDataGateway, 'getBars').mockResolvedValue(bars);
     vi.spyOn(marketDataWorker, 'getLatestPrice').mockImplementation((symbol: string) => symbol === 'QINV' ? 90 : null);
+    vi.spyOn(marketDataWorker, 'getLatestPriceAgeMs').mockReturnValue(1_000); // 2026-10-05 P1: fresh mark
     const emitSpy = vi.spyOn(eventBus, 'emitTradeIdea').mockImplementation(() => {});
 
     await portfolioMonitor.reviewPortfolio();
@@ -289,6 +297,7 @@ describe('PortfolioMonitorWorker.reviewPortfolio - quant strategy-aware exits (P
     } as any);
 
     vi.spyOn(marketDataWorker, 'getLatestPrice').mockImplementation((symbol: string) => symbol === 'NVDAX' ? 216.61 : null);
+    vi.spyOn(marketDataWorker, 'getLatestPriceAgeMs').mockReturnValue(1_000); // 2026-10-05 P1: fresh mark
     const emitSpy = vi.spyOn(eventBus, 'emitTradeIdea').mockImplementation(() => {});
 
     await portfolioMonitor.reviewPortfolio();
@@ -307,6 +316,7 @@ describe('PortfolioMonitorWorker.reviewPortfolio - quant strategy-aware exits (P
     });
 
     vi.spyOn(marketDataWorker, 'getLatestPrice').mockImplementation((symbol: string) => symbol === 'BADTGT' ? 216 : null);
+    vi.spyOn(marketDataWorker, 'getLatestPriceAgeMs').mockReturnValue(1_000); // 2026-10-05 P1: fresh mark
     const emitSpy = vi.spyOn(eventBus, 'emitTradeIdea').mockImplementation(() => {});
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
@@ -446,5 +456,108 @@ describe('resolvePositionStopTarget (positions ledger stop/take-profit)', () => 
     // toward the campaign's 1.5% ceiling.
     expect(result.stopLossPrice).toBeCloseTo(200 * (1 - 1 / 100), 2);
     await db.update(schema.settings).set({ trailingStopPct: 5 });
+  });
+});
+
+/**
+ * 2026-10-05 P1 hardening: zero-basis and stale-mark guards. A zero/negative cost basis
+ * used to produce ±Infinity PnL and phantom-trigger TARGET_REACHED/HARD_STOP SELLs; exits
+ * were evaluated on marks with no freshness bound. Both now fail closed.
+ * Real isolated temp SQLite DB, same pattern as the E2A block above.
+ */
+describe('PortfolioMonitorWorker.reviewPortfolio - P1 zero-basis and stale-mark guards (2026-10-05)', () => {
+  let tmpDbPath: string;
+  let db: any;
+  let sqliteDb: any;
+  let schema: any;
+  let portfolioMonitor: any;
+  let marketDataWorker: any;
+  let eventBus: any;
+
+  beforeAll(async () => {
+    tmpDbPath = path.join(os.tmpdir(), `argus_portfoliomonitor_p1_${Date.now()}_${process.pid}.db`);
+    process.env.ARGUS_DB_PATH = tmpDbPath;
+
+    // Same as the Phase 16B block above: earlier describes already imported (and closed)
+    // `../db` bound to different temp DBs — reset modules for a fresh connection.
+    vi.resetModules();
+    ({ db, sqliteDb } = await import('../db'));
+    schema = await import('../db/schema');
+    ({ portfolioMonitor } = await import('./PortfolioMonitor'));
+    ({ marketDataWorker } = await import('./MarketDataWorker'));
+    ({ eventBus } = await import('../core/EventBus'));
+
+    await db.insert(schema.settings).values({ takeProfitPct: 25, trailingStopPct: 8 });
+  });
+
+  afterAll(() => {
+    try { sqliteDb.close(); } catch { /* already closed */ }
+    for (const suffix of ['', '-shm', '-wal']) {
+      try { fs.unlinkSync(tmpDbPath + suffix); } catch { /* best-effort cleanup */ }
+    }
+    delete process.env.ARGUS_DB_PATH;
+  });
+
+  afterEach(async () => {
+    await db.delete(schema.portfolio);
+    vi.restoreAllMocks();
+  });
+
+  async function seedHolding(symbol: string, quantity: number, averagePrice: number) {
+    await db.insert(schema.portfolio).values({
+      symbol, quantity, averagePrice, lastUpdated: new Date().toISOString(),
+    });
+  }
+
+  it('does NOT emit a phantom TARGET_REACHED SELL for a zero cost basis (would be +Infinity% PnL)', async () => {
+    await seedHolding('ZEROBASIS', 10, 0);
+    vi.spyOn(marketDataWorker, 'getLatestPrice').mockImplementation((symbol: string) =>
+      symbol === 'ZEROBASIS' ? 200 : null);
+    vi.spyOn(marketDataWorker, 'getLatestPriceAgeMs').mockReturnValue(1_000);
+    const emitSpy = vi.spyOn(eventBus, 'emitTradeIdea').mockImplementation(() => {});
+
+    await portfolioMonitor.reviewPortfolio();
+
+    const sells = emitSpy.mock.calls.filter((c: any) => c[0]?.symbol === 'ZEROBASIS');
+    expect(sells).toHaveLength(0);
+  });
+
+  it('does NOT emit a phantom SELL for a negative cost basis', async () => {
+    await seedHolding('NEGBASIS', 10, -50);
+    vi.spyOn(marketDataWorker, 'getLatestPrice').mockImplementation((symbol: string) =>
+      symbol === 'NEGBASIS' ? 200 : null);
+    vi.spyOn(marketDataWorker, 'getLatestPriceAgeMs').mockReturnValue(1_000);
+    const emitSpy = vi.spyOn(eventBus, 'emitTradeIdea').mockImplementation(() => {});
+
+    await portfolioMonitor.reviewPortfolio();
+
+    expect(emitSpy).not.toHaveBeenCalled();
+  });
+
+  it('skips exit evaluation on a stale mark (older than stalePriceThresholdMs)', async () => {
+    const { tradingSafety } = await import('../config/tradingSafety');
+    await seedHolding('STALEMARK', 10, 100);
+    // +50% would trigger TARGET_REACHED on a fresh mark — must not fire on a stale one.
+    vi.spyOn(marketDataWorker, 'getLatestPrice').mockImplementation((symbol: string) =>
+      symbol === 'STALEMARK' ? 150 : null);
+    vi.spyOn(marketDataWorker, 'getLatestPriceAgeMs').mockReturnValue(tradingSafety.stalePriceThresholdMs + 60_000);
+    const emitSpy = vi.spyOn(eventBus, 'emitTradeIdea').mockImplementation(() => {});
+
+    await portfolioMonitor.reviewPortfolio();
+
+    expect(emitSpy).not.toHaveBeenCalled();
+  });
+
+  it('still evaluates exits on a fresh mark (control: guard does not disable normal exits)', async () => {
+    await seedHolding('FRESHMARK', 10, 100);
+    vi.spyOn(marketDataWorker, 'getLatestPrice').mockImplementation((symbol: string) =>
+      symbol === 'FRESHMARK' ? 130 : null); // +30% > 25% take-profit
+    vi.spyOn(marketDataWorker, 'getLatestPriceAgeMs').mockReturnValue(1_000);
+    const emitSpy = vi.spyOn(eventBus, 'emitTradeIdea').mockImplementation(() => {});
+
+    await portfolioMonitor.reviewPortfolio();
+
+    const sells = emitSpy.mock.calls.filter((c: any) => c[0]?.symbol === 'FRESHMARK');
+    expect(sells.length).toBeGreaterThan(0);
   });
 });

@@ -62,8 +62,16 @@ describe('PortfolioReconciliationWorker.reconcile persistence (Phase 3)', () => 
         unrealizedPnl: null, unrealizedPnlPercent: null, valuationStatus: 'UNAVAILABLE' },
     ] });
     try {
+      // 2026-10-05 P1: account tripwires are debounced (2 consecutive cycles) — the first
+      // cycle defers, the second records.
       await portfolioReconciliationWorker.reconcile();
-      const events = await db.select().from(schema.reconciliationEvents);
+      let events = await db.select().from(schema.reconciliationEvents);
+      let mismatches = events.at(-1).mismatches ? JSON.parse(events.at(-1).mismatches) : [];
+      expect(mismatches).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'ACCOUNT_VALUATION_UNAVAILABLE' }),
+      ]));
+      await portfolioReconciliationWorker.reconcile();
+      events = await db.select().from(schema.reconciliationEvents);
       expect(events.at(-1).matches).toBe(false);
       expect(JSON.parse(events.at(-1).mismatches)).toEqual(expect.arrayContaining([
         expect.objectContaining({ type: 'ACCOUNT_VALUATION_UNAVAILABLE' }),
@@ -112,6 +120,8 @@ describe('PortfolioReconciliationWorker.reconcile persistence (Phase 3)', () => 
     ] });
     marketDataWorker.cacheObservedQuote('STALEMRK', 140, Date.now() - tradingSafety.stalePriceThresholdMs - 60000);
     try {
+      // 2026-10-05 P1: debounced — needs 2 consecutive cycles to record.
+      await portfolioReconciliationWorker.reconcile();
       await portfolioReconciliationWorker.reconcile();
       const events = await db.select().from(schema.reconciliationEvents);
       const last = events.at(-1);
@@ -244,6 +254,29 @@ describe('PortfolioReconciliationWorker.reconcile persistence (Phase 3)', () => 
     const eventsAfter = await db.select().from(schema.reconciliationEvents);
     expect(eventsAfter.length).toBe(eventsBefore.length + 1);
   });
+  it('2026-10-05 P1: broker-side SHORT position is flagged SHORT_POSITION_UNMONITORED and never hydrated', async () => {
+    const broker = (await import('../../brokers/BrokerManager')).BrokerManager.getInstance().getActiveBroker();
+    const original = broker.portfolio;
+    broker.portfolio = async () => ({ cash: 1000, buyingPower: 1000, equity: 1000, positions: [
+      { symbol: 'SHORTX', quantity: -10, entryPrice: 50, currentPrice: 48, marketValue: -480,
+        unrealizedPnl: 20, unrealizedPnlPercent: 0.04, valuationStatus: 'VALUED' },
+    ] });
+    try {
+      await portfolioReconciliationWorker.reconcile();
+      const events = await db.select().from(schema.reconciliationEvents);
+      const last = events.at(-1);
+      const mismatches = last.mismatches ? JSON.parse(last.mismatches) : [];
+      expect(mismatches).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'SHORT_POSITION_UNMONITORED', symbol: 'SHORTX' }),
+      ]));
+      // Must NOT be hydrated into the long-only portfolio table.
+      const local = await db.select().from(schema.portfolio).where(eq(schema.portfolio.symbol, 'SHORTX'));
+      expect(local).toHaveLength(0);
+    } finally {
+      broker.portfolio = original;
+      await db.delete(schema.portfolio).where(eq(schema.portfolio.symbol, 'SHORTX'));
+    }
+  });
 });
 
 describe('safeDollarImpact P1 fail-closed (2026-10-05)', () => {
@@ -267,4 +300,6 @@ describe('safeDollarImpact P1 fail-closed (2026-10-05)', () => {
     expect(safeDollarImpact(10, 25, FALLBACK)).toBe(250);
     expect(safeDollarImpact(-4, 25, FALLBACK)).toBe(100);
   });
+
+
 });

@@ -30,6 +30,7 @@ const {
     then(resolve: any, reject: any) {
       if (throwOnIdempotency) return Promise.reject(new Error('idempotency lookup failed')).then(resolve, reject);
       if (selectBuilder._table === portfolio) return Promise.resolve(portfolioRows).then(resolve, reject);
+      if (selectBuilder._table === fills) return Promise.resolve([...fillsInserts]).then(resolve, reject);
       return Promise.resolve(existingTrades).then(resolve, reject);
     },
   };
@@ -611,5 +612,80 @@ describe('OrderManagementService.executeOrder', () => {
       expect(activePlaceOrder).toHaveBeenCalled();
       expect(getFinalTradeRow().brokerId).toBe('ibkr_gateway');
     });
+  });
+});
+
+describe('OrderManagementService P1 follow-up guards (2026-10-05)', () => {
+  const oms = new OrderManagementService();
+  const oldSubmittedAt = new Date(Date.now() - 3600_000).toISOString();
+
+  beforeEach(() => {
+    tradesInserts.length = 0;
+    fillsInserts.length = 0;
+    setExistingTrades([]);
+    setThrowOnIdempotency(false);
+  });
+
+  it('does NOT call applyFollowUpUpdate for an unchanged partial fill (kills the ORDER_EXECUTED storm)', async () => {
+    setExistingTrades([{
+      id: 'partial-1', brokerOrderId: 'b-1', brokerId: 'test-broker',
+      symbol: 'AAPL', side: 'BUY', quantity: 10, status: 'PARTIALLY_FILLED',
+      submittedAt: oldSubmittedAt,
+    }]);
+    // Fills ledger already has the 5-share partial at cumulativeQuantity 5.
+    fillsInserts.push({ orderId: 'partial-1', quantity: 5, price: 100, cumulativeQuantity: 5 });
+    mockBrokerHolder.broker = {
+      id: 'test-broker',
+      getCapabilities: () => ({}),
+      orders: vi.fn(async () => [{ id: 'b-1', status: 'PARTIALLY_FILLED', filledQuantity: 5 }]),
+    };
+    const spy = vi.spyOn(oms as any, 'applyFollowUpUpdate').mockImplementation(async () => {});
+
+    await oms.followUpOpenOrders();
+
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('DOES call applyFollowUpUpdate when the partial fill actually grew (control)', async () => {
+    setExistingTrades([{
+      id: 'partial-2', brokerOrderId: 'b-2', brokerId: 'test-broker',
+      symbol: 'AAPL', side: 'BUY', quantity: 10, status: 'PARTIALLY_FILLED',
+      submittedAt: oldSubmittedAt,
+    }]);
+    fillsInserts.push({ orderId: 'partial-2', quantity: 5, price: 100, cumulativeQuantity: 5 });
+    mockBrokerHolder.broker = {
+      id: 'test-broker',
+      getCapabilities: () => ({}),
+      orders: vi.fn(async () => [{ id: 'b-2', status: 'PARTIALLY_FILLED', filledQuantity: 8 }]),
+    };
+    const spy = vi.spyOn(oms as any, 'applyFollowUpUpdate').mockImplementation(async () => {});
+
+    await oms.followUpOpenOrders();
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it('never touches EXTERNAL_MANUAL quarantine rows in reconcileInboundBrokerOrders', async () => {
+    setExistingTrades([{
+      id: 'quar-1', brokerOrderId: 'bq-1',
+      symbol: 'AAPL', side: 'BUY', quantity: 10, status: 'EXTERNAL_MANUAL',
+      submittedAt: oldSubmittedAt,
+    }]);
+    mockBrokerHolder.broker = {
+      id: 'test-broker',
+      getCapabilities: () => ({}),
+      orders: vi.fn(async () => [{
+        id: 'bq-1', status: 'FILLED', filledQuantity: 10,
+        createdAt: new Date().toISOString(),
+      }]),
+    };
+    const spy = vi.spyOn(oms as any, 'applyFollowUpUpdate').mockImplementation(async () => {});
+
+    await (oms as any).reconcileInboundBrokerOrders();
+
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 });

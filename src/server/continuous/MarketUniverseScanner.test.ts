@@ -862,3 +862,57 @@ describe('MarketUniverseScanner - MarketUniverseScannerWorker scheduling (2026-0
     expect(continuousIntelligence.broadUniverseSnapshotCacheTtlMs).toBeLessThanOrEqual(60 * 60 * 1000);
   });
 });
+
+describe('P1 SPREAD_CROSSED rejection (2026-10-05)', () => {
+  afterEach(() => {
+    resetMarketUniverseScannerForTests();
+    mockFetch.mockReset();
+    delete process.env[FLAG];
+  });
+
+  it('rejects a crossed quote (bid > ask) as SPREAD_CROSSED, not as a tight spread', async () => {
+    process.env[FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(jsonResponse([
+      { symbol: 'CROSSED', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
+    ]));
+    // bid 50.10 > ask 49.90 — crossed. Old code: spreadBps = -40 (negative) which passed
+    // the positive ceiling and admitted the candidate on corrupt evidence.
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      CROSSED: {
+        latestTrade: { p: 50, t: '2026-10-05T14:59:00Z' },
+        dailyBar: { o: 48, c: 50, v: 2_000_000, h: 51, l: 47, t: '2026-10-05T04:00:00Z' },
+        prevDailyBar: { c: 48, t: '2026-10-04T04:00:00Z' },
+        latestQuote: { bp: 50.10, ap: 49.90 },
+      },
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ CROSSED: [1_500_000, 1_500_000] }));
+
+    await refreshBroadUniverseCache();
+
+    expect(getCachedBroadUniverseSymbols()).not.toContain('CROSSED');
+    expect(getLastBroadUniverseStats().stage1RejectionCounts.SPREAD_CROSSED).toBe(1);
+    delete process.env[FLAG];
+  });
+
+  it('admits a normal tight spread (control: the guard does not reject valid quotes)', async () => {
+    process.env[FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(jsonResponse([
+      { symbol: 'TIGHT', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
+    ]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      TIGHT: {
+        latestTrade: { p: 50, t: '2026-10-05T14:59:00Z' },
+        dailyBar: { o: 48, c: 50, v: 2_000_000, h: 51, l: 47, t: '2026-10-05T04:00:00Z' },
+        prevDailyBar: { c: 48, t: '2026-10-04T04:00:00Z' },
+        latestQuote: { bp: 49.95, ap: 50.05 }, // 20 bps — well under the ceiling
+      },
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ TIGHT: [1_500_000, 1_500_000] }));
+
+    await refreshBroadUniverseCache();
+
+    expect(getCachedBroadUniverseSymbols()).toContain('TIGHT');
+    expect(getLastBroadUniverseStats().stage1RejectionCounts.SPREAD_CROSSED).toBe(0);
+    delete process.env[FLAG];
+  });
+});

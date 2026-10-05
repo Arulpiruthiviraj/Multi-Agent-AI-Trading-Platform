@@ -451,7 +451,10 @@ export class PortfolioReconciliationWorker {
       } catch (e) {
         console.error('[PortfolioReconciliation] Open-order reconciliation failed', e);
       }
-      pruneResolvedFaults(this.consecutiveFaults, liveFaultKeys);
+      // 2026-10-05 P1: prune moved to AFTER the account check below — the account
+      // tripwires (also debounced) add their fault keys to liveFaultKeys, and pruning
+      // before they run would reset their consecutive counts every cycle, defeating
+      // the debounce.
 
       // Phase 1, item 4 - account-level consistency check. Not a comparison against a separate
       // local ledger (none exists, by design - see the constants' own comment above), but a real
@@ -527,6 +530,7 @@ export class PortfolioReconciliationWorker {
       } catch (e) {
         console.error('[PortfolioReconciliation] Account consistency check failed', e);
       }
+      pruneResolvedFaults(this.consecutiveFaults, liveFaultKeys);
 
       // Broker order/account reads above may yield while a new fill commits. Never publish a
       // clean MATCH for an earlier position snapshot in that case.

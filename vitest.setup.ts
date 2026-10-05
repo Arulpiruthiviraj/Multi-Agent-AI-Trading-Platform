@@ -83,6 +83,17 @@ if (process.env.ARGUS_TEST_ALLOW_HEAP_SNAPSHOTS !== 'true') {
   process.env.ARGUS_DISABLE_HEAP_SNAPSHOTS = 'true';
 }
 
+// Test hermeticity (2026-10-05 P1 hardening): EncryptionService.ts throws at module-load
+// time when ENCRYPTION_SECRET is unset, which breaks ANY test file that transitively
+// imports it (BrokerManager -> QuestradeBroker -> EncryptionService) in an environment
+// without a real .env - e.g. PortfolioReconciliation.test.ts's Phase-3 suite. Set a
+// test-scoped dummy secret here, before any such import. Assigned (not merely defaulted)
+// so a later dotenv.config() cannot override it, same idiom as above. Tests use isolated
+// temp DBs and never touch real encrypted rows, so a dummy secret is safe.
+if (!process.env.ENCRYPTION_SECRET) {
+  process.env.ENCRYPTION_SECRET = 'test-only-dummy-secret-not-for-production';
+}
+
 afterAll(() => {
   for (const suffix of ['', '-shm', '-wal']) {
     try { fs.unlinkSync(defaultDbPath + suffix); } catch { /* best-effort cleanup - may never have been created */ }

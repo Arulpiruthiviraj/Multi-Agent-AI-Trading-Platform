@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -283,5 +283,63 @@ describe('TradingEngine - trading-safety kill switch (P0)', () => {
     expect(veto.type).toBe('veto');
     expect(veto.msg).toContain('[gate=duplicate_signal]');
     expect(veto.detail.gate).toBe('duplicate_signal');
+  });
+});
+
+describe('TradingEngine.cancelAllOpenOrders - P1 CANCEL_REQUESTED (2026-10-05)', () => {
+  let tmpDbPath: string;
+  let db: any;
+  let sqliteDb: any;
+  let schema: any;
+  let tradingEngine: any;
+  let BrokerManager: any;
+
+  beforeAll(async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+    const os = await import('os');
+    tmpDbPath = path.join(os.tmpdir(), `argus_te_cancel_${Date.now()}_${process.pid}.db`);
+    process.env.ARGUS_DB_PATH = tmpDbPath;
+
+    // The first describe already imported (and closed) `../db` — reset for a fresh connection.
+    vi.resetModules();
+    ({ db, sqliteDb } = await import('../db'));
+    schema = await import('../db/schema');
+    ({ tradingEngine } = await import('./TradingEngine'));
+    ({ BrokerManager } = await import('../../brokers/BrokerManager'));
+
+    await tradingEngine.initialize();
+  });
+
+  afterAll(async () => {
+    const fs = await import('fs');
+    try { sqliteDb.close(); } catch { /* already closed */ }
+    for (const suffix of ['', '-shm', '-wal']) {
+      try { fs.unlinkSync(tmpDbPath + suffix); } catch { /* best-effort */ }
+    }
+    delete process.env.ARGUS_DB_PATH;
+  });
+
+  it('stamps CANCEL_REQUESTED (not terminal CANCELED) when the cancel request is accepted', async () => {
+    await db.insert(schema.trades).values({
+      id: 'kill-1', brokerOrderId: 'kb-1', brokerId: 'test',
+      symbol: 'AAPL', side: 'BUY', quantity: 10, price: 100,
+      status: 'PENDING', submittedAt: new Date().toISOString(),
+      timestamp: new Date().toISOString(),
+    });
+    const cancelOrder = async () => true; // adapter accepted the request; no broker confirmation yet
+    vi.spyOn(BrokerManager.getInstance(), 'getActiveBroker').mockReturnValue({ cancelOrder } as any);
+
+    const cancelled = await (tradingEngine as any).cancelAllOpenOrders();
+
+    expect(cancelled).toContain('kb-1');
+    const { eq } = await import('drizzle-orm');
+    const [row] = await db.select().from(schema.trades).where(eq(schema.trades.id, 'kill-1'));
+    // Must be non-terminal: OMS follow-up still polls it and reconciles to CANCELED/FILLED.
+    expect(row.status).toBe('CANCEL_REQUESTED');
+    expect(row.status).not.toBe('CANCELED');
+
+    vi.restoreAllMocks();
+    await db.delete(schema.trades).where(eq(schema.trades.id, 'kill-1'));
   });
 });
