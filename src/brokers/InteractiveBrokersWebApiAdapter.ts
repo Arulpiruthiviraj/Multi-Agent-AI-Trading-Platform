@@ -46,6 +46,7 @@
 import https from 'https';
 import { BrokerPlugin, BrokerCapabilities, Order, Position, Portfolio } from './BrokerAdapter';
 import { networkEndpoints } from '../server/config/networkEndpoints';
+import { loadIbkrConnection } from '../server/config/ibkrConnection';
 import { assertIbkrSessionAllowsOrder } from './ibkrAccountClassification';
 
 interface IBKRRequestOptions {
@@ -124,6 +125,17 @@ export class InteractiveBrokersWebApiAdapter implements BrokerPlugin {
     return new Promise((resolve, reject) => {
       const url = new URL(this.baseUrl + path);
       const bodyStr = options.body ? JSON.stringify(options.body) : undefined;
+      // 2026-10-04: fail-closed request timeout (previously none - a Gateway that accepted
+      // the connection but never responded hung the promise forever, including placeOrder).
+      // Timeout rejects as UNKNOWN, never FAILED: order placement must reconcile by
+      // clientOrderId rather than assume the order did not reach IBKR. Never auto-retried here.
+      const timeoutMs = loadIbkrConnection().webApiRequestTimeoutMs;
+      let settled = false;
+      const fail = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      };
       const req = https.request({
         hostname: url.hostname,
         port: url.port || networkEndpoints.broker.ibkr.gatewayPortDefault,
@@ -142,6 +154,8 @@ export class InteractiveBrokersWebApiAdapter implements BrokerPlugin {
         let data = '';
         res.on('data', (chunk) => data += chunk);
         res.on('end', () => {
+          if (settled) return;
+          settled = true;
           if ((res.statusCode || 500) >= 400) {
             reject(new Error(`IBKR Gateway ${options.method || 'GET'} ${path} -> ${res.statusCode}: ${data.slice(0, 300)}`));
             return;
@@ -153,7 +167,14 @@ export class InteractiveBrokersWebApiAdapter implements BrokerPlugin {
           }
         });
       });
-      req.on('error', (e) => reject(new Error(`Cannot reach IBKR Client Portal Gateway at ${this.baseUrl} - is it running? (${e.message})`)));
+      req.setTimeout(timeoutMs, () => {
+        // Claim settlement BEFORE destroy(): req.destroy() emits 'error' synchronously,
+        // and the settled-guard would otherwise let that connection error overwrite the
+        // BROKER_TIMEOUT rejection (a timeout is outcome-UNKNOWN, never a connection failure).
+        fail(new Error(`BROKER_TIMEOUT: IBKR Gateway ${options.method || 'GET'} ${path} timed out after ${timeoutMs}ms with no response - outcome UNKNOWN, reconcile by clientOrderId, do not assume the order was not placed.`));
+        req.destroy();
+      });
+      req.on('error', (e) => fail(new Error(`Cannot reach IBKR Client Portal Gateway at ${this.baseUrl} - is it running? (${e.message})`)));
       if (bodyStr) req.write(bodyStr);
       req.end();
     });

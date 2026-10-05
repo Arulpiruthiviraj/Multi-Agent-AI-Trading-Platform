@@ -76,7 +76,7 @@ export const pullbackContinuation: StrategyDefinition = {
     const totalConditions = conditionsMet.length + conditionsFailed.length;
     const setupScore = scoreFromConditions(conditionsMet, totalConditions);
 
-    const maValue = trend.movingAverages.sma20;
+    const maValue = trend.movingAverages !== null ? trend.movingAverages.sma20 : null;
     const structuralStop = bullish ? trend.structure.lastSwingLow : trend.structure.lastSwingHigh;
     const target = bullish ? supportResistance.nearest.nearestResistance : supportResistance.nearest.nearestSupport;
 

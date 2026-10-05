@@ -70,17 +70,21 @@ export interface AvailabilityTagged<T> {
 
 /** Real high/low of the current session's bars within `windowMinutes` of the session start
  *  (default 30, i.e. the classic "opening range"). Honestly reports unavailable on daily-
- *  granularity bars rather than fabricating a range from a single daily candle. */
-export function openingRange(bars: Bar[], windowMinutes: number = 30): AvailabilityTagged<{ high: number; low: number }> {
+ *  granularity bars rather than fabricating a range from a single daily candle.
+ *  2026-10-04: optional `regularSessionStartMs` anchors the window at the real regular-session
+ *  open (e.g. 9:30 AM ET). Without it, the window anchors at the first bar of the UTC day -
+ *  wrong when premarket bars are included (a 4:00 AM bar is not the opening range). Callers
+ *  with session context should supply it; the module itself makes no timezone assumption. */
+export function openingRange(bars: Bar[], windowMinutes: number = 30, regularSessionStartMs?: number): AvailabilityTagged<{ high: number; low: number }> {
   if (looksDailyGranularity(bars)) {
     return { available: false, reason: 'Only daily-granularity bars available - opening range requires intraday bars.', data: null };
   }
   const days = groupBarsByUTCDay(bars);
   if (days.length === 0) return { available: false, reason: 'No bars.', data: null };
   const currentDay = days[days.length - 1];
-  const sessionStart = currentDay[0].timestamp;
+  const sessionStart = regularSessionStartMs ?? currentDay[0].timestamp;
   const windowEnd = sessionStart + windowMinutes * 60 * 1000;
-  const rangeBars = currentDay.filter(b => b.timestamp <= windowEnd);
+  const rangeBars = currentDay.filter(b => b.timestamp >= sessionStart && b.timestamp <= windowEnd);
   if (rangeBars.length === 0) return { available: false, reason: 'No bars within the opening-range window yet.', data: null };
   return { available: true, data: { high: Math.max(...rangeBars.map(b => b.high)), low: Math.min(...rangeBars.map(b => b.low)) } };
 }
@@ -191,7 +195,7 @@ export interface SupportResistanceFeatures {
  * it (every existing caller before this fix) preserves the exact prior behavior byte-for-byte -
  * openingRange(bars, ...) on daily bars, honestly reporting unavailable, exactly as before.
  */
-export function computeSupportResistanceFeatures(bars: Bar[], intradayBars?: Bar[]): SupportResistanceFeatures {
+export function computeSupportResistanceFeatures(bars: Bar[], intradayBars?: Bar[], regularSessionStartMs?: number): SupportResistanceFeatures {
   const currentPrice = bars.length ? bars[bars.length - 1].close : 0;
   const prevDay = previousDayLevels(bars);
   const lookback = quantExperimentalStrategies.thresholds.donchianPriorLookback;
@@ -217,7 +221,7 @@ export function computeSupportResistanceFeatures(bars: Bar[], intradayBars?: Bar
     fibonacci,
     recentSwings: swings,
     nearest: nearestSupportResistance(currentPrice, candidateLevels),
-    openingRange: openingRange(intradayBars ?? bars, orWindow),
+    openingRange: openingRange(intradayBars ?? bars, orWindow, regularSessionStartMs),
     priorChannel20: rollingHighLow(priorBars, lookback),
   };
 }

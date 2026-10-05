@@ -45,7 +45,13 @@ export const smcLiquiditySweep: StrategyDefinition = {
   applicableRegimes: ['BULLISH_TREND', 'BEARISH_TREND', 'SIDEWAYS_RANGE'],
 
   evaluate(ctx: StrategyContext): StrategyEvaluation {
-    const smc = ctx.smc ?? emptySmc();
+    // 2026-10-04 (degenerate-input hardening): ctx.smc may be an empty/partial object
+    // (older fixtures, partial pipeline output). A missing sub-shape must fail closed to
+    // emptySmc() - never throw on `smc.liquidity.buySide` of undefined.
+    const raw = ctx.smc;
+    const smc = raw?.liquidity && raw?.sweep && raw?.structure && raw?.orderBlock && raw?.fairValueGap && raw?.displacement && raw?.trap
+      ? raw
+      : emptySmc();
     const w = smcConfluence;
     const conditionsMet: string[] = [];
     const conditionsFailed: string[] = [];

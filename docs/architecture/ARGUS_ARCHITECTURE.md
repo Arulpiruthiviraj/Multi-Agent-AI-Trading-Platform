@@ -28,6 +28,66 @@ All 5 CORE Java strategies re-port the `triggerMet` contract (parity tests asser
 
 No approval threshold, consensus math, RiskEngine gate, or OMS behavior was changed.
 
+## 2026-10-04 (evening): backlog defect remediation and degenerate-input hardening
+
+Three verified backlog defects and the remaining quant-repair items from the 2026-10-04 audit
+pass, fixed without touching the protected trading spine, consensus math, or any approval
+threshold.
+
+**PortfolioMonitor per-holding isolation (P2).** The holdings loop previously ran under one
+outer try/catch: a single holding's failure (e.g. `resolveOpeningTradeForLiveExit()` throwing
+on a corrupt row) skipped stop/target review for every holding after it that cycle. Each
+holding now gets its own try/catch — the failure is logged, a WARNING portfolio decision is
+recorded for that symbol, and the loop continues. The outer catch remains as the backstop for
+failures outside the loop (e.g. the initial holdings query).
+
+**IBKR Web API request timeout (P2).** `InteractiveBrokersWebApiAdapter`'s `https.request()`
+had no timeout: a Gateway that accepted the connection but never responded hung the promise
+forever, including `placeOrder`. `config/ibkrConnection.json:webApiRequestTimeoutMs` (30s,
+config-loaded with a 30s fallback) now bounds every request. Timeout rejects as
+BROKER_TIMEOUT with outcome UNKNOWN — reconcile by `clientOrderId`, never assume the order
+was not placed, never auto-retry. A `settled` guard plus fail-before-destroy ordering
+guarantees the late socket error from `req.destroy()` cannot overwrite the timeout rejection.
+OMS's existing "timeout stays PENDING / UNKNOWN, never FILLED" invariant is unchanged.
+
+**Broker buying-power TOCTOU (P2/P3).** Risk evaluations are serialized by the
+`evaluationQueue` mutex, but broker order placement sits outside it: two approved BUYs could
+each observe the same unchanged broker buying-power snapshot before either filled. The
+settings-budget side of this race was already closed (gate 23 `argus_capital_allocation`
+with DB-backed `pendingBuys` + `PendingCapitalReservations`). New
+`src/server/engines/buyingPowerReservations.ts` closes the broker side the same way: a
+durable, DB-derived reservation (sum of quantity×price over non-terminal BUY orders,
+excluding REPLAY/HISTORICAL_REPLAY, NULL environment counted as live like gate 23's own
+filter) is subtracted from the fresh broker buying-power snapshot before sizing and gates.
+It can only ever reduce buying power, never increase it. Unknown/reconciliation-required
+orders keep their reservation (fail-closed).
+
+**Opening-range session anchoring.** `openingRange()` anchored its window at the first bar
+of the UTC day — wrong when premarket bars are included (a 4:00 AM bar is not the opening
+range). It now takes an optional `regularSessionStartMs`; new `regularSessionOpenMs()` in
+`src/server/replay/marketSession.ts` computes the real regular-session open
+(`replaySafety.regularSessionStartMinutes`) in any IANA timezone, DST-correct via Intl with
+no hardcoded EST/EDT offset. `CampaignOpeningSurge` (1Min bars include premarket) and
+`QuantSignalAgent` (via `computeIntradayFetchWindow`, which already computed the session
+open internally) now supply it. Omitted, behavior is byte-for-byte unchanged.
+
+**Degenerate-input hardening (12 real defects).** A 421-case suite
+(`degenerateInputs.test.ts`) feeds null/NaN/missing ATR, DMI, MACD, VWAP, moving averages,
+RSI, Keltner, opening range, prior channel, previous-day levels, relative strength, and SMC
+context to all 21 strategies: none may throw, none may return an actionable evaluation.
+Twelve failures were real — `smcLiquiditySweep` on empty `{}`, `trendFollowing` /
+`oscillatorMomentum` on null MACD, five VWAP consumers on null VWAP, four strategies on null
+movingAverages — each fixed with a null-guard that fails the dependent condition closed
+(never a fabricated signal). Defense-in-depth: `StrategyEngine.evaluateAll()` now isolates
+each strategy in its own try/catch; a throwing strategy fails closed (triggerMet=false,
+confidence 0, error stated in conditionsFailed) instead of aborting every other strategy's
+evaluation that cycle.
+
+No strategy, indicator, or quant calculation was added; per the Java Engine Authority
+(AGENTS.md rule 13) these are bug fixes to existing TS calculations with no Java
+counterpart (or, for the five CORE names, TS-side fixes recorded as Java migration
+candidates — Java compilation remains unverified on this host).
+
 ## 2026-10-04: remaining forensic correctness and operations fixes
 
 The read-only `/api/v2/quant-core/catalog` route resolves its configuration dependencies when

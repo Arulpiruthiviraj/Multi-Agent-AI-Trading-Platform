@@ -31,6 +31,7 @@ import { applyRestrictedLiveCaps } from './RestrictedLiveMode';
 import { applySubordinateAssetNotionalCap } from '../multiAsset/ideaEligibility';
 import { snapshotCapital, evaluateAllocationGuard } from './CapitalAllocation';
 import { reservePendingCapital, releasePendingCapitalReservation, snapshotReservedNotional } from './PendingCapitalReservations';
+import { getReservedBuyNotional } from './buyingPowerReservations';
 import { evaluateDailyBuyNotional, resolveDailyBuyNotionalCap, sumDailyBuyNotional } from './DailyBuyNotional';
 import { campaignVelocityMaxTradeDollars } from '../services/campaignIntraday';
 import { tradingSafety, portfolioRiskPctForLevel, isExtendedHoursExecutionEnabled } from '../config/tradingSafety';
@@ -483,7 +484,15 @@ export class RiskEngine {
             }
             recordGate(INVALID_ACCOUNT_EQUITY, true, { equity: portfolio.equity });
             accountEquity = portfolio.equity;
-            buyingPower = isPositiveFiniteMoney(portfolio.buyingPower) ? portfolio.buyingPower : 0;
+            // 2026-10-04 P2/P3: subtract the buying-power reservation (durable, DB-derived
+            // sum of non-terminal BUY notional) from the fresh broker snapshot. Closes the
+            // TOCTOU where two serialized evaluations could each approve $X against the same
+            // unchanged snapshot before either order filled. Only ever reduces buying power.
+            const reservedBuyNotional = await getReservedBuyNotional();
+            buyingPower = Math.max(0, (isPositiveFiniteMoney(portfolio.buyingPower) ? portfolio.buyingPower : 0) - reservedBuyNotional);
+            if (reservedBuyNotional > 0) {
+              recordGate('buying_power_reservation', true, { reservedBuyNotional, buyingPowerAfterReservation: buyingPower });
+            }
 
             // 2a. Daily loss circuit breaker - tracks real broker equity against a start-of-day
             // baseline captured the first time we evaluate risk each calendar day. Uses the real

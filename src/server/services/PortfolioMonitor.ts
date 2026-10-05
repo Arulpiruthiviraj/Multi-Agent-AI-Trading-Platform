@@ -202,6 +202,11 @@ export class PortfolioMonitorWorker {
       const todayNy = getTradingDateStr();
 
       for (const holding of holdings) {
+        // Per-holding isolation (2026-10-04): one holding's failure (e.g. the opening-trade
+        // DB lookup throwing) must not skip stop-loss/take-profit review for every holding
+        // after it. Each holding gets its own try/catch; the outer catch remains as the
+        // backstop for failures outside the loop (e.g. the initial holdings query).
+        try {
         if (holding.quantity <= 0) continue;
 
         ensureHoldingSubscribed(holding.symbol);
@@ -391,6 +396,15 @@ export class PortfolioMonitorWorker {
             pnlPct: PnL,
             currentPrice: currentLivePrice,
             reason: 'No hard-exit trigger this cycle. HOLD is valid. Entry-style 2-agent consensus is not required for this HOLD.',
+          });
+        }
+        } catch (holdingError) {
+          console.error(`[PortfolioWorker] Error reviewing ${holding.symbol} - skipping to next holding:`, holdingError);
+          recordPortfolioDecision({
+            symbol: holding.symbol,
+            state: 'WARNING',
+            currentPrice: null,
+            reason: 'Per-holding review threw this cycle; holding skipped, other holdings reviewed normally.',
           });
         }
       }

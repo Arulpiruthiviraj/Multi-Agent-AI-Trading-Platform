@@ -10,7 +10,7 @@ With an authenticated, reachable engine in PAPER, trading paused and Autobot dis
 the existing settings API. This does not resume trading or reconcile legacy positions. Complete
 the inventory/baseline checks in `docs/architecture/ARGUS_ARCHITECTURE.md` before a PAPER session.
 
-**Harness (CODE-VERIFIED 2026-09-01):** `npm run lint` exit 0 · `npm test` **428** files / **2889** tests · Node **≥24.18** (package `engines.node`) · schema **74** SQLite tables.
+**Harness (CODE-VERIFIED 2026-10-04):** `npm run lint` exit 0 · `npm test` **633** files / **5316** tests (5307 passed, 1 skipped; 7 failures reproduce identically on the base commit — pre-existing, unrelated to this change set) · Node **≥24.18** (package `engines.node`) · schema **87** SQLite tables.
 
 ### Why "ARGUS"?
 

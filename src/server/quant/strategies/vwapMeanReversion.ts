@@ -27,7 +27,8 @@ export const vwapMeanReversion: StrategyDefinition = {
     const { volume, trend, priceAction, regime, volatility, supportResistance, currentPrice } = ctx;
     // A "session VWAP" built from daily bars degenerates to today's single-bar typical price -
     // the extension read is only real with genuine intraday session VWAP.
-    const genuineVwap = volume.vwap.intradayBased && volume.vwap.vwap !== null;
+    // 2026-10-04 (degenerate-input hardening): null VWAP fails closed, never throws.
+    const genuineVwap = volume.vwap !== null && volume.vwap.intradayBased && volume.vwap.vwap !== null;
     const dist = genuineVwap ? volume.vwap.distancePct : null;
     const extendedDown = dist !== null && dist <= -t.vwapReversionDistancePct;
     const extendedUp = dist !== null && dist >= t.vwapReversionDistancePct;
@@ -67,8 +68,8 @@ export const vwapMeanReversion: StrategyDefinition = {
     check(
       bullish ? 'VWAP reclaim print (or still below waiting reclaim)' : 'VWAP rejection print (or still above waiting rejection)',
       bullish
-        ? volume.vwap.event === 'RECLAIM' || extendedDown
-        : volume.vwap.event === 'REJECTION' || extendedUp,
+        ? (volume.vwap !== null && volume.vwap.event === 'RECLAIM') || extendedDown
+        : (volume.vwap !== null && volume.vwap.event === 'REJECTION') || extendedUp,
     );
 
     if (bullish && regime.regime === 'BEARISH_TREND') {

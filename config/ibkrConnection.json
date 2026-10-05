@@ -12,6 +12,8 @@
   "preferredAccountId": "DUR959160",
   "webApiGatewayUrlDefault": "https://localhost:5000/v1/api",
   "openBrowserOnWebApiStartup": false,
+  "_webApiRequestTimeoutComment": "2026-10-04 remediation: the Web API adapter's https.request previously had no timeout at all - a Gateway that accepts the connection but never responds would leave placeOrder/cancelOrder hanging forever. Each request now fails closed after this long with a BROKER_TIMEOUT error; order placement treats it as UNKNOWN (never FAILED), reconciling by clientOrderId. Never auto-retried.",
+  "webApiRequestTimeoutMs": 30000,
   "_marketDataRejectionComment": "2026-09-20 remediation for the Sept 18 rejection-triggered subscription desync (docs/audits): a reqMktData rejected with 354/10089 previously left the symbol permanently marked locally as already-subscribed, so it was never retried without an explicit external trigger. These keys govern the bounded per-symbol retry/backoff that replaces that silent-forever behavior. Deliberately a slower, coarser schedule than networkReconnectBackoffMs (transport reconnect) - an entitlement rejection is a different, slower-changing condition than a dropped socket.",
   "marketDataRejectionRetryableCodes": [354, 10089],
   "marketDataRejectionRetryBackoffMs": [60000, 120000, 300000, 600000, 900000],

@@ -33,6 +33,21 @@ never average-cost-as-price or invented zero P&L. Spread evidence requires indep
 BID and ASK. Shutdown requests share one drain; only successful completion marks the session
 clean, and unreadable existing markers fail closed. The owner-requested PAPER allocation profile
 uses the existing settings API with paused/disabled prerequisites; a saved profile is not activation.
+
+**2026-10-04 (evening) backlog and quant hardening:** PortfolioMonitor reviews each holding in its
+own try/catch — one holding's failure no longer skips stop/target review for the rest.
+`InteractiveBrokersWebApiAdapter` has a fail-closed request timeout
+(`config/ibkrConnection.json:webApiRequestTimeoutMs`, 30s): a silent Gateway rejects as
+BROKER_TIMEOUT with outcome UNKNOWN (reconcile by clientOrderId, never auto-retry); the late
+socket error from `req.destroy()` cannot overwrite the timeout rejection. RiskEngine subtracts a
+DB-derived buying-power reservation (non-terminal BUY notional, replay excluded) from the fresh
+broker snapshot before sizing — two serialized approvals can no longer spend the same buying
+power twice; the reservation can only reduce buying power, never increase it. All 21 strategies
+null-guard degenerate inputs (null MACD/VWAP/DMI/moving averages, empty SMC) and fail closed;
+`StrategyEngine.evaluateAll()` isolates each strategy so one throwing can never abort the rest.
+`openingRange()` anchors at the real 9:30 ET session open (DST-correct) instead of the first
+UTC-day bar when premarket bars are present. No threshold, consensus weight, gate, or OMS
+behavior was changed. See `docs/architecture/ARGUS_ARCHITECTURE.md` § 2026-10-04 (evening).
 See `docs/architecture/ARGUS_ARCHITECTURE.md` for this and the October 3 fill-backed inventory
 contract, including migration 0082's unresolved legacy-baseline deployment constraint.
 
@@ -393,7 +408,7 @@ Loaded via `src/server/config/loadRepoConfigJson.ts`. Missing required keys **fa
 |---|---|
 | AlpacaBroker | Paper or live REST; only fully unattended broker. TLS via `node:https` + system CA (DEF-10/11). Timeouts/retry/circuit breaker in `tradingSafety.json`. |
 | IBGatewaySocketAdapter (`ibkr_gateway`) | TWS/IB Gateway socket API (paper 4002 / 7497). No official JS client — direct TCP protocol implementation. **The currently-active broker in this deployment** (`settings.selectedBroker`). Cannot place Canadian-exchange equities (IIROC 3200A.1(b)(i)). `U*` live / `DU*` paper — P0.2 fail-closes classification mismatch. `IbkrSocketSession` gained a real reconnect-with-backoff (2026-09-06, `ARGUS_TRADING_ACTIVITY_FORENSIC_AUDIT.md`) — previously, unlike `MarketDataWorker.ts`'s Alpaca WebSocket path, a dropped or never-established connection stayed dead until a full process restart (reproduced live: IB Gateway Desktop was found not running mid-session). Reuses the SAME `ReconnectBackoff` utility, same schedule (`networkReconnectBackoffMs`). **Does not, and cannot, launch or log into IB Gateway Desktop itself** — that remains a manual step requiring the operator's own interactive 2FA; the fix only ensures Argus keeps trying once Gateway is reachable again instead of requiring a restart to notice. |
-| InteractiveBrokersWebApiAdapter (`ibkr_web`) | Client Portal Web API. Local Gateway + human 2FA ~24h (`requiresManualReauth: true`). Cannot place Canadian-exchange equities (IIROC 3200A.1(b)(i)). Gateway WAF 403 if no `User-Agent` — adapter sets one. `U*` live / `DU*` paper — adapter trusts Gateway session; P0.2 fail-closes classification mismatch. `InteractiveBrokersAdapter.ts` is a compatibility facade delegating to this or `IBGatewaySocketAdapter` by mode — currently unreferenced (BrokerManager registers both real adapters directly). |
+| InteractiveBrokersWebApiAdapter (`ibkr_web`) | Client Portal Web API. Local Gateway + human 2FA ~24h (`requiresManualReauth: true`). Cannot place Canadian-exchange equities (IIROC 3200A.1(b)(i)). Gateway WAF 403 if no `User-Agent` — adapter sets one. `U*` live / `DU*` paper — adapter trusts Gateway session; P0.2 fail-closes classification mismatch. Fail-closed per-request timeout (`config/ibkrConnection.json:webApiRequestTimeoutMs`, 30s, 2026-10-04): a silent Gateway rejects as BROKER_TIMEOUT with outcome UNKNOWN — reconcile by `clientOrderId`, never auto-retry; timeout stays PENDING/UNKNOWN in OMS, never FILLED. `InteractiveBrokersAdapter.ts` is a compatibility facade delegating to this or `IBGatewaySocketAdapter` by mode — currently unreferenced (BrokerManager registers both real adapters directly). |
 | CoinbaseBroker | Real Advanced Trade CDP-JWT. `placeOrder()` **refuses in paper** (no sandbox). Live requires LIVE_ARM. Not funded-account verified here. |
 | QuestradeBroker | Read-only OAuth2. `placeOrder()`/`modifyOrder()` throw. Never the order-placing broker. |
 
@@ -405,13 +420,13 @@ Encryption: AES-256-CBC (`ENCRYPTION_SECRET` or `data/.encryption_key`). Export 
 
 Daily buy notional: paper uses `maxDailyBuyNotionalDollars`; LIVE always `restrictedLiveMaxDailyBuyNotionalDollars`. Distinct from the daily-loss kill-switch.
 
-Position sizing: shared `PositionSizing.ts` (live + `BacktestEngine`). Default `FIXED_DOLLAR` (`settings.maxTradeSize`, fallback `$3000`). Optional `PERCENT_OF_EQUITY`. Zero-quantity `CLAMPED` results are **FAIL**, never silent pass. LIVE unknown sizing inputs fail-closed.
+Position sizing: shared `PositionSizing.ts` (live + `BacktestEngine`). Default `FIXED_DOLLAR` (`settings.maxTradeSize`, fallback `$3000`). Optional `PERCENT_OF_EQUITY`. Zero-quantity `CLAMPED` results are **FAIL**, never silent pass. LIVE unknown sizing inputs fail-closed. Since 2026-10-04 RiskEngine subtracts a DB-derived buying-power reservation (non-terminal BUY notional, replay excluded) from the fresh broker snapshot before sizing/gates — closes the TOCTOU where two serialized approvals could spend the same buying power twice; the reservation can only reduce buying power, never increase it.
 
 Kelly/EV (`quant/risk/ExpectedValue.ts`) can suppress Quant **ideas** only. RiskEngine does **not** size from Kelly. Kelly refuses &lt; 20 closed trades; fraction capped at 10% of capital.
 
 ## Quant (additive, default off)
 
-`src/server/quant/`. Five **CORE** in live `evaluateAll()`: `MOMENTUM_BREAKOUT`, `PULLBACK_CONTINUATION`, `MEAN_REVERSION`, `TREND_FOLLOWING`, `RANGE_REVERSION`. Experimental (UNVALIDATED; live only if that env is `'true'` at **call time**): includes `SMC_LIQUIDITY_SWEEP`, VWAP/ORB/Donchian/MA/oscillator/BB/gap/Fib/volume/SR/RS rotation, `STATISTICAL_MEAN_REVERSION`, others in `quantExperimentalStrategies.json`. `findStrategy(id)` searches core then experimental so **backtests work without the live flag**. Off-regime confidence is discounted (`regimeMismatchConfidenceMultiplier`), never zeroed.
+`src/server/quant/`. Five **CORE** in live `evaluateAll()`: `MOMENTUM_BREAKOUT`, `PULLBACK_CONTINUATION`, `MEAN_REVERSION`, `TREND_FOLLOWING`, `RANGE_REVERSION`. Experimental (UNVALIDATED; live only if that env is `'true'` at **call time**): includes `SMC_LIQUIDITY_SWEEP`, VWAP/ORB/Donchian/MA/oscillator/BB/gap/Fib/volume/SR/RS rotation, `STATISTICAL_MEAN_REVERSION`, others in `quantExperimentalStrategies.json`. `findStrategy(id)` searches core then experimental so **backtests work without the live flag**. Off-regime confidence is discounted (`regimeMismatchConfidenceMultiplier`), never zeroed. Since 2026-10-04 every evaluation carries required `triggerMet` (the defining event fired or not); `applyTriggerGate()` caps confidence at `triggerAbsentConfidenceCap` (0.4, below the trade bar) when absent — setup quality and trigger eligibility are separate. Degenerate inputs (null MACD/VWAP/DMI/indicators) fail closed per-strategy, and `evaluateAll()` isolates each strategy so one throwing can never abort the rest. `openingRange()` anchors at the real 9:30 ET session open when supplied, not the first UTC-day bar.
 
 `NOT_SUPPORTED` (never fill zeros): breadth, options, L2, volume profile, TSI, anchored VWAP, pairs, CAD FX, Wheel CSPs / 0DTE / GEX / DOM/CVD.
 
@@ -601,7 +616,7 @@ Backup: `GET /api/v1/system/export-db`. Restore: `POST /api/v1/system/import-db`
 | Quant default | OFF (`QUANT_ENGINE_ENABLED`) |
 | CORE strategies | UNTESTED on REAL_MARKET_DATA NEXT_BAR_OPEN |
 | Mandatory LIVE gates | Re-check `evaluateLiveReadiness()` — historically **6 / 28 PASS** family (`SOFTWARE_ORDER_PATH`, `EXECUTION_OMS`, `RISK_GATES`, `RESEARCH_WAREHOUSE`, `ZERO_COST_RESEARCH`, `QUANT_DEFAULT`); result remains **`LIVE_NO_GO`** while paper floors fail |
-| Harness (2026-09-01) | `npm test` **428** files / **2889** tests, all passing; `tsc --noEmit` clean; Node **24.18.0** |
+| Harness (2026-10-04) | `npm test` **633** files / **5316** tests (5307 passed, 1 skipped; 7 failures reproduce identically on the base commit — pre-existing, unrelated to this change set); `tsc --noEmit` clean; Node **24.18.0** |
 
 Soak floors (`config/researchSafety.json`): `minPaperTrades` 30, `minPaperSessions` 10, `minPaperCalendarDays` 30, `minPaperProfitFactor` 1.2, `minPaperExpectancy` 0, `minOosTrades` 30. REPLAY / EXTERNAL_SYNC / DIAGNOSTIC / shadow / telemetry pulse **do not count**. Script: `npx tsx scripts/organic_paper_soak_status.ts` (closes SQLite + `process.exit` — must not linger as a second DB writer).
 

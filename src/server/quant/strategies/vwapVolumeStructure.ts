@@ -34,7 +34,9 @@ export const vwapVolumeStructure: StrategyDefinition = {
     const contradictions: string[] = [];
     const check = (name: string, met: boolean) => (met ? conditionsMet.push(name) : conditionsFailed.push(name));
 
-    const dist = volume.vwap.intradayBased ? volume.vwap.distancePct : null;
+    // 2026-10-04 (degenerate-input hardening): null VWAP fails closed, never throws.
+    const vwapInfo = volume.vwap;
+    const dist = vwapInfo !== null && vwapInfo.intradayBased ? vwapInfo.distancePct : null;
     const absDist = dist !== null ? Math.abs(dist) : null;
 
     check(
@@ -65,20 +67,20 @@ export const vwapVolumeStructure: StrategyDefinition = {
         : priceAction.candlestick === 'SHOOTING_STAR' || priceAction.candlestick === 'BEARISH_ENGULFING',
     );
 
-    if (bullish && volume.vwap.event === 'REJECTION') {
+    if (bullish && vwapInfo !== null && vwapInfo.event === 'REJECTION') {
       contradictions.push('VWAP REJECTION event while scoring a long pullback — structure may already be failing.');
     }
-    if (!bullish && volume.vwap.event === 'RECLAIM') {
+    if (!bullish && vwapInfo !== null && vwapInfo.event === 'RECLAIM') {
       contradictions.push('VWAP RECLAIM event while scoring a short pullback — structure may already be failing.');
     }
-    if (!volume.vwap.intradayBased) {
+    if (vwapInfo === null || !vwapInfo.intradayBased) {
       contradictions.push('No genuine session VWAP (real intraday bars required) — the VWAP anchor is not real on this bar set.');
     }
 
     const totalConditions = conditionsMet.length + conditionsFailed.length;
     const setupScore = scoreFromConditions(conditionsMet, totalConditions);
     const atr = volatility.atr;
-    const vwap = volume.vwap.vwap;
+    const vwap = vwapInfo !== null ? vwapInfo.vwap : null;
 
     return {
       strategy: 'VWAP_VOLUME_STRUCTURE',
@@ -95,7 +97,7 @@ export const vwapVolumeStructure: StrategyDefinition = {
         'Market structure CHoCH against the side.',
         `RVOL collapses below follow-through (${t.rvolContinuation}x).`,
       ],
-      stop: atr && vwap !== null
+      stop: atr && vwapInfo !== null
         ? {
             price: bullish ? Math.min(vwap, currentPrice) - atr : Math.max(vwap, currentPrice) + atr,
             basis: '1x ATR beyond the nearer of VWAP and current price.',
