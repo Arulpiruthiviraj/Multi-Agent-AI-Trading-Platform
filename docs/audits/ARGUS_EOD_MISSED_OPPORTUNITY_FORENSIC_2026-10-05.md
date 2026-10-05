@@ -34,8 +34,9 @@ shows at least three independent, genuine findings, each affecting a different p
    assessments) — it is conclusively not the bottleneck.**
 
 None of today's headline movers (PTC, RXO, XP, PCVX, NVDA) represent a case of "Argus saw a clear winner and
-RiskEngine or OMS blocked it." The real story is upstream: a subscription-scheduling capacity issue (PTC), a
-news-ingestion coverage gap (PCVX), and — for every symbol that *did* get a fair look (XP, TSLA, META, NVDA)
+RiskEngine or OMS blocked it." The real story is upstream: a discovery-to-challenger-eligibility latency
+issue (PTC — see `ARGUS_ADMITTED_TO_CHALLENGER_FORENSIC_2026-10-05.md` for the full trace and MPWR's more
+severe control case), a news-ingestion coverage gap (PCVX), and — for every symbol that *did* get a fair look (XP, TSLA, META, NVDA)
 — evidence that never became strong or independent enough to approve.
 
 ## Section 1 — Current system state (frozen before analysis)
@@ -221,7 +222,7 @@ classification; today's fuller data does not change that finding.
 
 | Symbol | Day move | Catalyst | Premarket move | RTH opportunity | Discovered | Subscribed | Quant-evaluated | Valid trigger / idea | Consensus | Risk | Why missed |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| PTC | +33% | M&A (Schneider, $205/sh) | Yes, most of move | Minimal (arb-capped) | Yes (88x) | **No** | **No** | No | No | Not reached | Stale-reference SPREAD false-reject; also likely `CORRECTLY_IGNORED` as M&A arb |
+| PTC | +33% | M&A (Schneider, $205/sh) | Yes, most of move | Minimal (arb-capped) | Yes (94x) | **No** | **No** | No | No | Not reached | **Corrected:** SPREAD rejections were real IEX-only bid/ask, not a defect. Confirmed root cause: never reached the scored challenger pool until 10:37 ET (catalyst known 08:16 ET) — a discovery-to-challenger-eligibility latency gap, see `ARGUS_ADMITTED_TO_CHALLENGER_FORENSIC_2026-10-05.md`. By then its own move was over, so also likely `CORRECTLY_IGNORED` as M&A arb regardless |
 | RXO | +22%+ | M&A (C.H. Robinson) | Yes, most of move | Minimal (arb-capped) | Yes (107x) | Once | **No** | No | No | Not reached | Admitted/subscribed but never reached evaluation; also likely `CORRECTLY_IGNORED` as M&A arb |
 | PCVX | +32–54% | Phase 3 trial (binary) | Yes, nearly all | Unclear — not reconstructed | Barely (1x) | **No** | **No** | No | No | Not reached | `MISSED_DISCOVERY` + news-ingestion gap |
 | XP | +33% | Brazil election (macro) | Yes, most of move | Some | Yes (131x) | Yes | Yes (59x) | Yes (58 ideas) | Yes (rejected, 0.68 max) | Not reached | `MISSED_CONSENSUS` (legitimate, insufficient evidence) |
@@ -254,8 +255,11 @@ evidence). RiskEngine and OMS/broker lost nothing today because nothing reached 
 1. **CONSENSUS_CALIBRATION / INSUFFICIENT_INDEPENDENCE** — for every symbol that reached real, repeated
    evaluation (XP, TSLA, META, NVDA), the ceiling was weak, single-agent-dominated evidence. This is the
    larger-volume failure (4,427 real rounds, 0 approved).
-2. **DISCOVERY_DATA_QUALITY (stale reference pricing) + CATALYST_DISCOVERY (PCVX gap)** — smaller in volume
-   but directly explains why 2 of the 5 headline benchmark names (PTC, PCVX) barely got a fair look at all.
+2. **DISCOVERY_TO_CHALLENGER_ELIGIBILITY_LATENCY (PTC, and more severely MPWR) + CATALYST_DISCOVERY
+   (PCVX gap)** — not a data-quality defect (that claim is retracted); smaller in volume than #1 but
+   directly explains why PTC and PCVX barely got a fair look. See
+   `ARGUS_ADMITTED_TO_CHALLENGER_FORENSIC_2026-10-05.md` for the full root-cause trace, including MPWR's
+   more diagnostic case (76 admissions, zero challenger-pool appearances all day).
 
 RiskEngine, OMS, execution: **not implicated** — zero evidence reached them.
 
