@@ -169,10 +169,26 @@ upon to self-recover from an unattended death today unless the watchdog is start
   as a FAIL per the "do not hide failing tests" rule, not fixed silently during this read-only audit.
 - **`npm run build`:** not run this pass (tsc failure makes a clean build unlikely without the above fixed;
   not attempted to avoid conflating a UI build issue with trading-safety readiness).
-- **`npm test` (full vitest suite):** was still executing in the background at the time this report was
-  written and had not yet produced output. **Exact pass/fail/skip counts are UNKNOWN as of this writing** —
-  this report will not claim a count it does not have. Re-run `npm test` and check before resuming if this
-  section has not been updated with real numbers.
+- **`npm test` (full vitest suite): completed after this report was first drafted — updating with real
+  numbers now rather than leaving the earlier UNKNOWN in place.** `3 failed | 633 passed (636 files)`,
+  `21 failed | 5321 passed (5342 tests)`, duration 701.9s. **All 21 failures are in one file,
+  `src/server/services/ChiefTraderAgent.test.ts`**, every one with the identical root cause:
+  `TypeError: db.transaction is not a function` thrown from `recordConsensusTransaction()`
+  (`src/server/core/TransactionRegistry.ts:88`), called from `ChiefTraderAgent.evaluateConsensusSerialized`.
+  That function was recently changed to wrap its three consensus-record inserts in one atomic
+  `db.transaction(...)` call (replacing three sequential autocommits — see the function's own comment);
+  the real production `db` (drizzle-orm's better-sqlite3 adapter, `src/server/db/index.ts:87`) genuinely
+  exposes `.transaction()`, but this test file's `mockDb` (hand-built via `vi.mock('../db', ...)`,
+  `ChiefTraderAgent.test.ts:3-22`) was never updated to add it. **Classification: `TEST_DEBT`, not
+  `REAL_PRODUCTION_DEFECT`** — the production codepath is very likely sound (standard, documented
+  drizzle-orm API), but this is a real and currently-uncorrected loss of test coverage over exactly the
+  consensus-serialization/recording logic that sits at the center of the live decision spine (ChiefTrader
+  mints `transactionId` here). These 21 tests are not currently exercising that logic at all; they are
+  failing before their assertions run. **Recommended fix (not applied during this read-only audit):** add a
+  synchronous `transaction: (cb) => cb(mockDb)` (or equivalent) to the test's `mockDb`, matching
+  better-sqlite3's synchronous transaction semantics — a test-only change, no production code touched.
+  This should be done and the suite re-run before this file's coverage is trusted again, independent of
+  today's resume decision.
 - **Java (`quant-core-java`, `mvn test`): PASS.** Exit code 0. Quiet-mode build produced real strategy/engine
   log output (GARCH fits, HMM regime, ensemble combination, strategy evaluations, benchmark timings:
   `p50=8399us p95=14560us max=16517us` for the institutional-factors HTTP round trip) but no per-module
@@ -252,7 +268,7 @@ observe.
 | BROKER | PASS (IBKR paper account confirmed, DU-prefix) |
 | JAVA PARITY | PASS (`mvn test` exit 0) |
 | SYNTHETIC CERT | NOT_RUN |
-| TEST SUITE | **FAIL (tsc: 10 UI-only errors); vitest full run: UNKNOWN, still executing at time of writing** |
+| TEST SUITE | **FAIL (tsc: 10 UI-only errors; vitest: 21/5342 tests failed, all one file, TEST_DEBT — stale mock missing `db.transaction`, not a production defect)** |
 
 ## 33. Hard blockers (must all clear before resume)
 
@@ -317,6 +333,10 @@ Unchanged: EDGE EVIDENCE = WEAK, EXPECTED VALUE = INSUFFICIENT_EVIDENCE. Not rev
 24. Does Java parity pass? **YES** (`mvn test` exit 0)
 25. Does full synthetic certification pass? **NOT_RUN**
 26. Are there any unresolved P0 defects? **NO** new ones found; OKTA is a known, documented legacy-baseline gap, not a new P0.
-27. Are there any execution-critical P1 defects? **NO** new ones found this pass.
+27. Are there any execution-critical P1 defects? **NO** new ones found this pass. One real but non-execution
+    finding: `ChiefTraderAgent.test.ts`'s mock `db` doesn't implement `.transaction()`, so 21 tests covering
+    consensus serialization/recording currently fail before their real assertions run (`TEST_DEBT`, the
+    production `db` object genuinely has `.transaction()` — see §18). This is a coverage gap worth closing
+    before trusting that file's suite again, not a live-path defect.
 28. Is Argus safe for supervised PAPER today? **NO, not yet** — safe to leave paused; not safe to resume until the three hard blockers in §33 are cleared.
 29. Should the operator resume trading? **NO.**
