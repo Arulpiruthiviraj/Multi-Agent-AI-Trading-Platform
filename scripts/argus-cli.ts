@@ -408,6 +408,9 @@ export function parseFlags(argv: string[]) {
     // itself already checks (reconciliation/gates still apply server-side) - this flag only
     // decides whether `start` calls it at all. Never implied by --prod/--dev/--headless.
     enableTrading: argv.includes('--enable-trading'),
+    // 2026-10-05: lets `start` skip the watchdog auto-start (which is otherwise on by default)
+    // for maintenance/debug sessions where an unsupervised engine is intentional.
+    noWatchdog: argv.includes('--no-watchdog'),
   };
 }
 
@@ -637,6 +640,19 @@ async function startEngine() {
   // QuantCoreBridge picture `argus-cli health` gives, right here, instead of requiring a separate
   // manual follow-up command to see it.
   await printFullHealthReport();
+  // 2026-10-05 (operator request): starting the app also starts the watchdog, so there is never
+  // a running engine with no supervisor. startWatchdog() is idempotent (no-op if already running).
+  // Opt out with --no-watchdog for maintenance/debug sessions.
+  if (!flags.noWatchdog) {
+    try {
+      await startWatchdog();
+    } catch (e: any) {
+      console.error(JSON.stringify({
+        ok: false,
+        message: `Engine started but watchdog failed to start: ${e.message || e}. Engine is running UNSUPERVISED - start the watchdog manually with: argus watchdog-start`,
+      }, null, 2));
+    }
+  }
 }
 
 async function stopEngine() {
@@ -925,7 +941,7 @@ export const COMMAND_HELP: Record<string, string> = {
   'version': 'Usage: argus version\nPrint CLI version and the API endpoint in use.',
   'login': 'Usage: argus login\nAuthenticate the CLI. Reads ARGUS_CLI_USER + ARGUS_CLI_PASSWORD (or AUTH_USERNAME + AUTH_PASSWORD) from the environment and stores a session cookie. The password is never printed.',
   'logout': 'Usage: argus logout\nClear the stored CLI session.',
-  'start': 'Usage: argus start [--enable-trading] [--dev]\nStart the Argus engine (headless daemon). Use `argus help` / ./argus for process-mode details.',
+  'start': 'Usage: argus start [--enable-trading] [--dev] [--no-watchdog]\nStart the Argus engine (headless daemon). The watchdog supervisor auto-starts too unless --no-watchdog is given. Use `argus help` / ./argus for process-mode details.',
   'stop': 'Usage: argus stop\nStop the Argus engine gracefully (waits for /health to stop answering).',
   'restart': 'Usage: argus restart\nStop then start the engine.',
   'watchdog-start': 'Usage: argus watchdog-start\nStart the detached auto-restart supervisor.',
