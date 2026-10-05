@@ -80,11 +80,13 @@
  *    per-transaction suffixed rows (`{accession}#0`, `{accession}#1`, ...),
  *    so a re-scrape never duplicates. onConflictDoNothing() is belt-and-suspenders.
  *
- * 6. Bounded work per cycle: max 5 recent filings per symbol.
- *    The submissions API returns up to 1,000 recent filings per CIK. We only
- *    examine the 5 most recent because (a) older filings were either already
- *    ingested or are too stale to matter for a 2-day-filing-lag signal, and
- *    (b) unbounded XML fetching per symbol could turn one cycle into hours.
+ * 6. Bounded work per cycle: walk back to the last-seen accession (max 50 Form 4s).
+ *    The submissions API returns up to 1,000 recent filings per CIK. Each cycle walks
+ *    from the newest filing back to the accession recorded on the previous cycle, so
+ *    no filing is skipped regardless of arrival velocity (2026-10-05 defect fix: the old
+ *    fixed 5-window permanently dropped filings 6+ under high insider velocity). A
+ *    MAX_WALK of 50 bounds the work — extreme velocity beyond that logs a loud warning.
+ *    First run for a CIK (no position yet) keeps the historical bound of 5.
  *
  * 7. Fail-closed, never fail-loud.
  *    A scraper failure must never affect trading. Every network call is wrapped;
@@ -376,6 +378,19 @@ async function sleep(ms: number): Promise<void> {
 class SecEdgarForm4Scraper {
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private running = false;
+  /**
+   * Last-seen Form 4 accession per CIK (stripped form, no dashes).
+   * DEFECT FIX (2026-10-05 M1): the scraper previously examined only the 5 most recent
+   * filings per 6h cycle. If >5 Form 4s arrived between cycles — the exact clustered
+   * insider-buying scenario the quant thesis targets — filings 6+ fell outside every
+   * future 5-window and were NEVER ingested. Now each cycle walks back from the newest
+   * filing until it reaches the accession seen on the previous cycle, so no filing is
+   * skipped regardless of arrival velocity. In-memory only: on process restart the
+   * position is lost and the next cycle falls back to the bounded 5-window (safe
+   * degradation — may miss filings that arrived during the downtime, but never
+   * double-ingests thanks to the DB dedup).
+   */
+  private readonly lastSeenAccession = new Map<string, string>();
 
   isEnabled(): boolean {
     return process.env.ARGUS_SEC_EDGAR_FORM4_ENABLED === 'true';
@@ -419,6 +434,10 @@ class SecEdgarForm4Scraper {
    * can be hundreds of symbols; one bad apple shouldn't starve the rest.
    */
   async scrapeOnce(): Promise<{ symbols: number; filings: number; transactions: number }> {
+    // DEFECT FIX (2026-10-05 m3): re-check the enable flag on every cycle, not just at
+    // start(). An operator flipping ARGUS_SEC_EDGAR_FORM4_ENABLED to false at runtime
+    // previously had no effect until process restart — the 6h interval kept scraping.
+    if (!this.isEnabled()) return { symbols: 0, filings: 0, transactions: 0 };
     if (this.running) return { symbols: 0, filings: 0, transactions: 0 };
     this.running = true;
     try {
@@ -455,7 +474,7 @@ class SecEdgarForm4Scraper {
    *
    * Flow per symbol:
    *   1. Fetch submissions JSON (lists recent filings with form types)
-   *   2. Filter to form '4', take the 5 most recent
+   *   2. Filter to form '4', walk back from newest until the last-seen accession
    *   3. For each: skip if already stored (dedup), else fetch XML → parse → insert
    *
    * The accession number in the submissions JSON contains dashes
@@ -468,12 +487,41 @@ class SecEdgarForm4Scraper {
     const recent = submissions.filings?.recent;
     if (!recent) return { filings: 0, transactions: 0 };
 
+    // DEFECT FIX (2026-10-05 m4): the four arrays are indexed in lockstep. If the SEC ever
+    // returns a ragged response, fail with a clear schema-mismatch error instead of a
+    // confusing TypeError deep in the loop (which was mislogged as a symbol problem).
+    const formLen = recent.form.length;
+    if (recent.accessionNumber.length !== formLen
+        || recent.filingDate.length !== formLen
+        || recent.primaryDocument.length !== formLen) {
+      throw new Error(
+        `SEC submissions JSON ragged arrays for ${symbol}: form=${formLen}, ` +
+        `accessionNumber=${recent.accessionNumber.length}, filingDate=${recent.filingDate.length}, ` +
+        `primaryDocument=${recent.primaryDocument.length}`);
+    }
+
     let filings = 0;
     let transactions = 0;
-    // Bounded: only the 5 most recent filings. Rationale in the header comment.
-    for (let i = 0; i < Math.min(5, recent.form.length); i++) {
+    const lastSeen = this.lastSeenAccession.get(cik);
+    let newestAccession: string | null = null;
+    let form4Examined = 0;
+    let reachedLastSeen = false;
+    // Safety bound: never walk more than 50 Form 4s back in one cycle. With last-seen
+    // tracking the typical walk is 0-3; 50 covers extreme insider-velocity days without
+    // letting a corrupted position turn into a thundering herd of XML fetches.
+    const MAX_WALK = 50;
+    // First-seen CIK (no position yet): keep the historical bounded behavior of 5.
+    const firstRunBound = 5;
+    for (let i = 0; i < Math.min(MAX_WALK, formLen); i++) {
       if (recent.form[i] !== '4') continue;
       const accession = recent.accessionNumber[i].replace(/-/g, '');
+      if (newestAccession === null) newestAccession = accession;
+      // Reached the filing we processed last cycle: everything older is already ingested.
+      if (lastSeen !== undefined && accession === lastSeen) { reachedLastSeen = true; break; }
+      form4Examined++;
+      // First run for this CIK: bound the backfill to the 5 most recent.
+      if (lastSeen === undefined && form4Examined > firstRunBound) break;
+
       const filingDate = recent.filingDate[i];
       // Dedup: LIKE-prefix matches both the base accession and any
       // suffixed per-transaction rows from a prior ingest. One indexed
@@ -507,6 +555,20 @@ class SecEdgarForm4Scraper {
       filings += 1;
       transactions += txns.length;
       await sleep(REQUEST_SPACING_MS);
+    }
+    // Advance the position so the next cycle stops where this one started.
+    if (newestAccession !== null) {
+      if (lastSeen !== undefined && !reachedLastSeen) {
+        // We walked the full MAX_WALK bound without reaching lastSeen: either extreme
+        // velocity (>50 new Form 4s in one cycle) or a position corruption. The filings
+        // between the bound and lastSeen are missed this cycle — log loudly so the gap
+        // is visible, and re-anchor to newest so we don't walk forever next time.
+        observeSafe(() => structuredLogger.warn('form4_walk_bound_hit', {
+          category: 'OBSERVABILITY', eventType: 'FORM4_WALK_BOUND_HIT', symbol, cik,
+          lastSeen, newestAccession,
+        }));
+      }
+      this.lastSeenAccession.set(cik, newestAccession);
     }
     observeSafe(() => structuredLogger.info('form4_symbol_scraped', {
       category: 'OBSERVABILITY', eventType: 'FORM4_SYMBOL_SCRAPED', symbol, filings, transactions,

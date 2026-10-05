@@ -324,9 +324,12 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
         g.passed = false;
         g.detail = { ...g.detail, status: 'FAIL' };
       }
+      // DEFECT FIX (2026-10-05): simplified dead disjunct. Was
+      // (status === 'CLAMPED' || boundQuantity === 0) && boundQuantity === 0, which is just
+      // boundQuantity === 0 — the CLAMPED check could never affect the outcome and misled
+      // readers into thinking CLAMPED-with-nonzero-bound was handled here.
       if (
         (g.gate === 'symbol_concentration' || g.gate === 'sector_concentration' || g.gate === 'correlation_exposure')
-        && (g.detail?.status === 'CLAMPED' || g.detail?.boundQuantity === 0)
         && g.detail?.boundQuantity === 0
       ) {
         g.passed = false;

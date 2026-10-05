@@ -32,8 +32,18 @@ public final class InstitutionalStatArbStrategy {
         List<String> conditionsFailed = new ArrayList<>();
         List<String> contradictions = new ArrayList<>();
 
-        if (ctx.pairBars() == null || ctx.pairSymbol() == null) {
-            conditionsFailed.add("No pair symbol/bars configured for StatArb evaluation.");
+        // DEFECT FIX (2026-10-05): guard ctx itself AND primaryBars, not just pairBars.
+        // Previously a null ctx NPE'd here (siblings return clean noSignal), and a context
+        // with valid pair bars but null primary bars crashed in closes() instead of
+        // returning no-signal. Asymmetric null handling in a shared pipeline is a defect.
+        if (ctx == null || ctx.pairBars() == null || ctx.pairSymbol() == null) {
+            conditionsFailed.add(ctx == null
+                ? "No evaluation context provided - no signal by construction."
+                : "No pair symbol/bars configured for StatArb evaluation.");
+            return noSignal(conditionsMet, conditionsFailed, contradictions);
+        }
+        if (ctx.primaryBars() == null) {
+            conditionsFailed.add("No primary bar series provided - no signal by construction.");
             return noSignal(conditionsMet, conditionsFailed, contradictions);
         }
 
@@ -69,8 +79,12 @@ public final class InstitutionalStatArbStrategy {
             contradictions.add("Pair fails the cointegration test this pass - a spread trade here has no statistical basis, regardless of how extended it looks.");
         }
 
+        // DEFECT FIX (2026-10-05): uncomputable z-score previously fell through to side=SELL
+        // (hasZ false => bullishPrimary false). A missing computation must never become a
+        // directional signal — HOLD, matching the siblings' noSignal pattern.
         boolean bullishPrimary = hasZ && result.currentZScore() < 0;
-        StrategyEvaluation.Side side = bullishPrimary ? StrategyEvaluation.Side.BUY : StrategyEvaluation.Side.SELL;
+        StrategyEvaluation.Side side = !hasZ ? StrategyEvaluation.Side.HOLD
+            : (bullishPrimary ? StrategyEvaluation.Side.BUY : StrategyEvaluation.Side.SELL);
 
         int total = conditionsMet.size() + conditionsFailed.size();
         int setupScore = (result.cointegrated() && extended && reasonableHalfLife)

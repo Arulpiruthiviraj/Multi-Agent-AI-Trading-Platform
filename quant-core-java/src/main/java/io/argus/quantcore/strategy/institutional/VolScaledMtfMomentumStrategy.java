@@ -41,8 +41,11 @@ public final class VolScaledMtfMomentumStrategy {
     /** Fast/slow momentum lookbacks in trading days. */
     private static final int FAST_DAYS = 20;
     private static final int SLOW_DAYS = 60;
-    /** Minimum bars: slow window + one full fast-vol window for the stability median. */
-    private static final int MIN_BARS = SLOW_DAYS + FAST_DAYS;
+    /** Minimum bars: slow window + one full fast-vol window for the stability median, +1
+     *  because logRets has bars.length - 1 entries (2026-10-05 defect fix: MIN_BARS was
+     *  SLOW_DAYS + FAST_DAYS = 80, which admits 80 bars = 79 returns, but currentVolVsMedian
+     *  needs 80 returns — the vol-stability guard could never pass at the advertised minimum). */
+    private static final int MIN_BARS = SLOW_DAYS + FAST_DAYS + 1;
     /** Entry bar: |vol-scaled composite| must clear one Sharpe unit of drift (the score is
      *  ~N(0,1) under zero drift, so 1.0 is a one-sigma event). */
     private static final double ENTRY_COMPOSITE_THRESHOLD = 1.0;
@@ -96,14 +99,20 @@ public final class VolScaledMtfMomentumStrategy {
         // Volatility stability: rolling 20d vol series over the last 60d; the latest reading
         // must not be exploding relative to its own median.
         double volStabilityRatio = currentVolVsMedian(logRets);
+        boolean volStable = !Double.isNaN(volStabilityRatio) && volStabilityRatio <= VOL_EXPLOSION_MULTIPLE;
         check(conditionsMet, conditionsFailed,
             "Volatility stable (current 20d vol <= " + VOL_EXPLOSION_MULTIPLE + "x its 60d median)",
-            !Double.isNaN(volStabilityRatio) && volStabilityRatio <= VOL_EXPLOSION_MULTIPLE);
+            volStable);
 
         int total = conditionsMet.size() + conditionsFailed.size();
+        // CRITICAL DEFECT FIX (2026-10-05): vol-stability was a check() condition but NOT part of
+        // triggerMet, so the strategy could emit a paper vote precisely when its own safety
+        // rationale says the vol estimate is unreliable (exploding vol => the "trend" is likely
+        // a gap, not drift). The header documents this as a REQUIREMENT; the trigger now enforces it.
         boolean triggerMet = Math.abs(composite) >= ENTRY_COMPOSITE_THRESHOLD
             && dir * fastScore >= DIRECTION_MIN_SCORE
-            && dir * slowScore >= DIRECTION_MIN_SCORE;
+            && dir * slowScore >= DIRECTION_MIN_SCORE
+            && volStable;
         int setupScore = triggerMet ? (int) Math.round(((double) conditionsMet.size() / total) * 100) : 0;
 
         return new StrategyEvaluation(ID, side, setupScore, setupScore / 100.0,
@@ -152,21 +161,27 @@ public final class VolScaledMtfMomentumStrategy {
     }
 
     /**
-     * Latest 20d annualized vol divided by the median of the trailing twelve 20d vol
-     * readings (60 trading days of history). NaN when the history is insufficient.
+     * Latest 20d annualized vol divided by the median of the three trailing 20d vol
+     * readings (60 trading days of benchmark history, NOT including the current reading).
+     * NaN when the history is insufficient.
+     *
+     * DEFECT FIX (2026-10-05): the current reading used to participate in its own benchmark
+     * median, structurally desensitizing explosion detection (the outlier pulled the median
+     * toward itself). Now: median-of-trailing-3 vs. current.
      */
     static double currentVolVsMedian(double[] logRets) {
         int n = logRets.length;
-        // Need 60d of 20d-vol readings: vols ending at n-60 ... n-20, plus the current one ending at n.
+        // Need 4 non-overlapping 20d windows: current (ending at n) + 3 trailing benchmarks.
         if (n < SLOW_DAYS + FAST_DAYS) return Double.NaN;
-        double[] vols = new double[4]; // current + 3 trailing medians anchors (60d / 20d)
+        double[] vols = new double[4]; // vols[0] = current, vols[1..3] = trailing benchmarks
         for (int k = 0; k < 4; k++) {
             vols[k] = realizedVol(logRets, n - FAST_DAYS - k * FAST_DAYS, FAST_DAYS);
             if (Double.isNaN(vols[k]) || vols[k] <= 0) return Double.NaN;
         }
-        double[] sorted = vols.clone();
-        Arrays.sort(sorted);
-        double median = (sorted[1] + sorted[2]) / 2.0;
+        // Benchmark median excludes the current reading under test.
+        double[] trailing = {vols[1], vols[2], vols[3]};
+        Arrays.sort(trailing);
+        double median = trailing[1]; // median of 3
         return vols[0] / median;
     }
 
@@ -182,9 +197,18 @@ public final class VolScaledMtfMomentumStrategy {
         return out;
     }
 
+    /**
+     * Bar hygiene: reject non-positive, NaN, or infinite prices.
+     * DEFECT FIX (2026-10-05): previously accepted +Infinity closes and never inspected
+     * high/low for NaN. An infinite close makes logRets infinite and the variance NaN
+     * (Inf - Inf), which fails closed downstream — but the guard's contract ("clean bar
+     * history") is now actually enforced at the gate.
+     */
     private static boolean allPricesPositive(Bar[] bars) {
         for (Bar b : bars) {
-            if (b.close() <= 0 || b.open() <= 0 || Double.isNaN(b.close())) return false;
+            if (!Double.isFinite(b.close()) || !Double.isFinite(b.open())
+                    || !Double.isFinite(b.high()) || !Double.isFinite(b.low())
+                    || b.close() <= 0 || b.open() <= 0) return false;
         }
         return true;
     }

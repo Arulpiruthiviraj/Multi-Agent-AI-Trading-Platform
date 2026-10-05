@@ -405,7 +405,11 @@ export class RiskEngine {
                 tradingMode: tradingEngine.state.tradingMode,
                 // Order-notional cap from settings. Fallback is tradingSafety.defaultMaxTradeSizeDollars
                 // (not InternalPaper seed cash / paperInitialCapital).
-                maxTradeSizeDollar: settings[0]?.maxTradeSize || tradingSafety.defaultMaxTradeSizeDollars,
+                // NOTE (2026-10-05 defect fix): use ?? not || — an operator may deliberately set
+                // maxTradeSize = 0 as an emergency "halt all new orders". || would treat 0 as falsy
+                // and silently replace it with the permissive default (fail-open). ?? falls back
+                // only on null/undefined. Downstream PositionSizing correctly fail-closes on a true 0.
+                maxTradeSizeDollar: settings[0]?.maxTradeSize ?? tradingSafety.defaultMaxTradeSizeDollars,
                 maxOpenPositions: settings[0]?.maxOpenPositions ?? 10,
                 dailyLossLimitDollars: tradingEngine.state.dailyLossLimit,
             });

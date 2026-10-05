@@ -130,8 +130,16 @@ export interface MetaLabelFeatureInput {
    * Join key to agent_predictions.trace_id (populated by ReflectionEngine from
    * the TRADE_IDEA_GENERATED event). Generated at trigger time, before emission,
    * so features and the eventual prediction row share it deterministically.
-   * Null for sub-threshold triggers that never emit — these rows will never
-   * join to an outcome, which is correct (no label exists for them).
+   *
+   * DEFECT FIX (2026-10-05): corrected a stale contract. This used to say "Null for
+   * sub-threshold triggers that never emit" — but the vote service intentionally generates
+   * a REAL traceId for every triggered setup, including ones the gates later reject.
+   * This is correct by design: capturing the full trigger distribution (not just emitted
+   * votes) avoids training-serving skew in the meta-model. Rows whose traceId never
+   * appears in agent_predictions simply never join, which is correct (no outcome exists).
+   * For forensics: a non-null traceId absent from agent_predictions means "gates rejected"
+   * (check the vote service's rejection reason), NOT "pipeline broken" — unless the vote
+   * service logged an emission for that traceId.
    */
   traceId: string | null;
   /** Java strategy ID, e.g. 'INSTITUTIONAL_TS_MOMENTUM_12M'. Labels are per-strategy. */
@@ -231,7 +239,11 @@ export function recordMetaLabelFeatures(input: MetaLabelFeatureInput): void {
 export function countLabeledRows(strategyId: string, evidenceSource: MetaLabelEvidenceSource): number {
   try {
     const rows = db.all(sql`
-      SELECT COUNT(*) as n FROM meta_label_features f
+      -- DEFECT FIX (2026-10-05): COUNT(DISTINCT f.id), not COUNT(*). agent_predictions.trace_id
+      -- is not unique, so a duplicate trace_id would fan one feature row out into N joined rows
+      -- and inflate the count. This function is the documented GATE for meta-model training —
+      -- an inflated count would trigger training on fewer real labels than believed.
+      SELECT COUNT(DISTINCT f.id) as n FROM meta_label_features f
       JOIN agent_predictions p ON p.trace_id = f.trace_id
       JOIN prediction_outcomes o ON o.prediction_id = p.id
       WHERE f.strategy_id = ${strategyId} AND f.evidence_source = ${evidenceSource}

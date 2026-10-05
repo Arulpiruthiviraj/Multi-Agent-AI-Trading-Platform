@@ -87,10 +87,18 @@ public final class TimeSeriesMomentum12MStrategy {
 
         // Skip-month reversal guard: if the skipped month moved violently against the
         // formation direction, the trend may already be unwinding - stand aside.
+        // DEFECT FIX (2026-10-05): the skip-month return was normalized by a vol window that
+        // INCLUDED the skip month itself ([n-60, n)). Exactly when this guard matters most — a
+        // violent skip-month reversal — that violence inflated the denominator and pushed the
+        // ratio below the tripwire (self-dampening). The guard vol now excludes the skip month
+        // ([n-81, n-21)), matching the formation window's own 12-1 exclusion logic.
         double skipReturn = 0.0;
         for (int i = n - SKIP_DAYS; i < n; i++) skipReturn += logRets[i];
-        double skipVolScaled = skipReturn * (TRADING_DAYS_PER_YEAR / SKIP_DAYS) / vol;
-        boolean reversing = dir * skipVolScaled < -REVERSAL_GUARD_MULTIPLE;
+        double guardVol = realizedVol(logRets, n - SKIP_DAYS - VOL_DAYS, VOL_DAYS);
+        double skipVolScaled = (guardVol > 0 && !Double.isNaN(guardVol))
+            ? skipReturn * (TRADING_DAYS_PER_YEAR / SKIP_DAYS) / guardVol
+            : Double.NaN;
+        boolean reversing = !Double.isNaN(skipVolScaled) && dir * skipVolScaled < -REVERSAL_GUARD_MULTIPLE;
         check(conditionsMet, conditionsFailed,
             "No violent skip-month reversal (last-21d vol-scaled return not < -" + REVERSAL_GUARD_MULTIPLE + " against the signal)",
             !reversing);
@@ -139,9 +147,12 @@ public final class TimeSeriesMomentum12MStrategy {
         return out;
     }
 
+    /** Bar hygiene: reject non-positive, NaN, or infinite prices (2026-10-05 defect fix). */
     private static boolean allPricesPositive(Bar[] bars) {
         for (Bar b : bars) {
-            if (b.close() <= 0 || b.open() <= 0 || Double.isNaN(b.close())) return false;
+            if (!Double.isFinite(b.close()) || !Double.isFinite(b.open())
+                    || !Double.isFinite(b.high()) || !Double.isFinite(b.low())
+                    || b.close() <= 0 || b.open() <= 0) return false;
         }
         return true;
     }

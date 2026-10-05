@@ -1,5 +1,6 @@
 package io.argus.quantcore.strategy.institutional;
 
+import io.argus.quantcore.backtest.engine.Bar;
 import io.argus.quantcore.institutional.models.FactorAlphaEngine;
 import io.argus.quantcore.strategy.types.LevelSuggestion;
 import io.argus.quantcore.strategy.types.StrategyEvaluation;
@@ -13,6 +14,11 @@ import java.util.List;
  * FactorAlphaEngine's own header for what "order-flow" means here and what it explicitly is not).
  * Research/quant-core infrastructure only, not wired into the live spine (see
  * InstitutionalStatArbStrategy's header for why that's a deliberate, separate future phase).
+ *
+ * DESIGN NOTE (2026-10-05): the trigger is composite-only — a vote can fire while the momentum
+ * factor itself is deeply negative, if the other four factors carry the composite past the
+ * entry threshold. This is intentional: the composite is the strategy's position, not any single
+ * factor. The momentum-factor condition is still reported in conditionsMet/Failed for forensics.
  */
 public final class MultiFactorMomentumStrategy {
 
@@ -28,13 +34,41 @@ public final class MultiFactorMomentumStrategy {
         List<String> conditionsFailed = new ArrayList<>();
         List<String> contradictions = new ArrayList<>();
 
+        // DEFECT FIX (2026-10-05): null-guard ctx and validate bar hygiene BEFORE delegating to
+        // FactorAlphaEngine, which performs no input validation. Siblings (VolScaled, TS-12M)
+        // already do this; a corrupt bar (negative/NaN/Infinite price) previously flowed into
+        // finite-but-garbage factor z-scores that could emit a vote.
+        Bar[] bars = ctx == null ? null : ctx.primaryBars();
+        if (bars == null || !allPricesFinite(bars)) {
+            conditionsFailed.add(ctx == null || bars == null
+                ? "No bar context provided - no signal by construction."
+                : "Bar history contains non-finite or non-positive prices - no signal by construction.");
+            return new StrategyEvaluation(ID, StrategyEvaluation.Side.HOLD, 0, 0.0,
+                false, // degenerate input: HOLD, never a directional signal
+                conditionsMet, conditionsFailed, contradictions,
+                List.of(), LevelSuggestion.none("No signal."), LevelSuggestion.none("No signal."),
+                List.of("ANY_REGIME"));
+        }
+
         FactorAlphaEngine.FactorScores scores = FactorAlphaEngine.compute(
-            ctx.primaryBars(), MOMENTUM_DAYS, SMA_WINDOW, Z_SCORE_WINDOW);
+            bars, MOMENTUM_DAYS, SMA_WINDOW, Z_SCORE_WINDOW);
 
         if (scores == null) {
             conditionsFailed.add("Not enough bar history for the requested factor windows.");
             return new StrategyEvaluation(ID, StrategyEvaluation.Side.HOLD, 0, 0.0,
                 false, // insufficient history: no signal by construction
+                conditionsMet, conditionsFailed, contradictions,
+                List.of(), LevelSuggestion.none("No signal."), LevelSuggestion.none("No signal."),
+                List.of("ANY_REGIME"));
+        }
+
+        // DEFECT FIX (2026-10-05): NaN composite previously fell through to side=SELL
+        // (NaN >= 0 is false). Degenerate factor output is now HOLD, matching the siblings'
+        // noSignal pattern — a missing computation must never become a directional signal.
+        if (Double.isNaN(scores.composite())) {
+            conditionsFailed.add("Factor composite is NaN (degenerate input statistics) - no signal by construction.");
+            return new StrategyEvaluation(ID, StrategyEvaluation.Side.HOLD, 0, 0.0,
+                false,
                 conditionsMet, conditionsFailed, contradictions,
                 List.of(), LevelSuggestion.none("No signal."), LevelSuggestion.none("No signal."),
                 List.of("ANY_REGIME"));
@@ -82,5 +116,15 @@ public final class MultiFactorMomentumStrategy {
 
     private static void check(List<String> met, List<String> failed, String name, boolean condition) {
         (condition ? met : failed).add(name);
+    }
+
+    /** Bar hygiene: all OHLC prices finite and closes/opens positive. */
+    private static boolean allPricesFinite(Bar[] bars) {
+        for (Bar b : bars) {
+            if (!Double.isFinite(b.close()) || !Double.isFinite(b.open())
+                    || !Double.isFinite(b.high()) || !Double.isFinite(b.low())
+                    || b.close() <= 0 || b.open() <= 0) return false;
+        }
+        return true;
     }
 }
