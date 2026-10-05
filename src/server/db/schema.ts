@@ -551,6 +551,7 @@ export const agentPredictions = sqliteTable('agent_predictions', {
   // cheap at scale - without it, "bounded to batchSize rows returned" still costs a full-table
   // scan+sort every cycle on a 100K+ row table before the LIMIT is even applied.
   timestampIdx: index('idx_agent_predictions_timestamp').on(table.timestamp),
+  traceIdIdx: index('idx_agent_predictions_trace_id').on(table.traceId),
 }));
 
 export const agentPerformanceStats = sqliteTable('agent_performance_stats', {
@@ -2196,4 +2197,5 @@ export const metaLabelFeatures = sqliteTable('meta_label_features', {
   createdAt: text('created_at').notNull(),
 }, (table) => ({
   strategySourceIdx: index('idx_meta_label_features_strategy_source').on(table.strategyId, table.evidenceSource),
+  traceIdIdx: index('idx_meta_label_features_trace_id').on(table.traceId),
 }));
