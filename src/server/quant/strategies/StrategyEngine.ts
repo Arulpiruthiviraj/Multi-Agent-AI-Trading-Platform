@@ -136,7 +136,32 @@ export function evaluateAll(ctx: StrategyContext): StrategyEvaluation[] {
   }
   const evaluated = filterStrategiesForAsset(resolveStrategiesForLiveEvaluation(), ctx.assetClass)
     .map(strategy => {
-      const evaluation = applyTriggerGate(strategy.evaluate(ctx));
+      // 2026-10-04 (degenerate-input hardening, defense-in-depth): a single strategy throwing
+      // on a degenerate input must never abort evaluation for every other strategy on that
+      // symbol this cycle. Fail that strategy closed (triggerMet=false, confidence 0, error
+      // stated openly) and continue with the rest. This does not replace the per-strategy
+      // null-guards above - it is the backstop for the next unforeseen degenerate shape.
+      let evaluation;
+      try {
+        evaluation = applyTriggerGate(strategy.evaluate(ctx));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[StrategyEngine] ${strategy.id} threw during evaluate(); failing closed for this cycle`, message);
+        evaluation = applyTriggerGate({
+          strategy: strategy.id,
+          side: 'BUY',
+          setupScore: 0,
+          confidence: 0,
+          triggerMet: false,
+          conditionsMet: [],
+          conditionsFailed: [`Strategy threw during evaluation (fail-closed): ${message}`],
+          contradictions: [],
+          invalidationConditions: [],
+          stop: { price: null, basis: 'No evaluation - strategy threw.' },
+          target: { price: null, basis: 'No evaluation - strategy threw.' },
+          applicableRegimes: strategy.applicableRegimes,
+        });
+      }
       const regimeMatches = evaluation.applicableRegimes.includes(ctx.regime.regime);
       const confidence = Math.round(evaluation.confidence * (regimeMatches ? 1 : REGIME_MISMATCH_CONFIDENCE_MULTIPLIER) * 100) / 100;
       return { ...evaluation, confidence };

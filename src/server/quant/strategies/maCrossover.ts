@@ -25,9 +25,10 @@ export const maCrossover: StrategyDefinition = {
 
   evaluate(ctx: StrategyContext): StrategyEvaluation {
     const { trend, volume, volatility, regime, currentPrice } = ctx;
+    // 2026-10-04 (degenerate-input hardening): null movingAverages fails closed, never throws.
     const ma = trend.movingAverages;
-    const goldenStack = ma.sma50 !== null && ma.sma200 !== null && ma.sma50 > ma.sma200;
-    const deathStack = ma.sma50 !== null && ma.sma200 !== null && ma.sma50 < ma.sma200;
+    const goldenStack = ma !== null && ma.sma50 !== null && ma.sma200 !== null && ma.sma50 > ma.sma200;
+    const deathStack = ma !== null && ma.sma50 !== null && ma.sma200 !== null && ma.sma50 < ma.sma200;
     const side: 'BUY' | 'SELL' = deathStack && !goldenStack ? 'SELL' : 'BUY';
     const bullish = side === 'BUY';
 
@@ -36,18 +37,18 @@ export const maCrossover: StrategyDefinition = {
     const contradictions: string[] = [];
     const check = (name: string, met: boolean) => (met ? conditionsMet.push(name) : conditionsFailed.push(name));
 
-    check('SMA50 and SMA200 available', ma.sma50 !== null && ma.sma200 !== null);
+    check('SMA50 and SMA200 available', ma !== null && ma.sma50 !== null && ma.sma200 !== null);
     check(
       bullish ? 'SMA50 above SMA200 (golden-cross stack)' : 'SMA50 below SMA200 (death-cross stack)',
       bullish ? goldenStack : deathStack,
     );
     check(
       bullish ? 'EMA9 above EMA20' : 'EMA9 below EMA20',
-      ma.ema9 !== null && ma.ema20 !== null && (bullish ? ma.ema9 > ma.ema20 : ma.ema9 < ma.ema20),
+      ma !== null && ma.ema9 !== null && ma.ema20 !== null && (bullish ? ma.ema9 > ma.ema20 : ma.ema9 < ma.ema20),
     );
     check(
       bullish ? 'Price above SMA50' : 'Price below SMA50',
-      ma.sma50 !== null && (bullish ? currentPrice > ma.sma50 : currentPrice < ma.sma50),
+      ma !== null && ma.sma50 !== null && (bullish ? currentPrice > ma.sma50 : currentPrice < ma.sma50),
     );
     check(
       `ADX trend strength (>= ${t.adxTrendMin})`,
@@ -59,7 +60,7 @@ export const maCrossover: StrategyDefinition = {
       bullish ? regime.regime === 'BULLISH_TREND' : regime.regime === 'BEARISH_TREND',
     );
 
-    if (ma.sma50 === null || ma.sma200 === null) {
+    if (ma === null || ma.sma50 === null || ma.sma200 === null) {
       contradictions.push('SMA50/SMA200 not computable on this history — not a fabricated crossover.');
     }
 
@@ -81,9 +82,9 @@ export const maCrossover: StrategyDefinition = {
         'SMA50/SMA200 stack flips against the position.',
         `ADX fades below ${t.adxTrendMin}.`,
       ],
-      stop: ma.sma50 !== null && atr
+      stop: ma !== null && ma.sma50 !== null && atr
         ? { price: bullish ? ma.sma50 - atr : ma.sma50 + atr, basis: '1x ATR beyond SMA50.' }
-        : { price: ma.sma50, basis: 'SMA50 if present; otherwise no stop.' },
+        : { price: null, basis: 'SMA50 if present; otherwise no stop.' },
       target: atr
         ? { price: currentPrice + (bullish ? 2 * atr : -2 * atr), basis: '2x ATR measured move; MA systems have no fixed target.' }
         : { price: null, basis: 'No ATR for a measured target.' },

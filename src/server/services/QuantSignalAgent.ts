@@ -114,13 +114,13 @@ export interface DerivedIdea {
  * window to fetch (session open is at/after `nowMs`, e.g. called before the market has opened
  * today) - the caller must never fetch a zero/negative-width window.
  */
-export function computeIntradayFetchWindow(nowMs: number): { startMs: number; endMs: number } | null {
+export function computeIntradayFetchWindow(nowMs: number): { startMs: number; endMs: number; sessionOpenMs: number } | null {
   const startMinutes = replaySafety.regularSessionStartMinutes;
   const sessionOpenHHMM = `${String(Math.floor(startMinutes / 60)).padStart(2, '0')}:${String(startMinutes % 60).padStart(2, '0')}`;
   const sessionOpenMs = Date.parse(tradingWallTimeToIso(getTradingDateStr(new Date(nowMs)), sessionOpenHHMM));
   const startMs = Math.max(sessionOpenMs, nowMs - 8 * 60 * 60 * 1000);
   if (startMs >= nowMs) return null;
-  return { startMs, endMs: nowMs };
+  return { startMs, endMs: nowMs, sessionOpenMs };
 }
 
 export function deriveIdeaFromRegime(regime: RegimeResult): DerivedIdea | null {
@@ -344,6 +344,9 @@ export class QuantSignalAgent {
     // openingRange honestly reports unavailable) - never blocks the real daily-bar evaluation this
     // method exists for.
     let intradayBars: Bar[] | undefined;
+    // 2026-10-04 (opening-range session-anchoring fix): the real regular-session open for the
+    // opening-range anchor - computed from the same fetch window so it always matches the bars.
+    let intradaySessionOpenMs: number | undefined;
     if (isExperimentalStrategyLive('OPENING_RANGE_BREAKOUT')) {
       try {
         const window = computeIntradayFetchWindow(endMs);
@@ -355,6 +358,7 @@ export class QuantSignalAgent {
             if (!/429|rate-limited|Too Many Requests/i.test(msg)) throw e;
           }
           intradayBars = await historicalDataGateway.getBars(symbol, INTRADAY_TIMEFRAME, window.startMs, window.endMs);
+          intradaySessionOpenMs = window.sessionOpenMs;
         }
       } catch (e) {
         console.warn(`[QuantSignalAgent] ${symbol}: intraday bar fetch for opening-range evaluation failed (non-fatal - falling back to daily-bar-only support/resistance features)`, e);
@@ -396,7 +400,7 @@ export class QuantSignalAgent {
       // supportResistance's own intradayBars parameter below - undefined outside the ORB flag,
       // zero behavior change for every other strategy/deployment.
       volume: computeVolumeFeatures(bars, intradayBars),
-      supportResistance: computeSupportResistanceFeatures(bars, intradayBars),
+      supportResistance: computeSupportResistanceFeatures(bars, intradayBars, intradaySessionOpenMs),
       regime,
       marketContext,
       // Additive SMC snapshot. Does not change evaluateAll() unless QUANT_SMC_STRATEGY_ENABLED.

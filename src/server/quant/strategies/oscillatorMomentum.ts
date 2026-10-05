@@ -26,7 +26,10 @@ export const oscillatorMomentum: StrategyDefinition = {
 
   evaluate(ctx: StrategyContext): StrategyEvaluation {
     const { momentum, trend, volatility, regime, currentPrice } = ctx;
-    const bullishMacd = momentum.macd.histogram > 0;
+    // 2026-10-04 (degenerate-input hardening): null MACD fails every MACD-dependent
+    // condition closed - never throws on momentum.macd.histogram of null.
+    const macd = momentum.macd;
+    const bullishMacd = macd !== null && macd.histogram > 0;
     const side: 'BUY' | 'SELL' = !bullishMacd && momentum.rsi < t.rsiMidline ? 'SELL' : 'BUY';
     const bullish = side === 'BUY';
 
@@ -41,7 +44,7 @@ export const oscillatorMomentum: StrategyDefinition = {
     );
     check(
       bullish ? 'MACD histogram positive' : 'MACD histogram negative',
-      bullish ? momentum.macd.histogram > 0 : momentum.macd.histogram < 0,
+      macd !== null && (bullish ? macd.histogram > 0 : macd.histogram < 0),
     );
     check(
       bullish ? 'ROC > 0' : 'ROC < 0',
@@ -78,10 +81,10 @@ export const oscillatorMomentum: StrategyDefinition = {
       setupScore,
       confidence: setupScore / 100,
       // Aligned oscillators (RSI on the right side of midline AND MACD histogram agreeing)
-      // ARE this setup - a single mixed print is not momentum.
-      triggerMet: bullish
-        ? momentum.rsi > t.rsiMidline && momentum.macd.histogram > 0
-        : momentum.rsi < t.rsiMidline && momentum.macd.histogram < 0,
+      // ARE this setup - a single mixed print is not momentum. Null MACD never triggers.
+      triggerMet: macd !== null && (bullish
+        ? momentum.rsi > t.rsiMidline && macd.histogram > 0
+        : momentum.rsi < t.rsiMidline && macd.histogram < 0),
       conditionsMet,
       conditionsFailed,
       contradictions,

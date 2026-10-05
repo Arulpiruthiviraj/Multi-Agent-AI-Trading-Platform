@@ -44,7 +44,8 @@ export const gapContinuation: StrategyDefinition = {
     );
     check(
       bullish ? 'Price above session VWAP' : 'Price below session VWAP',
-      volume.vwap.intradayBased && volume.vwap.distancePct !== null && (bullish ? volume.vwap.distancePct > 0 : volume.vwap.distancePct < 0),
+      // 2026-10-04 (degenerate-input hardening): null VWAP fails closed, never throws.
+      volume.vwap !== null && volume.vwap.intradayBased && volume.vwap.distancePct !== null && (bullish ? volume.vwap.distancePct > 0 : volume.vwap.distancePct < 0),
     );
     check(
       'Favorable market regime',

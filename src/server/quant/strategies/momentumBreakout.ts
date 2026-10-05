@@ -44,7 +44,8 @@ export const momentumBreakout: StrategyDefinition = {
     check('ATR expansion (volatility regime EXPANDING)', volatility.regime === 'EXPANDING');
     check(
       bullish ? 'Price above session VWAP' : 'Price below session VWAP',
-      volume.vwap.intradayBased && volume.vwap.distancePct !== null && (bullish ? volume.vwap.distancePct > 0 : volume.vwap.distancePct < 0)
+      // 2026-10-04 (degenerate-input hardening): null VWAP fails closed, never throws.
+      volume.vwap !== null && volume.vwap.intradayBased && volume.vwap.distancePct !== null && (bullish ? volume.vwap.distancePct > 0 : volume.vwap.distancePct < 0)
     );
     check('Favorable market regime', bullish ? regime.regime === 'BULLISH_TREND' : regime.regime === 'BEARISH_TREND');
     check(

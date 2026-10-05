@@ -44,6 +44,28 @@ describe('indicators/supportResistance', () => {
       const result = openingRange(bars, 90); // wide enough to catch the first 3
       expect(result.available).toBe(true);
     });
+
+    it('anchors at the supplied regular-session open, excluding premarket bars (2026-10-04)', () => {
+      // Premarket bars at 4:00/6:00/8:00 UTC, regular session from 9:30 UTC.
+      // Without the anchor, the window starts at the first (premarket) bar - wrong.
+      const sessionStart = 1 * 86_400_000 + 9.5 * 3_600_000;
+      const bars = [
+        intradayBar(1, 4, 50), intradayBar(1, 6, 55), intradayBar(1, 8, 45), // premarket extremes
+        intradayBar(1, 9.5, 100), intradayBar(1, 9.6, 102), intradayBar(1, 9.7, 98),
+      ];
+      const unanchored = openingRange(bars, 30);
+      expect(unanchored.data).toEqual({ high: 50, low: 50 }); // old behavior: anchored at the 4:00 AM premarket bar, not the open
+      const anchored = openingRange(bars, 30, sessionStart);
+      expect(anchored.available).toBe(true);
+      expect(anchored.data).toEqual({ high: 102, low: 98 }); // premarket excluded
+    });
+
+    it('is unavailable when no bars exist at/after the supplied session start', () => {
+      const sessionStart = 1 * 86_400_000 + 9.5 * 3_600_000;
+      const bars = [intradayBar(1, 4, 50), intradayBar(1, 6, 55)]; // premarket only
+      const result = openingRange(bars, 30, sessionStart);
+      expect(result.available).toBe(false);
+    });
   });
 
   describe('premarketHighLow', () => {

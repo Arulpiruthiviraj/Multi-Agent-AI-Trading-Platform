@@ -6,7 +6,7 @@
  */
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
-import { getTradingDateStr, getTradingTimeHHMM } from '../core/TradingCalendar';
+import { getTradingDateStr, getTradingTimeHHMM, TRADING_TIMEZONE } from '../core/TradingCalendar';
 import { continuousIntelligence } from '../config/continuousIntelligence';
 import { tradingSafety } from '../config/tradingSafety';
 import { looksLikeListedTicker } from '../ai/AIOutputValidator';
@@ -16,6 +16,7 @@ import { historicalDataGateway, type Bar } from '../engines/backtest/HistoricalD
 import { relativeVolume } from '../quant/indicators/volume';
 import { previousDayLevels, openingRange } from '../quant/indicators/supportResistance';
 import { getNewsCatalysts } from './NewsCatalystStore';
+import { regularSessionOpenMs } from '../replay/marketSession';
 import {
   evaluateOpeningSurgeCandidate,
   isOpeningSurgeWindow,
@@ -109,7 +110,14 @@ export async function runCampaignOpeningSurge(now: Date = new Date()): Promise<{
     const volumes = bars.map((b) => b.volume);
     const rvol = relativeVolume(volumes, 20);
     const prev = previousDayLevels(bars);
-    const or = openingRange(bars, tradingSafety.campaignOpeningRangeMinutes);
+    const or = openingRange(
+      bars,
+      tradingSafety.campaignOpeningRangeMinutes,
+      // 2026-10-04 (opening-range session-anchoring fix): anchor at the real regular-session
+      // open (9:30 ET), not the first bar of the UTC day - loadRecentBars() fetches 1Min bars
+      // that include premarket when available, and a 4:00 AM bar is not the opening range.
+      regularSessionOpenMs(Date.now(), TRADING_TIMEZONE),
+    );
     const last = bars[bars.length - 1]?.close ?? null;
     const verdict = evaluateOpeningSurgeCandidate({
       rvol,

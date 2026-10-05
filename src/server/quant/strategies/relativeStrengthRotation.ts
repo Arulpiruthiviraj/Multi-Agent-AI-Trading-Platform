@@ -70,8 +70,10 @@ export const relativeStrengthRotation: StrategyDefinition = {
       stockPct !== null && stockPct !== undefined && spyPct !== null && spyPct !== undefined
         && (bullish ? stockPct > 0 && spyPct < 0 : stockPct < 0 && spyPct > 0),
     );
-    const sma50 = trend.movingAverages.sma50;
-    const sma200 = trend.movingAverages.sma200;
+    // 2026-10-04 (degenerate-input hardening): null movingAverages fails closed, never throws.
+    const ma = trend.movingAverages;
+    const sma50 = ma !== null ? ma.sma50 : null;
+    const sma200 = ma !== null ? ma.sma200 : null;
     check(
       bullish
         ? 'Bullish daily stack (price > SMA50 > SMA200)'
@@ -81,8 +83,8 @@ export const relativeStrengthRotation: StrategyDefinition = {
           ? currentPrice > sma50 && sma50 > sma200
           : currentPrice < sma50 && sma50 < sma200),
     );
-    const emaFast = trend.movingAverages.ema9;
-    const emaSlow = trend.movingAverages.ema20;
+    const emaFast = ma !== null ? ma.ema9 : null;
+    const emaSlow = ma !== null ? ma.ema20 : null;
     check(
       bullish
         ? 'EMA9 > EMA20 (existing EMAs; Argus does not compute EMA8/EMA21)'

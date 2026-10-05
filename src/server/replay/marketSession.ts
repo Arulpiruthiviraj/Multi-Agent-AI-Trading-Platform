@@ -34,6 +34,28 @@ export function classifyMarketSession(ms: number, timeZone: string, extendedHour
   return 'CLOSED';
 }
 
+/** 2026-10-04 (opening-range session-anchoring fix): UTC instant of the regular-session open
+ *  (`replaySafety.regularSessionStartMinutes`, 9:30 by default) in `timeZone` for the calendar
+ *  day containing `dayMs`. DST-safe via the Intl timezone database - no hardcoded EST/EDT
+ *  offset. Used to anchor openingRange() at the real regular-session open instead of the
+ *  first bar of the UTC day when premarket bars are included in the bar set. */
+export function regularSessionOpenMs(dayMs: number, timeZone: string): number {
+  const startMinutes = replaySafety.regularSessionStartMinutes;
+  const hh = String(Math.floor(startMinutes / 60)).padStart(2, '0');
+  const mm = String(startMinutes % 60).padStart(2, '0');
+  const dayFormatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
+  const timeFormatter = new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hour12: false });
+  const day = dayFormatter.format(new Date(dayMs));
+  const target = Date.parse(`${day}T${hh}:${mm}:00Z`);
+  let candidate = target;
+  for (let i = 0; i < 3; i++) {
+    const d = new Date(candidate);
+    const represented = Date.parse(`${dayFormatter.format(d)}T${timeFormatter.format(d)}:00Z`);
+    candidate += target - represented;
+  }
+  return candidate;
+}
+
 export function sessionAllowsFills(session: MarketSession, extendedHours: boolean): boolean {
   if (session === 'REGULAR') return true;
   if (extendedHours && (session === 'PRE_MARKET' || session === 'AFTER_HOURS')) return true;

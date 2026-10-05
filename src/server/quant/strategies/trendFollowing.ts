@@ -39,7 +39,9 @@ export const trendFollowing: StrategyDefinition = {
     check('Market structure real TRENDING (not ranging/choppy)', regime.marketStructure === 'TRENDING');
     check(
       bullish ? 'Moving averages ordered bullishly (SMA20 > SMA50 > SMA200)' : 'Moving averages ordered bearishly (SMA20 < SMA50 < SMA200)',
-      ma.sma20 !== null && ma.sma50 !== null && ma.sma200 !== null &&
+      // 2026-10-04 (degenerate-input hardening): null movingAverages must fail this condition
+      // closed, never throw on ma.sma20 of null.
+      ma !== null && ma.sma20 !== null && ma.sma50 !== null && ma.sma200 !== null &&
         (bullish ? ma.sma20 > ma.sma50 && ma.sma50 > ma.sma200 : ma.sma20 < ma.sma50 && ma.sma50 < ma.sma200)
     );
     check(
@@ -48,7 +50,8 @@ export const trendFollowing: StrategyDefinition = {
     );
     check(
       bullish ? 'MACD bullish (line above signal)' : 'MACD bearish (line below signal)',
-      bullish ? momentum.macd.macd > momentum.macd.signal : momentum.macd.macd < momentum.macd.signal
+      // 2026-10-04 (degenerate-input hardening): null MACD fails closed, never throws.
+      momentum.macd !== null && (bullish ? momentum.macd.macd > momentum.macd.signal : momentum.macd.macd < momentum.macd.signal)
     );
     check(
       bullish ? 'Chaikin Money Flow confirming accumulation (CMF > 0)' : 'Chaikin Money Flow confirming distribution (CMF < 0)',
@@ -65,7 +68,7 @@ export const trendFollowing: StrategyDefinition = {
     const totalConditions = conditionsMet.length + conditionsFailed.length;
     const setupScore = scoreFromConditions(conditionsMet, totalConditions);
 
-    const trailStop = ma.sma50;
+    const trailStop = ma !== null ? ma.sma50 : null;
 
     return {
       strategy: 'TREND_FOLLOWING',
