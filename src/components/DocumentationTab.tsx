@@ -696,6 +696,14 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
             </div>
           </div>
 
+          <div className="bg-[#111822] border border-slate-800 rounded-lg p-5 mb-8">
+            <h3 className="text-white font-bold mb-3 flex items-center gap-2"><Wallet size={16} className="text-amber-400"/> Budget Sweep — Synthetic Capital Sensitivity</h3>
+            <p className="text-slate-400 text-xs mb-3 leading-relaxed">
+              <code className="text-[10px]">npm run sim:budget-sweep</code> runs the full synthetic market session at multiple randomly-sampled allocated budgets ($0–$200k, seeded for reproducibility) and reports how Argus behaves at each: trades filled vs rejected, capital deployed, max single trade, utilization %, and which risk gates bound. Same seed/scenario every level — only the budget varies. Answers "if I allocate $X, what does the system actually do?" Flags: <code className="text-[10px]">--levels</code>, <code className="text-[10px]">--min-budget</code>, <code className="text-[10px]">--max-budget</code>, <code className="text-[10px]">--scenario</code>, <code className="text-[10px]">--seed</code>. Each level runs in its own isolated process/DB — never touches production.
+            </p>
+            <p className="text-[11px] text-slate-500 font-mono">Expected: $0 → zero trades cleanly; small budgets → gate 23 (capital allocation) binds; large budgets → $3k max_trade_size binds instead. The crossover reveals which constraint governs your allocation.</p>
+          </div>
+
           <h3 className="text-lg font-bold text-white mb-4 border-b border-slate-800 pb-2">Important Safety Guidelines</h3>
 
           <div className="bg-rose-500/10 border border-rose-500/20 p-5 rounded-lg flex gap-4">
@@ -818,6 +826,13 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
               Explore the Additive Quant Layer <ChevronRight size={16} />
             </button>
           </div>
+
+          <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg mt-6">
+            <span className="text-[10px] font-mono uppercase text-emerald-400 font-bold block mb-3">WATCHDOG AUTO-START (2026-10-05)</span>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              <code className="text-[10px]">argus start</code> now automatically starts the watchdog supervisor alongside the engine — there is never a running engine with no supervisor. The watchdog watches the engine process from outside (it cannot watch itself) and restarts it on confirmed unexpected death, always into <code className="text-[10px]">TRADING_PAUSED</code> — it never resumes trading on its own. Opt out with <code className="text-[10px]">argus start --no-watchdog</code> for maintenance sessions. Standalone commands <code className="text-[10px]">argus watchdog-start</code> / <code className="text-[10px]">watchdog-stop</code> / <code className="text-[10px]">watchdog-status</code> remain available.
+            </p>
+          </div>
         </div>
       )
     },
@@ -898,6 +913,47 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
                 A scoring engine does not prove an edge. Checked Quant walk-forward OOS failed. Do not enable live Quant/SMC flags “to see if it works.” L2 depth, options, breadth, and volume profile are <code className="text-[10px]">NOT_SUPPORTED</code> — zeros are never filled.
               </p>
             </div>
+          </div>
+
+          <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg mt-6">
+            <span className="text-[10px] font-mono uppercase text-sky-400 font-bold block mb-3">INSTITUTIONAL STRATEGIES (JAVA QUANT CORE) — 2026-10-05</span>
+            <p className="text-xs text-slate-300 leading-relaxed mb-3">
+              Three institutional-grade momentum strategies now run in the Java quant core (<code className="text-[10px]">quant-core-java/</code>), evaluated through <code className="text-[10px]">StrategyRegistry.evaluateInstitutional()</code> and exposed via <code className="text-[10px]">POST /api/v1/institutional/strategy/{'{strategyId}'}/{'{symbol}'}</code>. They are <strong className="text-slate-100">paper-vote eligible</strong> (not just advisory) when their env flags are enabled — but all flags default to <code className="text-[10px]">false</code> and no strategy votes without explicit operator opt-in.
+            </p>
+            <ul className="text-xs text-slate-400 leading-relaxed space-y-2 font-mono">
+              <li><strong className="text-slate-200">Vol-Scaled Multi-Timeframe Momentum</strong> (<code className="text-[10px]">INSTITUTIONAL_VOL_SCALED_MTF_MOMENTUM</code>) — 20d/60d volatility-normalized momentum with timeframe confluence and vol-stability gates. Flag: <code className="text-[10px]">ARGUS_VOL_SCALED_MTF_MOMENTUM_VOTE_ENABLED</code></li>
+              <li><strong className="text-slate-200">12M Time-Series Momentum</strong> (<code className="text-[10px]">INSTITUTIONAL_TS_MOMENTUM_12M</code>) — classic 12-month momentum (Moskowitz-Ooi-Pedersen style), needs 333+ trading days. Flag: <code className="text-[10px]">ARGUS_TS_MOMENTUM_12M_VOTE_ENABLED</code></li>
+              <li><strong className="text-slate-200">Multi-Factor Momentum</strong> (<code className="text-[10px]">INSTITUTIONAL_MULTI_FACTOR_MOMENTUM</code>) — momentum + value + quality composite. Flag: <code className="text-[10px]">ARGUS_MULTI_FACTOR_MOMENTUM_VOTE_ENABLED</code></li>
+            </ul>
+            <p className="text-[11px] text-slate-500 mt-3 font-mono">
+              Votes flow through the standard pipeline: <code className="text-[10px]">InstitutionalStrategyVoteService</code> → <code className="text-[10px]">eventBus.emitTradeIdea</code> → ChiefTrader → RiskEngine → PositionSizing → OMS → BrokerManager. Gates: Java triggerMet=true, confidence ≥ 0.6, valid price, per-agent Mission Control toggle. A fourth strategy (<code className="text-[10px]">INSTITUTIONAL_STAT_ARB</code>) is research-only — it requires a pair universe and short-selling support, so it can never emit votes.
+            </p>
+          </div>
+
+          <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg mt-4">
+            <span className="text-[10px] font-mono uppercase text-violet-400 font-bold block mb-3">META-LABELING RESEARCH TRACK — TRAINING DATA ONLY</span>
+            <p className="text-xs text-slate-300 leading-relaxed mb-3">
+              The quant research program's chosen ML architecture: a <strong className="text-slate-100">meta-model</strong> that predicts whether a triggered setup will be profitable after costs (López de Prado, 2018). The primary strategy decides <em>direction</em>; the meta-model decides <em>size</em>.
+            </p>
+            <ul className="text-xs text-slate-400 leading-relaxed space-y-1.5 font-mono">
+              <li><strong className="text-slate-200">Feature capture (live):</strong> <code className="text-[10px]">MetaLabelStore.recordMetaLabelFeatures()</code> snapshots strategy scores, regime, decision price, and conditions to <code className="text-[10px]">meta_label_features</code> on every trigger — <em>before</em> vote gates, to avoid selection bias. Joins to outcomes via trace_id.</li>
+              <li><strong className="text-slate-200">S-curve sizing (dormant):</strong> <code className="text-[10px]">MetaLabelSizing.size(p)</code> in Java converts calibrated win probability to position fraction. <strong className="text-rose-300">Not wired into any live path</strong> — activates only when a calibrated model exists.</li>
+              <li><strong className="text-slate-200">Status:</strong> No meta-model exists. Training requires hundreds of real PAPER labels; <code className="text-[10px]">countLabeledRows()</code> tracks progress. PAPER/BACKTEST/REPLAY labels are never mixed.</li>
+            </ul>
+          </div>
+
+          <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg mt-4">
+            <span className="text-[10px] font-mono uppercase text-emerald-400 font-bold block mb-3">ALTERNATIVE DATA: SEC FORM 4 INGESTION</span>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              <code className="text-[10px]">SecEdgarForm4Scraper</code> polls the free SEC EDGAR JSON API for insider-transaction filings (Form 4) on tracked symbols, storing to <code className="text-[10px]">insider_transactions</code>. Insider open-market purchases (especially CEO/CFO) have published predictive power for forward returns; Form 4's 2-day filing deadline makes it the fastest free fundamental signal. Gated by <code className="text-[10px]">ARGUS_SEC_EDGAR_FORM4_ENABLED</code> (default false). <strong className="text-slate-100">Data plumbing only — emits no signals.</strong> Respects SEC rate limits (2 req/sec, proper User-Agent).
+            </p>
+          </div>
+
+          <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg mt-4">
+            <span className="text-[10px] font-mono uppercase text-amber-400 font-bold block mb-3">STRATEGY DECISION THEATER</span>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              The <code className="text-[10px]">StrategyDecisionTheater</code> component animates how each quant strategy evaluates a setup — conditions lighting up one by one, scores building, the final trigger verdict. Two modes: <strong className="text-slate-100">educational</strong> (how the strategy works in general, labeled illustrative) and <strong className="text-slate-100">transaction replay</strong> (a real evaluation's actual conditions, from the Transaction Observatory's "Watch how [strategy] decided" button). Uses the same honesty contract as AgentWorkflowTheater: never invents values, never implies profitability.
+            </p>
           </div>
 
           <div className="flex justify-start mt-8">
