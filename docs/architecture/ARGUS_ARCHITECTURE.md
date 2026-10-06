@@ -3830,6 +3830,59 @@ OMS access, or broker access. All operational thresholds live in `config/trading
 through `src/server/config/tradingSafety.ts`), never TS literals. All new env fields in `.env.example`
 with explanatory comments. 55 Jev tests pass; tsc clean.
 
+## October 6, 2026 — Day-movers-vs-coverage reconciliation (workstream H, local-only)
+
+**Modules:** `src/server/reflection/moverCohort.ts` → `coverageReconciler.ts` →
+`dailyReflection.ts` (`runDailyReflection(tradingDate)`); migration `0093`
+(`mover_coverage`, `UNIQUE(trading_date, symbol)`). Wired into the post-close
+lifecycle as a step in `PostMarketAnalysisWorker.tick()`, right after the
+post-market report — runs once per trading date after close, idempotent via the
+UNIQUE constraint (plus per-process memoization so an `INSUFFICIENT_EVIDENCE`
+cohort does not re-hit the network every tick).
+
+**Problem fixed:** post-market reflection only ever classified symbols Argus had
+already touched (survivorship bias) — `TRUE_UNIVERSE_MISS` was unreachable. The
+reconciliation builds an **independent EOD benchmark mover cohort** (the day's
+real investable-universe movers) and joins every member against the real
+discovery/evaluation evidence, so a mover Argus never saw is genuinely
+reconcilable as `NEVER_SEEN`.
+
+**Cohort** (`moverCohort.ts`): same-date path uses the same real Alpaca
+`/v1beta1/screener/stocks/movers` endpoint the `MarketUniverseScanner` movers
+funnel uses (per-side rank preserved for `RANK_CAP` analysis); past-date path
+(backfill, e.g. 2026-10-05 — the live screener cannot serve a historical date)
+recomputes movers from the same provider's historical 1Day SIP bars over the
+tradable-assets universe. Investable screens mirror the funnel's own gates
+(price/dollar-volume/spread/ADV, same `config/continuousIntelligence.json`
+values — penny/microcap noise excluded per mandate); `eod_move_pct` is always
+bar-derived, never the screener's intraday percent_change. No provider keys (or
+any provider failure) → `INSUFFICIENT_EVIDENCE`, zero rows, never fabricated
+movers.
+
+**Reconciler** (`coverageReconciler.ts`): pure function over an injected evidence
+store joining discovery lineage, `transaction_traces`, `risk_assessments`,
+`trade_plans`/`trade_plan_revisions`, `premarket_focus_reports`,
+`premarket_data_reservations`, `quant_assessments`, `missed_opportunities`,
+`trades`/`fills`. Funnel-ordered ladder assigns exactly one `primary_fate`
+(`ACTED_ON | APPROVED_NOT_EXECUTED | CONSENSUS_REJECTED | RISK_REJECTED |
+STRATEGY_NO_SETUP | EVALUATED | SUBSCRIBED_NOT_EVALUATED | DISCOVERED_FILTERED |
+DISCOVERED_NOT_PROMOTED | NEVER_SEEN | INSUFFICIENT_EVIDENCE`) with JSON
+`secondary_reasons`. `NEVER_SEEN` causes (`UNIVERSE_COVERAGE |
+NEWS_SOURCE_COVERAGE | MARKET_MOVER_SOURCE | RANK_CAP | DATA_UNAVAILABLE |
+SYMBOL_EXTRACTION | PREMARKET_REFRESH_TIMING | OTHER | UNKNOWN`) require
+positive evidence — `UNKNOWN` is honest, never invented. `premarket_known_by`
+records which pre-market surface knew the symbol (`plan0400` / `refresh0915` /
+`fastLane` / `discovery`).
+
+**Hook points:** `callOutcomeAudits()` (workstream I — wired 2026-10-06 to
+`outcomeAudits.ts`, failure-contained) and `computeSessionMetrics()`
+(workstream K — no-op pending the weekly-digest wiring).
+
+**Boundaries (unchanged by this work):** diagnostic only — never emits
+`TRADE_IDEA_GENERATED`, never calls ChiefTrader/RiskEngine/OMS/BrokerManager,
+never changes the 0.75 consensus bar, independence requirements, RiskEngine
+gates, freshness, or capital limits. 43 workstream-H tests pass; tsc clean.
+
 ## October 6, 2026 — Post-market reflection outcome audits (workstream I, local-only)
 
 **Module:** `src/server/reflection/outcomeAudits.ts`, entry hook `callOutcomeAudits(tradingDate)`
@@ -3845,7 +3898,12 @@ to loosen the gate that fired.
 1. **Causal outcome windows** — forward moves over +5m/+15m/+30m/+60m/close from recorded
    1-min `ohlcvBars`, anchoring at the decision bar's close (or a stored price-at-decision)
    and EXCLUDING the bar containing the decision timestamp. No same-bar hindsight; bars
-   unavailable → null windows, never fabricated. Persisted to `mover_coverage.outcome_windows`.
+   unavailable → null windows, never fabricated. Merged flat into
+   `mover_coverage.outcome_windows` alongside workstream H's pre-existing `{eod}` block
+   (never destroyed); `secondary_reasons` keeps its JSON-string-array contract with audit
+   blocks appended as JSON-encoded string elements (`{kind: 'discoveryFilterAudit' |
+   'riskRejectionAudit', ...}`); `premarket_known_by` persists exactly
+   `{plan0400, refresh0915, fastLane, discovery}` per H's column contract.
 2. **Discovery-filtered audit** — for `DISCOVERED_FILTERED` movers, loads the contemporaneous
    lineage filter reason + evidence from `observability_events` and judges premise correctness
    AT DECISION TIME into `filter_premise_correct` (0/1/null). The judgment function takes only
@@ -3872,11 +3930,12 @@ to loosen the gate that fired.
 
 **Boundaries:** the only arithmetic is diagnostic return computation on recorded bars (same
 category as `PostMarketAnalysis.auditRejectedCandidates`' existing move math — no indicator,
-strategy, signal, or portfolio math, so the quant-core-java rule is intact). 14 tests in
+strategy, signal, or portfolio math, so the quant-core-java rule is intact). 19 tests in
 `outcomeAudits.test.ts` cover decision-time premise judgment (wide spread + later +20% rally →
 still premise-correct), same-bar exclusion, risk-rejection gate/timestamp/reference recording,
-04:00-vs-09:15 known-by, readiness classification, and per-date metric persistence with upsert
-idempotency.
+04:00-vs-09:15 known-by, readiness classification with failure WHYs, per-date metric persistence
+with upsert idempotency, and JSON-contract preservation (string-array secondary_reasons,
+4-key premarket_known_by, eod-block merge).
 
 ## October 6, 2026 — Daily reflection report surfaces (Part B, workstream J, local-only)
 
