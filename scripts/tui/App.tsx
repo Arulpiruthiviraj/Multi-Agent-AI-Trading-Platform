@@ -14,6 +14,7 @@ import { ConsensusScreen } from './screens/Consensus.js';
 import { RiskScreen } from './screens/Risk.js';
 import { PositionsScreen } from './screens/Positions.js';
 import { LogsScreen } from './screens/Logs.js';
+import { ReflectionScreen } from './screens/Reflection.js';
 
 const PAGES = [
   { key: '1', name: 'Overview', el: OverviewScreen },
@@ -23,6 +24,7 @@ const PAGES = [
   { key: '5', name: 'Risk', el: RiskScreen },
   { key: '6', name: 'Positions', el: PositionsScreen },
   { key: '7', name: 'Logs', el: LogsScreen },
+  { key: '8', name: 'Reflection', el: ReflectionScreen },
 ] as const;
 
 function HelpOverlay({ onClose }: { onClose: () => void }) {
@@ -30,7 +32,7 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
     if (key.escape || _input === '?' || _input === 'q') onClose();
   });
   const rows: [string, string][] = [
-    ['1-7', 'switch page'],
+    ['1-8', 'switch page'],
     ['r', 'refresh current page'],
     ['?', 'this help'],
     ['q', 'quit'],

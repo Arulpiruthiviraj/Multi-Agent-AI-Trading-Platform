@@ -3829,3 +3829,88 @@ never reasoning, recommendations, votes, or trading signals.
 OMS access, or broker access. All operational thresholds live in `config/tradingSafety.json` (typed
 through `src/server/config/tradingSafety.ts`), never TS literals. All new env fields in `.env.example`
 with explanatory comments. 55 Jev tests pass; tsc clean.
+
+## October 6, 2026 — Post-market reflection outcome audits (workstream I, local-only)
+
+**Module:** `src/server/reflection/outcomeAudits.ts`, entry hook `callOutcomeAudits(tradingDate)`
+(intended call site: `dailyReflection.ts`'s `callOutcomeAudits` hook — that file does not exist
+yet on main; the hook is exported and ready). **Strictly diagnostic:** never emits trade ideas,
+never calls ChiefTrader/RiskEngine/OMS/BrokerManager, never changes the 0.75 consensus bar,
+independence requirements, RiskEngine gates, freshness, or capital limits. A filter or risk
+rejection that "would have worked" in hindsight is a research observation only — never a reason
+to loosen the gate that fired.
+
+**What it audits, per trading date** (reads workstream H's `mover_coverage` table, migration
+0093; degrades gracefully to "nothing to audit" until 0093 lands):
+1. **Causal outcome windows** — forward moves over +5m/+15m/+30m/+60m/close from recorded
+   1-min `ohlcvBars`, anchoring at the decision bar's close (or a stored price-at-decision)
+   and EXCLUDING the bar containing the decision timestamp. No same-bar hindsight; bars
+   unavailable → null windows, never fabricated. Persisted to `mover_coverage.outcome_windows`.
+2. **Discovery-filtered audit** — for `DISCOVERED_FILTERED` movers, loads the contemporaneous
+   lineage filter reason + evidence from `observability_events` and judges premise correctness
+   AT DECISION TIME into `filter_premise_correct` (0/1/null). The judgment function takes only
+   (reason, evidence, thresholds) — no outcome parameter exists, so a later rally structurally
+   cannot flip the verdict. Thresholds come from `config/continuousIntelligence.ts`, never TS
+   literals; unjudgeable cases record null with a basis, never a guess.
+3. **Risk-rejected audit** — for `RISK_REJECTED` movers, records rejecting gate(s) from
+   `risk_assessments`/`risk_gate_results`, the real decision timestamp, and the reference price
+   (stored consensus-evidence price, else decision-bar close) plus outcome windows.
+4. **Pre-market effectiveness** — per mover, `premarket_known_by` JSON across plan0400
+   (`trade_plans` v1 before the day's first focus report), refresh0915 (focus-report tiers or
+   `trade_plan_revisions`), fastLane (`FAST_LANE` observability events), discovery (lineage
+   ledger). Measures the incremental value of the ~09:15 refresh.
+5. **Data readiness at open** — PRIMARY focus entries classified FRESH / SUBSCRIBED_FRESH_UNKNOWN /
+   NO_SUBSCRIPTION_SLOT / RESERVATION_DENIED / RESERVED_BUT_STALE / STALE_QUOTE / RESCUE_DENIED /
+   PLAN_NOT_LIVE / UNKNOWN, each with the WHY (joining `premarket_data_reservations`).
+   Diagnosis, not a blind 100% target.
+6. **Session metrics** — one `reflection_session_metrics` row per date (migration 0094):
+   movers_total/seen, focus_recall, primary_data_readiness, catalyst_coverage, never_seen_rate,
+   discovery_filter_rate, evaluation_rate (real `quant_assessments`), valid_trigger_rate (real
+   `strategy_engine_signals` with entry_met=1), consensus_approval_rate, primary_precision
+   (PRIMARY selections that developed a legitimate setup — better discovery, not more symbols).
+   Zero denominators yield null, never a masquerading 0%.
+
+**Boundaries:** the only arithmetic is diagnostic return computation on recorded bars (same
+category as `PostMarketAnalysis.auditRejectedCandidates`' existing move math — no indicator,
+strategy, signal, or portfolio math, so the quant-core-java rule is intact). 14 tests in
+`outcomeAudits.test.ts` cover decision-time premise judgment (wide spread + later +20% rally →
+still premise-correct), same-bar exclusion, risk-rejection gate/timestamp/reference recording,
+04:00-vs-09:15 known-by, readiness classification, and per-date metric persistence with upsert
+idempotency.
+
+## October 6, 2026 — Daily reflection report surfaces (Part B, workstream J, local-only)
+
+**Module:** `src/server/reflection/reflectionReportService.ts` (pure assembly), read-only
+`GET /api/v2/observability/daily-reflection/:date` (`:date` = YYYY-MM-DD or `latest`),
+`argus daily-reflection [--date=YYYY-MM-DD]` CLI command, and the TUI "Reflection" page
+(`scripts/tui/screens/Reflection.tsx`, key `8`). **Read-only by construction:** SELECTs only
+(plus a `sqlite_master` existence check), never writes, never touches ChiefTrader/RiskEngine/
+OMS/BrokerManager, never carries a direction/side. Explains what happened — never what to trade.
+
+**Sources** (all fail-soft; a missing producer table yields an honest empty section, never
+fabricated rows): workstream H's `mover_coverage` (migration 0093), workstream I's
+`reflection_session_metrics` (migration 0094), `premarket_focus_reports` (workstream D),
+`postmarket_reports`. Eight sections: PREMARKET FOCUS PERFORMANCE (tier counts, missing
+inputs), DISCOVERY COVERAGE (movers → seen → evaluated → acted funnel + fate histogram +
+workstream-I rate scorecard), NEVER-SEEN MOVERS (with `never_seen_cause`), FILTERED
+WINNERS-LOSERS (filter-centric: `filter_premise_correct=false` = "filtered winner", never an
+invented return threshold), CONSENSUS REJECTIONS, RISK REJECTIONS, DATA-READINESS FAILURES,
+CATALYST COVERAGE. Rejection sections take the primary fate first and fall back to
+secondary-reason text only when the reason carries rejection vocabulary — a bare topic mention
+(e.g. `CONSENSUS: 0.81 > 0.75`, a pass note) never counts as a rejection. Repeating issues are
+derived observed patterns only (e.g. a never-seen cause hitting ≥2 movers); issue text is never
+invented. Fate taxonomy is workstream H's exact `primary_fate` set (ACTED_ON /
+APPROVED_NOT_EXECUTED / CONSENSUS_REJECTED / RISK_REJECTED / STRATEGY_NO_SETUP / EVALUATED /
+SUBSCRIBED_NOT_EVALUATED / DISCOVERED_FILTERED / DISCOVERED_NOT_PROMOTED / NEVER_SEEN /
+INSUFFICIENT_EVIDENCE); unknown values parse to UNKNOWN and count as unseen.
+
+**Surfaces:** the CLI is presentation-only (calls the service, prints
+`formatDailyReflectionReport` or raw JSON with `--json`); the TUI page shows the funnel, the
+top-movers table with fate badges, blind spots, repeating issues, and a keyboard drill-down
+(↑/↓ select, Enter, Esc) to per-symbol fate/secondary-reasons/outcome-windows/premarket_known_by.
+The TUI imports only React/Ink plus its own presentation modules (enforced by
+`reflection.imports.test.ts` alongside the existing architecture-protection test).
+
+**Tests:** 11 service tests (all 8 sections from fixtures, honest empty states, invalid-date
+rejection, never-mutates via full row-count snapshot), 3 route smoke tests, 4 TUI import/path
+tests. `tsc --noEmit` clean.

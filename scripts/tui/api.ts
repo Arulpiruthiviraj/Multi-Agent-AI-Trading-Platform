@@ -47,6 +47,8 @@ export class TuiApiClient {
   consensus() { return getJson<any>(this.base, '/api/v2/observability/consensus-report'); }
   risk() { return getJson<any>(this.base, '/api/v2/runtime/risk/status'); }
   events() { return getJson<any>(this.base, '/api/v2/observability/events?limit=50'); }
+  /** Daily reflection report for a trading date (YYYY-MM-DD) or 'latest'. */
+  dailyReflection(date: string) { return getJson<any>(this.base, `/api/v2/observability/daily-reflection/${encodeURIComponent(date)}`); }
 }
 
 /**

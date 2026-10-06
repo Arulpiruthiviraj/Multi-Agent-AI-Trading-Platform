@@ -31,6 +31,7 @@ describe('TuiApiClient', () => {
     await c.consensus();
     await c.risk();
     await c.events();
+    await c.dailyReflection('2026-10-05');
 
     const paths = calls.map((u) => u.replace('http://127.0.0.1:3400', ''));
     expect(paths).toEqual([
@@ -45,6 +46,7 @@ describe('TuiApiClient', () => {
       '/api/v2/observability/consensus-report',
       '/api/v2/runtime/risk/status',
       '/api/v2/observability/events?limit=50',
+      '/api/v2/observability/daily-reflection/2026-10-05',
     ]);
   });
 

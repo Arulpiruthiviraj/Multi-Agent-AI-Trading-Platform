@@ -232,6 +232,14 @@ shortlisted candidates (watchlist-subscribe only — **never** a second order pa
                                  # NO_SNAPSHOT_DATA) plus how far it got through subscription/
                                  # evaluation/consensus/risk/OMS. Only covers activity after this
                                  # phase shipped - cannot retroactively explain an earlier miss.
+./argus daily-reflection [--date=YYYY-MM-DD]
+                                 # GET /api/v2/observability/daily-reflection/:date - post-market
+                                 # reflection report (default: most recent completed session):
+                                 # pre-market focus performance, discovery coverage funnel
+                                 # (movers -> seen -> evaluated -> acted), top movers with
+                                 # Argus's fate per symbol, never-seen blind spots, filtered
+                                 # winners-losers, consensus/risk rejections, data-readiness
+                                 # failures, catalyst coverage. Read-only, never what to trade.
 ```
 
 All of the above are read-only correlations over already-persisted `observability_events` /
