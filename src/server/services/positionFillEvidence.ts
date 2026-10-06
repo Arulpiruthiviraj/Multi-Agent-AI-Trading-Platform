@@ -24,6 +24,21 @@ export function checkPositionFillEvidence(scope: Scope, remoteQuantity: number):
   return Math.abs(fill.quantity - remoteQuantity) > tolerance ? 'POSITION_FILL_CONFLICT' : null;
 }
 
+/** Distinct symbols this (broker, environment) scope has ANY fill-ledger history for. Used to
+ * cross-check a symbol the broker currently reports as flat/absent against the authoritative
+ * fill ledger, even when the `portfolio` cache table never hydrated it (e.g. a short position -
+ * see PortfolioReconciliation.ts's short-position branch). Without this, a symbol missing from
+ * BOTH the broker response AND the local cache is invisible to every existing comparison loop,
+ * so a genuine broker/ledger disagreement (broker says flat, ledger says a real position) would
+ * never surface at all. 2026-10-06, ARGUS_SHORT_RECONCILIATION_SEMANTICS_FIX.
+ */
+export function listSymbolsWithFillLedgerHistory(brokerId: string, environment: string): string[] {
+  const rows = sqliteDb.prepare(`SELECT DISTINCT t.symbol AS symbol FROM fills f
+    JOIN trades t ON t.id = f.order_id
+    WHERE t.broker_id = ? AND t.execution_environment = ?`).all(brokerId, environment) as Array<{ symbol: string }>;
+  return rows.map((r) => r.symbol).filter(Boolean);
+}
+
 /** Called after broker read, directly before placeOrder. The already-persisted PENDING row is
  * the reservation. Sibling unresolved orders are rejected, not timed out or assumed canceled.
  * Validation + baseline write are synchronous so two independent exit traces cannot race.

@@ -998,6 +998,7 @@ export const COMMAND_HELP: Record<string, string> = {
   'reflection-engine-health': 'Usage: argus reflection-engine-health\nReflection engine health.',
   'extended-hours-spread': 'Usage: argus extended-hours-spread [--hours=N]\nExtended-hours spread diagnostics.',
   'why-no-trade': 'Usage: argus why-no-trade [--symbol=<SYM>]\nExplain why Argus is not trading (blocking gates).',
+  'reconciliation-status': 'Usage: argus reconciliation-status\nExplain the latest portfolio reconciliation cycle - broker vs local cache vs fill ledger, per-symbol mismatch detail, and whether trading is paused for it. Never shows a fabricated local=0 when the authoritative fill ledger disagrees.',
   'calibration-maturity': 'Usage: argus calibration-maturity\nCalibration maturity report.',
   'agent-edge': 'Usage: argus agent-edge\nPer-agent edge estimates.',
   'multi-horizon-outcomes': 'Usage: argus multi-horizon-outcomes\nMulti-horizon outcome tracking.',
@@ -1585,6 +1586,59 @@ const commands: Record<string, () => Promise<void>> = {
       signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
     });
     console.log(await res.text());
+  },
+  async 'reconciliation-status'() {
+    // 2026-10-06 (ARGUS_SHORT_RECONCILIATION_SEMANTICS_FIX, OKTA forensic audit follow-up):
+    // reads GET /api/v1/system/reconciliation/status (already-existing, read-only - this never
+    // resumes, pauses, acknowledges, or flattens anything) and renders it clearly, so a mismatch
+    // like UNMANAGED_SHORT_POSITION never reads as "local thinks this is flat" when the
+    // authoritative fill ledger actually agrees with the broker on a real signed quantity.
+    const res = await fetch(`${BASE}/api/v1/system/reconciliation/status`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
+    });
+    const data: any = await res.json();
+    if (data?.error) {
+      console.log(`Error: ${data.error}`);
+      return;
+    }
+    const lines: string[] = [];
+    lines.push(`Trading state: ${data.tradingState}`);
+    lines.push(`Broker: ${data.broker?.name ?? 'unknown'} (syncState=${data.broker?.syncState ?? 'unknown'})`);
+    lines.push('');
+    const mismatches: Array<{ symbol?: string; type?: string; localQty?: number; remoteQty?: number; approxDollarImpact?: number }> = data.latest?.mismatches ?? [];
+    if (mismatches.length === 0) {
+      lines.push('Latest reconciliation cycle: MATCH (no mismatches).');
+    } else {
+      lines.push(`Latest reconciliation cycle: ${mismatches.length} mismatch(es) - actionTaken=${data.latest?.actionTaken ?? 'null'}`);
+      for (const m of mismatches) {
+        lines.push('');
+        lines.push(`  Reason: ${m.type}`);
+        if (m.symbol) lines.push(`  Symbol: ${m.symbol}`);
+        if (m.type === 'UNMANAGED_SHORT_POSITION') {
+          // localQty here IS the authoritative fill-ledger quantity (never a fabricated 0) -
+          // both the broker and the fill ledger already agree; the local `portfolio` cache
+          // simply refuses to hydrate a short, so PortfolioMonitor cannot risk-manage it.
+          lines.push(`  Broker: ${m.remoteQty}`);
+          lines.push(`  Fill ledger: ${m.localQty}`);
+          lines.push(`  Portfolio monitor: SHORT_NOT_SUPPORTED`);
+          lines.push(`  Operator action required - see docs/audits/ARGUS_SHORT_RECONCILIATION_SEMANTICS_FIX_2026-10-06.md.`);
+        } else if (m.type === 'SHORT_POSITION_UNMONITORED') {
+          lines.push(`  Broker: ${m.remoteQty}`);
+          lines.push(`  Fill ledger: no history for this scope - cannot confirm agreement.`);
+          lines.push(`  Portfolio monitor: SHORT_NOT_SUPPORTED`);
+          lines.push(`  Operator action required.`);
+        } else {
+          lines.push(`  Local: ${m.localQty}  Broker: ${m.remoteQty}  ~$Impact: ${m.approxDollarImpact}`);
+        }
+      }
+    }
+    lines.push('');
+    if (data.unackedFilledOrphans?.length > 0) {
+      lines.push(`Unacknowledged FILLED broker orders with no local record: ${data.unackedFilledOrphans.length}`);
+    }
+    lines.push(data.note ?? '');
+    console.log(lines.join('\n'));
   },
   async 'calibration-maturity'() {
     // Phase 9 (2026-08-31): explicit UNVALIDATED/LEARNING/CALIBRATED/TRUSTED classification per
@@ -2504,7 +2558,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'premarket-focus', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
-      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'trade-economic-attribution', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'discovery-challengers', 'strategy-scorecard', 'market-data-diagnostics', 'quant-evidence', 'reflection-engine-health', 'portfolio-impact', 'daily-reflection']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'trade-economic-attribution', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'reconciliation-status', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'discovery-challengers', 'strategy-scorecard', 'market-data-diagnostics', 'quant-evidence', 'reflection-engine-health', 'portfolio-impact', 'daily-reflection']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
       ['Doctor & shell integration', ['doctor', 'completion']],

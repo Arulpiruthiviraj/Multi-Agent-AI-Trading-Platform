@@ -21,7 +21,7 @@ import { getActiveAcknowledgedOrderIds } from './ReconciliationAcknowledgements'
 import { isReconciliationWarmupActive, reconciliationWarmupRemainingMs } from '../core/startup';
 import { canonicalPortfolioSymbol, confirmConsecutiveFault, confirmMissingLocally, confirmStillHeldLocally, discrepancyFaultKey, findHolding, positionSetDelta, pruneResolvedFaults, summarizePositionSet } from './portfolioReconcileCompare';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
-import { checkPositionFillEvidence, latestPositionFill } from './positionFillEvidence';
+import { checkPositionFillEvidence, latestPositionFill, listSymbolsWithFillLedgerHistory } from './positionFillEvidence';
 import { resolveOmsExecutionEnvironment } from '../research/organicPaper';
 import { normalizeTradingMode } from '../core/tradingModeEnv';
 import { marketDataWorker } from './MarketDataWorker';
@@ -54,7 +54,7 @@ interface MismatchDetail {
   type: 'QUANTITY_DRIFT' | 'MISSING_LOCALLY' | 'MISSING_REMOTELY'
       | 'OPEN_ORDER_MISSING_LOCALLY' | 'OPEN_ORDER_MISSING_REMOTELY' | 'ACCOUNT_INCONSISTENCY' | 'ACCOUNT_VALUATION_UNAVAILABLE'
       | 'FILLED_ORDER_MISSING_LOCALLY' | 'POSITION_FILL_CONFLICT' | 'POSITION_FILL_BASELINE_UNAVAILABLE'
-      | 'SHORT_POSITION_UNMONITORED';
+      | 'SHORT_POSITION_UNMONITORED' | 'UNMANAGED_SHORT_POSITION';
   localQty: number;
   remoteQty: number;
   approxDollarImpact: number;
@@ -223,16 +223,57 @@ export class PortfolioReconciliationWorker {
         // be hydrated or drift-written verbatim: PortfolioMonitor skips quantity <= 0 rows
         // forever (no stop/target review) and the MISSING_REMOTELY loop skips them too, so
         // writing one manufactures a false RECONCILIATION_MATCH for a position nothing
-        // monitors. Record it as an operator-alert mismatch instead; the normal
-        // worstImpact >= SIGNIFICANT_MISMATCH_DOLLARS gate pauses new trading until the
-        // operator resolves it. Dust below QTY_TOLERANCE is ignored.
+        // monitors. Dust below QTY_TOLERANCE is ignored.
+        //
+        // 2026-10-06 correction (ARGUS_SHORT_RECONCILIATION_SEMANTICS_FIX, OKTA forensic
+        // audit): the original fix above always recorded a hardcoded `localQty: 0` sentinel
+        // and the type `SHORT_POSITION_UNMONITORED`, which reads as "local thinks this is
+        // flat" even when the authoritative fill ledger (`fills.position_quantity_after`,
+        // NOT the `portfolio` cache this branch intentionally refuses to write) already
+        // knows the true signed quantity and AGREES with the broker. That is not a real
+        // broker/local disagreement - it is a cache that cannot represent a short at all.
+        // Cross-check against the fill ledger (the same `checkPositionFillEvidence()` used
+        // for every other POSITION_FILL_* case) before deciding which story to tell:
+        //   - ledger DISAGREES with the broker  -> a genuine mismatch. Do not soften it;
+        //     report it exactly as every other POSITION_FILL_* conflict is reported.
+        //   - ledger AGREES with the broker     -> both authoritative sources already agree
+        //     this is a real, continuing, un-risk-managed short. Report the TRUE ledger
+        //     quantity (never 0) under a distinct classification, UNMANAGED_SHORT_POSITION,
+        //     so an operator never reads this as "local=0 vs broker=-14".
+        //   - no ledger evidence exists at all  -> cannot confirm agreement either way; keep
+        //     the original, more conservative SHORT_POSITION_UNMONITORED/localQty:0 framing.
+        // Every branch still skips hydration and still pushes a mismatch that the existing
+        // worstImpact >= SIGNIFICANT_MISMATCH_DOLLARS gate uses to pause trading - this is a
+        // reporting/classification fix only, never a relaxation of the pause.
         if (typeof qty === 'number' && qty < -QTY_TOLERANCE) {
+          const scope = { symbol, brokerId: broker.id, environment };
+          const conflict = checkPositionFillEvidence(scope, qty);
+          if (conflict) {
+            if (!mismatches.some(m => m.symbol === symbol && m.type.startsWith('POSITION_FILL_'))) {
+              mismatches.push({ symbol, type: conflict === 'POSITION_FILL_BASELINE_UNAVAILABLE'
+                ? 'POSITION_FILL_BASELINE_UNAVAILABLE' : 'POSITION_FILL_CONFLICT',
+                localQty: latestPositionFill(scope)?.quantity ?? 0, remoteQty: qty,
+                approxDollarImpact: dollarImpact(qty, price) });
+            }
+            console.error(`[PortfolioReconciliation] ${symbol}: broker holds SHORT position (${qty}) but the fill ledger disagrees (${conflict}) — genuine broker/ledger mismatch. NOT hydrated.`);
+            continue;
+          }
+          const fill = latestPositionFill(scope);
+          if (fill && fill.quantity !== null) {
+            if (!mismatches.some(m => m.symbol === symbol && m.type === 'UNMANAGED_SHORT_POSITION')) {
+              mismatches.push({ symbol, type: 'UNMANAGED_SHORT_POSITION',
+                localQty: fill.quantity, remoteQty: qty,
+                approxDollarImpact: dollarImpact(qty, price) });
+            }
+            console.error(`[PortfolioReconciliation] ${symbol}: broker and the fill ledger AGREE on a SHORT position (${qty}) — NOT hydrated into the portfolio cache (Argus has no short-monitoring path). Operator review required (UNMANAGED_SHORT_POSITION).`);
+            continue;
+          }
           if (!mismatches.some(m => m.symbol === symbol && m.type === 'SHORT_POSITION_UNMONITORED')) {
             mismatches.push({ symbol, type: 'SHORT_POSITION_UNMONITORED',
               localQty: 0, remoteQty: qty,
               approxDollarImpact: dollarImpact(qty, price) });
           }
-          console.error(`[PortfolioReconciliation] ${symbol}: broker holds SHORT position (${qty}) — NOT hydrated (Argus has no short-monitoring path). Operator review required.`);
+          console.error(`[PortfolioReconciliation] ${symbol}: broker holds SHORT position (${qty}) with no fill-ledger history — NOT hydrated (Argus has no short-monitoring path). Operator review required.`);
           continue;
         }
         if (rejectUnconfirmedPosition(symbol, qty, price)) continue;
@@ -364,6 +405,28 @@ export class PortfolioReconciliationWorker {
           quantity: 0,
           lastUpdated: new Date().toISOString()
         }).where(eq(portfolio.symbol, local.symbol)).run();
+      }
+
+      // 2026-10-06 (ARGUS_SHORT_RECONCILIATION_SEMANTICS_FIX): a symbol that is missing from
+      // BOTH the broker's current response AND the local `portfolio` cache is invisible to the
+      // two loops above - they only ever compare "remote positions" against "cache rows", never
+      // against the authoritative fill ledger directly. That is exactly the gap that would let a
+      // genuine broker/ledger disagreement where the broker now reports a symbol as flat (e.g. an
+      // operator manually closed a position outside Argus) while the fill ledger still shows a
+      // real open quantity go completely unreported. Cross-check every symbol with fill-ledger
+      // history that neither loop above already covered, reusing the SAME checkPositionFillEvidence()
+      // comparison every other POSITION_FILL_* case already uses - no new comparison logic, and
+      // this can only ADD a mismatch, never suppress one already found above.
+      try {
+        for (const rawSymbol of listSymbolsWithFillLedgerHistory(broker.id, environment)) {
+          const canon = canonicalPortfolioSymbol(rawSymbol);
+          if (!canon || remoteCanon.has(canon)) continue; // already checked via the remote-positions loop
+          if (findHolding(localHoldings, canon)) continue; // already checked via the local-holdings loop above
+          const fillPrice = latestPositionFill({ symbol: canon, brokerId: broker.id, environment })?.averagePrice || 0;
+          rejectUnconfirmedPosition(canon, 0, fillPrice);
+        }
+      } catch (e) {
+        console.error('[PortfolioReconciliation] Fill-ledger-only cross-check failed', e);
       }
       // pruneResolvedFaults() moved to after the open-order reconciliation block below (2026-09-14)
       // so both sections' fault keys share one prune pass - calling it here too would incorrectly

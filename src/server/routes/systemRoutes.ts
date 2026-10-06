@@ -245,7 +245,7 @@ systemRouter.post("/system/reconciliation/acknowledge", tradingLimiter, async (r
 systemRouter.get("/system/reconciliation/status", async (_req: Request, res: Response) => {
   try {
     const { listActiveAcknowledgements, getActiveAcknowledgedOrderIds } = await import('../services/ReconciliationAcknowledgements');
-    const { latestCycleIsMatch, selectUnackedFilledOrphans } = await import('../services/reconciliationOperatorSnapshot');
+    const { latestCycleIsMatch, selectUnackedFilledOrphans, parseReconMismatches } = await import('../services/reconciliationOperatorSnapshot');
     const brokerManager = BrokerManager.getInstance();
     let brokerName = 'unknown';
     let unackedFilledOrphans: Array<{
@@ -278,9 +278,14 @@ systemRouter.get("/system/reconciliation/status", async (_req: Request, res: Res
     const latest = recent[0];
     const lastPause = recent.find((r) => String(r.actionTaken || '').includes('TRADING_PAUSED')) || null;
     const acks = await listActiveAcknowledgements(brokerName === 'unknown' ? undefined : brokerName);
-    const mismatchCount = latest?.mismatches
-      ? (() => { try { const p = JSON.parse(latest.mismatches as string); return Array.isArray(p) ? p.length : 0; } catch { return 0; } })()
-      : 0;
+    // 2026-10-06 (ARGUS_SHORT_RECONCILIATION_SEMANTICS_FIX): surface the actual per-symbol
+    // mismatch rows, not just a count. `localQty`/`remoteQty` on a mismatch row is whatever
+    // PortfolioReconciliation.ts actually compared (the `portfolio` cache for most types; the
+    // authoritative fill ledger's TRUE signed quantity for UNMANAGED_SHORT_POSITION) - never a
+    // fabricated zero. An operator reading this JSON must never be told local=0 when the fill
+    // ledger says otherwise; see UNMANAGED_SHORT_POSITION vs SHORT_POSITION_UNMONITORED.
+    const latestMismatches = parseReconMismatches(latest?.mismatches as string | null | undefined);
+    const mismatchCount = latestMismatches.length;
 
     res.json({
       tradingState: tradingEngine.state.tradingState,
@@ -296,6 +301,7 @@ systemRouter.get("/system/reconciliation/status", async (_req: Request, res: Res
         broker: latest.broker,
         matches: latestCycleIsMatch(latest),
         mismatchCount,
+        mismatches: latestMismatches,
         actionTaken: latest.actionTaken,
       } : {
         id: null,
@@ -303,6 +309,7 @@ systemRouter.get("/system/reconciliation/status", async (_req: Request, res: Res
         broker: null,
         matches: false,
         mismatchCount: 0,
+        mismatches: [],
         actionTaken: null,
       },
       lastPause: lastPause ? {
