@@ -6,7 +6,7 @@
  * Purpose:
  * Phase 3 extension contract for future Jev classification tasks beyond news
  * triage. Defines the shape any new task must implement to reuse the proven
- * pattern: perfect-data state → single batched evaluate() → validated mapping.
+ * pattern: complete-validated-or-skip state → single batched evaluate() → validated mapping.
  *
  * No task is registered here. Adding a task means implementing this interface
  * in a new module, feature-flagging it default-off, and wiring it through the

@@ -26,7 +26,7 @@
  */
 
 import { tradingSafety } from '../config/tradingSafety';
-import { JevNewsScore, mapJevScoreToAnalysisFields } from './JevNewsTriage';
+import { JevNewsScore, mapJevScoreToAnalysisFields } from './JevNewsTypes';
 import { AIAnalysisResult } from './NewsScoringEngine';
 import { NormalizedArticle } from './NewsNormalizer';
 import {

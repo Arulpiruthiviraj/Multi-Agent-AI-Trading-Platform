@@ -433,6 +433,12 @@ export interface TradingSafety {
   /** Jev Phase 2: credibility at/above this + impact at/above jevHighStakesImpact = high-stakes, always escalate to LLM. */
   jevHighStakesCredibility: number;
   jevHighStakesImpact: number;
+  /** Jev Phase 1 (2026-10-06): articles older than this (hours) are never shadow-scored. */
+  jevShadowMaxAgeHours: number;
+  /** Jev Phase 1: article body truncation budget (chars) for the Jev request state. */
+  jevShadowMaxBodyChars: number;
+  /** Jev Phase 1: default per-request timeout (ms) for shadow scoring. */
+  jevShadowTimeoutMs: number;
   aiDecisionTemperature: number;
   minRegimeConfidenceToTrade: number;
   /**
@@ -797,6 +803,9 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'jevEscalationRelevanceThreshold',
   'jevHighStakesCredibility',
   'jevHighStakesImpact',
+  'jevShadowMaxAgeHours',
+  'jevShadowMaxBodyChars',
+  'jevShadowTimeoutMs',
   'aiDecisionTemperature',
   'minRegimeConfidenceToTrade',
   'monteCarloDefaultSeed',

@@ -20,7 +20,7 @@ import { randomUUID } from 'crypto';
 import { db } from '../db';
 import * as schema from '../db/schema';
 import { sql } from 'drizzle-orm';
-import { JevNewsScore, mapJevScoreToAnalysisFields } from './JevNewsTriage';
+import { JevNewsScore, mapJevScoreToAnalysisFields } from './JevNewsTypes';
 import { AIAnalysisResult } from './NewsScoringEngine';
 
 export interface ShadowLedgerEntry {

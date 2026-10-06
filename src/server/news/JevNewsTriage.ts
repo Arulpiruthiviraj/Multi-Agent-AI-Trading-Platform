@@ -5,7 +5,7 @@
  *
  * Purpose:
  * Jev-powered news triage for Argus — Phase 1 (shadow) through Phase 3.
- * Builds the perfect-data input contract, defines the single batched question
+ * Builds the complete-validated-or-skip input contract, defines the single batched question
  * set, scores articles via JevProvider, and maps answers back into Argus's own
  * validated shapes. Phase 1 uses only scoreArticleWithJev() + the shadow ledger;
  * nothing here influences any trading decision.
@@ -25,8 +25,13 @@
  */
 
 import { JevProvider, JevQuestion, JevEvaluationResult } from '../ai/providers/JevProvider';
-import { looksLikeListedTicker, clampScore, coerceEnum, TRADING_BIAS_VALUES } from '../ai/AIOutputValidator';
+import { looksLikeListedTicker, clampScore } from '../ai/AIOutputValidator';
+import { JevNewsScore, mapJevScoreToAnalysisFields } from './JevNewsTypes';
+/** Re-exported from JevNewsTypes (circular-dep refactor, 2026-10-06) — prefer importing from './JevNewsTypes'. */
+export type { JevNewsScore };
+export { mapJevScoreToAnalysisFields };
 import { NormalizedArticle } from './NewsNormalizer';
+import { tradingSafety } from '../config/tradingSafety';
 import { recordShadowScore } from './JevShadowLedger';
 import { AIAnalysisResult } from './NewsScoringEngine';
 
@@ -57,17 +62,28 @@ export interface JevNewsState {
   };
 }
 
-/** Articles older than this are never scored — stale news spends zero requests. */
-export const JEV_NEWS_MAX_AGE_HOURS = 24;
-/** Jev's documented budget: ~32k tokens for state + longest question. Stay well under. */
-const MAX_BODY_CHARS = 12000;
+/** Articles older than this are never scored — stale news spends zero requests.
+ *  Operational threshold: lives in config/tradingSafety.json (jevShadowMaxAgeHours). */
+export function getJevShadowMaxAgeHours(): number {
+  return Number((tradingSafety as unknown as { jevShadowMaxAgeHours: number }).jevShadowMaxAgeHours) || 24;
+}
+/** Jev's documented budget: ~32k tokens for state + longest question. Stay well under.
+ *  Operational threshold: lives in config/tradingSafety.json (jevShadowMaxBodyChars). */
+export function getJevShadowMaxBodyChars(): number {
+  return Number((tradingSafety as unknown as { jevShadowMaxBodyChars: number }).jevShadowMaxBodyChars) || 12000;
+}
+/** Default per-request timeout for shadow scoring.
+ *  Operational threshold: lives in config/tradingSafety.json (jevShadowTimeoutMs). */
+export function getJevShadowTimeoutMs(): number {
+  return Number((tradingSafety as unknown as { jevShadowTimeoutMs: number }).jevShadowTimeoutMs) || 15000;
+}
 
 export function isJevShadowEnabled(): boolean {
   return process.env.ARGUS_JEV_SHADOW_SCORING_ENABLED === 'true';
 }
 
 /**
- * Perfect-data input contract. Returns a complete, validated state, or null when
+ * Complete-validated-or-skip input contract. Returns a complete, schema-validated, fresh, bounded state, or null when
  * anything required is missing/invalid/stale — in which case the caller must NOT
  * make a request. Never returns a partial state.
  */
@@ -87,7 +103,7 @@ export function buildJevNewsState(
 
   const publishedMs = Date.parse(article.publishedAt || '');
   if (!Number.isFinite(publishedMs)) return null;
-  if (nowMs - publishedMs > JEV_NEWS_MAX_AGE_HOURS * 3600_1000) return null; // stale
+  if (nowMs - publishedMs > getJevShadowMaxAgeHours() * 3600_1000) return null; // stale
   if (publishedMs > nowMs + 5 * 60_1000) return null; // future-dated feed garbage
 
   const credibility = Number(ctx.credibility);
@@ -97,8 +113,8 @@ export function buildJevNewsState(
 
   // Truncate explicitly with a marker rather than silently — the scorer sees the full
   // headline and knows the body was cut.
-  const truncatedBody = body.length > MAX_BODY_CHARS
-    ? body.slice(0, MAX_BODY_CHARS) + '\n[BODY TRUNCATED FOR LENGTH]'
+  const truncatedBody = body.length > getJevShadowMaxBodyChars()
+    ? body.slice(0, getJevShadowMaxBodyChars()) + '\n[BODY TRUNCATED FOR LENGTH]'
     : body;
 
   return {
@@ -168,24 +184,6 @@ export function buildJevNewsQuestions(state: JevNewsState): Record<string, JevQu
   };
 }
 
-/** Jev's raw scored answers for one article, in Argus's own validated ranges. */
-export interface JevNewsScore {
-  relevantProb: number; // 0..1
-  sentiment: 'bullish' | 'bearish' | 'neutral';
-  sentimentConf: number; // 0..1
-  sentimentProbs: Record<string, number>;
-  impactScore: number; // 0..10
-  impactConf: number; // 0..1
-  surpriseProb: number; // 0..1
-  contradictionProb: number; // 0..1
-  urgencyScore: number; // 0..10
-  urgencyConf: number; // 0..1
-  minConfidence: number; // 0..1 — lowest confidence across all questions
-  model: string;
-  inputTokens: number;
-  latencyMs: number;
-}
-
 function asNoul(answer: unknown): number {
   const a = answer as { type: string; noul: number };
   if (a?.type !== 'noul' || !Number.isFinite(a.noul)) throw new Error('bad noul answer');
@@ -218,7 +216,7 @@ export async function scoreArticleWithJev(
   const result: JevEvaluationResult = await provider.evaluate(
     state as unknown as Record<string, unknown>,
     buildJevNewsQuestions(state),
-    { timeoutMs: options?.timeoutMs ?? 15000 },
+    { timeoutMs: options?.timeoutMs ?? getJevShadowTimeoutMs() },
   );
   const latencyMs = Date.now() - started;
   const a = result.answers;
@@ -318,31 +316,4 @@ export function kickOffJevShadowScoring(input: ShadowScoringInput): void {
       console.warn('[JevShadow] scoring failed (observation dropped):', (e as Error)?.message || e);
     }
   })();
-}
-/**
- * Map a Jev score into the LLM path's own field scales, for apples-to-apples
- * agreement measurement (Phase 1) and for the future escalated path (Phase 2).
- * Uses the same clamps as NewsScoringEngine's validation.
- */
-export function mapJevScoreToAnalysisFields(score: JevNewsScore): {
-  sentimentScore: number; // -1..1
-  marketImpactScore: number; // 0..100
-  confidence: number; // 0..100
-  tradingBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
-  marketSurprise: number; // 0..1
-  contradictoryEvidence: boolean;
-} {
-  const directional = score.sentiment === 'bullish' ? 1 : score.sentiment === 'bearish' ? -1 : 0;
-  return {
-    sentimentScore: clampScore(directional * score.sentimentConf, -1, 1, 0),
-    marketImpactScore: clampScore(score.impactScore * 10, 0, 100, 0),
-    confidence: clampScore(score.minConfidence * 100, 0, 100, 0),
-    tradingBias: coerceEnum(
-      score.sentiment === 'bullish' ? 'BULLISH' : score.sentiment === 'bearish' ? 'BEARISH' : 'NEUTRAL',
-      TRADING_BIAS_VALUES,
-      'NEUTRAL',
-    ),
-    marketSurprise: clampScore(score.surpriseProb, 0, 1, 0),
-    contradictoryEvidence: score.contradictionProb >= 0.5,
-  };
 }
