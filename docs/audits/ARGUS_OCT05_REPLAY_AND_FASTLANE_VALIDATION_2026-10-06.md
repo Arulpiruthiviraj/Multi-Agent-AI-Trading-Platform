@@ -299,8 +299,16 @@ live if their env flag is set at call time. So the honest conclusion is narrower
 exists and would have fired": the **logic** exists and would not need new research, but it is not
 part of the always-on live set today. Combined with Phase 10's finding (no bars ever fetched for
 three of the four benchmark names), the strategy question is moot for Oct 5 specifically regardless
-of CORE/EXPERIMENTAL status — there was no data to evaluate against. **No `RESEARCH_GAP` is
-recorded** — existing coverage is sufficient; this is a data/discovery gap, not a strategy gap.
+of CORE/EXPERIMENTAL status — there was no data to evaluate against.
+**Precise scope of this conclusion, stated carefully:** "no `RESEARCH_GAP`" means the required
+strategy *families* (opening-range, relative-strength, gap/volume continuation) appear to already
+exist in code — it does **not** mean these strategies were shown capable of capturing MXL/SYNA/
+WOLF specifically. That claim was never tested and cannot be, because those three symbols never
+had the bars or evaluation cycles needed to run any strategy against them at all (Phase 10). The
+correct, narrower statement is: *if* real data had existed for these symbols, Argus would not have
+needed new strategy research to evaluate it — not that any existing strategy would have fired on
+it. This distinction matters because "coverage is sufficient" and "coverage would have worked"
+are different claims, and only the first is supported here.
 
 ## Phase 22 — New strategy hypotheses. **DOCUMENTED ONLY, per real Phase 21 finding: not justified**
 
@@ -349,16 +357,29 @@ an empty one — not an honest basis for a promotion decision either way.
   more specific finding than "inconclusive" — it names exactly what's missing (an evaluator that
   turns a `FastOpportunityCandidate` into a real `FastEvaluationResult` and, when actionable, a real
   `emitTradeIdea` call into the unchanged ChiefTrader consensus).
-- **SCHEDULER_POLICY = `KEEP_CURRENT`** — no counterfactual policy was validated against a
-  trustworthy replay (Phase 5/14 correctly blocked), and the one real defect found in this whole
-  series (the non-finite-score gap) is already fixed as of the prior commit. Nothing here
-  independently proves any current policy parameter (cap=1, topN=20, fairness window=20) wrong.
+- **SCHEDULER_POLICY = `NO_POLICY_CHANGE_JUSTIFIED_YET`** (corrected from an earlier draft's
+  `KEEP_CURRENT` — the two are not equivalent). `KEEP_CURRENT` implies an active comparison was
+  made and the current policy won; that did not happen. Only one narrow cycle (CHRW/BMY/PTC) was
+  faithfully replayable, and the full day cannot be reconstructed (Phase 5) — so this report has no
+  basis to claim the current policy is *correct*, only that nothing here *proves it wrong*. The one
+  real defect found in this whole series (the non-finite-score gap) is already fixed as of the
+  prior commit; that is a correctness fix, not evidence about `cap=1`/`topN=20`/fairness-window=20
+  specifically. `NO_POLICY_CHANGE_JUSTIFIED_YET` is the honest state: absence of proof is not proof
+  of correctness.
 - **CONSENSUS = `INDEPENDENCE_LIMITED`** — real, repeated, direct evidence (Phase 18/19): every
   near-miss today was carried by exactly one independent evidence source, and the same confidence
   value recurring verbatim across many rounds for TSLA/META/XP suggests the system is re-asking the
   same single source rather than accumulating new independent evidence over time. This is the
   system's real bottleneck today — not discovery latency, not the hot-swap cap, not the allocator's
-  fairness semantics.
+  fairness semantics. **Update (2026-10-06):** the repeated-confidence pattern was formally audited
+  in `ARGUS_FAST_EVALUATOR_OCT05_CASE_STUDY.md` §5. That audit found `TechnicalAgent`'s own
+  confidence genuinely varies between rounds (real, changing indicator snapshots), while
+  `ChiefTraderAgent`'s aggregate repeats an identical 17-digit float across multiple timestamps —
+  evidence consistent with stale-evidence re-scoring, not fully traced to its root cause. This
+  does **not** overturn the `INDEPENDENCE_LIMITED` classification, which rests on the separately-
+  confirmed `agreements_count=1` pattern and is unaffected by the freshness question — but it does
+  mean the *4,427-round count* itself is probably inflated by re-scores, a distinction this report
+  did not originally draw.
 
 ## What this report explicitly recommends next (not executed here)
 
