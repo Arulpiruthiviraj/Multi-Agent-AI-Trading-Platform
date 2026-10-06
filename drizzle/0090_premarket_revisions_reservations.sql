@@ -13,9 +13,11 @@ CREATE TABLE trade_plan_revisions (
   reason_for_refresh TEXT,
   created_at TEXT NOT NULL
 );
+--> statement-breakpoint
 CREATE INDEX idx_trade_plan_revisions_plan ON trade_plan_revisions(plan_id, refresh_version);
+--> statement-breakpoint
 CREATE INDEX idx_trade_plan_revisions_symbol_date ON trade_plan_revisions(symbol, plan_date);
-
+--> statement-breakpoint
 CREATE TABLE premarket_data_reservations (
   id TEXT PRIMARY KEY,
   symbol TEXT NOT NULL,
@@ -31,5 +33,7 @@ CREATE TABLE premarket_data_reservations (
   release_reason TEXT,
   created_at TEXT NOT NULL
 );
+--> statement-breakpoint
 CREATE INDEX idx_premarket_reservations_status ON premarket_data_reservations(status, expires_at);
+--> statement-breakpoint
 CREATE INDEX idx_premarket_reservations_symbol ON premarket_data_reservations(symbol, status);

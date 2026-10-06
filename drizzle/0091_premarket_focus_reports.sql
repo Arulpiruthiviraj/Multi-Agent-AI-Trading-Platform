@@ -14,4 +14,5 @@ CREATE TABLE premarket_focus_reports (
   metrics_json TEXT,
   created_at TEXT NOT NULL
 );
+--> statement-breakpoint
 CREATE UNIQUE INDEX idx_premarket_focus_reports_date_version ON premarket_focus_reports(plan_date, refresh_version);
