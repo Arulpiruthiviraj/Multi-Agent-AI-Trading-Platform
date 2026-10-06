@@ -21,11 +21,13 @@
  *    could have used at the time).
  *  - A real flow-level scorecard (today's actual stage-by-stage counts).
  *  - Real systematic blind-spot detection (aggregate patterns across today's findings only - a
- *    single day is not enough to call anything "recurring"; that requires the multi-day rollup
- *    this module does not yet build).
+ *    single day is not enough to call anything "recurring"; recurrence is established by
+ *    computeMultiDayRollup() below and by the weekly digest in
+ *    src/server/reflection/weeklyDigest.ts, which persists a pattern only after it recurs on
+ *    >= 2 distinct trading days in a week).
  *  - Does NOT yet build: per-strategy/per-agent statistical learning (needs real trade outcomes;
- *    today has zero), the trade forensic record (same reason), weekly reviews (needs 5 real
- *    sessions; we have 1), research-hypothesis generation with real historical evidence.
+ *    today has zero), the trade forensic record (same reason), research-hypothesis generation
+ *    with real historical evidence.
  */
 import { db, sqliteDb } from '../db';
 import * as schema from '../db/schema';
@@ -122,7 +124,55 @@ export interface PostMarketReport {
   rejectedCandidateAudits: RejectedCandidateAudit[];
 }
 
-function classify(f: Pick<SymbolFinding, 'admitted' | 'filteredReasons' | 'hadNewsCoverage' | 'missedOpportunityRow'> & { lastEvidence: FilteredEvidence | null }): { classification: string; rationale: string } {
+/**
+ * TAXONOMY INVENTORY (2026-10-06, workstream K audit - every fate/reason code classified).
+ * PostMarketAnalysis classify() taxonomy (this module's own codes):
+ *  - CORRECT_NON_ACTION ...... USED (filtered on PRICE or SPREAD - deliberate policy screens)
+ *  - DATA_QUALITY_GAP ........ USED (filtered on ADV with null advShares - gate failed closed
+ *                              correctly; the data fetch is the real gap. Deliberately distinct
+ *                              from LIQUIDITY_EXCLUDED: "no data" vs "measured below floor".)
+ *  - LIQUIDITY_EXCLUDED ...... USED (filtered on ADV_BELOW_FLOOR/ADV/DOLLAR_VOLUME with a real
+ *                              measured value below the configured floor)
+ *  - FILTERED_OTHER .......... USED (genuine fallback for unmapped DiscoveryRejectReasons:
+ *                              NO_SNAPSHOT_DATA, SPREAD_CROSSED, RANK_CAP - and any future reason.
+ *                              Deliberately distinct from CORRECT_NON_ACTION: capacity/unknown
+ *                              exclusions are not deliberate quality screens.)
+ *  - ADMITTED_NO_MISSED_OPP_ROW USED (admitted as a discovery candidate, never flagged as a miss)
+ *  - NEWS_BLIND_SPOT ......... USED (NewsEngine covered it, never became a discovery candidate)
+ *  - TRUE_UNIVERSE_MISS ...... USED (was IMPLEMENTED_BUT_UNREACHED: the old fallthrough
+ *                              could never trigger because buildFindings() only saw symbols
+ *                              with discovery/news events. Now genuinely populated by
+ *                              readNeverSeenMovers() from workstream H's mover_coverage
+ *                              NEVER_SEEN rows - migration 0093, landed 2026-10-06.)
+ * MissedOpportunityDetector MissClassification (passed through verbatim from
+ * missed_opportunities rows when present - see that module's own inventory comment):
+ *  SUBSCRIPTION_MISS / AGENT_MISS / CONSENSUS_REJECTION / RISK_REJECTION /
+ *  RISK_NOT_CONFIRMED / EXECUTION_MISS / THESIS_INVALIDATED - all USED upstream.
+ *  NOT_ACTUALLY_MISS is USED by classifyMiss() but never persisted (filtered by
+ *  buildMissedOpportunityRecord()), so it cannot appear here in practice.
+ *  RANKING_MISS was REMOVED from the union 2026-10-06 (dead - never returned); rows
+ *  persisted before removal pass through verbatim if ever present (historical honesty).
+ * replay/MissedOpportunityAnalysis MissedOpportunityClassification
+ * (MISSED_OPPORTUNITY | CORRECTLY_AVOIDED | INCONCLUSIVE): a SEPARATE after-the-fact
+ * replay taxonomy, explicitly labeled 'AFTER-THE-FACT ANALYSIS' - not merged with the
+ * live-telemetry taxonomies above, which never use hindsight.
+ * Workstream H enums (mover_coverage, migration 0093 - LANDED 2026-10-06, real enums from
+ * drizzle/0093_mover_coverage.sql):
+ *  - primary_fate: ACTED_ON | APPROVED_NOT_EXECUTED | CONSENSUS_REJECTED | RISK_REJECTED |
+ *    STRATEGY_NO_SETUP | EVALUATED | SUBSCRIBED_NOT_EVALUATED | DISCOVERED_FILTERED |
+ *    DISCOVERED_NOT_PROMOTED | NEVER_SEEN | INSUFFICIENT_EVIDENCE - all USED (populated by
+ *    H's reconciliation; read by readNeverSeenMovers() below and outcomeAudits.ts).
+ *    Overlap note: CONSENSUS_REJECTED/RISK_REJECTED here describe the MOVER's fate (did the
+ *    day's big mover get acted on?), while MissClassification's CONSENSUS_REJECTION/
+ *    RISK_REJECTION describe a FUNNEL CANDIDATE's death point - same words, different
+ *    populations, deliberately not merged.
+ *  - never_seen_cause: UNIVERSE_COVERAGE | NEWS_SOURCE_COVERAGE | MARKET_MOVER_SOURCE |
+ *    RANK_CAP | DATA_UNAVAILABLE | SYMBOL_EXTRACTION | PREMARKET_REFRESH_TIMING | OTHER |
+ *    UNKNOWN - all USED (populated by H; UNKNOWN is the honest "no positive evidence"
+ *    cause, never an invented one). The weekly digest derives UNIVERSE_MISS_<CAUSE>
+ *    patterns from these.
+ */
+function classify(f: Pick<SymbolFinding, 'admitted' | 'filteredReasons' | 'hadNewsCoverage' | 'missedOpportunityRow'> & { lastEvidence: FilteredEvidence | null; neverSeenCause?: string | null }): { classification: string; rationale: string } {
   if (f.missedOpportunityRow) {
     return { classification: f.missedOpportunityRow.classification, rationale: f.missedOpportunityRow.classificationReason };
   }
@@ -153,7 +203,42 @@ function classify(f: Pick<SymbolFinding, 'admitted' | 'filteredReasons' | 'hadNe
   if (f.hadNewsCoverage) {
     return { classification: 'NEWS_BLIND_SPOT', rationale: 'NewsEngine analyzed a real story mentioning this symbol, but it never became a discovery candidate.' };
   }
+  // 2026-10-06 (workstream K): populated only via readNeverSeenMovers() when workstream H's
+  // mover_coverage table exists - a real reconciled NEVER_SEEN mover, not an inference.
+  if (f.neverSeenCause !== undefined) {
+    return { classification: 'TRUE_UNIVERSE_MISS', rationale: `Zero discovery-lineage or news events found for this symbol today, and mover_coverage reconciled it as NEVER_SEEN (cause: ${f.neverSeenCause ?? 'unknown'}).` };
+  }
   return { classification: 'TRUE_UNIVERSE_MISS', rationale: 'Zero discovery-lineage or news events found for this symbol today.' };
+}
+
+export interface NeverSeenMover {
+  symbol: string;
+  neverSeenCause: string | null;
+}
+
+/**
+ * Workstream H contract reader (2026-10-06, workstream K - CONDITIONAL wiring).
+ *
+ * Expected producer: workstream H's `mover_coverage` table (migration 0093, landed
+ * 2026-10-06) - one row per (trading_date, market mover) with columns `trading_date`,
+ * `symbol`, `primary_fate`, `never_seen_cause`. Rows with primary_fate = 'NEVER_SEEN' are
+ * movers the market made that Argus's discovery/news funnels never saw - the genuine
+ * producer for the TRUE_UNIVERSE_MISS taxonomy code.
+ *
+ * The table-existence check is explicit (rather than a swallowed query error) so this
+ * degrades honestly on a database where migration 0093 has not been applied yet - zero
+ * reconciled universe misses, never a fabricated one - while a real query failure against
+ * an existing table still throws instead of silently reporting zero.
+ */
+export function readNeverSeenMovers(tradingDate: string): NeverSeenMover[] {
+  const tableExists = sqliteDb.prepare(
+    `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mover_coverage'`
+  ).get() as { '1': number } | undefined;
+  if (!tableExists) return [];
+  const rows = sqliteDb.prepare(
+    `SELECT symbol, never_seen_cause FROM mover_coverage WHERE trading_date = ? AND primary_fate = 'NEVER_SEEN'`
+  ).all(tradingDate) as Array<{ symbol: string; never_seen_cause: string | null }>;
+  return rows.map((r) => ({ symbol: r.symbol, neverSeenCause: r.never_seen_cause }));
 }
 
 function buildFindings(sinceMs: number, sinceIso: string): SymbolFinding[] {
@@ -198,16 +283,33 @@ function buildFindings(sinceMs: number, sinceIso: string): SymbolFinding[] {
   }
 
   const allSymbols = new Set<string>([...bySymbol.keys(), ...missedOppBySymbol.keys()]);
+  // 2026-10-06 (workstream K): fold in H's reconciled NEVER_SEEN movers so TRUE_UNIVERSE_MISS
+  // is genuinely populated when the mover_coverage table exists. Empty until H lands.
+  const tradingDateOnly = sinceIso.slice(0, 10);
+  const neverSeenBySymbol = new Map<string, string | null>();
+  for (const m of readNeverSeenMovers(tradingDateOnly)) {
+    if (!neverSeenBySymbol.has(m.symbol)) {
+      neverSeenBySymbol.set(m.symbol, m.neverSeenCause);
+      allSymbols.add(m.symbol);
+    }
+  }
   const findings: SymbolFinding[] = [];
   for (const symbol of allSymbols) {
     const disc = bySymbol.get(symbol);
     const missedRow = missedOppBySymbol.get(symbol) ?? null;
     const base = {
-      admitted: disc?.admitted ?? true,
+      // 2026-10-06: default false (was true) - a symbol with no discovery events was never
+      // admitted; the old `true` default was unreachable in practice because every such
+      // symbol carried a missedOpportunityRow, whose branch fires first. The false default
+      // is what lets reconciled NEVER_SEEN movers reach TRUE_UNIVERSE_MISS.
+      admitted: disc?.admitted ?? false,
       filteredReasons: disc?.filteredReasons ?? [],
       hadNewsCoverage: disc?.hadNewsCoverage ?? false,
       missedOpportunityRow: missedRow,
       lastEvidence: disc?.lastEvidence ?? null,
+      // A symbol with any discovery/news event was seen by definition - the reconciled
+      // NEVER_SEEN cause applies only when no other evidence exists for it today.
+      neverSeenCause: disc === undefined && neverSeenBySymbol.has(symbol) ? (neverSeenBySymbol.get(symbol) ?? null) : undefined,
     };
     const { classification, rationale } = classify(base);
     findings.push({
@@ -632,6 +734,13 @@ function tradingDateInTimeZone(ms: number, timeZone: string): string {
 export class PostMarketAnalysisWorker {
   private intervalId: NodeJS.Timeout | null = null;
   private inFlight = false;
+  /** Trading dates whose mover-coverage reconciliation already completed this
+   *  process lifetime (rows persisted). */
+  private reflectionCompleted = new Set<string>();
+  /** Trading dates whose mover cohort was INSUFFICIENT_EVIDENCE (e.g. no provider
+   *  keys) - re-running every tick would just re-hit the network for the same
+   *  honest answer. A process restart re-attempts. */
+  private reflectionInsufficient = new Set<string>();
 
   start(intervalMs = 30 * 60_000): void {
     if (this.intervalId) return;
@@ -655,13 +764,42 @@ export class PostMarketAnalysisWorker {
     this.inFlight = true;
     try {
       const existing = await db.select().from(schema.postmarketReports).where(eq(schema.postmarketReports.tradingDate, tradingDate));
-      if (existing[0]?.status === 'COMPLETED') return;
-      const report = await generatePostMarketReport(tradingDate);
-      await persistPostMarketReport(report);
+      if (existing[0]?.status !== 'COMPLETED') {
+        const report = await generatePostMarketReport(tradingDate);
+        await persistPostMarketReport(report);
+      }
     } catch (e) {
       logErrorSafely('[PostMarketAnalysisWorker] report generation failed - will retry next tick', e);
     } finally {
       this.inFlight = false;
+    }
+
+    // Part B workstream H: day-movers-vs-coverage reconciliation, once per trading
+    // date after close, right after the post-market report step. Independent
+    // diagnostic - a report failure does not block it and vice versa.
+    await this.runReflectionOnce(tradingDate);
+  }
+
+  /**
+   * Runs the day-movers-vs-coverage reconciliation exactly once per trading date
+   * per process lifetime (idempotent at the DB level too, via mover_coverage's
+   * UNIQUE(trading_date, symbol)). A reflection failure is isolated: it logs and
+   * retries on the next tick without affecting the post-market report above.
+   * Dynamic import keeps this module's import graph unchanged (the reflection
+   * chain is only loaded when actually run).
+   */
+  private async runReflectionOnce(tradingDate: string): Promise<void> {
+    if (this.reflectionCompleted.has(tradingDate) || this.reflectionInsufficient.has(tradingDate)) return;
+    try {
+      const { runDailyReflection } = await import('../reflection/dailyReflection');
+      const result = await runDailyReflection(tradingDate);
+      if (result.cohortStatus === 'INSUFFICIENT_EVIDENCE') {
+        this.reflectionInsufficient.add(tradingDate);
+      } else {
+        this.reflectionCompleted.add(tradingDate);
+      }
+    } catch (e) {
+      logErrorSafely('[PostMarketAnalysisWorker] mover-coverage reflection failed - will retry next tick', e);
     }
   }
 }

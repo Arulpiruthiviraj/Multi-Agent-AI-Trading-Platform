@@ -46,15 +46,37 @@ const CHIEF_APPROVAL_OR_LATER_STATUS_LIST: TraceLifecycleStatus[] = [
 ];
 const CHIEF_APPROVAL_OR_LATER_STATUSES = new Set<string>(CHIEF_APPROVAL_OR_LATER_STATUS_LIST);
 
+/**
+ * Taxonomy inventory (2026-10-06, workstream K audit - every code classified):
+ *  - SUBSCRIPTION_MISS ......... USED (classifyMiss: ranked PROMOTE but never subscribed)
+ *  - AGENT_MISS ................ USED (classifyMiss: subscribed, no agent idea in window)
+ *  - CONSENSUS_REJECTION ....... USED (classifyMiss: idea generated, never reached CHIEF_APPROVED_IDEA)
+ *  - RISK_REJECTION ............ USED (classifyMiss: ChiefTrader approved, RiskEngine rejected)
+ *  - RISK_NOT_CONFIRMED ........ USED (classifyMiss: ChiefTrader approved, no affirmative risk approval;
+ *                                deliberately distinct from RISK_REJECTION - "rejected" and "never
+ *                                assessed" are different failure points, not duplicates)
+ *  - EXECUTION_MISS ............ USED (classifyMiss: approved by ChiefTrader + RiskEngine, no fill)
+ *  - THESIS_INVALIDATED ........ USED (classifyMiss: premarket TradePlan INVALIDATED/EXPIRED by
+ *                                TradePlanBuilder's own revalidation before any agent/ChiefTrader/
+ *                                RiskEngine stage was reached - deliberately distinct from
+ *                                CONSENSUS_REJECTION/RISK_REJECTION, which require evaluation by
+ *                                those stages; this is the thesis withdrawn upstream of the live
+ *                                idea pipeline entirely)
+ *  - NOT_ACTUALLY_MISS ......... USED (classifyMiss only - returned when the candidate was actually
+ *                                filled; buildMissedOpportunityRecord() filters it before persistence,
+ *                                so it can never appear in the missed_opportunities table by design)
+ *  - RANKING_MISS .............. DEAD - REMOVED 2026-10-06 (was in the union but classifyMiss() never
+ *                                returned it, and no honest producer exists: the detection cycle only
+ *                                examines PROMOTE-recommended candidates, and this module's own
+ *                                anti-hindsight governance ("a REJECT-recommended candidate is NOT
+ *                                classified as a miss at all") forbids labeling a ranker-demotion a
+ *                                miss without outcome knowledge - which this module deliberately
+ *                                excludes. Reintroduce only with a real, non-hindsight ranking-failure
+ *                                telemetry source wired to return it.)
+ */
 export type MissClassification =
-  | 'RANKING_MISS' | 'SUBSCRIPTION_MISS' | 'AGENT_MISS'
+  | 'SUBSCRIPTION_MISS' | 'AGENT_MISS'
   | 'CONSENSUS_REJECTION' | 'RISK_REJECTION' | 'RISK_NOT_CONFIRMED' | 'EXECUTION_MISS' | 'NOT_ACTUALLY_MISS'
-  /** Session-Aware Trading Architecture Phase 7 (2026-09-05): a premarket TradePlan existed for
-   *  this symbol (planDate === today) and was INVALIDATED or EXPIRED by TradePlanBuilder's own
-   *  revalidation logic before any agent/ChiefTrader/RiskEngine stage was ever reached. Distinct
-   *  from CONSENSUS_REJECTION/RISK_REJECTION (which require the idea to have actually been
-   *  evaluated by those stages) - this classifies a real, distinct failure point: the thesis
-   *  itself was withdrawn upstream of the live idea pipeline entirely. */
   | 'THESIS_INVALIDATED';
 
 export interface FunnelSignals {
