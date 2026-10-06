@@ -519,8 +519,17 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
       // so a future change to that formula cannot silently desync the REAL decision from what gets
       // logged (only this display mirror would need updating, and staleness there is a
       // documentation gap, not a decision-path divergence).
+      // 2026-10-06 (October 5 replay forensic follow-up, oct05ReplayFidelity.test.ts's own real
+      // finding): moverBonus/composableScore were previously folded into finalScore but never
+      // separately logged, which is exactly why 8 of 11 symbols in the real 14:37:05 cycle could
+      // not be bit-reproduced from history - their real contribution was invisible. Both mirror
+      // blendedHotSwapScore()'s own one-line internal formulas for display only, same pattern
+      // gapTerm already uses - never a second, independently-invoked computation, so this display
+      // mirror cannot desync from the real decision. Forward-looking only: does not and cannot
+      // reconstruct any already-logged historical row.
       const priorityScoreBreakdownOf = (symbol: string): {
         finalScore: number; baseScore: number; gapPct: number | null; gapTerm: number; hasGapEvidence: boolean;
+        isVerifiedMover: boolean; moverBonus: number; composableScore: number | null; composableContribution: number;
       } => {
         const gapPct = getCachedBroadUniverseGapPct(symbol);
         const baseScore = baseScoreOf(symbol);
@@ -528,7 +537,16 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
         const gapTerm = gapPct != null && Number.isFinite(gapPct)
           ? Math.abs(gapPct) * 100 * continuousIntelligence.broadUniverseGapHotSwapWeight
           : 0;
-        return { finalScore, baseScore, gapPct, gapTerm, hasGapEvidence: gapPct != null };
+        const isVerifiedMover = getCachedMoverSymbols().includes(symbol.toUpperCase());
+        const moverBonus = isVerifiedMover ? continuousIntelligence.moverPriorityScoreBonus : 0;
+        const composableScore = getLastComposableScore(symbol);
+        const composableContribution = composableScore != null
+          ? composableScore * continuousIntelligence.composableRankingHotSwapWeight
+          : 0;
+        return {
+          finalScore, baseScore, gapPct, gapTerm, hasGapEvidence: gapPct != null,
+          isVerifiedMover, moverBonus, composableScore, composableContribution,
+        };
       };
       // 2026-09-30: discoverySource is a best-effort label inferred from which real, already-cached
       // admission list currently contains this symbol - shortlist rows themselves carry no source
@@ -676,6 +694,13 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
               baseScore: round4(c.breakdown.baseScore),
               gapPct: c.breakdown.gapPct != null ? round4(c.breakdown.gapPct) : null,
               gapTerm: round4(c.breakdown.gapTerm),
+              // 2026-10-06: previously-missing score-decomposition fields (see this closure's own
+              // header comment) - the real reason 8/11 symbols in the 2026-10-05T14:37:05 cycle
+              // could not be bit-reproduced from history. Present from today forward.
+              isVerifiedMover: c.breakdown.isVerifiedMover,
+              moverBonus: round4(c.breakdown.moverBonus),
+              composableScore: c.breakdown.composableScore != null ? round4(c.breakdown.composableScore) : null,
+              composableContribution: round4(c.breakdown.composableContribution),
               finalPriorityScore: round4(c.breakdown.finalScore),
               hasGapEvidence: c.breakdown.hasGapEvidence,
               gapEvidenceAgeMs: c.breakdown.hasGapEvidence && snapshotFetchedAt != null ? Math.max(0, now.getTime() - snapshotFetchedAt) : null,
