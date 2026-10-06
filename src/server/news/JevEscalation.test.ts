@@ -87,6 +87,24 @@ describe('buildJevAnalysisResult', () => {
     expect(result.headline).toBe('T');
     expect(result.source).toBe('S');
   });
+
+  it('maps an invalid ticker to UNKNOWN - never emits an unvalidated symbol', () => {
+    const result = buildJevAnalysisResult(ARTICLE, CONFIDENT_SCORE, {
+      symbol: 'not a ticker!!!', category: 'Earnings', impactScore01: 0.7,
+      timeHorizon: 'short', isNewCluster: true, priorArticleCount: 0, credibility: 0.8,
+    });
+    expect(result.symbol).toBe('UNKNOWN');
+  });
+
+  it('maps bearish sentiment to BEARISH bias with negative sentiment score', () => {
+    const bearish = { ...CONFIDENT_SCORE, sentiment: 'bearish' as const, sentimentConf: 0.7 };
+    const result = buildJevAnalysisResult(ARTICLE, bearish, {
+      symbol: 'ACME', category: 'Earnings', impactScore01: 0.7,
+      timeHorizon: 'short', isNewCluster: true, priorArticleCount: 0, credibility: 0.8,
+    });
+    expect(result.tradingBias).toBe('BEARISH');
+    expect(result.sentimentScore).toBeCloseTo(-0.7, 5);
+  });
 });
 
 describe('isJevEscalationEnabled', () => {

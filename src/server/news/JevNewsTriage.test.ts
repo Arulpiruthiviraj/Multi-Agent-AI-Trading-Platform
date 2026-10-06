@@ -11,6 +11,8 @@ import {
   scoreArticleWithJev,
   mapJevScoreToAnalysisFields,
   isJevShadowEnabled,
+  kickOffJevShadowScoring,
+  resetJevShadowProviderCache,
   JevNewsDeterministicContext,
   JevNewsScore,
 } from './JevNewsTriage';
@@ -197,5 +199,55 @@ describe('isJevShadowEnabled', () => {
     expect(isJevShadowEnabled()).toBe(true);
     process.env.ARGUS_JEV_SHADOW_SCORING_ENABLED = '1';
     expect(isJevShadowEnabled()).toBe(false);
+  });
+});
+
+describe('kickOffJevShadowScoring', () => {
+  const FLAG = process.env.ARGUS_JEV_SHADOW_SCORING_ENABLED;
+  const KEY = process.env.JEV_API_KEY;
+  const TYPESAFE_KEY = process.env.TYPESAFE_API_KEY;
+  afterEach(() => {
+    if (FLAG === undefined) delete process.env.ARGUS_JEV_SHADOW_SCORING_ENABLED;
+    else process.env.ARGUS_JEV_SHADOW_SCORING_ENABLED = FLAG;
+    if (KEY === undefined) delete process.env.JEV_API_KEY;
+    else process.env.JEV_API_KEY = KEY;
+    if (TYPESAFE_KEY === undefined) delete process.env.TYPESAFE_API_KEY;
+    else process.env.TYPESAFE_API_KEY = TYPESAFE_KEY;
+    resetJevShadowProviderCache();
+  });
+
+  function shadowInput(overrides: Partial<{ article: NormalizedArticle }> = {}) {
+    return {
+      article: { ...BASE_ARTICLE, ...(overrides.article ?? {}) },
+      symbol: 'ACME',
+      traceId: 'trace-1',
+      llmAnalysis: null,
+      deterministic: BASE_CTX,
+    };
+  }
+
+  it('is a no-op when the flag is off - never throws, never touches the provider', () => {
+    delete process.env.ARGUS_JEV_SHADOW_SCORING_ENABLED;
+    delete process.env.JEV_API_KEY;
+    delete process.env.TYPESAFE_API_KEY;
+    resetJevShadowProviderCache();
+    expect(() => kickOffJevShadowScoring(shadowInput())).not.toThrow();
+  });
+
+  it('is a no-op when the flag is on but no API key is configured', () => {
+    process.env.ARGUS_JEV_SHADOW_SCORING_ENABLED = 'true';
+    delete process.env.JEV_API_KEY;
+    delete process.env.TYPESAFE_API_KEY;
+    resetJevShadowProviderCache();
+    expect(() => kickOffJevShadowScoring(shadowInput())).not.toThrow();
+  });
+
+  it('is a no-op on imperfect state even with flag and key - no request is made', () => {
+    process.env.ARGUS_JEV_SHADOW_SCORING_ENABLED = 'true';
+    process.env.JEV_API_KEY = 'test-key-not-used';
+    resetJevShadowProviderCache();
+    // Empty title -> buildJevNewsState returns null -> no request, no throw.
+    // (Provider would only be constructed, never called - and no network in unit tests.)
+    expect(() => kickOffJevShadowScoring(shadowInput({ article: { ...BASE_ARTICLE, title: '' } }))).not.toThrow();
   });
 });

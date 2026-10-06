@@ -105,6 +105,46 @@ describe('convertFastEvaluationToCanonicalIdea', () => {
       expect(converted.reason).toBe('NON_FINITE_CONFIDENCE');
     }
   });
+
+  it('rejects MISSING_STRATEGY_IDENTITY when status is VALID but bestStrategy is absent - never converts an idea with no strategy to attribute', () => {
+    const converted = convertFastEvaluationToCanonicalIdea(fakeResult({ bestStrategy: undefined }), fakeCandidate());
+    expect(converted.ok).toBe(false);
+    if (converted.ok === true) throw new Error('unreachable');
+    expect(converted.reason).toBe('MISSING_STRATEGY_IDENTITY');
+  });
+
+  it('rejects MISSING_DIRECTION_OR_CONFIDENCE when direction is absent', () => {
+    const converted = convertFastEvaluationToCanonicalIdea(fakeResult({ direction: undefined }), fakeCandidate());
+    expect(converted.ok).toBe(false);
+    if (converted.ok === true) throw new Error('unreachable');
+    expect(converted.reason).toBe('MISSING_DIRECTION_OR_CONFIDENCE');
+  });
+
+  it('rejects MISSING_DIRECTION_OR_CONFIDENCE when confidence is null', () => {
+    const converted = convertFastEvaluationToCanonicalIdea(fakeResult({ confidence: null as unknown as number }), fakeCandidate());
+    expect(converted.ok).toBe(false);
+    if (converted.ok === true) throw new Error('unreachable');
+    expect(converted.reason).toBe('MISSING_DIRECTION_OR_CONFIDENCE');
+  });
+
+  it('converts a SELL direction result correctly - side flows through, strategy identity preserved', () => {
+    const converted = convertFastEvaluationToCanonicalIdea(
+      fakeResult({ direction: 'SELL', bestStrategy: 'MEAN_REVERSION', validTriggers: ['MEAN_REVERSION'] }),
+      fakeCandidate(),
+    );
+    expect(converted.ok).toBe(true);
+    if (converted.ok === false) throw new Error('unreachable');
+    expect(converted.idea.side).toBe('SELL');
+    expect(converted.idea.strategy).toBe('MEAN_REVERSION');
+    expect(converted.idea.agent).toBe('FastOpportunityLane');
+  });
+
+  it('handles a null catalyst - evidence.catalyst is null, not undefined or a crash', () => {
+    const converted = convertFastEvaluationToCanonicalIdea(fakeResult(), fakeCandidate({ catalyst: undefined }));
+    expect(converted.ok).toBe(true);
+    if (converted.ok === false) throw new Error('unreachable');
+    expect(converted.idea.evidence.catalyst).toBeNull();
+  });
 });
 
 describe('computeEvidenceFingerprint', () => {
@@ -127,5 +167,15 @@ describe('computeEvidenceFingerprint', () => {
     const a = computeEvidenceFingerprint({ ...base, dataAsOf: 1_700_000_000_000 });
     const b = computeEvidenceFingerprint({ ...base, dataAsOf: 1_700_000_120_000 }); // 2 minutes later
     expect(a).not.toBe(b);
+  });
+
+  it('handles null dataAsOf with the unknown bucket - two null-dataAsOf evidences fingerprint identically, null vs real differ', () => {
+    const base = { strategy: 'MOMENTUM_BREAKOUT', symbol: 'AAPL', side: 'BUY' as const };
+    const a = computeEvidenceFingerprint({ ...base, dataAsOf: null });
+    const b = computeEvidenceFingerprint({ ...base, dataAsOf: null });
+    expect(a).toBe(b);
+    expect(a).toContain('unknown');
+    const c = computeEvidenceFingerprint({ ...base, dataAsOf: 1_700_000_000_000 });
+    expect(a).not.toBe(c);
   });
 });

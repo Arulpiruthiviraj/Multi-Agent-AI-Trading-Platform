@@ -142,7 +142,15 @@ export interface ThresholdAnalysis {
  */
 export async function analyzeAgreementByConfidence(): Promise<ThresholdAnalysis> {
   const bucketEdges = [0.5, 0.6, 0.7, 0.8, 0.9, 1.01];
-  const buckets: ConfidenceBucket[] = [];
+  // Build the full bucket skeleton first so a DB failure still returns a consistent
+  // shape (five zeroed buckets), never a truncated array.
+  const buckets: ConfidenceBucket[] = bucketEdges.slice(0, -1).map((low, i) => ({
+    bucketLow: low,
+    bucketHigh: Math.min(bucketEdges[i + 1], 1.0),
+    compared: 0,
+    agreed: 0,
+    agreementRate: null,
+  }));
   try {
     for (let i = 0; i < bucketEdges.length - 1; i++) {
       const low = bucketEdges[i];
@@ -159,13 +167,13 @@ export async function analyzeAgreementByConfidence(): Promise<ThresholdAnalysis>
           AND ${schema.jevShadowScores.jevRelevantConf} < ${high}`);
       const r = rows[0] ?? { compared: 0, agreed: 0 };
       const compared = Number(r.compared) || 0;
-      buckets.push({
+      buckets[i] = {
         bucketLow: low,
         bucketHigh: Math.min(high, 1.0),
         compared,
         agreed: Number(r.agreed) || 0,
         agreementRate: compared > 0 ? Number(r.agreed) / compared : null,
-      });
+      };
     }
   } catch (e) {
     console.warn('[JevShadowLedger] threshold analysis failed:', (e as Error)?.message || e);

@@ -112,4 +112,17 @@ describe('classifyEvidenceCollision (Section 6, observational only)', () => {
     const existing = { ...momentumBuyAAPL, side: 'SELL' as const };
     expect(classifyEvidenceCollision(momentumBuyAAPL, existing)).toBe('GENUINELY_INDEPENDENT_EVIDENCE');
   });
+
+  it('SAME_STRATEGY_SAME_EVIDENCE when both sides have null dataAsOf - unknown buckets match, not treated as distinct', () => {
+    const incoming = { ...momentumBuyAAPL, dataAsOf: null };
+    const existing = { ...momentumBuyAAPL, dataAsOf: null };
+    expect(classifyEvidenceCollision(incoming, existing)).toBe('SAME_STRATEGY_SAME_EVIDENCE');
+  });
+
+  it('null vs real dataAsOf on the same strategy/symbol/side classifies as newer evidence, not identical', () => {
+    const incoming = { ...momentumBuyAAPL, dataAsOf: 1_700_000_000_000 };
+    const existing = { ...momentumBuyAAPL, dataAsOf: null };
+    // fingerprints differ ('unknown' vs a real bucket), same side -> newer evidence
+    expect(classifyEvidenceCollision(incoming, existing)).toBe('SAME_STRATEGY_NEWER_EVIDENCE');
+  });
 });
