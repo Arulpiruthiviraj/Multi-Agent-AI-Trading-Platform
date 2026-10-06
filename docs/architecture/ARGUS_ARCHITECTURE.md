@@ -1596,6 +1596,28 @@ but not yet built" — the audit found that framing **stale relative to the code
 those four items (only "after-close review" genuinely doesn't exist; `MissedOpportunityDetector`
 classifies funnel drop-off, not a true close-of-day review).
 
+### 2026-10-06: pre-market TradePlan lifecycle (local-only, PAPER)
+
+The one-time-startup-snapshot defect verified live on 2026-10-06 (~08:29 ET: engine
+started 08:23, five plans built once, never refreshed) is fixed by turning
+`TradePlanBuilder` into a proper premarket lifecycle — design:
+`docs/design/ARGUS_PREMARKET_TRADEPLAN_LIFECYCLE.md`, validation:
+`docs/audits/ARGUS_PREMARKET_LIFECYCLE_VALIDATION.md`. Four scheduled points
+(initial build on `PREMARKET_SESSION_STARTED`, post-08:30 mid-morning refresh,
+~09:00–09:15 late refresh, ~09:20–09:28 pre-open validation) plus debounced
+event-driven material refreshes; versioned plans with prior-version snapshots
+(`trade_plan_revisions`) and no-churn hashing; bounded pre-open data
+reservations (4 of 12 slots, 09:25 ET handover expiry); decomposed 10-component
+pre-market score (`config/premarketFocus.json`); signed FinBERT sentiment as a
+symmetric contextual term (never directional); 4-stage ticker extraction
+replacing the 7-ticker hardcode; `PREMARKET_RVOL=BLOCKED_BY_DATA` (renders
+`PREMARKET_RVOL_UNAVAILABLE`, never `0.00x`); `argus premarket-focus` CLI.
+Invariants: the lifecycle never places orders, never emits trade ideas, never
+bypasses consensus (0.75) / RiskEngine / OMS, never auto-tunes — enforced by
+`tradePlanLifecycleBoundary.test.ts` and `premarketArchitectureBoundary.test.ts`.
+Discovery funnels stay OFF by default; the lifecycle consumes enabled sources
+and records them per report.
+
 ### Session representation — nine independent representations of "what phase of day is it"
 
 `classifyMarketSession()` (`src/server/replay/marketSession.ts`) is the base function most other
