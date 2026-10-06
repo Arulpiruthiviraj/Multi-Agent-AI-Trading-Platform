@@ -987,6 +987,7 @@ export const COMMAND_HELP: Record<string, string> = {
   'rescue-occupants': 'Usage: argus rescue-occupants\nCurrent rescue occupants.',
   'broad-universe-aging': 'Usage: argus broad-universe-aging [--sortBy=mostSkipped|mostEligible|longestSinceSelected]\nBroad-universe allocator aging state (who is being starved?).',
   'observability-health': 'Usage: argus observability-health\nPer-tag observability health (is any event-logging path silently broken right now?).',
+  'jev-calibration': 'Usage: argus jev-calibration\nJev shadow agreement ledger: scored count, Jev-vs-LLM agreement rate, confidence buckets, cost.',
   'market-data-diagnostics': 'Usage: argus market-data-diagnostics [--symbols=AAPL,MSFT]\nMarket-data feed diagnostics.',
   'ai-cost-governor': 'Usage: argus ai-cost-governor\nAI cost governor status.',
   'discovery-challengers': 'Usage: argus discovery-challengers [--hours=N]\nDiscovery challenger strategies.',
@@ -1615,6 +1616,16 @@ const commands: Record<string, () => Promise<void>> = {
         );
       }
     }
+  },
+  async 'jev-calibration'() {
+    // 2026-10-06 (Jev Phase 3): read-only view of the shadow agreement ledger.
+    // Shows scored count, Jev-vs-LLM agreement, confidence buckets for threshold
+    // decisions, and cumulative cost. Advisory only — never changes a threshold.
+    const res = await fetch(`${BASE}/api/v2/observability/jev-calibration?format=text`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
+    });
+    console.log(await res.text());
   },
   async 'market-data-diagnostics'() {
     // 2026-09-20 (delayed-data observability follow-up): read-only live in-memory market-data

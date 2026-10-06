@@ -118,3 +118,70 @@ export async function getCalibrationSummary(): Promise<CalibrationSummary> {
     return { totalScored: 0, withLlmComparison: 0, sentimentAgreementRate: null, avgJevLatencyMs: null, totalJevInputTokens: 0, estimatedCostUsd: 0 };
   }
 }
+
+export interface ConfidenceBucket {
+  /** Bucket lower bound (inclusive), e.g. 0.7 for the 0.70–0.80 bucket. */
+  bucketLow: number;
+  bucketHigh: number;
+  compared: number; // articles with LLM comparison in this bucket
+  agreed: number;
+  agreementRate: number | null;
+}
+
+export interface ThresholdAnalysis {
+  buckets: ConfidenceBucket[];
+  /** Human-readable recommendation. Never auto-applies anything. */
+  recommendation: string;
+}
+
+/**
+ * Phase 3 widening hook: bucket the Jev-vs-LLM agreement by Jev's own confidence,
+ * so a human can see what the agreement rate WOULD be at candidate escalation
+ * thresholds. Read-only analysis — it never changes any threshold itself.
+ * Widening a threshold requires explicit operator action after reviewing this.
+ */
+export async function analyzeAgreementByConfidence(): Promise<ThresholdAnalysis> {
+  const bucketEdges = [0.5, 0.6, 0.7, 0.8, 0.9, 1.01];
+  const buckets: ConfidenceBucket[] = [];
+  try {
+    for (let i = 0; i < bucketEdges.length - 1; i++) {
+      const low = bucketEdges[i];
+      const high = bucketEdges[i + 1];
+      // jev_relevant_conf stores the min confidence across questions per row.
+      const rows = await db
+        .select({
+          compared: sql<number>`count(*)`,
+          agreed: sql<number>`coalesce(sum(${schema.jevShadowScores.sentimentAgree}), 0)`,
+        })
+        .from(schema.jevShadowScores)
+        .where(sql`${schema.jevShadowScores.sentimentAgree} IS NOT NULL
+          AND ${schema.jevShadowScores.jevRelevantConf} >= ${low}
+          AND ${schema.jevShadowScores.jevRelevantConf} < ${high}`);
+      const r = rows[0] ?? { compared: 0, agreed: 0 };
+      const compared = Number(r.compared) || 0;
+      buckets.push({
+        bucketLow: low,
+        bucketHigh: Math.min(high, 1.0),
+        compared,
+        agreed: Number(r.agreed) || 0,
+        agreementRate: compared > 0 ? Number(r.agreed) / compared : null,
+      });
+    }
+  } catch (e) {
+    console.warn('[JevShadowLedger] threshold analysis failed:', (e as Error)?.message || e);
+  }
+
+  // Conservative recommendation: the lowest bucket edge at/above which agreement
+  // is >= 90% over a meaningful sample (>= 30 comparisons). Advisory only.
+  let recommendation = 'insufficient comparison data to recommend any threshold change';
+  for (const b of buckets) {
+    if (b.compared >= 30 && (b.agreementRate ?? 0) >= 0.9) {
+      recommendation =
+        `bucket [${b.bucketLow.toFixed(2)}, ${b.bucketHigh.toFixed(2)}]: ` +
+        `${(b.agreementRate! * 100).toFixed(1)}% agreement over ${b.compared} comparisons — ` +
+        `candidate for lowering jevEscalationConfidenceThreshold to ${b.bucketLow.toFixed(2)} after human review`;
+      break;
+    }
+  }
+  return { buckets, recommendation };
+}

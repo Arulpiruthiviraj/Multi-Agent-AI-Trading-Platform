@@ -724,6 +724,37 @@ observabilityRouter.get('/broad-universe-aging', (req, res) => {
   }
 });
 
+// Jev calibration observability (Phase 3, 2026-10-06): read-only view of the shadow
+// agreement ledger — how many articles Jev scored, the Jev-vs-LLM agreement rate,
+// confidence-bucketed agreement for threshold decisions, and cumulative cost.
+// Never used by any trading decision; exists so a human can decide whether Phase 2
+// thresholds should be widened, and only after reviewing this data.
+observabilityRouter.get('/jev-calibration', async (req, res) => {
+  try {
+    const { getCalibrationSummary, analyzeAgreementByConfidence } = await import('../news/JevShadowLedger');
+    const summary = await getCalibrationSummary();
+    const thresholdAnalysis = await analyzeAgreementByConfidence();
+    if (req.query.format === 'text') {
+      const lines = [
+        'JEV SHADOW CALIBRATION (jev_shadow_scores ledger, read-only)',
+        `articles scored: ${summary.totalScored} | with LLM comparison: ${summary.withLlmComparison}`,
+        `sentiment agreement rate: ${summary.sentimentAgreementRate == null ? 'n/a (no comparisons yet)' : (summary.sentimentAgreementRate * 100).toFixed(1) + '%'}`,
+        `avg Jev latency: ${summary.avgJevLatencyMs == null ? 'n/a' : summary.avgJevLatencyMs.toFixed(0) + 'ms'} | est. cost: $${summary.estimatedCostUsd.toFixed(4)}`,
+        '--- agreement by Jev confidence bucket ---',
+        ...thresholdAnalysis.buckets.map((b) =>
+          `[${b.bucketLow.toFixed(2)}, ${b.bucketHigh.toFixed(2)}]: ${b.compared} compared, ` +
+          `${b.agreementRate == null ? 'n/a' : (b.agreementRate * 100).toFixed(1) + '% agreement'}`),
+        `recommendation: ${thresholdAnalysis.recommendation}`,
+      ];
+      res.type('text/plain').send(lines.join('\n'));
+      return;
+    }
+    res.json({ ok: true, summary, thresholdAnalysis });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Phase A2/A5/M (AI Cost Governor, 2026-09-02): current policy, the per-(agent,provider) real
 // graded-outcome quality ledger, and recent shadow-mode decisions. Read-only; the governor itself
 // is off by default (config/aiCostGovernor.json) and never gates a trade.
