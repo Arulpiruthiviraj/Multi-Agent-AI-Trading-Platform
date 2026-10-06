@@ -7,7 +7,7 @@ import { observabilityConfig, LEVEL_RANK, type ObservabilityLevel } from '../con
 import { redactSecrets, redactSecretsDeep } from '../core/SecretRedaction';
 import { snapshotObservabilityIds } from './ObservabilityContext';
 import { enqueueObservabilityEvent } from './ObservabilityStore';
-import { incMetric } from './ObservabilityMetrics';
+import { incMetric, recordObservabilityFailure, recordObservabilitySuccess } from './ObservabilityMetrics';
 
 export interface StructuredLogFields {
   category?: string;
@@ -109,8 +109,10 @@ export function logStructured(level: ObservabilityLevel, message: string, fields
         payload: payloadStr,
       });
     }
-  } catch {
+    recordObservabilitySuccess(eventType ?? 'UNTAGGED');
+  } catch (e) {
     incMetric('logger_errors');
+    recordObservabilityFailure((fields.eventType as string | undefined) ?? 'UNTAGGED', e instanceof Error ? e.name : 'UNKNOWN_ERROR');
   }
 }
 
@@ -123,11 +125,21 @@ export const structuredLogger = {
   fatal: (msg: string, fields?: StructuredLogFields) => logStructured('FATAL', msg, fields),
 };
 
-/** Fail-open wrapper for instrumentation sites on the live path. */
-export function observeSafe(fn: () => void): void {
+/** Fail-open wrapper for instrumentation sites on the live path.
+ *
+ *  2026-10-06 (October 5 forensic follow-up, Phase 2): this swallow-and-continue behavior is
+ *  deliberately unchanged - a callback failure here must never affect the real decision it
+ *  wraps. What changed: the failure's timestamp/type is now also recorded
+ *  (recordObservabilityFailure()), so a callback that has been throwing on every call since some
+ *  point in the past (exactly the cycleId TDZ bug's real shape) becomes visible via
+ *  getObservabilityHealth()'s `degraded` flag, instead of only ever showing up as an
+ *  undifferentiated increment in the cumulative logger_errors counter. */
+export function observeSafe(fn: () => void, tag = 'UNTAGGED'): void {
   try {
     fn();
-  } catch {
+    recordObservabilitySuccess(tag);
+  } catch (e) {
     incMetric('logger_errors');
+    recordObservabilityFailure(tag, e instanceof Error ? e.name : 'UNKNOWN_ERROR');
   }
 }

@@ -29,6 +29,106 @@ export function incMetric(name: MetricName, by = 1): void {
   counters.set(name, (counters.get(name) ?? 0) + by);
 }
 
+/**
+ * 2026-10-06 (October 5 forensic follow-up, Phase 2 - observability self-health). Real gap this
+ * closes: `logger_errors` (above) was already a real, correct cumulative counter, but a raw total
+ * alone cannot answer "is this broken RIGHT NOW" - the cycleId TDZ bug (fixed in
+ * OpportunityDiscovery.ts the same day) demonstrated exactly this: observeSafe() correctly kept
+ * production running while one specific event path silently failed on every single cycle for
+ * hours, and nothing distinguished that from ordinary, rare, already-recovered noise.
+ *
+ * Deliberately tracked PER TAG, not as one global success/failure pair: a naive global signal
+ * would have been worthless for exactly the cycleId case, since other, unrelated observeSafe()
+ * calls (the pre-existing snapshot/swap-outcome events) kept succeeding in the very same cycle the
+ * broken one failed in - a global "last success" timestamp would have looked healthy the whole
+ * time. `tag` is an explicit, caller-supplied label (the event's own eventType string) passed to
+ * observeSafe(fn, tag) - not every one of this codebase's ~44 observeSafe() call sites has been
+ * updated to pass one (that is a larger, separate sweep, out of scope here); untagged calls share
+ * the 'UNTAGGED' bucket, which still carries a real but coarser signal.
+ *
+ * Fail-open observability itself is unchanged - this never affects observeSafe()'s own
+ * swallow-and-continue behavior. It only makes a swallowed failure's recency/nature visible.
+ */
+export interface TagHealth {
+  tag: string;
+  failureCount: number;
+  lastFailureAt: string | null;
+  lastFailureType: string | null;
+  lastSuccessAt: string | null;
+  /** True when at least one failure has occurred AND no success has been recorded since for THIS
+   *  tag - the exact "silently broken right now" state the cycleId bug produced. A failure
+   *  followed by a later success for the SAME tag is NOT degraded. */
+  degraded: boolean;
+}
+
+interface TagHealthState {
+  failureCount: number;
+  lastFailureAtMs: number | null;
+  lastFailureType: string | null;
+  lastSuccessAtMs: number | null;
+}
+
+const tagHealth = new Map<string, TagHealthState>();
+
+function getOrInitTagHealth(tag: string): TagHealthState {
+  let state = tagHealth.get(tag);
+  if (!state) {
+    state = { failureCount: 0, lastFailureAtMs: null, lastFailureType: null, lastSuccessAtMs: null };
+    tagHealth.set(tag, state);
+  }
+  return state;
+}
+
+/** Called from observeSafe()'s own catch block and logStructured()'s own catch block - the two
+ *  real sites a swallowed observability failure can occur. `errorType` is the error's own `.name`
+ *  (e.g. 'ReferenceError') when available, falling back to 'UNKNOWN_ERROR'. */
+export function recordObservabilityFailure(tag: string, errorType: string): void {
+  const state = getOrInitTagHealth(tag);
+  state.failureCount += 1;
+  state.lastFailureAtMs = Date.now();
+  state.lastFailureType = errorType;
+}
+
+/** Called on every observeSafe() callback that completes without throwing, and every successful
+ *  logStructured() completion - the real "this specific path is alive" signal, independent of the
+ *  cumulative logs_emitted counter (which keeps growing even if ONE path's emission silently
+ *  stopped while every other path kept going). */
+export function recordObservabilitySuccess(tag: string): void {
+  getOrInitTagHealth(tag).lastSuccessAtMs = Date.now();
+}
+
+function toTagHealth(tag: string, state: TagHealthState): TagHealth {
+  const degraded = state.lastFailureAtMs != null
+    && (state.lastSuccessAtMs == null || state.lastSuccessAtMs < state.lastFailureAtMs);
+  return {
+    tag,
+    failureCount: state.failureCount,
+    lastFailureAt: state.lastFailureAtMs != null ? new Date(state.lastFailureAtMs).toISOString() : null,
+    lastFailureType: state.lastFailureType,
+    lastSuccessAt: state.lastSuccessAtMs != null ? new Date(state.lastSuccessAtMs).toISOString() : null,
+    degraded,
+  };
+}
+
+/** Per-tag breakdown for every tag that has seen at least one call (success or failure). */
+export function listObservabilityHealth(): TagHealth[] {
+  return [...tagHealth.entries()].map(([tag, state]) => toTagHealth(tag, state));
+}
+
+export function getObservabilityHealthForTag(tag: string): TagHealth {
+  return toTagHealth(tag, getOrInitTagHealth(tag));
+}
+
+/** True if ANY tracked tag is currently degraded - the single top-level health-check boolean. */
+export function isAnyObservabilityTagDegraded(): boolean {
+  return [...tagHealth.values()].some((state) =>
+    state.lastFailureAtMs != null && (state.lastSuccessAtMs == null || state.lastSuccessAtMs < state.lastFailureAtMs));
+}
+
+export function resetObservabilityHealthForTests(): void {
+  tagHealth.clear();
+}
+
 export function getMetric(name: MetricName): number {
   return counters.get(name) ?? 0;
 }

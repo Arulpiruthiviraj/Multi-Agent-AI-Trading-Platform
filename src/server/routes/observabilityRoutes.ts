@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { snapshotMetrics } from '../observability/ObservabilityMetrics';
+import { snapshotMetrics, listObservabilityHealth, isAnyObservabilityTagDegraded } from '../observability/ObservabilityMetrics';
 import { getSessionId } from '../observability/ObservabilityContext';
 import { observabilityConfig } from '../config/observability';
 import { getDecisionTrace, getOrderTrace, exportDecisionTraceJson } from '../observability/queryTraces';
@@ -50,6 +50,17 @@ observabilityRouter.get('/metrics', (_req, res) => {
     sessionId: getSessionId(),
     live: 'NO-GO',
     counters: snapshotMetrics(),
+    // 2026-10-06 (October 5 forensic follow-up, Phase 2 - observability self-health): the cycleId
+    // TDZ bug (OpportunityDiscovery.ts) demonstrated that observeSafe()'s fail-open swallow can
+    // hide a completely broken event path for hours with zero external signal beyond an
+    // undifferentiated counter increment. observabilityHealth surfaces per-tag degradation
+    // (tracked for this file's own observeSafe() call sites; other call sites across the codebase
+    // share the 'UNTAGGED' bucket until similarly tagged) without changing fail-open behavior
+    // itself - trading continuity is never affected by a logging failure, only its visibility.
+    observabilityHealth: {
+      anyTagDegraded: isAnyObservabilityTagDegraded(),
+      tags: listObservabilityHealth(),
+    },
     config: {
       persistMinLevel: observabilityConfig.persistMinLevel,
       retentionDays: observabilityConfig.retentionDays,
