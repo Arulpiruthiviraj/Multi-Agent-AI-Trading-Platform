@@ -52,10 +52,12 @@ function makeResult(
   reasonCodes: string[],
   extra: Partial<FastEvaluationResult> = {},
 ): FastEvaluationResult {
+  const evaluatedAt = Date.now();
   return {
+    id: `${candidate.id}:${evaluatedAt}`,
     candidateId: candidate.id,
     symbol: candidate.symbol,
-    evaluatedAt: Date.now(),
+    evaluatedAt,
     dataAsOf: null,
     marketDataType: 'UNKNOWN',
     strategiesEvaluated: [],

@@ -158,6 +158,56 @@ export function logFastEvaluationFailed(candidateId: string, symbol: string, err
   });
 }
 
+// 2026-10-06 (Fast Lane Canonical Integration, Section 13). All include candidateId/evaluationId/
+// canonicalIdeaId where applicable for end-to-end forensic tracing. None of these calls gate or
+// alter any real decision - purely observational, same fail-open observeSafe pattern as every
+// other event in this file. FAST_CANONICAL_CONSENSUS_ENTERED is defined for a later, separately-
+// authorized phase that actually wires live emission - not called anywhere in this phase.
+export function logFastCanonicalIdeaCreated(candidateId: string, evaluationId: string, canonicalIdeaId: string, symbol: string, strategy: string): void {
+  observeSafe(() => {
+    structuredLogger.info('fast_canonical_idea_created', {
+      category: 'FAST_LANE', eventType: 'FAST_CANONICAL_IDEA_CREATED',
+      candidateId, evaluationId, canonicalIdeaId, symbol, strategy,
+    });
+  });
+}
+
+export function logFastCanonicalIdeaDeduped(candidateId: string, evaluationId: string, canonicalIdeaId: string, symbol: string): void {
+  observeSafe(() => {
+    structuredLogger.info('fast_canonical_idea_deduped', {
+      category: 'FAST_LANE', eventType: 'FAST_CANONICAL_IDEA_DEDUPED',
+      candidateId, evaluationId, canonicalIdeaId, symbol,
+    });
+  });
+}
+
+export function logFastCanonicalIdeaReplacedStale(candidateId: string, symbol: string, previousEvaluationId: string, newEvaluationId: string): void {
+  observeSafe(() => {
+    structuredLogger.info('fast_canonical_idea_replaced_stale', {
+      category: 'FAST_LANE', eventType: 'FAST_CANONICAL_IDEA_REPLACED_STALE',
+      candidateId, symbol, previousEvaluationId, newEvaluationId,
+    });
+  });
+}
+
+export function logFastCanonicalIdeaRejected(candidateId: string, symbol: string, reason: string): void {
+  observeSafe(() => {
+    structuredLogger.info('fast_canonical_idea_rejected', {
+      category: 'FAST_LANE', eventType: 'FAST_CANONICAL_IDEA_REJECTED',
+      candidateId, symbol, reason,
+    });
+  });
+}
+
+export function logFastCanonicalConsensusEntered(candidateId: string, canonicalIdeaId: string, symbol: string): void {
+  observeSafe(() => {
+    structuredLogger.info('fast_canonical_consensus_entered', {
+      category: 'FAST_LANE', eventType: 'FAST_CANONICAL_CONSENSUS_ENTERED',
+      candidateId, canonicalIdeaId, symbol,
+    });
+  });
+}
+
 export function logFastResourcePromotionRequested(
   candidateId: string, symbol: string,
   requestedTier: string, reason: string,

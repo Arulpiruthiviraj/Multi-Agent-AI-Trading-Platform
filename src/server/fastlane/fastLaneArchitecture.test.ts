@@ -103,4 +103,36 @@ describe('FastLane architecture safety boundary', () => {
       expect(f!.content, `${name} must not set LIVE mode`).not.toMatch(/setLiveMode|LIVE_ARM\s*=\s*true/);
     }
   });
+
+  // 2026-10-06 (Fast Lane -> Canonical Decision Spine Integration, Section 21). This phase's own
+  // explicit boundary: Fast canonical evidence may be CONVERTED into the existing idea shape, but
+  // must not be EMITTED into ChiefTrader/consensus yet (see fastCanonicalAdapter.ts/
+  // fastCanonicalDedup.ts's own headers - evaluation/conversion proven correct first, execution
+  // integration is a later, separately-authorized phase). If this test ever fails because a future
+  // change adds emitTradeIdea here, that is the trigger to write the dedicated,
+  // explicitly-authorized wiring module this phase deliberately did not build - not to silently
+  // update this test to allow it.
+  it('fastCanonicalAdapter.ts and fastCanonicalDedup.ts never call emitTradeIdea or reference ChiefTrader - conversion/dedup only, no emission in this phase', () => {
+    for (const name of ['fastCanonicalAdapter.ts', 'fastCanonicalDedup.ts']) {
+      const f = files.find((x) => x.name === name);
+      expect(f, `${name} must exist`).toBeTruthy();
+      expect(f!.content, `${name} must not call emitTradeIdea`).not.toMatch(/emitTradeIdea\s*\(/);
+      expect(f!.content, `${name} must not reference ChiefTrader`).not.toMatch(/ChiefTrader/);
+      expect(f!.content, `${name} must not import EventBus`).not.toMatch(/from ['"][^'"]*\/EventBus['"]/);
+    }
+  });
+
+  it('fastCanonicalAdapter.ts preserves the ORIGINAL strategy identity field name - never hardcodes a Fast-Lane-specific strategy label', () => {
+    const f = files.find((x) => x.name === 'fastCanonicalAdapter.ts')!;
+    expect(f.content).not.toMatch(/strategy:\s*['"]FAST_LANE/i);
+    expect(f.content).not.toContain("strategy: 'FAST_LANE_BUY'");
+  });
+
+  it('every fastlane file importing resolveIndependentEvidenceGroup-adjacent logic does so only for classification, never to bypass the independence floor', () => {
+    // No fastlane file may hardcode a confidence/threshold bonus tied to its own arrival path -
+    // Section 12 ("no confidence bonus"). Speed is not alpha.
+    for (const f of files) {
+      expect(f.content, `${f.name} must not add a Fast-Lane-specific confidence bonus`).not.toMatch(/confidence\s*\+=|confidence\s*\*\s*1\.\d|FAST_LANE_BONUS/i);
+    }
+  });
 });

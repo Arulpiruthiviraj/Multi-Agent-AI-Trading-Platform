@@ -129,6 +129,12 @@ export type FastEvaluationStatus =
 export type DataSufficiencyGrade = 'AVAILABLE' | 'MISSING' | 'STALE' | 'NOT_APPLICABLE';
 
 export interface FastEvaluationResult {
+  /** 2026-10-06 (Fast Lane Canonical Integration): stable identity for this specific evaluation
+   *  run - distinct from candidateId (one candidate can be evaluated more than once across its
+   *  lifetime, e.g. after a cooldown). Used for provenance/idempotency when converting to a
+   *  canonical idea. Deterministic (candidateId + evaluatedAt), never a random UUID, so the same
+   *  evaluation result replayed through tests/logs always carries the same id. */
+  id: string;
   candidateId: string;
   symbol: string;
   evaluatedAt: number;
