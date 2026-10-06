@@ -250,6 +250,21 @@ export interface DailyReflectionReport {
   postmarketSummary: PostmarketSummary | null;
   /** Full per-symbol list (sorted by |eod_move_pct| desc) for drill-down. */
   movers: MoverSummary[];
+  /** Per-symbol evidence for drill-down (bounded: one entry per mover). */
+  moverDetails: Record<string, MoverDetail>;
+}
+
+export interface MoverDetail {
+  symbol: string;
+  eodMovePct: number | null;
+  primaryFate: MoverFate;
+  secondaryReasons: string[];
+  neverSeenCause: string | null;
+  referencePrice: number | null;
+  outcomeWindows: OutcomeWindow[];
+  filterReason: string | null;
+  filterPremiseCorrect: boolean | null;
+  premarketKnownBy: string[];
 }
 
 export interface BuildDailyReflectionOptions {
@@ -618,6 +633,22 @@ export function assembleReflectionSections(
     focus != null ||
     postmarket != null;
 
+  const moverDetails: Record<string, MoverDetail> = {};
+  for (const m of sorted) {
+    moverDetails[m.symbol] = {
+      symbol: m.symbol,
+      eodMovePct: m.eodMovePct,
+      primaryFate: m.primaryFate,
+      secondaryReasons: m.secondaryReasons,
+      neverSeenCause: m.neverSeenCause,
+      referencePrice: m.referencePrice,
+      outcomeWindows: m.outcomeWindows,
+      filterReason: m.filterReason,
+      filterPremiseCorrect: m.filterPremiseCorrect,
+      premarketKnownBy: m.premarketKnownBy,
+    };
+  }
+
   return {
     tradingDate,
     generatedAt: now.toISOString(),
@@ -640,6 +671,7 @@ export function assembleReflectionSections(
     repeatingIssues,
     postmarketSummary: postmarket,
     movers: summaries.sort(byAbsMoveDesc),
+    moverDetails,
   };
 }
 

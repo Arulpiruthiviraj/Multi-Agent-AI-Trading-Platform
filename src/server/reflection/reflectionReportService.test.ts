@@ -197,6 +197,18 @@ describe('assembleReflectionSections (fixture data)', () => {
     expect(r.movers).toHaveLength(7);
   });
 
+  it('carries per-symbol drill-down details', () => {
+    const r = buildFixtureReport();
+    const aaa = r.moverDetails.AAA;
+    expect(aaa.primaryFate).toBe('ACTED_ON');
+    expect(aaa.secondaryReasons).toContain('CATALYST: earnings beat');
+    expect(aaa.outcomeWindows).toEqual([{ window: 'T+1d', returnPct: 3.1, note: undefined }]);
+    expect(aaa.premarketKnownBy).toEqual(['catalyst', 'premarket-focus']);
+    expect(r.moverDetails.EEE.neverSeenCause).toBe('UNIVERSE_COVERAGE');
+    expect(r.moverDetails.EEE.referencePrice).toBe(42.5);
+    expect(Object.keys(r.moverDetails)).toHaveLength(7);
+  });
+
   it('honest empty report when nothing is loaded', () => {
     const r = assembleReflectionSections('2026-10-05', [], null, null, null, false, NOW);
     expect(r.hasData).toBe(false);
