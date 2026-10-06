@@ -8,6 +8,8 @@ import { NewsImpactEngine } from './NewsImpactEngine';
 import { NewsClusterEngine } from './NewsClusterEngine';
 import { NewsScoringEngine, AIAnalysisResult, buildLocalFirstNewsAnalysis } from './NewsScoringEngine';
 import { kickOffJevShadowScoring } from './JevNewsTriage';
+import { isJevEscalationEnabled } from './JevEscalation';
+import { NormalizedArticle } from './NewsNormalizer';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { tradingSafety } from '../config/tradingSafety';
@@ -179,12 +181,34 @@ export class NewsEngine {
           decisiveThreshold: DECISIVE_SENTIMENT_THRESHOLD,
         });
 
-        let aiAnalysis: AIAnalysisResult | null = null;
+        // Jev Phase 2 escalation (2026-10-06): when ARGUS_JEV_ESCALATION_ENABLED=true,
+        // Jev scores first and the LLM runs only on low confidence / high stakes /
+        // Jev-unavailable. When the flag is off, this block is skipped entirely and the
+        // existing FinBERT→LLM path below runs byte-for-byte unchanged.
+        // The accepted Jev path never calls the LLM; the escalated path is identical
+        // to the no-flag behavior. Either way, no trading decision is influenced.
+        let jevAcceptedAnalysis: AIAnalysisResult | null = null;
+        if (isJevEscalationEnabled() && finalSymbols.length > 0) {
+          jevAcceptedAnalysis = await this.tryJevFirstAnalysis(normalized, {
+            symbol: finalSymbols[0],
+            traceId,
+            category,
+            credibility,
+            isNewCluster,
+            priorArticleCount,
+            impactScore01: impact.impactScore,
+            timeHorizon: impact.timeHorizon,
+          });
+        }
+
+        let aiAnalysis: AIAnalysisResult | null = jevAcceptedAnalysis;
         // Pure LLM result, captured separately for the Jev shadow agreement ledger
         // (Phase 1): aiAnalysis may later be overwritten by the local-first fallback,
         // but agreement measurement needs the LLM's own scores or an explicit null.
         let llmAnalysisForShadow: AIAnalysisResult | null = null;
-        if (escalationDecision.escalate && llmCallsThisCycle < tradingSafety.newsLlmMaxCallsPerCycle) {
+        // When Jev's score was accepted above, the LLM path is skipped entirely —
+        // aiAnalysis already holds the Jev-built result.
+        if (!jevAcceptedAnalysis && escalationDecision.escalate && llmCallsThisCycle < tradingSafety.newsLlmMaxCallsPerCycle) {
           llmCallsThisCycle += 1;
           try {
             aiAnalysis = await this.scoringEngine.analyzeWithAI(normalized, traceId, {
@@ -214,7 +238,7 @@ export class NewsEngine {
               reasoning: `[Local-First] Remote LLM failed; using ${impact.sentimentSource} sentiment ${impact.sentiment.toFixed(2)}.`,
             });
           }
-        } else if (finalSymbols.length > 0 && (!escalationDecision.escalate || llmCallsThisCycle >= tradingSafety.newsLlmMaxCallsPerCycle)) {
+        } else if (!jevAcceptedAnalysis && finalSymbols.length > 0 && (!escalationDecision.escalate || llmCallsThisCycle >= tradingSafety.newsLlmMaxCallsPerCycle)) {
           if (escalationDecision.escalate) {
             console.warn(`[NewsEngine] Skipping LLM escalation — cycle cap ${tradingSafety.newsLlmMaxCallsPerCycle} reached (DEF-14).`);
           }
@@ -492,6 +516,68 @@ export class NewsEngine {
       console.error('[NewsEngine] Pipeline tick failed (interval continues):', e);
     } finally {
       this.pipelineInFlight = false;
+    }
+  }
+
+  /**
+   * Jev Phase 2 (2026-10-06): score one article with Jev and decide whether the LLM
+   * is needed. Returns an AIAnalysisResult built from Jev's score when Jev is
+   * confident (LLM skipped), or null when the existing LLM path should run.
+   * Never throws — any failure means "fall through to the existing path".
+   * Only called when ARGUS_JEV_ESCALATION_ENABLED=true.
+   */
+  private async tryJevFirstAnalysis(
+    article: NormalizedArticle,
+    opts: {
+      symbol: string;
+      traceId: string;
+      category: string;
+      credibility: number;
+      isNewCluster: boolean;
+      priorArticleCount: number;
+      impactScore01: number;
+      timeHorizon: string;
+    },
+  ): Promise<AIAnalysisResult | null> {
+    try {
+      const { buildJevNewsState, scoreArticleWithJev } = await import('./JevNewsTriage');
+      const { JevProvider } = await import('../ai/providers/JevProvider');
+      const { decideJevEscalation, buildJevAnalysisResult } = await import('./JevEscalation');
+
+      const apiKey = (process.env.JEV_API_KEY || process.env.TYPESAFE_API_KEY || '').trim();
+      if (!apiKey) return null;
+
+      const state = buildJevNewsState(article, opts.symbol, {
+        category: opts.category,
+        credibility: opts.credibility,
+        isNewCluster: opts.isNewCluster,
+        priorArticleCount: opts.priorArticleCount,
+        impactScore01: opts.impactScore01,
+        timeHorizon: opts.timeHorizon,
+      });
+      if (!state) return null; // imperfect data — existing path handles it
+
+      const provider = new JevProvider();
+      await provider.initialize(apiKey);
+      // Tighter than the shadow default: this call blocks the article's analysis.
+      const score = await scoreArticleWithJev(provider, state, { timeoutMs: 8000 });
+
+      const decision = decideJevEscalation({ jevScore: score, credibility: opts.credibility });
+      console.log(`[NewsEngine][Jev] ${opts.symbol}: ${decision.reason}`);
+      if (decision.escalateToLlm) return null;
+
+      return buildJevAnalysisResult(article, score, {
+        symbol: opts.symbol,
+        category: opts.category,
+        impactScore01: opts.impactScore01,
+        timeHorizon: opts.timeHorizon,
+        isNewCluster: opts.isNewCluster,
+        priorArticleCount: opts.priorArticleCount,
+        credibility: opts.credibility,
+      });
+    } catch (e) {
+      console.warn('[NewsEngine][Jev] triage failed, falling through to existing path:', (e as Error)?.message || e);
+      return null;
     }
   }
 }

@@ -426,6 +426,13 @@ export interface TradingSafety {
   kronosEvaluationHorizonMs: number;
   tradingDaysPerYear: number;
   newsDecisiveSentimentThreshold: number;
+  /** Jev Phase 2 (2026-10-06): accept Jev's news score without LLM at/above this min confidence. Conservative initial value pending Phase 1 calibration data. */
+  jevEscalationConfidenceThreshold: number;
+  /** Jev Phase 2: article must also clear this P(relevant) for Jev's score to be accepted. */
+  jevEscalationRelevanceThreshold: number;
+  /** Jev Phase 2: credibility at/above this + impact at/above jevHighStakesImpact = high-stakes, always escalate to LLM. */
+  jevHighStakesCredibility: number;
+  jevHighStakesImpact: number;
   aiDecisionTemperature: number;
   minRegimeConfidenceToTrade: number;
   /**
@@ -786,6 +793,10 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'campaignEodFlattenEtMinutesBeforeClose',
   'tradingDaysPerYear',
   'newsDecisiveSentimentThreshold',
+  'jevEscalationConfidenceThreshold',
+  'jevEscalationRelevanceThreshold',
+  'jevHighStakesCredibility',
+  'jevHighStakesImpact',
   'aiDecisionTemperature',
   'minRegimeConfidenceToTrade',
   'monteCarloDefaultSeed',
