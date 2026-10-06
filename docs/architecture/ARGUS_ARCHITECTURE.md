@@ -3914,3 +3914,48 @@ The TUI imports only React/Ink plus its own presentation modules (enforced by
 **Tests:** 11 service tests (all 8 sections from fixtures, honest empty states, invalid-date
 rejection, never-mutates via full row-count snapshot), 3 route smoke tests, 4 TUI import/path
 tests. `tsc --noEmit` clean.
+
+## October 6, 2026 — Weekly reflection digest + taxonomy cleanup + reflection architecture tests (Part B, workstream K, local-only)
+
+**Modules:** `src/server/reflection/weeklyDigestAggregate.ts` (pure, zero imports),
+`src/server/reflection/weeklyDigest.ts` (DB layer: read week's COMPLETED `postmarket_reports`,
+aggregate, upsert). **Diagnostic only**, same safety contract as the daily reflection
+surfaces: never imports RiskEngine/OMS/BrokerManager, never emits TRADE_IDEA_GENERATED /
+CHIEF_APPROVED_IDEA, writes only to its own `weekly_reflection_digest` table (migration
+0095: `week_start`, `pattern_key`, `occurrences`, `symbols` JSON, `first_seen`, `last_seen`,
+UNIQUE(`week_start`, `pattern_key`)).
+
+**Recurrence gate:** a pattern enters the digest only after occurring on >= 2 distinct
+trading days in the week (`DEFAULT_MIN_OCCURRENCES`, configurable per call) — a one-day
+anomaly is never promoted to an architecture-level conclusion. Pattern keys derive only
+from real daily-report evidence: blind-spot `patternKey`s, `FILTER_<reason>` (discovery
+filter reasons, e.g. `FILTER_RANK_CAP`), `FATE_<classification>` (per-symbol fate
+distribution), `NO_FRESH_DATA` (real NEWS_IDEA_DISCARDED_NO_FRESH_DATA events),
+`FAILURE_<category>` (narrative failure categories, excluding NONE),
+`AUDIT_<verdict>` (rejected-candidate audits), `UNIVERSE_MISS_<cause>` (workstream H's
+`never_seen_cause`). Per-pattern symbol lists (capped at 50) and first/last-seen dates.
+
+**Taxonomy cleanup (same change):** `RANKING_MISS` removed from `MissClassification`
+(dead — in the union but `classifyMiss()` never returned it, and the module's own
+anti-hindsight governance forbids any honest producer; removal documented in-code with
+reintroduction conditions). `TRUE_UNIVERSE_MISS` in PostMarketAnalysis is now genuinely
+populated: `readNeverSeenMovers()` reads workstream H's `mover_coverage` NEVER_SEEN rows
+(migration 0093) into findings (a symbol with any discovery event is never mislabeled
+never-seen; absent table degrades to zero, never fabricated). Full fate/reason inventory
+audited in-code (PostMarketAnalysis.ts taxonomy comment): every code classified
+USED / IMPLEMENTED_BUT_UNREACHED / DEAD / DUPLICATE; no duplicate merges were needed —
+the candidate overlaps (CORRECT_NON_ACTION vs FILTERED_OTHER, RISK_REJECTION vs
+RISK_NOT_CONFIRMED, mover primary_fate vs MissClassification) are genuinely distinct
+populations and documented as such.
+
+**Tests:** `reflectionSafety.test.ts` — 6 tests proving reflection is diagnostic-only: (a)
+no BrokerManager/OMS/placeOrder imports (static scan), (b) no emitTradeIdea /
+CHIEF_APPROVED_IDEA, (c) write-table allow-list (weekly_reflection_digest,
+reflection_session_metrics, mover_coverage only), (d) no consensus/agent-weight/
+RiskEngine/tradingSafety mutation, (e) single-occurrence patterns never promoted;
+`weeklyDigestAggregate.test.ts` — 13 unit tests (recurrence, key derivation, caps,
+determinism); `weeklyDigest.persistence.test.ts` — 2 tests (migration applies, end-to-end
+recurrence, RUNNING reports excluded, upsert idempotent); `PostMarketAnalysis.universeMiss.test.ts`
+— 3 tests (TRUE_UNIVERSE_MISS genuinely populated with real cause; seen symbols not
+mislabeled). Existing PostMarketAnalysis (18) + MissedOpportunityDetector (30) + Detector
+persistence (8) suites pass unchanged after the taxonomy edits.
