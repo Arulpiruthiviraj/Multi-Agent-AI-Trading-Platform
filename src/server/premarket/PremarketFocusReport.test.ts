@@ -12,6 +12,11 @@ import os from 'node:os';
 import {
   buildFocusReport,
   getPersistedFocusReport,
+  getPlanTierMovements,
+  getPremarketFocusCliView,
+  getPremarketLifecycleStatusSafe,
+  formatPremarketRvol,
+  planRvolDisplayLine,
   tierForTotal,
   type TradePlanRow,
 } from './PremarketFocusReport';
@@ -26,7 +31,7 @@ const VALID_UNTIL = '2026-10-06T20:00:00.000Z'; // 16:00 ET
 const CREATED_AT = '2026-10-06T08:00:00.000Z';
 
 function planRow(overrides: Partial<TradePlanRow> = {}): TradePlanRow {
-  return {
+  const base: TradePlanRow = {
     id: `plan-${overrides.symbol ?? 'X'}`,
     symbol: 'X',
     planDate: TRADING_DATE,
@@ -34,6 +39,8 @@ function planRow(overrides: Partial<TradePlanRow> = {}): TradePlanRow {
     direction: 'BUY',
     thesis: 'fixture thesis',
     catalysts: null,
+    catalystType: null,
+    catalystSourceCount: null,
     entryZoneLow: null,
     entryZoneHigh: null,
     invalidationLevel: null,
@@ -52,8 +59,10 @@ function planRow(overrides: Partial<TradePlanRow> = {}): TradePlanRow {
     reasonForRefresh: null,
     originalCreatedAt: null,
     scoreDecompositionJson: null,
-    ...overrides,
+    evidenceAsof: null,
+    sessionPhase: null,
   };
+  return { ...base, ...overrides };
 }
 
 function persistedBreakdown(symbol: string, total: number): string {
@@ -144,27 +153,36 @@ describe('tierForTotal', () => {
   });
 });
 
+/** File-level DB isolation: one temp DB for the whole file (the db module is
+ *  cached after first import, so a second per-describe ARGUS_DB_PATH would
+ *  silently keep pointing at the first DB). Same convention as
+ *  SessionLifecycle.test.ts — never touches the real data/argus.db. */
+let tmpDbPath: string;
+let sqliteDb: { close(): void };
+
+beforeAll(async () => {
+  tmpDbPath = path.join(os.tmpdir(), `argus_premarket_focus_${Date.now()}_${process.pid}.db`);
+  process.env.ARGUS_DB_PATH = tmpDbPath;
+  const dbMod = await import('../db');
+  sqliteDb = dbMod.sqliteDb as { close(): void };
+  const schema = await import('../db/schema');
+  await dbMod.db.insert(schema.tradePlans).values(fixturePlans());
+  // Warm the heavy MarketDataWorker module graph once here (hookTimeout is
+  // 60s): buildFocusReport resolves subscription state via a dynamic import
+  // of it, and the first import takes several seconds in the test env.
+  await import('../services/MarketDataWorker');
+}, 60_000);
+
+afterAll(() => {
+  try { sqliteDb.close(); } catch { /* already closed */ }
+  for (const suffix of ['', '-shm', '-wal']) {
+    try { fs.unlinkSync(tmpDbPath + suffix); } catch { /* best-effort */ }
+  }
+  delete process.env.ARGUS_DB_PATH;
+});
+
 describe('buildFocusReport — tiering from fixture plans', () => {
-  let tmpDbPath: string;
-  let sqliteDb: { close(): void };
   let emitSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeAll(async () => {
-    tmpDbPath = path.join(os.tmpdir(), `argus_premarket_focus_${Date.now()}_${process.pid}.db`);
-    process.env.ARGUS_DB_PATH = tmpDbPath;
-    const dbMod = await import('../db');
-    sqliteDb = dbMod.sqliteDb as { close(): void };
-    const schema = await import('../db/schema');
-    await dbMod.db.insert(schema.tradePlans).values(fixturePlans());
-  });
-
-  afterAll(() => {
-    try { sqliteDb.close(); } catch { /* already closed */ }
-    for (const suffix of ['', '-shm', '-wal']) {
-      try { fs.unlinkSync(tmpDbPath + suffix); } catch { /* best-effort */ }
-    }
-    delete process.env.ARGUS_DB_PATH;
-  });
 
   beforeEach(() => {
     emitSpy = vi.spyOn(eventBus, 'emit');
@@ -187,7 +205,7 @@ describe('buildFocusReport — tiering from fixture plans', () => {
     expect(report.tiers.PRIMARY.map((e) => e.symbol)).toEqual(['EEE', 'AAA']); // total desc
     expect(report.tiers.SECONDARY.map((e) => e.symbol)).toEqual(['BBB']);
     expect(report.tiers.WATCH.map((e) => e.symbol)).toEqual(['CCC']);
-    expect(report.tiers.REJECTED.map((e) => e.symbol)).toEqual(['FFF', 'DDD']);
+    expect(report.tiers.REJECTED.map((e) => e.symbol)).toEqual(['DDD', 'FFF']); // tie at 0.05 -> symbol asc
 
     const aaa = report.tiers.PRIMARY.find((e) => e.symbol === 'AAA')!;
     expect(aaa.total).toBeCloseTo(0.8658, 3);
@@ -210,7 +228,9 @@ describe('buildFocusReport — tiering from fixture plans', () => {
     expect(aaa.freshness).toMatchObject({ planStatus: 'READY', dataFresh: true });
     expect(aaa.freshness.planAgeMinutes).toBe(240); // 08:00 -> 12:00 UTC
     expect(aaa.strategyApplicability).toHaveLength(3);
-    expect(aaa.dataReadiness.completeness).toBe(1);
+    // 9 of 10 scored inputs present; advShares honestly missing from the fixture.
+    expect(aaa.dataReadiness.completeness).toBeCloseTo(0.9, 10);
+    expect(aaa.dataReadiness.missing).toEqual(['advShares']);
     expect(['SUBSCRIBED_ANCHOR', 'SUBSCRIBED_DYNAMIC', 'NOT_SUBSCRIBED', 'UNKNOWN']).toContain(aaa.subscriptionState);
 
     // Never actionable: no direction/side anywhere in the entry or its JSON.
@@ -290,28 +310,166 @@ describe('buildFocusReport — tiering from fixture plans', () => {
   });
 });
 
-describe('installPremarketFocusSubscribers — defensive refresh handling', () => {
-  let tmpDbPath: string;
-  let sqliteDb: { close(): void };
-  let unsubscribe: () => void;
+describe('RVOL honesty — PREMARKET_RVOL_UNAVAILABLE (workstream E verdict)', () => {
+  it('formatPremarketRvol maps null/zero/non-positive to PREMARKET_RVOL_UNAVAILABLE, never "0.00x"', () => {
+    for (const bad of [null, undefined, 0, -1, -0.5, NaN, Infinity]) {
+      const rendered = formatPremarketRvol(bad as number | null | undefined);
+      expect(rendered).toBe('PREMARKET_RVOL_UNAVAILABLE');
+      expect(rendered).not.toContain('0.00x');
+    }
+  });
+
+  it('formatPremarketRvol renders a real positive multiple honestly', () => {
+    expect(formatPremarketRvol(2.345)).toBe('2.35x');
+    expect(formatPremarketRvol(0.5)).toBe('0.50x');
+  });
+
+  it('planRvolDisplayLine returns null when the plan carries no RVOL evidence', () => {
+    expect(planRvolDisplayLine(planRow({ componentScoresJson: null }))).toBeNull();
+    expect(planRvolDisplayLine(planRow({ componentScoresJson: 'not-json' }))).toBeNull();
+    expect(planRvolDisplayLine(planRow({ componentScoresJson: JSON.stringify({ momentum: { score: 0.5 } }) }))).toBeNull();
+  });
+
+  it('unavailable RVOL in the focus report renders PREMARKET_RVOL_UNAVAILABLE, never "0.00x"', async () => {
+    const ggg = planRow({
+      id: 'plan-ggg', symbol: 'GGG', rankAtCreation: 20,
+      componentScoresJson: JSON.stringify({
+        relativeVolume: { score: null, available: false, reason: 'no premarket time-of-day curve' },
+        momentum: { score: 0.5, available: true },
+      }),
+    });
+    const report = await buildFocusReport(TRADING_DATE, 1, { plans: [ggg], now: NOW });
+    const entry = report.tiers.REJECTED.find((e) => e.symbol === 'GGG')!;
+    expect(entry).toBeDefined();
+    expect(entry.whySelected.some((r) => r.includes('PREMARKET_RVOL_UNAVAILABLE'))).toBe(true);
+    expect(entry.whySelected.some((r) => r.includes('0.00x'))).toBe(false);
+    // The persisted JSON carries the honest marker too.
+    const read = await getPersistedFocusReport(TRADING_DATE, 1);
+    const persisted = read!.tiers.REJECTED.find((e) => e.symbol === 'GGG')!;
+    expect(JSON.stringify(persisted.whySelected)).toContain('PREMARKET_RVOL_UNAVAILABLE');
+    expect(JSON.stringify(persisted.whySelected)).not.toContain('0.00x');
+  });
+
+  it('available RVOL renders its real normalized score, honestly labeled', async () => {
+    const hhh = planRow({
+      id: 'plan-hhh', symbol: 'HHH', rankAtCreation: 21,
+      componentScoresJson: JSON.stringify({
+        relativeVolume: { score: 0.75, available: true },
+      }),
+    });
+    const report = await buildFocusReport(TRADING_DATE, 1, { plans: [hhh], now: NOW });
+    const entry = report.tiers.REJECTED.find((e) => e.symbol === 'HHH')!;
+    expect(entry.whySelected.some((r) => r === 'relative volume score 0.75')).toBe(true);
+  });
+});
+
+describe('getPremarketLifecycleStatusSafe — workstream B contract', () => {
+  it('returns B\'s lifecycle status when available; degrades to null (never throws) otherwise', async () => {
+    const status = await getPremarketLifecycleStatusSafe(TRADING_DATE);
+    // Workstream B has landed getPremarketLifecycleStatus: expect the real,
+    // shape-validated status. The safe wrapper still guarantees null-or-valid.
+    expect(status).not.toBeNull();
+    expect(status!.tradingDate).toBe(TRADING_DATE);
+    expect(typeof status!.sessionPhase).toBe('string');
+    expect(typeof status!.refreshDue).toBe('boolean');
+    const pc = status!.planCounts;
+    expect(Object.values(pc).reduce((a, b) => a + b, 0)).toBe(6); // 6 fixture plans
+    expect(pc.PRIMARY).toBe(2);
+    expect(pc.BACKUP).toBe(1);
+    expect(pc.WATCH).toBe(3);
+  });
+
+  it('never rejects', async () => {
+    await expect(getPremarketLifecycleStatusSafe('2099-01-01')).resolves.not.toThrow();
+  });
+});
+
+describe('getPlanTierMovements — promotions/downgrades/expiries since the previous build', () => {
+  const MOVEMENT_DATE = '2026-10-07';
 
   beforeAll(async () => {
-    tmpDbPath = path.join(os.tmpdir(), `argus_premarket_focus_sub_${Date.now()}_${process.pid}.db`);
-    process.env.ARGUS_DB_PATH = tmpDbPath;
     const dbMod = await import('../db');
-    sqliteDb = dbMod.sqliteDb as { close(): void };
     const schema = await import('../db/schema');
-    await dbMod.db.insert(schema.tradePlans).values(fixturePlans());
+    const v1 = ['AAA', 'BBB', 'CCC', 'DDD'].map((s, i) =>
+      planRow({
+        id: `m1-${s}`, symbol: s, planDate: MOVEMENT_DATE, refreshVersion: 1, rankAtCreation: i + 1,
+        setupType: s === 'AAA' ? 'PRIMARY' : s === 'BBB' ? 'BACKUP' : 'WATCHLIST',
+      }),
+    );
+    const v2 = [
+      planRow({ id: 'm2-AAA', symbol: 'AAA', planDate: MOVEMENT_DATE, refreshVersion: 2, rankAtCreation: 1, setupType: 'PRIMARY' }),
+      planRow({ id: 'm2-BBB', symbol: 'BBB', planDate: MOVEMENT_DATE, refreshVersion: 2, rankAtCreation: 5, setupType: 'WATCHLIST' }),
+      planRow({ id: 'm2-DDD', symbol: 'DDD', planDate: MOVEMENT_DATE, refreshVersion: 2, rankAtCreation: 3, setupType: 'BACKUP' }),
+      planRow({ id: 'm2-EEE', symbol: 'EEE', planDate: MOVEMENT_DATE, refreshVersion: 2, rankAtCreation: 2, setupType: 'PRIMARY' }),
+    ];
+    await dbMod.db.insert(schema.tradePlans).values([...v1, ...v2]);
+  });
+
+  it('detects promotions, downgrades, and expiries between the two latest versions', async () => {
+    const { currentVersion, previousVersion, movements } = await getPlanTierMovements(MOVEMENT_DATE);
+    expect(currentVersion).toBe(2);
+    expect(previousVersion).toBe(1);
+    expect(movements).toEqual([
+      { symbol: 'BBB', kind: 'DOWNGRADED', from: 'BACKUP', to: 'WATCHLIST' },
+      { symbol: 'CCC', kind: 'EXPIRED', from: 'WATCHLIST', to: null },
+      { symbol: 'DDD', kind: 'PROMOTED', from: 'WATCHLIST', to: 'BACKUP' },
+    ]);
+  });
+
+  it('returns empty movements when fewer than two versions exist', async () => {
+    const res = await getPlanTierMovements(TRADING_DATE);
+    expect(res.currentVersion).toBe(1);
+    expect(res.previousVersion).toBeNull();
+    expect(res.movements).toEqual([]);
+  });
+});
+
+describe('getPremarketFocusCliView — CLI service function', () => {
+  it('assembles lifecycle (degraded), per-symbol plan rows, movements, and the persisted report', async () => {
+    const view = await getPremarketFocusCliView(TRADING_DATE, NOW);
+    expect(view.tradingDate).toBe(TRADING_DATE);
+    // Workstream B's getPremarketLifecycleStatus is landed: real status, shape-validated.
+    expect(view.lifecycle).not.toBeNull();
+    expect(view.lifecycle!.tradingDate).toBe(TRADING_DATE);
+    expect(typeof view.lifecycle!.sessionPhase).toBe('string');
+    expect(typeof view.lifecycle!.refreshDue).toBe('boolean');
+    expect(view.plans).toHaveLength(6);
+    // Lifecycle-tier sort: PRIMARY first.
+    expect(view.plans[0].setupType).toBe('PRIMARY');
+    const aaa = view.plans.find((p) => p.symbol === 'AAA')!;
+    expect(aaa).toMatchObject({ direction: 'BUY', planVersion: 1, setupType: 'PRIMARY' });
+    expect(aaa.planAgeMinutes).toBe(240);
+    expect(aaa.catalystLabels).toEqual(['earnings beat']);
+    expect(aaa.dataTotal).toBeGreaterThan(0);
+    expect(typeof aaa.total).toBe('number');
+    expect(aaa.whySelected.length).toBeGreaterThan(0);
+    // Movements: only v1 exists for this date.
+    expect(view.movementVersions).toEqual({ current: 1, previous: null });
+    expect(view.movements).toEqual([]);
+    // Persisted focus report from the earlier build tests.
+    expect(view.focusReport).not.toBeNull();
+    expect(view.focusReport!.tiers.PRIMARY.length).toBeGreaterThan(0);
+  });
+});
+
+describe('CLI wiring — argus premarket-focus', () => {
+  it('is registered with a Usage: help entry', async () => {
+    const cli = await import('../../../scripts/argus-cli');
+    expect(cli.commandNames()).toContain('premarket-focus');
+    expect(cli.COMMAND_HELP['premarket-focus'].startsWith('Usage:')).toBe(true);
+    expect(cli.COMMAND_HELP['premarket-focus']).toContain('--date=');
+  });
+});
+
+describe('installPremarketFocusSubscribers — defensive refresh handling', () => {
+  let unsubscribe: () => void;
+
+  beforeAll(() => {
     unsubscribe = installPremarketFocusSubscribers();
   });
 
   afterAll(() => {
     unsubscribe();
-    try { sqliteDb.close(); } catch { /* already closed */ }
-    for (const suffix of ['', '-shm', '-wal']) {
-      try { fs.unlinkSync(tmpDbPath + suffix); } catch { /* best-effort */ }
-    }
-    delete process.env.ARGUS_DB_PATH;
   });
 
   it('regenerates the report on PREMARKET_REFRESH_COMPLETED without throwing', async () => {

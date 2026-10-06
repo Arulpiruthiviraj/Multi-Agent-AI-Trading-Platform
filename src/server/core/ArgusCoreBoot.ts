@@ -294,6 +294,22 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
   }
 
   try {
+    const { startPremarketPlanLifecycle } = await import('../continuous/TradePlanBuilder');
+    startPremarketPlanLifecycle();
+    console.log('[TradePlanLifecycle] Premarket plan lifecycle subscribed (no timers; tick-driven).');
+  } catch (e: any) {
+    console.warn(`[TradePlanLifecycle] Boot subscription failed: ${e.message}`);
+  }
+
+  try {
+    const { installPremarketFocusSubscribers } = await import('../premarket/premarketFocusEvents');
+    installPremarketFocusSubscribers();
+    console.log('[PremarketFocus] Focus-report subscribers installed (defensive; never throws into bus).');
+  } catch (e: any) {
+    console.warn(`[PremarketFocus] Subscriber install failed: ${e.message}`);
+  }
+
+  try {
     const { calibrationValidationWorker } = await import('../continuous/CalibrationValidationWorker');
     calibrationValidationWorker.start();
     console.log(

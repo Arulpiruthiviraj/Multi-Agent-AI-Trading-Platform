@@ -176,7 +176,13 @@ function candidateInputFromPlan(plan: TradePlanRow, now: Date): PremarketCandida
   };
 }
 
-function resolveBreakdown(
+/**
+ * Resolve the scoring breakdown for one plan: explicit candidate inputs win,
+ * then workstream B's persisted scoreDecompositionJson, then the default
+ * honest-missing derivation from the plan row. Exported for the CLI, which
+ * shows per-symbol scores consistently with the persisted report.
+ */
+export function resolvePlanBreakdown(
   plan: TradePlanRow,
   opts: BuildFocusReportOptions,
   now: Date,
@@ -216,6 +222,53 @@ function fmtDollars(v: number): string {
   if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
   if (v >= 1_000) return `$${(v / 1_000).toFixed(0)}K`;
   return `$${v.toFixed(0)}`;
+}
+
+/**
+ * RVOL honesty (2026-10-06, workstream E verdict PREMARKET_RVOL_UNAVAILABLE):
+ * there is no pre-market time-of-day expected-volume curve, so a null, zero,
+ * or otherwise non-positive relative-volume multiple in a pre-market context
+ * must render as PREMARKET_RVOL_UNAVAILABLE — never as "0.00x", which would
+ * fabricate a measured zero. The "Relative volume 0.00x (score N/A)" string
+ * itself is produced by TradePlanBuilder.buildThesis — not this module's file,
+ * do not touch; this module maps it at its own display boundary instead.
+ */
+export function formatPremarketRvol(rawMultiple: number | null | undefined): string {
+  if (rawMultiple == null || !Number.isFinite(rawMultiple) || rawMultiple <= 0) {
+    return 'PREMARKET_RVOL_UNAVAILABLE';
+  }
+  return `${rawMultiple.toFixed(2)}x`;
+}
+
+/** Extract the plan's relative-volume component evidence, if the plan row carries it. */
+function planRelativeVolumeComponent(plan: TradePlanRow | null): { score: number | null; available: boolean } | null {
+  if (!plan?.componentScoresJson) return null;
+  try {
+    const parsed = JSON.parse(plan.componentScoresJson) as { relativeVolume?: unknown };
+    const rv = parsed?.relativeVolume as { score?: unknown; available?: unknown } | undefined;
+    if (rv == null || typeof rv !== 'object') return null;
+    return {
+      score: typeof rv.score === 'number' && Number.isFinite(rv.score) ? rv.score : null,
+      available: rv.available === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Display line for the plan's relative-volume evidence, RVOL-honest: an
+ * unavailable/null/zero reading in this pre-market context renders as
+ * PREMARKET_RVOL_UNAVAILABLE, never "0.00x". Returns null when the plan row
+ * carries no relative-volume evidence at all.
+ */
+export function planRvolDisplayLine(plan: TradePlanRow | null): string | null {
+  const comp = planRelativeVolumeComponent(plan);
+  if (!comp) return null;
+  if (comp.available && comp.score != null && comp.score > 0) {
+    return `relative volume score ${comp.score.toFixed(2)}`;
+  }
+  return `relative volume ${formatPremarketRvol(null)}`;
 }
 
 /** Direction-blind attention reasons, strongest contribution first. */
@@ -275,6 +328,11 @@ function buildWhySelected(
 
   candidates.sort((a, b) => b.rank - a.rank);
   const reasons = candidates.filter((r) => r.rank > 0).slice(0, 4).map((r) => r.text);
+
+  // Plan evidence the score doesn't consume: relative volume, RVOL-honest
+  // (PREMARKET_RVOL_UNAVAILABLE, never a fabricated "0.00x").
+  const rvolLine = planRvolDisplayLine(plan);
+  if (rvolLine) reasons.push(rvolLine);
 
   if (plan) {
     reasons.push(
@@ -345,7 +403,7 @@ export async function buildFocusReport(
   const subscriptionStates = await resolveSubscriptionStates(uniquePlans.map((p) => p.symbol));
 
   const entries: FocusReportEntry[] = uniquePlans.map((plan) => {
-    const { breakdown, input, fromPersisted } = resolveBreakdown(plan, opts, now);
+    const { breakdown, input, fromPersisted } = resolvePlanBreakdown(plan, opts, now);
     const tier = tierForTotal(breakdown.total);
     const catalystLabels = parseJsonArray(plan.catalysts);
     const createdAtMs = Date.parse(plan.createdAt);
@@ -568,5 +626,234 @@ export async function getPersistedFocusReport(
         return { plansRead: 0, symbolsScored: 0, planStatuses: {} };
       }
     })(),
+  };
+}
+/**
+ * Workstream B's pre-market lifecycle status contract (2026-10-06 course
+ * correction). Canonical definition lives alongside getPremarketLifecycleStatus()
+ * in ../continuous/TradePlanBuilder ("Workstream D CLI contract — shape is
+ * stable, do not change without coordinating"); imported here as the single
+ * source of truth. The runtime validator below still guards against shape
+ * drift (the CLI must degrade gracefully, never throw).
+ */
+import type { PremarketLifecycleStatus } from '../continuous/TradePlanBuilder';
+export type { PremarketLifecycleStatus };
+
+const NEXT_REFRESH_KINDS = ['MID_MORNING', 'LATE_REFRESH', 'PREOPEN_VALIDATION', 'EVENT_DRIVEN'];
+const PLAN_COUNT_KEYS = ['PRIMARY', 'BACKUP', 'WATCH', 'DOWNGRADED', 'EXPIRED'];
+
+function isValidLifecycleStatus(raw: unknown): raw is PremarketLifecycleStatus {
+  if (raw == null || typeof raw !== 'object') return false;
+  const s = raw as Record<string, unknown>;
+  const pc = s.planCounts as Record<string, unknown> | undefined;
+  return (
+    typeof s.tradingDate === 'string' &&
+    typeof s.sessionPhase === 'string' &&
+    (s.lastBuildAt === null || typeof s.lastBuildAt === 'string') &&
+    typeof s.lastBuildVersion === 'number' &&
+    Number.isInteger(s.lastBuildVersion) &&
+    (s.evidenceAsof === null || typeof s.evidenceAsof === 'string') &&
+    (s.nextRefreshAt === null || typeof s.nextRefreshAt === 'string') &&
+    (s.nextRefreshKind === null ||
+      (typeof s.nextRefreshKind === 'string' && NEXT_REFRESH_KINDS.includes(s.nextRefreshKind))) &&
+    pc != null &&
+    typeof pc === 'object' &&
+    PLAN_COUNT_KEYS.every((k) => typeof pc[k] === 'number') &&
+    (s.oldestPlanAgeMinutes === null || typeof s.oldestPlanAgeMinutes === 'number') &&
+    typeof s.refreshDue === 'boolean'
+  );
+}
+
+/**
+ * Best-effort read of workstream B's getPremarketLifecycleStatus(). Never
+ * throws: returns null when B hasn't landed the function yet, the import
+ * fails, or the shape drifted — callers (CLI) degrade gracefully. The parent
+ * reconciles the contract at integration.
+ */
+export async function getPremarketLifecycleStatusSafe(
+  tradingDate?: string,
+): Promise<PremarketLifecycleStatus | null> {
+  try {
+    const mod = (await import('../continuous/TradePlanBuilder')) as unknown as Record<string, unknown>;
+    const fn = mod.getPremarketLifecycleStatus;
+    if (typeof fn !== 'function') return null;
+    const raw = await (fn as (tradingDate?: string) => Promise<unknown>)(tradingDate);
+    return isValidLifecycleStatus(raw) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+export type PlanTierMovementKind = 'PROMOTED' | 'DOWNGRADED' | 'EXPIRED';
+
+export interface PlanTierMovement {
+  symbol: string;
+  kind: PlanTierMovementKind;
+  /** Previous setupType (or previous status context for EXPIRED). */
+  from: string | null;
+  /** Current setupType; null when the plan vanished between builds. */
+  to: string | null;
+}
+
+/** Lifecycle tier rank for promotion/downgrade comparison (lower = higher tier). */
+const SETUP_TIER_RANK: Record<string, number> = { PRIMARY: 0, BACKUP: 1, WATCHLIST: 2 };
+
+/**
+ * Promotions / downgrades / expiries "since the previous build": compares the
+ * two latest refresh versions of the trade plans for a trading date. A symbol
+ * whose latest plan is EXPIRED (or which vanished between versions) counts as
+ * EXPIRED. Returns empty movements when fewer than two versions exist.
+ */
+export async function getPlanTierMovements(tradingDate: string): Promise<{
+  currentVersion: number | null;
+  previousVersion: number | null;
+  movements: PlanTierMovement[];
+}> {
+  const { getTradePlansForDate } = await import('../continuous/TradePlanBuilder');
+  const plans = (await getTradePlansForDate(tradingDate)).filter((p) => p.planDate === tradingDate);
+  const versions = [...new Set(plans.map((p) => p.refreshVersion))].sort((a, b) => a - b);
+  if (versions.length < 2) {
+    return { currentVersion: versions[0] ?? null, previousVersion: null, movements: [] };
+  }
+  const currentVersion = versions[versions.length - 1];
+  const previousVersion = versions[versions.length - 2];
+  // Latest row wins per (version, symbol); getTradePlansForDate orders by
+  // rankAtCreation, so the Map keeps the last row per symbol per version.
+  const current = new Map(
+    plans.filter((p) => p.refreshVersion === currentVersion).map((p) => [p.symbol, p] as const),
+  );
+  const previous = new Map(
+    plans.filter((p) => p.refreshVersion === previousVersion).map((p) => [p.symbol, p] as const),
+  );
+  const movements: PlanTierMovement[] = [];
+  for (const [symbol, prev] of previous) {
+    const cur = current.get(symbol);
+    if (!cur || (cur.status === 'EXPIRED' && prev.status !== 'EXPIRED')) {
+      movements.push({ symbol, kind: 'EXPIRED', from: prev.setupType, to: cur?.setupType ?? null });
+      continue;
+    }
+    const prevRank = SETUP_TIER_RANK[prev.setupType] ?? 99;
+    const curRank = SETUP_TIER_RANK[cur.setupType] ?? 99;
+    if (curRank < prevRank) {
+      movements.push({ symbol, kind: 'PROMOTED', from: prev.setupType, to: cur.setupType });
+    } else if (curRank > prevRank) {
+      movements.push({ symbol, kind: 'DOWNGRADED', from: prev.setupType, to: cur.setupType });
+    }
+  }
+  movements.sort((a, b) => a.symbol.localeCompare(b.symbol));
+  return { currentVersion, previousVersion, movements };
+}
+
+export interface FocusCliPlanEntry {
+  symbol: string;
+  /** Lifecycle tier: PRIMARY | BACKUP | WATCHLIST (as stored on the plan). */
+  setupType: string;
+  /** The plan's recorded direction — displayed as descriptive plan data with
+   *  the "never trade this" disclaimer, never as a recommendation. */
+  direction: string;
+  /** Decomposed pre-market opportunity score total (0..1). */
+  total: number;
+  /** Score-based attention tier (PRIMARY/SECONDARY/WATCH/REJECTED). */
+  attentionTier: FocusTier;
+  catalystLabels: string[];
+  catalystType: string | null;
+  dataAvailable: number;
+  dataTotal: number;
+  dataMissing: string[];
+  planAgeMinutes: number | null;
+  planVersion: number;
+  refreshReason: string | null;
+  refreshedAt: string | null;
+  whySelected: string[];
+}
+
+export interface PremarketFocusCliView {
+  tradingDate: string;
+  generatedAt: string;
+  /** Null when workstream B's status function is unavailable or drifted. */
+  lifecycle: PremarketLifecycleStatus | null;
+  /** Latest refresh version per symbol, lifecycle-tier sorted. */
+  plans: FocusCliPlanEntry[];
+  movements: PlanTierMovement[];
+  movementVersions: { current: number | null; previous: number | null };
+  /** Persisted score-based attention-tier report, if one exists for the date. */
+  focusReport: FocusReport | null;
+}
+
+/** Latest refresh version wins per symbol (tie: latest createdAt). */
+function dedupePlansLatestVersion(plans: TradePlanRow[]): TradePlanRow[] {
+  const bySymbol = new Map<string, TradePlanRow>();
+  for (const plan of plans) {
+    const prev = bySymbol.get(plan.symbol);
+    if (
+      !prev ||
+      plan.refreshVersion > prev.refreshVersion ||
+      (plan.refreshVersion === prev.refreshVersion && plan.createdAt > prev.createdAt)
+    ) {
+      bySymbol.set(plan.symbol, plan);
+    }
+  }
+  return [...bySymbol.values()];
+}
+
+/**
+ * Read-only service function for `argus premarket-focus`: assembles the full
+ * CLI view — lifecycle status (best-effort), per-symbol plan rows enriched
+ * with score decompositions, tier movements since the previous build, and the
+ * persisted focus report. No heavy logic in the CLI itself; this function
+ * owns the DB reads. Never throws for a missing lifecycle status (null), but
+ * DB failures propagate to the caller (the CLI reports them).
+ */
+export async function getPremarketFocusCliView(
+  tradingDate: string,
+  now: Date = new Date(),
+): Promise<PremarketFocusCliView> {
+  const { getTradePlansForDate } = await import('../continuous/TradePlanBuilder');
+  const plans = dedupePlansLatestVersion(
+    (await getTradePlansForDate(tradingDate)).filter((p) => p.planDate === tradingDate),
+  );
+
+  const [lifecycle, movementInfo, focusReport] = await Promise.all([
+    getPremarketLifecycleStatusSafe(tradingDate),
+    getPlanTierMovements(tradingDate),
+    getPersistedFocusReport(tradingDate),
+  ]);
+
+  const entries: FocusCliPlanEntry[] = plans.map((plan) => {
+    const { breakdown, input } = resolvePlanBreakdown(plan, {}, now);
+    const createdMs = Date.parse(plan.originalCreatedAt ?? plan.createdAt);
+    return {
+      symbol: plan.symbol,
+      setupType: plan.setupType,
+      direction: plan.direction,
+      total: breakdown.total,
+      attentionTier: tierForTotal(breakdown.total),
+      catalystLabels: parseJsonArray(plan.catalysts),
+      catalystType: plan.catalystType,
+      dataAvailable: breakdown.inputsAvailable.length,
+      dataTotal: breakdown.inputsAvailable.length + breakdown.inputsMissing.length,
+      dataMissing: breakdown.inputsMissing,
+      planAgeMinutes: Number.isFinite(createdMs)
+        ? Math.max(0, Math.round((now.getTime() - createdMs) / 60000))
+        : null,
+      planVersion: plan.refreshVersion,
+      refreshReason: plan.reasonForRefresh,
+      refreshedAt: plan.refreshedAt,
+      whySelected: buildWhySelected(plan, input, breakdown),
+    };
+  });
+  entries.sort(
+    (a, b) =>
+      (SETUP_TIER_RANK[a.setupType] ?? 99) - (SETUP_TIER_RANK[b.setupType] ?? 99) || b.total - a.total,
+  );
+
+  return {
+    tradingDate,
+    generatedAt: now.toISOString(),
+    lifecycle,
+    plans: entries,
+    movements: movementInfo.movements,
+    movementVersions: { current: movementInfo.currentVersion, previous: movementInfo.previousVersion },
+    focusReport,
   };
 }

@@ -1027,6 +1027,7 @@ export const COMMAND_HELP: Record<string, string> = {
   'ranking': 'Usage: argus ranking [SYMBOL]\nLatest candidate ranking, or ranking history for SYMBOL.',
   'subscription-queue': 'Usage: argus subscription-queue [decisions]\nSubscription priority queue snapshot; `decisions` shows promotion/eviction reasons.',
   'trade-plan': 'Usage: argus trade-plan [date] [planId]\nPre-market trade plan (default: today); with planId shows revalidations.',
+  'premarket-focus': 'Usage: argus premarket-focus [--date=YYYY-MM-DD]\nPre-market focus: lifecycle status, plan tiers with scores, movements since previous build. Tiers mean "deserves attention", never "trade this".',
   'missed-opportunities': 'Usage: argus missed-opportunities [sinceMs]\nDetected missed opportunities (default 24h lookback).',
   'learning': 'Usage: argus learning <observations|versions|promotions|rollbacks|calibration [worker-status]> [args...]\nLearning / self-evolution observability.',
   'session-lifecycle': 'Usage: argus session-lifecycle\nSession lifecycle snapshot + recent history.',
@@ -2006,6 +2007,111 @@ const commands: Record<string, () => Promise<void>> = {
     console.log(JSON.stringify(await fetchJson(`/api/v2/continuous-intelligence/trade-plans/${encodeURIComponent(planDate)}`), null, 2));
   },
   /**
+   * Pre-market focus (workstream D, 2026-10-06). Read-only: the service
+   * function in PremarketFocusReport.ts owns all DB reads; the CLI only
+   * formats. Shows workstream B's lifecycle status (session phase, last
+   * build, next refresh, plan counts, oldest plan age + REFRESH_DUE warning),
+   * plans grouped by lifecycle tier (PRIMARY/BACKUP/WATCH) with per-symbol
+   * score, direction, catalyst, data readiness, plan age, plan version and
+   * refresh reason, tier movements since the previous build, and the
+   * persisted score-based focus report.
+   *
+   * Tiers mean "deserves attention" — PRIMARY is the highest-priority set to
+   * monitor/evaluate, NEVER "trade this". This view never places orders.
+   * The plan's recorded direction is descriptive plan data, not a recommendation.
+   */
+  async 'premarket-focus'() {
+    const dateArg = process.argv.slice(3).find((a) => a.startsWith('--date='));
+    const tradingDate = dateArg ? dateArg.slice('--date='.length) : new Date().toISOString().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(tradingDate)) {
+      console.error('Usage: argus premarket-focus [--date=YYYY-MM-DD]');
+      return;
+    }
+    const { getPremarketFocusCliView } = await import('../src/server/premarket/PremarketFocusReport');
+    let view: Awaited<ReturnType<typeof getPremarketFocusCliView>>;
+    try {
+      view = await getPremarketFocusCliView(tradingDate);
+    } catch (e) {
+      console.error(`premarket-focus: failed to load view for ${tradingDate}: ${(e as Error).message}`);
+      return;
+    }
+    if (isJsonOutput()) return printJson(view);
+
+    const DISCLAIMER = 'NOTE: tiers mean "deserves attention" — PRIMARY is the highest-priority set to monitor/evaluate, never "trade this". This view never places orders.';
+    console.log(`Pre-market focus — ${view.tradingDate}`);
+    console.log(DISCLAIMER);
+    const lc = view.lifecycle;
+    if (lc) {
+      console.log(`Session phase: ${lc.sessionPhase}`);
+      console.log(`Last build: ${lc.lastBuildAt ?? 'n/a'} (version ${lc.lastBuildVersion}, evidence as of ${lc.evidenceAsof ?? 'n/a'})`);
+      console.log(`Next refresh: ${lc.nextRefreshKind ?? 'n/a'}${lc.nextRefreshAt ? ` at ${lc.nextRefreshAt}` : ''}`);
+      const pc = lc.planCounts;
+      console.log(`Plan counts: PRIMARY ${pc.PRIMARY}, BACKUP ${pc.BACKUP}, WATCH ${pc.WATCH}, DOWNGRADED ${pc.DOWNGRADED}, EXPIRED ${pc.EXPIRED}`);
+      const age = lc.oldestPlanAgeMinutes;
+      console.log(
+        `Oldest plan age: ${age == null ? 'n/a' : `${age}m`}` +
+        (lc.refreshDue ? ' — REFRESH_DUE: oldest plan is stale, refresh overdue' : ''),
+      );
+    } else {
+      console.log('Lifecycle status unavailable (getPremarketLifecycleStatus not yet wired) — showing plans only.');
+    }
+
+    const tierGroups: Array<[string, string]> = [
+      ['PRIMARY', 'PRIMARY'],
+      ['BACKUP', 'BACKUP'],
+      ['WATCH', 'WATCHLIST'],
+    ];
+    for (const [label, setupType] of tierGroups) {
+      const rows = view.plans.filter((p) => p.setupType === setupType);
+      console.log(`\n${label} (${rows.length}):`);
+      printTable(
+        rows.map((p) => ({
+          symbol: p.symbol,
+          score: p.total.toFixed(3),
+          dir: p.direction,
+          catalyst: p.catalystLabels[0] ?? p.catalystType ?? '—',
+          data: `${p.dataAvailable}/${p.dataTotal}`,
+          age: p.planAgeMinutes == null ? 'n/a' : `${p.planAgeMinutes}m`,
+          ver: String(p.planVersion),
+          refreshReason: p.refreshReason ?? '—',
+        })),
+        [
+          { header: 'SYMBOL', pick: (r) => field(r, 'symbol') },
+          { header: 'SCORE', pick: (r) => field(r, 'score') },
+          { header: 'DIR', pick: (r) => field(r, 'dir') },
+          { header: 'CATALYST', pick: (r) => field(r, 'catalyst') },
+          { header: 'DATA', pick: (r) => field(r, 'data') },
+          { header: 'AGE', pick: (r) => field(r, 'age') },
+          { header: 'VER', pick: (r) => field(r, 'ver') },
+          { header: 'REFRESH REASON', pick: (r) => field(r, 'refreshReason') },
+        ],
+      );
+    }
+
+    if (view.movements.length > 0) {
+      console.log(`\nMovements since build v${view.movementVersions.previous} → v${view.movementVersions.current}:`);
+      for (const m of view.movements) {
+        console.log(`  ${m.kind.padEnd(10)} ${m.symbol}  ${m.from ?? '?'} -> ${m.to ?? 'gone'}`);
+      }
+    } else if (view.movementVersions.previous != null) {
+      console.log('\nNo tier movements since the previous build.');
+    } else {
+      console.log('\nNo previous build to compare movements against.');
+    }
+
+    const fr = view.focusReport;
+    if (fr) {
+      console.log(`\nPersisted focus-report attention tiers (v${fr.refreshVersion}, generated ${fr.generatedAt}):`);
+      for (const t of ['PRIMARY', 'SECONDARY', 'WATCH', 'REJECTED'] as const) {
+        const entries = fr.tiers[t] ?? [];
+        const top = entries.slice(0, 5).map((e) => `${e.symbol}(${e.total.toFixed(3)})`).join(', ');
+        console.log(`  ${t}: ${entries.length}${top ? ` — top: ${top}` : ''}`);
+      }
+    } else {
+      console.log('\nNo persisted focus report for this date yet.');
+    }
+  },
+  /**
    * Phase 4F (Missed Opportunity Intelligence, 2026-08-27). Usage:
    *   argus missed-opportunities [sinceMs]  - detected misses + classification breakdown
    *   (default lookback 24h if sinceMs omitted)
@@ -2363,7 +2469,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['System / lifecycle', ['status', 'dashboard', 'tui', 'ui', 'health', 'start', 'stop', 'restart', 'wait-ready', 'config']],
       ['Watchdog (detached auto-restart supervisor)', ['watchdog-start', 'watchdog-stop', 'watchdog-restart', 'watchdog-status']],
       ['Trading state / portfolio', ['resume', 'pause', 'ready', 'positions', 'portfolio', 'brokers', 'set-broker', 'paper-profile']],
-      ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
+      ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'premarket-focus', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
       ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'trade-economic-attribution', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'discovery-challengers', 'strategy-scorecard', 'market-data-diagnostics', 'quant-evidence', 'reflection-engine-health', 'portfolio-impact']],
