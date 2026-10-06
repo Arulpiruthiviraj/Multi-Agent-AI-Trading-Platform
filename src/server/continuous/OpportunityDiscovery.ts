@@ -538,6 +538,15 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
       // (zeroScoreOrExcludedCount). Capture per-symbol reason codes here — purely
       // additive observability, does not change which candidates are eligible.
       const zeroScoreExcluded = scoredCandidates.filter((c) => !(c.breakdown.finalScore > 0));
+      // 2026-10-05 (Challenger Exclusion & Aging forensic follow-up): cycleId must be declared
+      // before this block, not after it. This event previously referenced cycleId before its own
+      // `const` declaration further down (same name, reused there for the pre-truncation snapshot
+      // and swap-outcome events) - a real, confirmed TDZ ReferenceError thrown synchronously on
+      // every single cycle this block ran, silently swallowed by observeSafe(), meaning
+      // BROAD_UNIVERSE_CHALLENGER_EXCLUDED had never actually fired even once since it was added.
+      // Hoisted here (pure, side-effect-free - cycle_${now.getTime()}) and reused unchanged by the
+      // later snapshot/swap-outcome events exactly as before.
+      const cycleId = `cycle_${now.getTime()}`;
       if (zeroScoreExcluded.length > 0) {
         const moverSymbols = new Set(getCachedMoverSymbols().map((s: string) => s.toUpperCase()));
         observeSafe(() => {
@@ -548,8 +557,26 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
               `reasons=${[...new Set(zeroScoreExcluded.map((c) => classifyExclusionReason(c.symbol, c.breakdown, moverSymbols)))].join(',')}`,
             cycleId,
             excludedCount: zeroScoreExcluded.length,
-            // Bounded: top 25 by absolute gap (most "interesting" exclusions first), never unbounded.
-            excluded: zeroScoreExcluded.slice(0, 25).map((c) => {
+            // 2026-10-05 (Challenger Exclusion & Aging forensic follow-up): this comment originally
+            // said "top 25 by absolute gap" but no sort ever ran before the slice below - a real
+            // bug confirmed while testing this exact code path against a synthetic fixture where
+            // dozens of ordinary seed/watch-universe symbols tie at baseScore=0/gapPct=null. Because
+            // Array.prototype.slice preserves shortlist's own concatenation order (static seed/
+            // watch/momentum universe FIRST, broad-universe/mover/news LAST), the bound was always
+            // won by routine static-universe noise, silently crowding out the diagnostically
+            // interesting case this event exists to surface (a broad-universe/mover/news-sourced
+            // admission that reached shortlist and still scored zero). Fixed to actually do what
+            // the comment always claimed: non-static sources first, then by absolute gap magnitude
+            // descending - sampling/display order only, never changes which candidates are excluded.
+            excluded: [...zeroScoreExcluded]
+              .sort((a, b) => {
+                const aNonStatic = inferredDiscoverySourceOf(a.symbol) !== 'SEED_OR_WATCH_OR_UNKNOWN';
+                const bNonStatic = inferredDiscoverySourceOf(b.symbol) !== 'SEED_OR_WATCH_OR_UNKNOWN';
+                if (aNonStatic !== bNonStatic) return aNonStatic ? -1 : 1;
+                return Math.abs(b.breakdown.gapPct ?? 0) - Math.abs(a.breakdown.gapPct ?? 0);
+              })
+              .slice(0, 25)
+              .map((c) => {
               const composableScore = getLastComposableScore(c.symbol);
               return {
                 symbol: c.symbol,
@@ -577,9 +604,6 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
           momentumScore: c.breakdown.finalScore,
         }));
       const broadUniverseChallengerSymbols = new Set(broadUniverseChallengers.map((c) => c.symbol));
-      // Shared across the pre-truncation snapshot below and the post-planning swap-outcome summary
-      // further down, so both events correlate to the same cycle and the same budget numbers.
-      const cycleId = `cycle_${now.getTime()}`;
       // Mirrors planSnapshotHotSwap()'s own internal swapCap clamp (a trivial, one-line formula,
       // not decision logic prone to drift) so the budget this logs matches what that function
       // actually enforces, without changing planSnapshotHotSwap()'s signature to return it.

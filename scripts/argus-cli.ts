@@ -985,6 +985,7 @@ export const COMMAND_HELP: Record<string, string> = {
   'rescue-outcomes': 'Usage: argus rescue-outcomes\nRescue / intervention outcomes.',
   'exploration-health': 'Usage: argus exploration-health\nExploration subsystem health.',
   'rescue-occupants': 'Usage: argus rescue-occupants\nCurrent rescue occupants.',
+  'broad-universe-aging': 'Usage: argus broad-universe-aging [--sortBy=mostSkipped|mostEligible|longestSinceSelected]\nBroad-universe allocator aging state (who is being starved?).',
   'market-data-diagnostics': 'Usage: argus market-data-diagnostics [--symbols=AAPL,MSFT]\nMarket-data feed diagnostics.',
   'ai-cost-governor': 'Usage: argus ai-cost-governor\nAI cost governor status.',
   'discovery-challengers': 'Usage: argus discovery-challengers [--hours=N]\nDiscovery challenger strategies.',
@@ -1570,6 +1571,19 @@ const commands: Record<string, () => Promise<void>> = {
     // Phase 18, Part 7: who currently holds a temporary-data-rescue slot, what class, since when,
     // how many times renewed. Live in-memory admission-state introspection, no secrets involved.
     const res = await fetch(`${BASE}/api/v2/observability/rescue-occupants?format=text`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
+    });
+    console.log(await res.text());
+  },
+  async 'broad-universe-aging'() {
+    // 2026-10-05 (Admitted -> Challenger Eligibility Gap Forensic, Section 6): who is accumulating
+    // aging credit in BroadUniverseSubscriptionAllocator but hasn't won a slot yet - the exact
+    // question that previously required offline DB archaeology to answer. Live in-memory
+    // introspection, read-only, no mutation. `--sortBy=mostSkipped|mostEligible|longestSinceSelected`.
+    const sortByArg = process.argv.slice(3).find((a) => a.startsWith('--sortBy='));
+    const sortBy = sortByArg ? sortByArg.split('=')[1] : 'mostSkipped';
+    const res = await fetch(`${BASE}/api/v2/observability/broad-universe-aging?format=text&sortBy=${encodeURIComponent(sortBy)}`, {
       headers: cliAuthHeaders(),
       signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
     });

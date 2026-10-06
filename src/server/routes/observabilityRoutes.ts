@@ -25,6 +25,8 @@ import { guardHeavyReport, HeavyReportRefusedError } from '../observability/heav
 import { buildRecertificationReview, formatRecertificationReview } from '../quant/strategies/StrategyRecertification';
 import { buildStrategyScoreNormalizationComparison, formatStrategyScoreNormalizationComparison } from '../research/strategyScoreNormalizationComparison';
 import { marketDataWorker } from '../services/MarketDataWorker';
+import { listAllocationRecords } from '../continuous/BroadUniverseSubscriptionAllocator';
+import { getCachedBroadUniverseSymbols } from '../continuous/MarketUniverseScanner';
 import { buildAiCostGovernorReport, formatAiCostGovernorReport } from '../observability/aiCostGovernorReport';
 import { buildDiscoveryLineageReport, formatDiscoveryLineageReport } from '../observability/discoveryLineageReport';
 import { buildDiscoveryChallengerReport, formatDiscoveryChallengerReport } from '../observability/discoveryChallengerReport';
@@ -648,6 +650,64 @@ observabilityRouter.get('/rescue-occupants', async (req, res) => {
       return;
     }
     res.json({ ok: true, occupants });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 2026-10-05 (Admitted -> Challenger Eligibility Gap Forensic, Section 6): read-only introspection
+// of BroadUniverseSubscriptionAllocator's in-memory aging state - listAllocationRecords() already
+// existed but, before this route, was called only from the allocator's own test file, with zero
+// production/operator visibility. Answers "who is being starved?" directly, without the DB
+// archaeology this forensic needed to answer it the hard way. Same read-only pattern as
+// /rescue-occupants above - no mutation, no second invocation of the real allocator (which would
+// corrupt its cycle bookkeeping - see the allocator's own comments on why calling it twice per
+// cycle is unsafe), never used by any trading decision.
+observabilityRouter.get('/broad-universe-aging', (req, res) => {
+  try {
+    const sortBy = String(req.query.sortBy || 'mostSkipped');
+    const currentlyAdmitted = new Set(getCachedBroadUniverseSymbols());
+    const records = listAllocationRecords().map((r) => ({
+      ...r,
+      currentlyPresent: currentlyAdmitted.has(r.symbol),
+    }));
+    const sorted = [...records].sort((a, b) => {
+      if (sortBy === 'mostEligible') return b.cyclesEligible - a.cyclesEligible;
+      if (sortBy === 'longestSinceSelected') {
+        const aLast = a.lastSelectedAt ?? -Infinity;
+        const bLast = b.lastSelectedAt ?? -Infinity;
+        return aLast - bLast; // oldest (or never-selected) first
+      }
+      return b.cyclesSkipped - a.cyclesSkipped; // default: mostSkipped
+    });
+    if (req.query.format === 'text') {
+      const lines = [
+        'BROAD-UNIVERSE ALLOCATOR AGING STATE (in-memory, resets on restart, never DB-persisted)',
+        `sortBy=${sortBy} (mostSkipped | mostEligible | longestSinceSelected)`,
+        '----------------------------------------------------------------------------------',
+      ];
+      if (sorted.length === 0) {
+        lines.push('(no tracked candidates)');
+      } else {
+        lines.push(
+          'Symbol'.padEnd(10) + 'Eligible'.padEnd(10) + 'Skipped'.padEnd(10) + 'Selected'.padEnd(10)
+          + 'LastSelectedAt'.padEnd(26) + 'CurrentlyPresent',
+        );
+        for (const r of sorted) {
+          lines.push(
+            r.symbol.padEnd(10)
+            + String(r.cyclesEligible).padEnd(10)
+            + String(r.cyclesSkipped).padEnd(10)
+            + String(r.cyclesSelected).padEnd(10)
+            + (r.lastSelectedAt != null ? new Date(r.lastSelectedAt).toISOString() : 'never').padEnd(26)
+            + String(r.currentlyPresent),
+          );
+        }
+      }
+      res.type('text/plain').send(lines.join('\n'));
+      return;
+    }
+    res.json({ ok: true, sortBy, records: sorted });
   } catch (e: any) {
     if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }

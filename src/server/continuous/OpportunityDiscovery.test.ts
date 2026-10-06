@@ -644,6 +644,58 @@ describe('OpportunityDiscovery observability hardening (2026-09-30)', () => {
     expect(candidates.find((c) => c.symbol === 'NOEVD')).toBeUndefined(); // zero-score, excluded before the eligible list
   });
 
+  // 2026-10-05 (Challenger Exclusion & Aging forensic follow-up): the BROAD_UNIVERSE_CHALLENGER_EXCLUDED
+  // event's own comment claimed its bounded 25-entry sample was "top 25 by absolute gap", but no sort
+  // ever ran before the slice - confirmed as a real bug by this exact test failing before the fix (dozens
+  // of real seed/watch-universe symbols tie at baseScore=0/gapPct=null in this fixture and, in
+  // shortlist's own concatenation order, always won the bound ahead of the one broad-universe-sourced
+  // symbol this event exists to surface).
+  it('BROAD_UNIVERSE_CHALLENGER_EXCLUDED surfaces a broad-universe-sourced exclusion in its bounded sample even when many static seed/watch symbols also tie at zero score', async () => {
+    process.env[FLAG_O] = 'true';
+    setupFullCapacity();
+    vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([]);
+    vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockReturnValue(null); // every static symbol ties at baseScore=0
+    vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['BUNEV']));
+    vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockReturnValue(null);
+
+    const logSpy = vi.spyOn(structuredLogger, 'info');
+    await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+
+    const excludedCall = logSpy.mock.calls.find((c) => c[1]?.eventType === 'BROAD_UNIVERSE_CHALLENGER_EXCLUDED');
+    expect(excludedCall).toBeTruthy();
+    const sample = (excludedCall![1] as any).excluded as Array<Record<string, unknown>>;
+    expect(sample.find((c) => c.symbol === 'BUNEV')).toBeTruthy();
+  });
+
+  // Documents a real dead-code/comment-mismatch finding: classifyExclusionReason() has an
+  // INFINITE_SCORE branch and a dedicated unit test asserting it (challengerExclusionReason.test.ts),
+  // but the real pipeline's own eligibility filter (`finalScore > 0`) is true for Infinity, so an
+  // Infinite-score candidate never enters zeroScoreExcluded and this classifier is never actually
+  // called with one in production - it is promoted, not excluded, exactly like a normal winner. This
+  // end-to-end test proves that directly rather than only asserting the classifier's isolated,
+  // unreachable-in-practice behavior. Not fixed here - patching it would change real scoring/
+  // selection behavior, which an observability-only pass should not do silently.
+  it('[DOCUMENTS DEAD CODE] an Infinite base score is promoted, not excluded - classifyExclusionReason("INFINITE_SCORE") is never reached by the real pipeline', async () => {
+    process.env[FLAG_O] = 'true';
+    setupFullCapacity();
+    vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([]);
+    vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockImplementation((s: string) => (s === 'INFSC' ? Infinity : null));
+    vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['INFSC']));
+    vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockReturnValue(null);
+
+    const subs: Array<{ symbol?: string }> = [];
+    const onSub = (p: { symbol?: string }) => subs.push(p);
+    eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+    const logSpy = vi.spyOn(structuredLogger, 'info');
+    await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+    eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+
+    expect(subs.find((s) => s.symbol === 'INFSC')).toBeTruthy(); // promoted, not excluded
+    const excludedCall = logSpy.mock.calls.find((c) => c[1]?.eventType === 'BROAD_UNIVERSE_CHALLENGER_EXCLUDED');
+    const sample = (excludedCall?.[1] as any)?.excluded as Array<Record<string, unknown>> | undefined;
+    expect(sample?.find((c) => c.symbol === 'INFSC')).toBeUndefined(); // never excluded, so never reason-coded either
+  });
+
   it('a positive-score candidate ranked outside the challenger limit logs BELOW_CHALLENGER_LIMIT truncation via survivedTruncation:false, with its real rank and score recorded', async () => {
     process.env[FLAG_O] = 'true';
     setupFullCapacity();
