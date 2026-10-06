@@ -624,6 +624,27 @@
       "when": 1791258400000,
       "tag": "0088_jev_shadow_scores",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "6",
+      "when": 1791290542000,
+      "tag": "0089_trade_plans_refresh_versioning",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "6",
+      "when": 1791290542001,
+      "tag": "0090_premarket_revisions_reservations",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "6",
+      "when": 1791290542002,
+      "tag": "0091_premarket_focus_reports",
+      "breakpoints": true
     }
   ]
 }

@@ -1596,6 +1596,17 @@ export const tradePlans = sqliteTable('trade_plans', {
   // close, never a verified one. Additive/nullable so existing rows (all pre-dating this column)
   // read as unset rather than a fabricated retroactive claim.
   validUntilConfidence: text('valid_until_confidence'), // ASSUMED_REGULAR_CLOSE_NO_EXCHANGE_CALENDAR
+  // Pre-market focus engine (2026-10-06, local-only): late pre-market refresh versioning.
+  // The 04:00 plan is version 1; each late pre-market refresh that changes the plan bumps
+  // refreshVersion and records refreshedAt + reasonForRefresh. originalCreatedAt preserves the
+  // 04:00 creation time across refreshes. scoreDecompositionJson holds the decomposed
+  // pre-market opportunity score breakdown (see PremarketOpportunityScore.ts), or null when
+  // the refresh ran without pre-market scoring inputs.
+  refreshVersion: integer('refresh_version').notNull().default(1),
+  refreshedAt: text('refreshed_at'),
+  reasonForRefresh: text('reason_for_refresh'),
+  originalCreatedAt: text('original_created_at'),
+  scoreDecompositionJson: text('score_decomposition_json'),
 }, (table) => ({
   planDateIdx: index('idx_trade_plans_plan_date').on(table.planDate, table.setupType),
   symbolIdx: index('idx_trade_plans_symbol').on(table.symbol, table.createdAt),
@@ -2236,4 +2247,74 @@ export const jevShadowScores = sqliteTable('jev_shadow_scores', {
 }, (table) => ({
   symbolIdx: index('idx_jev_shadow_scores_symbol').on(table.symbol),
   fingerprintIdx: index('idx_jev_shadow_scores_fingerprint').on(table.articleFingerprint),
+}));
+
+/**
+ * Pre-market focus engine (2026-10-06, local-only): immutable revision snapshots for
+ * trade plans. Every late pre-market refresh that changes a plan writes the PRIOR version
+ * here before mutating trade_plans, so old-vs-refreshed deltas are always reconstructible.
+ * Diagnostic only; never feeds the trading spine directly.
+ */
+export const tradePlanRevisions = sqliteTable('trade_plan_revisions', {
+  id: text('id').primaryKey(),
+  planId: text('plan_id').notNull(),
+  originalPlanId: text('original_plan_id').notNull(),
+  planDate: text('plan_date').notNull(),
+  symbol: text('symbol').notNull(),
+  refreshVersion: integer('refresh_version').notNull(),
+  snapshotJson: text('snapshot_json').notNull(),
+  deltaSummaryJson: text('delta_summary_json'),
+  reasonForRefresh: text('reason_for_refresh'),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  planVersionIdx: index('idx_trade_plan_revisions_plan').on(table.planId, table.refreshVersion),
+  symbolDateIdx: index('idx_trade_plan_revisions_symbol_date').on(table.symbol, table.planDate),
+}));
+
+/**
+ * Pre-market focus engine (2026-10-06, local-only): bounded pre-open data reservations.
+ * A PRIMARY-tier plan may hold a bounded, expiring reservation for subscription capacity
+ * so it has fresh data at the open. Reservations are NEVER permanent: they expire at
+ * expiresAt, on plan expiry/tier drop/invalidation, or at the market-open handover.
+ * Diagnostic + capacity-management only; granting a reservation is not trade eligibility.
+ */
+export const premarketDataReservations = sqliteTable('premarket_data_reservations', {
+  id: text('id').primaryKey(),
+  symbol: text('symbol').notNull(),
+  planId: text('plan_id'),
+  tier: text('tier').notNull(), // PRIMARY | SECONDARY
+  requestedAt: text('requested_at').notNull(),
+  expiresAt: text('expires_at').notNull(),
+  reason: text('reason').notNull(),
+  priority: integer('priority').notNull().default(0),
+  releaseCondition: text('release_condition').notNull(),
+  status: text('status').notNull().default('ACTIVE'), // ACTIVE | RELEASED | EXPIRED | DENIED
+  releasedAt: text('released_at'),
+  releaseReason: text('release_reason'),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  statusExpiryIdx: index('idx_premarket_reservations_status').on(table.status, table.expiresAt),
+  symbolStatusIdx: index('idx_premarket_reservations_symbol').on(table.symbol, table.status),
+}));
+
+/**
+ * Pre-market focus engine (2026-10-06, local-only): the ~09:15 focus report.
+ * One row per trading date per refresh version. Being listed as PRIMARY/SECONDARY/WATCH
+ * means "deserves attention", never "actionable" — selection does not imply eligibility
+ * and this table never emits trade ideas.
+ */
+export const premarketFocusReports = sqliteTable('premarket_focus_reports', {
+  id: text('id').primaryKey(),
+  planDate: text('plan_date').notNull(),
+  generatedAt: text('generated_at').notNull(),
+  refreshVersion: integer('refresh_version').notNull(),
+  primaryJson: text('primary_json').notNull(),
+  secondaryJson: text('secondary_json').notNull(),
+  watchJson: text('watch_json').notNull(),
+  rejectedJson: text('rejected_json').notNull(),
+  sourcesJson: text('sources_json').notNull(),
+  metricsJson: text('metrics_json'),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  dateVersionIdx: index('idx_premarket_focus_reports_date_version').on(table.planDate, table.refreshVersion),
 }));
