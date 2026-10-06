@@ -48,6 +48,7 @@ import { OpenAIProvider } from './providers/OpenAIProvider';
 import { OpenAICompatibleProvider } from './providers/OpenAICompatibleProvider';
 import { NvidiaProvider } from './providers/NvidiaProvider';
 import { AnthropicProvider } from './providers/AnthropicProvider';
+import { JevProvider } from './providers/JevProvider';
 import { db } from '../db';
 import * as schema from '../db/schema';
 import { eq, desc } from 'drizzle-orm';
@@ -141,6 +142,9 @@ export function envKeyForProviderName(providerName: string): string | undefined 
   if (providerName.toLowerCase().includes('claude') || providerName.toLowerCase().includes('anthropic')) candidates.unshift('ANTHROPIC_API_KEY');
   // "Kimi" (Moonshot AI's model line) - some operators set the vendor's own env var name.
   if (providerName.toLowerCase().includes('kimi') || providerName.toLowerCase().includes('moonshot')) candidates.unshift('MOONSHOT_API_KEY');
+  // "Jev" (TypeSafe AI's decision model) - JEV_API_KEY is Argus's own convention;
+  // TYPESAFE_API_KEY is the vendor's documented env name.
+  if (providerName.toLowerCase().includes('jev') || providerName.toLowerCase().includes('typesafe')) candidates.unshift('JEV_API_KEY', 'TYPESAFE_API_KEY');
   for (const name of candidates) {
     const v = process.env[name];
     if (v == null) continue;
@@ -724,6 +728,14 @@ export class AIRouter {
          } else if (nameLower.includes('nvidia')) {
              providerInstance = new NvidiaProvider();
              await (providerInstance as NvidiaProvider).initialize(apiKey, p.defaultModel || undefined);
+         } else if (nameLower.includes('jev') || nameLower.includes('typesafe')) {
+             // Research spike (2026-10-05): TypeSafe Jev is a decision model, NOT a chat LLM.
+             // It speaks its own /v1/systemone wire format (state + typed questions ->
+             // probabilities), so it gets a dedicated adapter. chat()/stream() fail closed
+             // by design — the intended consumer is evaluate()/askYesNo() for cheap
+             // classification/triage, never chat routing.
+             providerInstance = new JevProvider();
+             await (providerInstance as JevProvider).initialize(apiKey, p.defaultModel || undefined);
          } else if ((nameLower.includes('claude') || nameLower.includes('anthropic')) && !p.apiEndpoint) {
              // Real fix (2026-08-24 readiness audit, Part 4): "Claude" used to fall through to the
              // generic OpenAICompatibleProvider branch below, which speaks the OpenAI schema
