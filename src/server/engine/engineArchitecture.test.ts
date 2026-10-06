@@ -54,7 +54,25 @@ describe('Argus Engine daemon architecture', () => {
     expect(closeBody).not.toContain('drainTradingProcess');
     expect(closeBody).not.toContain('system.stop');
     expect(closeBody).not.toContain('runtimeStop');
-    expect(closeBody).toContain("eventBus.off");
+    // 2026-10-06 (same stale-assertion class already fixed once this session in
+    // architecture.protection.test.ts): the P1 defect-hunt pass refactored the inline
+    // eventBus.off('*', wildcardHandler) call into a cleanupWildcard() helper (confirmed by
+    // source inspection, still calls eventBus.off internally - see server.ts), which broke this
+    // test's literal substring match even though the real cleanup is unchanged. Resolve through
+    // whichever helper the close handler delegates to, the same fix applied to the other instance
+    // of this exact test shape, rather than requiring one implementation's literal syntax.
+    const helperCallMatch = closeBody.match(/(\w+)\(\);/);
+    const directCleanup = closeBody.includes('eventBus.off');
+    let deferredCleanup = false;
+    if (!directCleanup && helperCallMatch) {
+      const helperName = helperCallMatch[1];
+      const helperDefMatch = src.match(new RegExp(`const ${helperName} = \\(\\) => \\{([\\s\\S]*?)\\};`));
+      if (helperDefMatch) deferredCleanup = helperDefMatch[1].includes('eventBus.off');
+    }
+    expect(
+      directCleanup || deferredCleanup,
+      'expected the close handler (or a helper it calls) to call eventBus.off',
+    ).toBe(true);
   });
 
   it('headless scripts delegate to the engine entry', () => {
