@@ -34,6 +34,8 @@
     "test:tier3": "vitest run src/server/testing/slow/tier3",
     "test:tier4": "vitest run src/server/testing/slow/tier4",
     "test:golden": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/goldenCriticalScenarios.ts",
+    "test:certification": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/sim/marketOpen.ts --certify --speed=400",
+    "test:certification:unit": "vitest run src/server/replay/synthetic",
     "test:e2e": "playwright test",
     "security:scan-writes": "tsx scripts/scan_unallowlisted_writes.ts",
     "research:probe-env": "python scripts/probe_research_env.py",

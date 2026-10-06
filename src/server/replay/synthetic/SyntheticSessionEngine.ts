@@ -229,6 +229,24 @@ export class SyntheticSessionEngine {
     // loop from also running and writing its own non-deterministic news_clusters rows alongside it.
     process.env.ARGUS_NEWS_ENGINE_ENABLED = 'false';
 
+    // Real isolation gap found 2026-10-06 (synthetic certification pass), same bug class as the
+    // newsEngine fix above: SystemBootstrap.start() - triggered inside this engine by the seeded
+    // autoBotEnabled:true settings row, exactly as that fix's own comment already documents - also
+    // unconditionally calls postMarketAnalysisWorker.start(). That worker's tick() fires once it
+    // observes (via the REAL wall clock, not the synthetic session clock - PostMarketAnalysis.ts's
+    // own classifyMarketSession(now.getTime(), ...) call uses `new Date()` by default) that real
+    // wall-clock time is outside RTH, and then calls runDailyReflection() -> buildMoverCohort() ->
+    // fetchRawMovers(), a REAL outbound HTTP call to the live movers screener endpoint. Reproduced
+    // live: a 2026-10-06 certification run (run near real-world market close) produced a real
+    // "movers screener HTTP 401" network attempt and stack trace inside an isolated synthetic child
+    // process - caught and logged by that worker's own try/catch (no corruption), but a genuine
+    // real-network leak into what must be an offline-deterministic harness per CLAUDE.md's "No mock
+    // data in real runtime" / isolation rules (the same direction of leak, just the opposite data
+    // flow: real network reaching INTO a synthetic run rather than synthetic data reaching into
+    // production). Guarded the same way as ARGUS_NEWS_ENGINE_ENABLED - see the matching check added
+    // at SystemBootstrap.ts's postMarketAnalysisWorker.start() call site.
+    process.env.ARGUS_POST_MARKET_ANALYSIS_ENABLED = 'false';
+
     assertSyntheticSimulationIsolation({ dbPath: this.dbPath, sessionMarkerPath: this.sessionMarkerPath });
   }
 

@@ -140,7 +140,16 @@ export class SystemBootstrap {
     missedOpportunityEvaluator.start();
     // Phase 2 (2026-09-10): real automatic daily postmarket forensic report - runs once per
     // real trading day, after the regular session ends. See PostMarketAnalysis.ts's own header.
-    postMarketAnalysisWorker.start();
+    // ARGUS_POST_MARKET_ANALYSIS_ENABLED='false' (isolated synthetic simulation only - see
+    // SyntheticSessionEngine.ts's prepareIsolatedEnvironment()) must stop this call, same pattern
+    // and same real finding class as the ARGUS_NEWS_ENGINE_ENABLED guard above: this worker's
+    // tick() runs on the REAL wall clock (not the synthetic session clock) and, once it observes
+    // real time outside RTH, makes a real outbound HTTP call to the live movers screener endpoint
+    // via runDailyReflection() -> buildMoverCohort() - a real-network leak into an offline
+    // certification run, found 2026-10-06.
+    if (process.env.ARGUS_POST_MARKET_ANALYSIS_ENABLED !== 'false') {
+      postMarketAnalysisWorker.start();
+    }
     trainingExampleBuilder.start();
     systemMetricsWorker.start();
     dbBackupService.start();
