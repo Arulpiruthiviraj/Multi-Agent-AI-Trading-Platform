@@ -98,15 +98,46 @@ export class PortfolioReconciliationWorker {
   /**
    * Broker cutover: clear local portfolio cache (never invent positions for the new adapter),
    * then reconcile against getActiveBroker().portfolio(). Does not place orders.
+   *
+   * Diagnostic observability (2026-10-06, same-day PAPER recovery session, Phase 6): the OKTA
+   * forensic audit (`docs/audits/ARGUS_OKTA_RECONCILIATION_FORENSIC_2026-10-06.md`) found the
+   * `portfolio` table went from having rows to 0 rows (any symbol) in a ~4-minute window and
+   * could not conclusively prove whether this function ran during it - its own `console.warn`
+   * is not persisted to `observability_events`, so a real flush and "nothing flushed, broker
+   * genuinely reported everything flat" were indistinguishable after the fact. This is a pure
+   * additive diagnostic (reason/actor/broker/row-count-before/after at start and completion) so
+   * a future occurrence is provable from the DB alone - it does not change flush behavior,
+   * pause/resume semantics, or any safety gate.
    */
   async flushLocalHoldingsAndReconcile(reason: string): Promise<void> {
     console.warn(`[PortfolioReconciliation] Flushing local portfolio cache (${reason})`);
     this.consecutiveFaults.clear();
+    const activeBroker = BrokerManager.getInstance().getActiveBroker?.();
+    let rowsBefore: number | null = null;
+    try {
+      rowsBefore = (sqliteDb.prepare('SELECT COUNT(*) AS c FROM portfolio').get() as { c: number }).c;
+    } catch { /* best-effort diagnostic only */ }
+    observeSafe(() => structuredLogger.warn('portfolio_cache_flush_started', {
+      category: 'RECONCILIATION',
+      component: 'PortfolioReconciliation',
+      eventType: 'PORTFOLIO_CACHE_FLUSH_STARTED',
+      metadata: { reason, actor: 'system:BrokerManager.setActiveBroker', broker: activeBroker?.id ?? null, rowsBefore },
+    }));
+    let rowsAfter: number | null = null;
     try {
       sqliteDb.prepare('DELETE FROM portfolio').run();
     } catch (e) {
       console.error('[PortfolioReconciliation] Failed to flush portfolio table', e);
     }
+    try {
+      rowsAfter = (sqliteDb.prepare('SELECT COUNT(*) AS c FROM portfolio').get() as { c: number }).c;
+    } catch { /* best-effort diagnostic only */ }
+    observeSafe(() => structuredLogger.warn('portfolio_cache_flush_completed', {
+      category: 'RECONCILIATION',
+      component: 'PortfolioReconciliation',
+      eventType: 'PORTFOLIO_CACHE_FLUSH_COMPLETED',
+      metadata: { reason, actor: 'system:BrokerManager.setActiveBroker', broker: activeBroker?.id ?? null, rowsBefore, rowsAfter },
+    }));
     await this.reconcile();
   }
 

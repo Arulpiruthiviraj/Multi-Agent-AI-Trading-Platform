@@ -143,6 +143,43 @@ describe('OMS durable close-long and accounting evidence', () => {
     expect(sqliteDb.prepare('SELECT quantity FROM portfolio WHERE symbol=?').get('OKTA')).toEqual({ quantity: -14 });
   });
 
+  it('does not let an opening-short SELL inherit the prior closing SELL\'s realized P&L (OKTA incident regression, 2026-10-06)', async () => {
+    // Real OMS path for the close: BUY 14 (open long), SELL 14 (close long, real realized gain).
+    // Production SELL means CLOSE_LONG only - OPEN_SHORT has no authorized production order path
+    // (prepareOrderPosition's own CLOSE_LONG_QUANTITY_EXCEEDED gate correctly refuses a second
+    // oms.executeOrder SELL once flat, confirmed by this test prior to this fixture change) - so
+    // the opening-short leg is modeled the same way the real OKTA incident actually reached the
+    // ledger: an external/unexpected fill recorded directly via insertIncrementalFill, exactly
+    // like the adjacent "unexpected external short fill" test above. The question this regression
+    // guards is cross-order attribution: `applyPositionFill()`'s UPDATE is scoped to orderId
+    // (`WHERE id=?` bound to the SAME orderId as the SUM's own `WHERE order_id=?`), so the closing
+    // order's real gain must never leak onto the opening-short order's row, and vice versa - this
+    // is the exact shape of the real anomaly found 2026-10-06 (trades.profit_loss=11.46 on the
+    // OKTA opening-short trade, which has no closing leg of its own).
+    await buy();
+    broker.nextFillPrice.set('OKTA', 212.49);
+    await oms.executeOrder('OKTA', 'SELL', 14, 'CERTIFICATION_FIXTURE_ONLY', 'close-long');
+    const closeRow = order('close-long');
+    expect(closeRow.status).toBe('FILLED');
+    const expectedClosePnl = (closeRow.price - order('entry').price) * 14;
+    expect(closeRow.profit_loss).toBeCloseTo(expectedClosePnl);
+
+    await db.insert(trades).values({ id: 'open-short', symbol: 'OKTA', side: 'SELL', quantity: 14, price: 212.61,
+      status: 'RECONCILIATION_REQUIRED', timestamp: new Date().toISOString(), brokerId: broker.id,
+      executionEnvironment: 'REPLAY', positionQuantityBefore: 0, positionAveragePriceBefore: 0 });
+    await insertIncrementalFill({ orderId: 'open-short', brokerOrderId: null, requestedQuantity: 14, status: 'FILLED',
+      filledQuantity: 14, averageFillPrice: 212.61, applyPosition: true });
+
+    // The opening-short order has no closing leg of its own - its profit_loss must stay null,
+    // never the earlier close's real gain and never any other invented value.
+    expect(sqliteDb.prepare('SELECT profit_loss FROM trades WHERE id=?').get('open-short')).toEqual({ profit_loss: null });
+    // The earlier close's own profit_loss must still be exactly what it was before the second
+    // order's fill was recorded - a later, unrelated order's fill processing must never
+    // retroactively rewrite it.
+    expect(order('close-long').profit_loss).toBeCloseTo(expectedClosePnl);
+    expect(sqliteDb.prepare('SELECT quantity FROM portfolio WHERE symbol=?').get('OKTA')).toEqual({ quantity: -14 });
+  });
+
   it('rolls back fill, inventory and P&L together if inventory persistence fails', async () => {
     await buy();
     sqliteDb.exec("CREATE TRIGGER fail_inventory BEFORE DELETE ON portfolio BEGIN SELECT RAISE(ABORT, 'fixture fault'); END;");
