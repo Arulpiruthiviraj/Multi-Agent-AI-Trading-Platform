@@ -203,11 +203,19 @@ export interface ContinuousIntelligenceConfig {
    *  candidates may receive a real javaQuantScore (Java quant engine bar-fetch + HTTP call) during
    *  the once-per-day PRE_MARKET plan-building cycle. Never applied to the ~30s RTH ranking loop. */
   javaQuantScoreCandidateLimit: number;
-  /** 2026-10-06 pre-market focus engine (workstream B): late pre-market TradePlan refresh window,
-   *  ET wall-clock HH:MM. SnapshotScanner's PRE_MARKET tick refreshes plans at most once per
-   *  trading date while minutesInTimezone(now, TRADING_TIMEZONE) is in [start, end). */
+  /** 2026-10-06 pre-market focus engine, course-corrected (lifecycle, not a one-time snapshot):
+   *  four lifecycle points, each run at most once per trading date while ET wall-clock time is
+   *  inside its window. (1) INITIAL_BUILD on PREMARKET_SESSION_STARTED / first PRE_MARKET tick;
+   *  (2) MID_MORNING after 08:30 ET (08:30 economic releases); (3) LATE_REFRESH ~09:00-09:15;
+   *  (4) PREOPEN_VALIDATION ~09:20-09:28. */
+  premarketMidMorningRefreshStartEt: string;
+  premarketMidMorningRefreshEndEt: string;
+  /** 2026-10-06 (same): LATE_REFRESH window [start, end), ET wall-clock HH:MM. */
   premarketRefreshWindowStart: string;
   premarketRefreshWindowEnd: string;
+  /** 2026-10-06 (same): PREOPEN_VALIDATION window [start, end), ET wall-clock HH:MM. */
+  premarketPreopenValidationStartEt: string;
+  premarketPreopenValidationEndEt: string;
   /** 2026-10-06 (same): bounded pre-open data reservation pool for PRIMARY-tier TradePlans.
    *  Must be < maxActiveSubscriptions (enforced at load) so the 09:20-09:30 emerging-movers
    *  rotation can never be fully starved by pre-open reservations. */
@@ -218,6 +226,11 @@ export interface ContinuousIntelligenceConfig {
   /** 2026-10-06 (same): ET wall-clock HH:MM by which every pre-open reservation must have
    *  expired (market-open handover). Must be after premarketRefreshWindowEnd (enforced at load). */
   premarketReservationHandoverEt: string;
+  /** 2026-10-06 (same): event-driven material refreshes are debounced through the SnapshotScanner
+   *  tick (no scattered timers) - a refresh fires only after this many ms with no new trigger. */
+  premarketEventDrivenDebounceMs: number;
+  /** 2026-10-06 (same): minimum ms between two event-driven material refreshes. */
+  premarketEventDrivenCooldownMs: number;
   honesty: string;
 }
 
@@ -411,11 +424,17 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     rankingThresholdsBySession: requireRankingThresholdsBySession(raw.rankingThresholdsBySession, 'rankingThresholdsBySession'),
     newsCatalystComponent: requireNewsCatalystComponent(raw.newsCatalystComponent),
     javaQuantScoreCandidateLimit: requireNumber(raw.javaQuantScoreCandidateLimit, 'javaQuantScoreCandidateLimit'),
+    premarketMidMorningRefreshStartEt: requireHhmm(raw.premarketMidMorningRefreshStartEt, 'premarketMidMorningRefreshStartEt'),
+    premarketMidMorningRefreshEndEt: requireHhmm(raw.premarketMidMorningRefreshEndEt, 'premarketMidMorningRefreshEndEt'),
     premarketRefreshWindowStart: requireHhmm(raw.premarketRefreshWindowStart, 'premarketRefreshWindowStart'),
     premarketRefreshWindowEnd: requireHhmm(raw.premarketRefreshWindowEnd, 'premarketRefreshWindowEnd'),
+    premarketPreopenValidationStartEt: requireHhmm(raw.premarketPreopenValidationStartEt, 'premarketPreopenValidationStartEt'),
+    premarketPreopenValidationEndEt: requireHhmm(raw.premarketPreopenValidationEndEt, 'premarketPreopenValidationEndEt'),
     premarketReservedSlots: requireNumber(raw.premarketReservedSlots, 'premarketReservedSlots'),
     premarketReservationTtlMinutes: requireNumber(raw.premarketReservationTtlMinutes, 'premarketReservationTtlMinutes'),
     premarketReservationHandoverEt: requireHhmm(raw.premarketReservationHandoverEt, 'premarketReservationHandoverEt'),
+    premarketEventDrivenDebounceMs: requireNumber(raw.premarketEventDrivenDebounceMs, 'premarketEventDrivenDebounceMs'),
+    premarketEventDrivenCooldownMs: requireNumber(raw.premarketEventDrivenCooldownMs, 'premarketEventDrivenCooldownMs'),
     honesty: raw.honesty,
   };
   if (cfg.coreStreamingSymbols.length > cfg.maxActiveSubscriptions) {
@@ -439,6 +458,10 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
   const refreshWindowStartMin = hhmmToMinutes(cfg.premarketRefreshWindowStart);
   const refreshWindowEndMin = hhmmToMinutes(cfg.premarketRefreshWindowEnd);
   const reservationHandoverMin = hhmmToMinutes(cfg.premarketReservationHandoverEt);
+  const midMorningStartMin = hhmmToMinutes(cfg.premarketMidMorningRefreshStartEt);
+  const midMorningEndMin = hhmmToMinutes(cfg.premarketMidMorningRefreshEndEt);
+  const preopenStartMin = hhmmToMinutes(cfg.premarketPreopenValidationStartEt);
+  const preopenEndMin = hhmmToMinutes(cfg.premarketPreopenValidationEndEt);
   if (refreshWindowStartMin >= refreshWindowEndMin) {
     throw new Error(
       'config/continuousIntelligence.json premarketRefreshWindowStart must be < premarketRefreshWindowEnd',
@@ -447,6 +470,18 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
   if (reservationHandoverMin <= refreshWindowEndMin) {
     throw new Error(
       'config/continuousIntelligence.json premarketReservationHandoverEt must be after premarketRefreshWindowEnd (a reservation granted inside the refresh window must never be born expired)',
+    );
+  }
+  // 2026-10-06: the four lifecycle windows must be ordered and non-overlapping - a tick inside two
+  // windows at once would double-schedule the refresh.
+  if (!(midMorningStartMin < midMorningEndMin
+    && midMorningEndMin <= refreshWindowStartMin
+    && refreshWindowEndMin < preopenStartMin
+    && preopenStartMin < preopenEndMin)) {
+    throw new Error(
+      'config/continuousIntelligence.json premarket lifecycle windows must be ordered and non-overlapping: '
+      + 'premarketMidMorningRefreshStartEt < premarketMidMorningRefreshEndEt <= premarketRefreshWindowStart '
+      + '< premarketRefreshWindowEnd < premarketPreopenValidationStartEt < premarketPreopenValidationEndEt',
     );
   }
   return cfg;

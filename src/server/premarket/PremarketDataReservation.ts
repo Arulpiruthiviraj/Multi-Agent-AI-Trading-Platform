@@ -1,11 +1,29 @@
 /**
- * Pre-market focus engine (2026-10-06, local-only) — bounded pre-open data reservation manager
- * (workstream B).
+ * Pre-market focus engine (2026-10-06, local-only; course-corrected 2026-10-06) — bounded pre-open
+ * data reservation manager (workstream B).
  *
  * A PRIMARY-tier TradePlan may hold a bounded, expiring reservation for subscription capacity so
  * it has a real chance at fresh data by the open. Reservations are NEVER permanent: a reservation
  * ends at expiresAt, on plan expiry / tier drop / invalidation, or at the market-open handover —
  * whichever comes first.
+ *
+ * Subscription priority ordering (2026-10-06):
+ *   ACTIVE_POSITION > PENDING_ORDER > PRIMARY_PLAN > FAST_ACTIONABLE > NORMAL_DISCOVERY
+ * persisted as the numeric `priority` column and exported as RESERVATION_PRIORITY below.
+ *
+ * Deviation from MarketDataWorker's existing classes (documented, not hidden): MarketDataWorker's
+ * admission control speaks RescueRequestClass (ROUTINE_RECOVERY | EXPLORATION | MARKET_MOVER |
+ * NEWS_CATALYST) plus an unconditional protected set (SPY/QQQ/GLD) — it has no position/order
+ * concepts and no 5-level plan/actionable/discovery hierarchy. This manager does NOT change that
+ * admission logic (untouched). Instead: (a) the 5-level ordering is the reservation ledger's own
+ * priority, governing any future preemption and operator triage; (b) a GRANTED PRIMARY_PLAN
+ * reservation requests temporary subscription priority through the EXISTING
+ * requestTemporaryDataRescue() with class EXPLORATION — the rescue budget already reserves slots
+ * for EXPLORATION/MARKET_MOVER-class requests (rescueReservedSlotsForPriorityClasses), so a
+ * PRIMARY plan's rescue competes in the priority lane, not the routine-recovery lane. Tier
+ * mapping for the persisted column: PRIMARY -> PRIMARY_PLAN, BACKUP -> FAST_ACTIONABLE,
+ * WATCHLIST -> NORMAL_DISCOVERY (only PRIMARY is requested by the refresh today; the others are
+ * defined so the column stays meaningful if policy ever widens).
  *
  * Why cap + early expiry (not priority preemption) protects the 09:20-09:30 emerging movers:
  * the pool is a strict subset of streaming capacity (premarketReservedSlots=4 of
@@ -13,13 +31,11 @@
  * load), and every reservation dies no later than the 09:25 ET handover, which is BEFORE the
  * 09:25-09:35 momentum rotation window (momentumScanWindowStartEt). By the time emerging movers
  * need slots, pre-open reservations have already released — the two mechanisms never overlap.
+ * The session handoff (PREMARKET_PLAN_HANDED_TO_RTH) additionally releases every ACTIVE row.
+ * Intraday Fast Lane / discovery subscriptions are never touched here — only this ledger's rows.
  *
  * Diagnostic + capacity-management only: granting a reservation is not trade eligibility, never
- * emits a trade idea, and never bypasses ChiefTrader/RiskEngine/OMS. On GRANTED for PRIMARY the
- * manager requests temporary subscription priority through MarketDataWorker's EXISTING public
- * requestTemporaryDataRescue() (the same bounded mechanism emitTradePlanIdea already uses) —
- * a rescue grants a subscription chance, not an instant tick, and its denial never fails the
- * reservation itself.
+ * emits a trade idea, and never bypasses ChiefTrader/RiskEngine/OMS.
  *
  * Persistence: premarket_data_reservations (migration 0090). db is imported ONLY from
  * src/server/db/index.ts. Callers that want honest capacity accounting call sweepExpired() before
@@ -51,6 +67,20 @@ export type ReservationDeniedReason =
   | 'HANDOVER_UNRESOLVABLE';
 
 export type ReservationRow = typeof premarketDataReservations.$inferSelect;
+
+/**
+ * Subscription priority ordering, highest first. See the module header for the deviation note
+ * vs MarketDataWorker's RescueRequestClass.
+ */
+export const RESERVATION_PRIORITY = {
+  ACTIVE_POSITION: 50,
+  PENDING_ORDER: 40,
+  PRIMARY_PLAN: 30,
+  FAST_ACTIONABLE: 20,
+  NORMAL_DISCOVERY: 10,
+} as const;
+
+export type ReservationPriorityClass = keyof typeof RESERVATION_PRIORITY;
 
 /** Minimal structural port over MarketDataWorker.requestTemporaryDataRescue() — the least
  *  invasive existing API for temporary subscription priority. Injected in tests; production uses
@@ -84,6 +114,24 @@ export interface ReservationRequestResult {
   rescueDeniedReason?: string;
 }
 
+// ── Perf instrumentation: DB query counting for the refresh perf sample ──
+// The refresh runner resets both counters before a run and sums them after; the sample is the
+// honest "DB queries issued by this refresh". These counters are module-local and never affect
+// query semantics.
+let managerDbQueries = 0;
+function mcounted<T>(p: Promise<T>): Promise<T> {
+  managerDbQueries++;
+  return p;
+}
+/** Test/perf-only: reset the manager's DB query counter. */
+export function resetManagerDbQueryCount(): void {
+  managerDbQueries = 0;
+}
+/** Test/perf-only: read the manager's DB query counter. */
+export function getManagerDbQueryCount(): number {
+  return managerDbQueries;
+}
+
 /**
  * Effective reservation cap: the configured pool size, hard-bounded by maxActiveSubscriptions so
  * a config typo can never reserve more than the entire streaming pool. Config load already
@@ -95,15 +143,14 @@ export function getReservationCap(): number {
 }
 
 export async function countActiveReservations(): Promise<number> {
-  const rows = await db
-    .select({ n: count() })
-    .from(premarketDataReservations)
-    .where(eq(premarketDataReservations.status, 'ACTIVE'));
+  const rows = await mcounted(
+    db.select({ n: count() }).from(premarketDataReservations).where(eq(premarketDataReservations.status, 'ACTIVE')),
+  );
   return rows[0]?.n ?? 0;
 }
 
 export async function getActiveReservations(): Promise<ReservationRow[]> {
-  return db.select().from(premarketDataReservations).where(eq(premarketDataReservations.status, 'ACTIVE'));
+  return mcounted(db.select().from(premarketDataReservations).where(eq(premarketDataReservations.status, 'ACTIVE')));
 }
 
 /** Release-condition contract, persisted verbatim on every row so the expiry semantics are
@@ -111,10 +158,13 @@ export async function getActiveReservations(): Promise<ReservationRow[]> {
 export const RESERVATION_RELEASE_CONDITION =
   'EXPIRES_AT_OR_PLAN_EXPIRY_OR_TIER_DROP_OR_INVALIDATION_OR_MARKET_OPEN_HANDOVER';
 
-/** Priority persisted on the row: PRIMARY outranks BACKUP outranks WATCHLIST for any future
- *  operator triage. Capacity admission itself is first-come-first-served within the cap. */
+/** Persisted numeric priority per reservation tier (see RESERVATION_PRIORITY and the header). */
 function tierPriority(tier: ReservationTier): number {
-  return tier === 'PRIMARY' ? 2 : tier === 'BACKUP' ? 1 : 0;
+  return tier === 'PRIMARY'
+    ? RESERVATION_PRIORITY.PRIMARY_PLAN
+    : tier === 'BACKUP'
+      ? RESERVATION_PRIORITY.FAST_ACTIONABLE
+      : RESERVATION_PRIORITY.NORMAL_DISCOVERY;
 }
 
 function handoverInstant(tradingDate: string): number {
@@ -144,7 +194,7 @@ async function persistDenied(
     releaseReason: deniedReason,
     createdAt: nowIso,
   };
-  await db.insert(premarketDataReservations).values(row);
+  await mcounted(db.insert(premarketDataReservations).values(row));
   return row;
 }
 
@@ -215,16 +265,17 @@ export async function requestDataReservation(
     return deny('PAST_HANDOVER');
   }
 
-  const duplicate = await db
-    .select({ id: premarketDataReservations.id })
-    .from(premarketDataReservations)
-    .where(
-      and(
-        eq(premarketDataReservations.symbol, normalizedSymbol),
-        eq(premarketDataReservations.status, 'ACTIVE'),
-      ),
-    )
-    .limit(1);
+  const duplicate = await mcounted(
+    db.select({ id: premarketDataReservations.id })
+      .from(premarketDataReservations)
+      .where(
+        and(
+          eq(premarketDataReservations.symbol, normalizedSymbol),
+          eq(premarketDataReservations.status, 'ACTIVE'),
+        ),
+      )
+      .limit(1),
+  );
   if (duplicate.length > 0) {
     return deny('DUPLICATE_ACTIVE_RESERVATION');
   }
@@ -249,12 +300,10 @@ export async function requestDataReservation(
     releaseReason: null,
     createdAt: nowIso,
   };
-  await db.insert(premarketDataReservations).values(row);
-  const reservation = (await db
-    .select()
-    .from(premarketDataReservations)
-    .where(eq(premarketDataReservations.id, row.id))
-    .limit(1))[0]!;
+  await mcounted(db.insert(premarketDataReservations).values(row));
+  const reservation = (await mcounted(
+    db.select().from(premarketDataReservations).where(eq(premarketDataReservations.id, row.id)).limit(1),
+  ))[0]!;
 
   emitDataReservationGranted({
     reservationId: reservation.id,
@@ -300,17 +349,16 @@ export async function releaseDataReservation(
   now: Date = new Date(),
 ): Promise<boolean> {
   const nowIso = now.toISOString();
-  const rows = await db
-    .select()
-    .from(premarketDataReservations)
-    .where(eq(premarketDataReservations.id, id))
-    .limit(1);
+  const rows = await mcounted(
+    db.select().from(premarketDataReservations).where(eq(premarketDataReservations.id, id)).limit(1),
+  );
   const row = rows[0];
   if (!row || row.status !== 'ACTIVE') return false;
-  await db
-    .update(premarketDataReservations)
-    .set({ status: 'RELEASED', releasedAt: nowIso, releaseReason: reason })
-    .where(eq(premarketDataReservations.id, id));
+  await mcounted(
+    db.update(premarketDataReservations)
+      .set({ status: 'RELEASED', releasedAt: nowIso, releaseReason: reason })
+      .where(eq(premarketDataReservations.id, id)),
+  );
   emitDataReservationReleased({
     reservationId: row.id,
     symbol: row.symbol,
@@ -333,14 +381,33 @@ export async function releaseReservationsForPlan(
   reason: string,
   now: Date = new Date(),
 ): Promise<number> {
-  const rows = await db
-    .select()
-    .from(premarketDataReservations)
-    .where(
-      and(eq(premarketDataReservations.planId, planId), eq(premarketDataReservations.status, 'ACTIVE')),
-    );
+  const rows = await mcounted(
+    db.select()
+      .from(premarketDataReservations)
+      .where(
+        and(eq(premarketDataReservations.planId, planId), eq(premarketDataReservations.status, 'ACTIVE')),
+      ),
+  );
   let released = 0;
   for (const row of rows) {
+    if (await releaseDataReservation(row.id, reason, now)) released++;
+  }
+  return released;
+}
+
+/**
+ * Release every ACTIVE reservation in the ledger — the market-open handover leg of the release
+ * contract (PREMARKET_PLAN_HANDED_TO_RTH). Only this ledger's rows are touched: intraday Fast
+ * Lane / discovery subscriptions and MarketDataWorker's own rescue grants are never cancelled
+ * here (rescue grants lapse via their own bounded TTL). Returns the number released.
+ */
+export async function releaseAllActiveReservations(
+  reason: string,
+  now: Date = new Date(),
+): Promise<number> {
+  const active = await getActiveReservations();
+  let released = 0;
+  for (const row of active) {
     if (await releaseDataReservation(row.id, reason, now)) released++;
   }
   return released;
@@ -357,10 +424,11 @@ export async function sweepExpiredReservations(now: Date = new Date()): Promise<
   let expired = 0;
   for (const row of active) {
     if (row.expiresAt <= nowIso) {
-      await db
-        .update(premarketDataReservations)
-        .set({ status: 'EXPIRED', releasedAt: nowIso, releaseReason: 'EXPIRED' })
-        .where(eq(premarketDataReservations.id, row.id));
+      await mcounted(
+        db.update(premarketDataReservations)
+          .set({ status: 'EXPIRED', releasedAt: nowIso, releaseReason: 'EXPIRED' })
+          .where(eq(premarketDataReservations.id, row.id)),
+      );
       emitDataReservationReleased({
         reservationId: row.id,
         symbol: row.symbol,

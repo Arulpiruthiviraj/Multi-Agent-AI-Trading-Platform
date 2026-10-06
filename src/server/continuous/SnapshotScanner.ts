@@ -354,7 +354,7 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
       }));
       const { runRankingCycle } = await import('./ComposableRanking');
       const planDate = getTradingDateStr(now);
-      const { buildTradePlanDrafts, persistTradePlanDrafts, getTradePlansForDate, revalidateTradePlan, persistRevalidation, emitTradePlanIdea, maybeRunLatePremarketRefresh } = await import('./TradePlanBuilder');
+      const { getTradePlansForDate, revalidateTradePlan, persistRevalidation, maybeRunScheduledPremarketRefresh } = await import('./TradePlanBuilder');
 
       let rankedCandidates = await runRankingCycle(rankingInputs, now, new Map(), marketSession);
 
@@ -413,30 +413,17 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
       const rankedBySymbol = new Map(rankedCandidates.map((r) => [r.symbol, r]));
 
       if (marketSession === 'PRE_MARKET') {
-        const existing = await getTradePlansForDate(planDate);
-        if (existing.length === 0) {
-          const drafts = buildTradePlanDrafts(rankedCandidates, inputsBySymbol, planDate, now);
-          await persistTradePlanDrafts(drafts);
-          // 2026-09-05, explicit operator authorization (see TradePlanBuilder.ts's own header) -
-          // one independent TRADE_IDEA_GENERATED vote per PRIMARY-tier draft. No-op (returns
-          // emitted:false) unless ARGUS_TRADE_PLAN_IDEAS_ENABLED, Autobot, and the TradePlanBuilder
-          // pipeline-agent toggle are all on - identical behavior to before this call existed for
-          // every deployment that has not made this explicit choice.
-          for (const draft of drafts) {
-            emitTradePlanIdea(draft, inputsBySymbol.get(draft.symbol)?.last ?? null);
-          }
-        } else {
-          // Workstream B (2026-10-06, local-only): late pre-market refresh, once per trading date
-          // inside the configured ET window (~09:00-09:15). A 04:00 plan must not stay
-          // authoritative at 09:29 merely because it exists. maybeRunLatePremarketRefresh() is a
-          // no-op outside the window and when a refresh already ran (in-memory + refreshVersion>=2
-          // guards); it never throws into the scan — a failure here can never affect the existing
-          // scan/rank return value, same contract as the plan-build block above.
-          try {
-            await maybeRunLatePremarketRefresh({ planDate, now, rankedCandidates, inputsBySymbol });
-          } catch (e) {
-            logErrorSafely('[SnapshotScanner] late pre-market refresh failed (does not affect the existing scan)', e);
-          }
+        // Workstream B (2026-10-06, course-corrected): premarket plan lifecycle — INITIAL_BUILD
+        // once from evidence-as-of the build tick (a late start never pretends to be a 04:00
+        // plan), then MID_MORNING / LATE_REFRESH / PREOPEN_VALIDATION scheduled refreshes plus
+        // debounced event-driven material refreshes. All scheduling state lives in
+        // TradePlanBuilder; this tick only supplies fresh evidence. Subsumes the previous
+        // build-once block, including its gated PRIMARY-tier idea emission (now inside
+        // buildInitialPlans, same gates). Never throws into the scan.
+        try {
+          await maybeRunScheduledPremarketRefresh({ planDate, now, rankedCandidates, inputsBySymbol });
+        } catch (e) {
+          logErrorSafely('[SnapshotScanner] premarket plan lifecycle failed (does not affect the existing scan)', e);
         }
       } else if (marketSession === 'REGULAR') {
         const existing = await getTradePlansForDate(planDate);

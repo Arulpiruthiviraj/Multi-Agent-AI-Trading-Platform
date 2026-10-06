@@ -25,12 +25,13 @@
  *   (no ATR, no synthetic volatility estimate) that this deployment cannot honestly compute yet.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { tradingWallTimeToIso, TRADING_TIMEZONE } from '../core/TradingCalendar';
+import { getTradingDateStr, tradingWallTimeToIso, TRADING_TIMEZONE } from '../core/TradingCalendar';
 import { db } from '../db';
 import { tradePlans, tradePlanRevisions, tradePlanRevalidations } from '../db/schema';
 import { desc, eq } from 'drizzle-orm';
 import type { RankedCandidate, RankingInput, NewsCatalystDetail } from './ComposableRanking';
 import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
 import { generateTraceId } from '../core/traceId';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
@@ -45,14 +46,24 @@ import {
 import {
   requestDataReservation,
   releaseReservationsForPlan,
+  releaseAllActiveReservations,
+  getActiveReservations,
   sweepExpiredReservations,
+  resetManagerDbQueryCount,
+  getManagerDbQueryCount,
   type DataRescuePort,
 } from '../premarket/PremarketDataReservation';
 import {
-  emitPremarketRefreshStarted,
-  emitPremarketRefreshCompleted,
-  emitTradePlanRefreshed,
+  emitPremarketPlanBuildStarted,
+  emitPremarketPlanBuildCompleted,
+  emitTradePlanVersionCreated,
+  emitTradePlanUnchanged,
+  emitTradePlanPromoted,
+  emitTradePlanDowngraded,
   emitTradePlanExpired,
+  emitPreopenRevalidationStarted,
+  emitPreopenRevalidationCompleted,
+  emitPremarketPlanHandedToRth,
 } from '../premarket/premarketRefreshEvents';
 
 export type SetupType = 'PRIMARY' | 'BACKUP' | 'WATCHLIST';
@@ -293,10 +304,28 @@ export function buildTradePlanDrafts(
   return drafts;
 }
 
-export async function persistTradePlanDrafts(drafts: TradePlanDraft[]): Promise<void> {
+export interface PersistTradePlanMeta {
+  /** ISO timestamp of the newest evidence incorporated (never a fabricated 04:00 label). */
+  evidenceAsof?: string;
+  /** Market session at build (e.g. 'PRE_MARKET'). */
+  sessionPhase?: string;
+  /** Lifecycle reason, e.g. 'INITIAL_BUILD'. */
+  reasonForRefresh?: string;
+}
+
+export async function persistTradePlanDrafts(drafts: TradePlanDraft[], meta: PersistTradePlanMeta = {}): Promise<void> {
   if (drafts.length === 0) return;
   try {
-    await db.insert(tradePlans).values(drafts.map((d) => ({ ...d, catalysts: JSON.stringify(d.catalysts) })));
+    await db.insert(tradePlans).values(drafts.map((d) => ({
+      ...d,
+      catalysts: JSON.stringify(d.catalysts),
+      // Initial builds only: the creation time IS the original creation time. Refreshes preserve
+      // the existing originalCreatedAt instead (see refreshOnePlan).
+      originalCreatedAt: d.createdAt,
+      evidenceAsof: meta.evidenceAsof ?? null,
+      sessionPhase: meta.sessionPhase ?? null,
+      reasonForRefresh: meta.reasonForRefresh ?? null,
+    })));
   } catch (e) {
     console.error('[TradePlanBuilder] Failed to persist trade plan drafts', e);
   }
@@ -491,45 +520,86 @@ export async function getRevalidationHistory(planId: string): Promise<Array<type
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Workstream B (2026-10-06): late pre-market refresh + TradePlan versioning/expiry.
+// Workstream B (2026-10-06; course-corrected 2026-10-06): premarket plan lifecycle.
 //
-// A 04:00 plan (refreshVersion 1) must not stay authoritative at 09:29 merely because it exists.
-// SnapshotScanner's PRE_MARKET tick calls maybeRunLatePremarketRefresh() once per trading date
-// inside the configured ET window (~09:00-09:15). For each plan the refresh snapshots the PRIOR
-// version into trade_plan_revisions (immutable, with a delta summary), then recomputes from
-// current morning evidence via the SAME computePlanFields() the 04:00 build uses — never a
-// second, divergent field computation. scorePremarketCandidate() is attempted inside try/catch
-// (workstream D owns the real scorer; the current stub throws) — on throw the refresh falls back
-// to the existing ranking path and an unchanged plan is marked UNCHANGED_NO_NEW_EVIDENCE.
+// Verified 2026-10-06 ~08:29 ET on the live deployment: TradePlanBuilder ran ONCE at startup
+// (08:23) and produced 5 real plans — the defect is NOT "premarket analysis isn't running", it is
+// "TradePlan intelligence is a one-time startup snapshot rather than a premarket lifecycle."
+// This section makes it a lifecycle:
 //
-// No-churn rule: recomputation is compared against a canonical snapshot hash of the plan's
+//   INITIAL_BUILD        on PREMARKET_SESSION_STARTED / first PRE_MARKET tick with evidence,
+//                        from evidence-as-of the build tick (evidenceAsof=now, sessionPhase=
+//                        PRE_MARKET) — a late start NEVER pretends to be a 04:00 plan.
+//   MID_MORNING          once after 08:30 ET (captures 08:30 economic releases).
+//   LATE_REFRESH         once ~09:00-09:15 ET.
+//   PREOPEN_VALIDATION   once ~09:20-09:28 ET (downgrade/expire on invalidation).
+//   EVENT_DRIVEN         debounced material refreshes on high-impact NEWS_CATALYST,
+//                        MARKET_DATA_GAP_DETECTED, MACRO_ANALYSIS_COMPLETED.
+//
+// Scheduling: the SnapshotScanner PRE_MARKET tick calls maybeRunScheduledPremarketRefresh() with
+// fresh evidence; ALL scheduling state (per-kind once-per-date, debounce, cooldown, pending
+// triggers) lives here. NO setTimeout/setInterval anywhere in this file — the existing
+// SessionLifecycleManager / SnapshotScanner ticks are the schedulers. Event subscriptions
+// (startPremarketPlanLifecycle) only record intent; the tick executes.
+//
+// Versioning: every refresh snapshots the PRIOR version into trade_plan_revisions (immutable,
+// with a delta summary of tier/thesis/levels/entry-zone/invalidation/catalyst changes) before
+// mutating, via the SAME computePlanFields() the build uses. scorePremarketCandidate() runs
+// inside try/catch (workstream D owns the real scorer; the stub throws) — on throw the refresh
+// falls back to the ranking path and an unchanged plan is marked UNCHANGED_NO_NEW_EVIDENCE.
+//
+// No-churn: recomputation is compared against a canonical snapshot hash of the plan's
 // decision-relevant fields; when nothing material changed, NO revision row is written and the
-// version is NOT bumped. Expiry (stale catalyst, invalidation hit, no fresh evidence) downgrades
-// or expires the plan — an expired catalyst never remains PRIMARY — and releases its data
-// reservation. Surviving PRIMARY plans receive a bounded pre-open data reservation
-// (PremarketDataReservation.ts); the reservation phase never affects the plan writes above.
+// version is NOT bumped. A refresh that finds nothing material emits TRADE_PLAN_UNCHANGED and
+// writes nothing further. Lifecycle is expressed via the EXISTING trade_plans.status values plus
+// refreshVersion + reasonForRefresh — no parallel state machine.
 //
-// Governance: diagnostic/planning only. This section never emits TRADE_IDEA_GENERATED, never
-// imports OMS/RiskEngine/ChiefTraderAgent/the order-placement broker layer.
+// Expiry (stale catalyst, invalidation hit, no fresh evidence) downgrades or expires the plan —
+// an expired catalyst never remains PRIMARY — and releases its data reservation. Surviving
+// PRIMARY plans (except inside the pre-open validation window, where the 09:25 handover cap
+// would born-expire new grants) receive a bounded pre-open data reservation.
+//
+// Open handoff: when the session leaves PREMARKET, PREMARKET_PLAN_HANDED_TO_RTH is emitted and
+// every ACTIVE reservation is released. Intraday Fast Lane / discovery subscriptions are never
+// touched — only this ledger's rows.
+//
+// Governance: diagnostic/planning only. This section never emits a trade idea outside the
+// existing ARGUS_TRADE_PLAN_IDEAS_ENABLED-gated emitTradePlanIdea() path (unchanged, still OFF by
+// default), never imports OMS/RiskEngine/ChiefTraderAgent/the order-placement broker layer.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type PlanRefreshKind = 'UNCHANGED' | 'REFRESHED' | 'EXPIRED' | 'SKIPPED';
 
-/** Refresh reason codes. UNCHANGED_NO_NEW_EVIDENCE is also the fallback mark when the pre-market
- *  scorer is unavailable (stub throws) and recomputation yields no material change. */
+/** Lifecycle + outcome reasons. The five lifecycle values plus PROMOTED/DOWNGRADED markers are
+ *  what reasonForRefresh carries on live plans; the HIT / NO_FRESH_EVIDENCE / REJECTS / STALE /
+ *  FELL_OUT values are expiry/demotion markers; UNCHANGED / STATUS / PROCESSING values are
+ *  outcome-only (never persisted — unchanged plans are not written at all). */
 export type PlanRefreshReason =
-  | 'UNCHANGED_NO_NEW_EVIDENCE'
-  | 'NEW_MORNING_EVIDENCE'
-  | 'TIER_PROMOTED'
-  | 'TIER_DEMOTED'
+  | 'INITIAL_BUILD'
+  | 'MID_MORNING_REFRESH'
+  | 'LATE_REFRESH'
+  | 'PREOPEN_VALIDATION'
+  | 'EVENT_DRIVEN_MATERIAL'
+  | 'PROMOTED'
+  | 'DOWNGRADED'
   | 'CATALYST_STALE'
   | 'INVALIDATION_LEVEL_HIT'
   | 'NO_FRESH_EVIDENCE'
   | 'RANKING_REJECTS_THESIS'
   | 'FELL_OUT_OF_PLAN_TIERS'
   | 'VALID_UNTIL_PASSED'
+  | 'UNCHANGED_NO_NEW_EVIDENCE'
   | 'STATUS_NOT_REFRESHABLE'
   | 'PROCESSING_ERROR';
+
+export type LifecycleRefreshKind = 'MID_MORNING' | 'LATE_REFRESH' | 'PREOPEN_VALIDATION' | 'EVENT_DRIVEN';
+
+const KIND_REASON: Record<LifecycleRefreshKind, PlanRefreshReason> = {
+  MID_MORNING: 'MID_MORNING_REFRESH',
+  LATE_REFRESH: 'LATE_REFRESH',
+  PREOPEN_VALIDATION: 'PREOPEN_VALIDATION',
+  EVENT_DRIVEN: 'EVENT_DRIVEN_MATERIAL',
+};
 
 export interface PlanFieldChange {
   field: string;
@@ -554,7 +624,7 @@ export interface PlanRefreshOutcome {
   postRefreshStatus: TradePlanStatus;
 }
 
-export interface LateRefreshInput {
+export interface LifecycleTickInput {
   planDate: string;
   now: Date;
   rankedCandidates: RankedCandidate[];
@@ -563,29 +633,154 @@ export interface LateRefreshInput {
   rescuePort?: DataRescuePort;
 }
 
-export interface LateRefreshSummary {
+export interface LifecycleTickSummary {
   ran: boolean;
-  reason: string;
   tradingDate: string;
-  refreshedAt: string;
+  at: string;
+  actions: Array<{ action: string; kind?: string; detail?: string }>;
+}
+
+export interface LifecycleRefreshSummary {
+  kind: LifecycleRefreshKind | 'INITIAL_BUILD';
+  tradingDate: string;
+  refreshedCount: number;
+  unchangedCount: number;
+  expiredCount: number;
+  skippedCount: number;
+  newPlans: number;
   outcomes: PlanRefreshOutcome[];
+}
+
+/** Perf sample for one build/refresh run. Reported via console + getLastRefreshPerf(). */
+export interface RefreshPerfSample {
+  kind: string;
+  tradingDate: string;
+  startedAt: string;
+  durationMs: number;
+  /** DB queries issued by this run (plan ledger + reservation ledger). Must stay linear in
+   *  plans/candidates — the "no unbounded synchronous scans" assertion in tests. */
+  dbQueries: number;
+  symbolsRanked: number;
+  plansProcessed: number;
+  plansChanged: number;
+  eventLoopLagMsBefore: number;
+  eventLoopLagMsAfter: number;
+}
+
+/** Workstream D CLI contract — shape is stable, do not change without coordinating. */
+export interface PremarketLifecycleStatus {
+  tradingDate: string;
+  sessionPhase: string;
+  lastBuildAt: string | null;
+  lastBuildVersion: number;
+  evidenceAsof: string | null;
+  nextRefreshAt: string | null;
+  nextRefreshKind: 'MID_MORNING' | 'LATE_REFRESH' | 'PREOPEN_VALIDATION' | 'EVENT_DRIVEN' | null;
+  planCounts: { PRIMARY: number; BACKUP: number; WATCH: number; DOWNGRADED: number; EXPIRED: number };
+  oldestPlanAgeMinutes: number | null;
+  refreshDue: boolean;
 }
 
 type TradePlanRow = typeof tradePlans.$inferSelect;
 
-/** In-memory once-per-date guard: complements the refreshVersion>=2 DB check in
- *  maybeRunLatePremarketRefresh(). Process-local by design — a restart re-derives from the DB. */
-const lateRefreshRunDates = new Set<string>();
+// ── In-memory lifecycle state (process-local; DB rows are the cross-restart truth) ──
+/** Lifecycle kinds completed for a date. Best-effort across restarts: a re-run after a restart
+ *  is write-free by the no-churn rule (the plan rows already reflect the evidence), so the
+ *  in-memory guard only needs to be exact within a process. */
+const completedKindsByDate = new Map<string, Set<string>>();
+/** Set by the PREMARKET_SESSION_STARTED handler when no plans exist yet; consumed by the tick. */
+let pendingInitialBuild = false;
+interface PendingEventTrigger { source: string; symbol: string | null; at: number; }
+let pendingEventTriggers: PendingEventTrigger[] = [];
+let lastEventDrivenRunAt: number | null = null;
+let lifecycleSubscribed = false;
+const lifecycleMemoryByDate = new Map<string, { lastRunAt: string; lastRunKind: string }>();
+let lastRefreshPerf: RefreshPerfSample | null = null;
+/** Safety bound on the pending-trigger list: a bus event storm must not grow it without limit.
+ *  Oldest triggers are dropped first; the refresh still runs once. Engineering bound, not an
+ *  operational threshold. */
+const MAX_PENDING_TRIGGERS = 100;
 
-/** Test-only: clear the in-memory once-per-date guard. */
-export function resetLateRefreshGuardForTests(): void {
-  lateRefreshRunDates.clear();
+/** Test-only: reset all in-memory lifecycle state (the subscription itself stays idempotent). */
+export function resetPremarketLifecycleForTests(): void {
+  completedKindsByDate.clear();
+  pendingInitialBuild = false;
+  pendingEventTriggers = [];
+  lastEventDrivenRunAt = null;
+  lifecycleMemoryByDate.clear();
+  lastRefreshPerf = null;
+  planDbQueries = 0;
+  resetManagerDbQueryCount();
 }
 
-function refreshHhmmToMinutes(hhmm: string): number {
+/** Last measured refresh perf sample (null before the first run). */
+export function getLastRefreshPerf(): RefreshPerfSample | null {
+  return lastRefreshPerf;
+}
+
+// ── Perf instrumentation: DB query counting on this module's refresh/build path ──
+let planDbQueries = 0;
+function counted<T>(p: Promise<T>): Promise<T> {
+  planDbQueries++;
+  return p;
+}
+
+async function measureEventLoopLagMs(): Promise<number> {
+  const start = performance.now();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  return performance.now() - start;
+}
+
+function recordPerf(sample: RefreshPerfSample): void {
+  lastRefreshPerf = sample;
+  console.log(
+    `[TradePlanLifecycle] refresh kind=${sample.kind} date=${sample.tradingDate} `
+    + `durationMs=${sample.durationMs.toFixed(1)} dbQueries=${sample.dbQueries} `
+    + `symbolsRanked=${sample.symbolsRanked} plansProcessed=${sample.plansProcessed} `
+    + `plansChanged=${sample.plansChanged} `
+    + `eventLoopLagBeforeMs=${sample.eventLoopLagMsBefore.toFixed(2)} `
+    + `eventLoopLagAfterMs=${sample.eventLoopLagMsAfter.toFixed(2)}`,
+  );
+}
+
+function hhmmToMinutes(hhmm: string): number {
   const [h, m] = hhmm.split(':').map(Number);
   return h * 60 + m;
 }
+
+function markKindCompleted(planDate: string, kind: string): void {
+  let set = completedKindsByDate.get(planDate);
+  if (!set) {
+    set = new Set();
+    completedKindsByDate.set(planDate, set);
+  }
+  set.add(kind);
+}
+
+function isKindCompleted(planDate: string, kind: string): boolean {
+  return completedKindsByDate.get(planDate)?.has(kind) ?? false;
+}
+
+type ScheduledRefreshKind = 'MID_MORNING' | 'LATE_REFRESH' | 'PREOPEN_VALIDATION';
+
+function kindWindowEt(kind: ScheduledRefreshKind): [string, string] {
+  const c = continuousIntelligence;
+  switch (kind) {
+    case 'MID_MORNING': return [c.premarketMidMorningRefreshStartEt, c.premarketMidMorningRefreshEndEt];
+    case 'LATE_REFRESH': return [c.premarketRefreshWindowStart, c.premarketRefreshWindowEnd];
+    case 'PREOPEN_VALIDATION': return [c.premarketPreopenValidationStartEt, c.premarketPreopenValidationEndEt];
+  }
+}
+
+function isKindDue(kind: ScheduledRefreshKind, now: Date): boolean {
+  const mins = minutesInTimezone(now.getTime(), TRADING_TIMEZONE);
+  const [startEt, endEt] = kindWindowEt(kind);
+  const start = hhmmToMinutes(startEt);
+  const end = hhmmToMinutes(endEt);
+  return mins >= start && mins < end;
+}
+
+// ── Canonical snapshot + no-churn hash ──
 
 /** Canonical, decision-relevant snapshot of a plan for the no-churn hash comparison. Deliberately
  *  excludes componentScoresJson (raw component dump — confidence/confluence/evidenceQuality and
@@ -699,7 +894,7 @@ function tierRank(tier: SetupType): number {
   return tier === 'PRIMARY' ? 3 : tier === 'BACKUP' ? 2 : 1;
 }
 
-/** A plan is catalyst-backed when its 04:00 evidence recorded a news catalyst — either as a
+/** A plan is catalyst-backed when its evidence recorded a news catalyst — either as a
  *  catalysts[] entry or as structured catalyst metadata. */
 function planHasCatalyst(plan: TradePlanRow): boolean {
   return parseCatalysts(plan.catalysts).some((c) => c.startsWith('News catalyst')) || plan.catalystType != null;
@@ -712,7 +907,7 @@ function planHasCatalyst(plan: TradePlanRow): boolean {
 function toPremarketCandidateInput(
   symbol: string,
   input: RankingInput,
-  candidate: RankedCandidate,
+  _candidate: RankedCandidate,
 ): PremarketCandidateInput {
   return {
     symbol,
@@ -733,6 +928,8 @@ function toPremarketCandidateInput(
 
 const REFRESHABLE_STATUSES: ReadonlySet<string> = new Set(['DRAFT', 'READY', 'VALID', 'REVALIDATING']);
 
+// ── Per-plan refresh ──
+
 async function expirePlan(
   plan: TradePlanRow,
   reason: PlanRefreshReason,
@@ -746,7 +943,7 @@ async function expirePlan(
     tierChanged: null,
   };
   // Immutable prior-version snapshot first — the revision row must exist before the mutation.
-  await db.insert(tradePlanRevisions).values({
+  await counted(db.insert(tradePlanRevisions).values({
     id: randomUUID(),
     planId: plan.id,
     originalPlanId: plan.id,
@@ -757,14 +954,16 @@ async function expirePlan(
     deltaSummaryJson: JSON.stringify(delta),
     reasonForRefresh: reason,
     createdAt: nowIso,
-  });
-  await db.update(tradePlans).set({
+  }));
+  await counted(db.update(tradePlans).set({
     status: 'EXPIRED',
     refreshVersion: newVersion,
     refreshedAt: nowIso,
     reasonForRefresh: reason,
     originalCreatedAt: plan.originalCreatedAt ?? plan.createdAt,
-  }).where(eq(tradePlans.id, plan.id));
+    evidenceAsof: nowIso,
+    sessionPhase: 'PRE_MARKET',
+  }).where(eq(tradePlans.id, plan.id)));
   // Plan expiry releases any pre-open data reservation (release contract).
   await releaseReservationsForPlan(plan.id, 'PLAN_EXPIRED', now);
   emitTradePlanExpired({
@@ -793,6 +992,7 @@ async function refreshOnePlan(
   rankedBySymbol: Map<string, RankedCandidate>,
   inputsBySymbol: Map<string, RankingInput>,
   now: Date,
+  kind: LifecycleRefreshKind,
 ): Promise<PlanRefreshOutcome> {
   const nowIso = now.toISOString();
   const priorVersion = plan.refreshVersion ?? 1;
@@ -846,8 +1046,8 @@ async function refreshOnePlan(
     return expirePlan(plan, 'FELL_OUT_OF_PLAN_TIERS', now);
   }
   // Preserve previously-recorded catalyst metadata: the refresh performs no catalyst-detail
-  // fetch (same no-new-network-calls constraint as the 04:00 build), so dropping it would be
-  // data loss rather than new evidence. Catalyst STALENESS is still detected below via the
+  // fetch (same no-new-network-calls constraint as the build), so dropping it would be data
+  // loss rather than new evidence. Catalyst STALENESS is still detected below via the
   // newsCatalyst component's current availability.
   if (fields.catalystType == null) {
     fields.catalystType = plan.catalystType;
@@ -880,10 +1080,10 @@ async function refreshOnePlan(
   const delta = diffSnapshots(priorSnap, nextSnap);
   const newVersion = priorVersion + 1;
   const reason: PlanRefreshReason = delta.tierChanged
-    ? (tierRank(delta.tierChanged.to) > tierRank(delta.tierChanged.from) ? 'TIER_PROMOTED' : 'TIER_DEMOTED')
-    : catalystStale ? 'CATALYST_STALE' : 'NEW_MORNING_EVIDENCE';
+    ? (tierRank(delta.tierChanged.to) > tierRank(delta.tierChanged.from) ? 'PROMOTED' : 'DOWNGRADED')
+    : catalystStale ? 'CATALYST_STALE' : KIND_REASON[kind];
 
-  await db.insert(tradePlanRevisions).values({
+  await counted(db.insert(tradePlanRevisions).values({
     id: randomUUID(),
     planId: plan.id,
     originalPlanId: plan.id,
@@ -894,8 +1094,8 @@ async function refreshOnePlan(
     deltaSummaryJson: JSON.stringify(delta),
     reasonForRefresh: reason,
     createdAt: nowIso,
-  });
-  await db.update(tradePlans).set({
+  }));
+  await counted(db.update(tradePlans).set({
     setupType: fields.setupType,
     direction: fields.direction,
     thesis: fields.thesis,
@@ -915,18 +1115,21 @@ async function refreshOnePlan(
     refreshedAt: nowIso,
     reasonForRefresh: reason,
     originalCreatedAt: plan.originalCreatedAt ?? plan.createdAt,
+    evidenceAsof: nowIso,
+    sessionPhase: 'PRE_MARKET',
     scoreDecompositionJson,
-  }).where(eq(tradePlans.id, plan.id));
+  }).where(eq(tradePlans.id, plan.id)));
 
   // Tier drop off PRIMARY releases the pre-open data reservation (release contract).
   if (plan.setupType === 'PRIMARY' && fields.setupType !== 'PRIMARY') {
     await releaseReservationsForPlan(plan.id, 'TIER_DROP', now);
   }
 
-  emitTradePlanRefreshed({
+  emitTradePlanVersionCreated({
     planId: plan.id,
     symbol: plan.symbol,
     tradingDate: plan.planDate,
+    refreshKind: KIND_REASON[kind],
     refreshVersion: newVersion,
     refreshedAt: nowIso,
     reasonForRefresh: reason,
@@ -934,6 +1137,14 @@ async function refreshOnePlan(
     tierChanged: delta.tierChanged,
     at: nowIso,
   });
+  if (delta.tierChanged) {
+    const tierPayload = {
+      planId: plan.id, symbol: plan.symbol, tradingDate: plan.planDate,
+      refreshVersion: newVersion, fromTier: delta.tierChanged.from, toTier: delta.tierChanged.to, at: nowIso,
+    };
+    if (reason === 'PROMOTED') emitTradePlanPromoted(tierPayload);
+    else emitTradePlanDowngraded(tierPayload);
+  }
 
   return {
     planId: plan.id,
@@ -948,26 +1159,125 @@ async function refreshOnePlan(
   };
 }
 
+// ── Reservation phase ──
+
+async function requestPrimaryReservationsForPlans(
+  primaries: Array<{ planId: string; symbol: string }>,
+  now: Date,
+  rescuePort?: DataRescuePort,
+): Promise<void> {
+  if (primaries.length === 0) return;
+  // Skip plans that already hold an ACTIVE reservation — re-requesting would only mint
+  // DUPLICATE_ACTIVE_RESERVATION denials (and their rows), breaking the no-churn contract for
+  // refreshes that changed nothing.
+  const active = await counted(getActiveReservations());
+  const coveredPlanIds = new Set(active.map((r) => r.planId));
+  for (const p of primaries) {
+    if (coveredPlanIds.has(p.planId)) continue;
+    try {
+      await requestDataReservation(
+        p.symbol, p.planId, 'PRIMARY', 'premarket_plan_lifecycle',
+        continuousIntelligence.premarketReservationTtlMinutes, { now, rescuePort },
+      );
+    } catch (e) {
+      console.error('[TradePlanLifecycle] reservation request failed for', p.symbol, e);
+    }
+  }
+}
+
+// ── Initial build ──
+
+export interface InitialBuildSummary {
+  planCount: number;
+  primaryCount: number;
+  evidenceAsof: string;
+}
+
 /**
- * Runs the late pre-market refresh over every refreshable plan for planDate. Exported for tests;
- * production callers go through maybeRunLatePremarketRefresh() (window + once-per-date guards).
- * Emits PREMARKET_REFRESH_STARTED/COMPLETED plus per-plan TRADEPLAN_REFRESHED/TRADEPLAN_EXPIRED.
- * A per-plan failure is isolated (SKIPPED) and never aborts the run; a reservation-phase failure
- * never rolls back already-persisted plan writes.
+ * Builds the date's plans from evidence-as-of now. A late start (e.g. 08:23) builds immediately
+ * and records evidenceAsof=now, sessionPhase=PRE_MARKET — it NEVER pretends to be a 04:00 plan.
+ * Defensive per-symbol dedupe: never creates a duplicate plan for the same symbol+date.
  */
-export async function runLatePremarketRefresh(input: LateRefreshInput): Promise<LateRefreshSummary> {
+async function buildInitialPlans(input: LifecycleTickInput): Promise<InitialBuildSummary> {
   const { planDate, now } = input;
   const nowIso = now.toISOString();
-  emitPremarketRefreshStarted(planDate, nowIso);
+  const perfStart = performance.now();
+  const lagBefore = await measureEventLoopLagMs();
+  planDbQueries = 0;
+  resetManagerDbQueryCount();
 
-  const plans = await getTradePlansForDate(planDate);
+  emitPremarketPlanBuildStarted(planDate, nowIso);
+  const drafts = buildTradePlanDrafts(input.rankedCandidates, input.inputsBySymbol, planDate, now);
+  const existing = await counted(getTradePlansForDate(planDate));
+  const existingSymbols = new Set(existing.map((p) => p.symbol));
+  const fresh = drafts.filter((d) => !existingSymbols.has(d.symbol));
+  await persistTradePlanDrafts(fresh, {
+    evidenceAsof: nowIso,
+    sessionPhase: 'PRE_MARKET',
+    reasonForRefresh: 'INITIAL_BUILD',
+  });
+  // The existing gated path (unchanged behavior): one independent vote per PRIMARY-tier draft,
+  // still gated by ARGUS_TRADE_PLAN_IDEAS_ENABLED + Autobot + the pipeline-agent toggle.
+  for (const draft of fresh) {
+    if (draft.setupType === 'PRIMARY') {
+      emitTradePlanIdea(draft, input.inputsBySymbol.get(draft.symbol)?.last ?? null);
+    }
+  }
+  const primaryCount = fresh.filter((d) => d.setupType === 'PRIMARY').length;
+  await requestPrimaryReservationsForPlans(
+    fresh.filter((d) => d.setupType === 'PRIMARY').map((d) => ({ planId: d.id, symbol: d.symbol })),
+    now,
+    input.rescuePort,
+  );
+  emitPremarketPlanBuildCompleted({
+    tradingDate: planDate, planCount: fresh.length, primaryCount, evidenceAsof: nowIso, at: nowIso,
+  });
+
+  const lagAfter = await measureEventLoopLagMs();
+  recordPerf({
+    kind: 'INITIAL_BUILD', tradingDate: planDate, startedAt: nowIso,
+    durationMs: performance.now() - perfStart,
+    dbQueries: planDbQueries + getManagerDbQueryCount(),
+    symbolsRanked: input.rankedCandidates.length, plansProcessed: fresh.length, plansChanged: fresh.length,
+    eventLoopLagMsBefore: lagBefore, eventLoopLagMsAfter: lagAfter,
+  });
+  lifecycleMemoryByDate.set(planDate, { lastRunAt: nowIso, lastRunKind: 'INITIAL_BUILD' });
+  return { planCount: fresh.length, primaryCount, evidenceAsof: nowIso };
+}
+
+// ── Lifecycle refresh runner ──
+
+/**
+ * Runs one lifecycle refresh over the date's plans: refresh existing, admit new candidates,
+ * then the reservation phase. Emits per-plan TRADE_PLAN_VERSION_CREATED / PROMOTED / DOWNGRADED /
+ * EXPIRED; when nothing material changed anywhere, a single TRADE_PLAN_UNCHANGED (and no DB
+ * rows were written). PREOPEN_VALIDATION additionally emits PREOPEN_REVALIDATION_STARTED /
+ * COMPLETED. A per-plan failure is isolated (SKIPPED) and never aborts the run; a
+ * reservation-phase failure never rolls back plan writes.
+ */
+async function runLifecycleRefresh(
+  kind: LifecycleRefreshKind,
+  input: LifecycleTickInput,
+): Promise<LifecycleRefreshSummary> {
+  const { planDate, now } = input;
+  const nowIso = now.toISOString();
+  const perfStart = performance.now();
+  const lagBefore = await measureEventLoopLagMs();
+  planDbQueries = 0;
+  resetManagerDbQueryCount();
+
+  const isPreopen = kind === 'PREOPEN_VALIDATION';
+  if (isPreopen) emitPreopenRevalidationStarted(planDate, nowIso);
+
+  const plans = await counted(getTradePlansForDate(planDate));
   const rankedBySymbol = new Map(input.rankedCandidates.map((r) => [r.symbol, r]));
+  const existingSymbols = new Set(plans.map((p) => p.symbol));
   const outcomes: PlanRefreshOutcome[] = [];
   const primarySurvivors: Array<{ planId: string; symbol: string }> = [];
 
   for (const plan of plans) {
     try {
-      const outcome = await refreshOnePlan(plan, rankedBySymbol, input.inputsBySymbol, now);
+      const outcome = await refreshOnePlan(plan, rankedBySymbol, input.inputsBySymbol, now, kind);
       outcomes.push(outcome);
       if (
         (outcome.kind === 'REFRESHED' || outcome.kind === 'UNCHANGED') &&
@@ -977,14 +1287,14 @@ export async function runLatePremarketRefresh(input: LateRefreshInput): Promise<
         primarySurvivors.push({ planId: plan.id, symbol: plan.symbol });
       }
     } catch (e) {
-      console.error('[TradePlanBuilder] late pre-market refresh failed for plan', plan.id, e);
+      console.error('[TradePlanLifecycle] refresh failed for plan', plan.id, e);
       outcomes.push({
         planId: plan.id,
         symbol: plan.symbol,
         kind: 'SKIPPED',
         reason: 'PROCESSING_ERROR',
-        previousRefreshVersion: plan.refreshVersion ?? 1,
-        newRefreshVersion: plan.refreshVersion ?? 1,
+        previousRefreshVersion: priorVersionOf(plan),
+        newRefreshVersion: priorVersionOf(plan),
         deltaSummary: null,
         postRefreshSetupType: plan.setupType as SetupType,
         postRefreshStatus: plan.status as TradePlanStatus,
@@ -992,91 +1302,379 @@ export async function runLatePremarketRefresh(input: LateRefreshInput): Promise<
     }
   }
 
-  // Reservation phase: sweep expired first (honest capacity accounting), then request one bounded
-  // reservation per surviving PRIMARY plan. PRIMARY-only by policy: the pool is sized for the
-  // PRIMARY tier (3 plans <= 4 slots); BACKUP promotion at the open uses the normal discovery
-  // and rescue paths. A failure here never rolls back the plan writes above.
-  try {
-    await sweepExpiredReservations(now);
-    for (const survivor of primarySurvivors) {
-      await requestDataReservation(
-        survivor.symbol,
-        survivor.planId,
-        'PRIMARY',
-        'late_premarket_refresh',
-        continuousIntelligence.premarketReservationTtlMinutes,
-        { now, rescuePort: input.rescuePort },
-      );
-    }
-  } catch (e) {
-    console.error('[TradePlanBuilder] late-refresh reservation phase failed (plan writes stand)', e);
+  // New candidates enter: a ranked candidate with no plan for this symbol+date and a
+  // plan-eligible setup gets a v1 plan (existingSymbols guards against duplicates — never two
+  // PRIMARYs for the same symbol+date).
+  let newPlans = 0;
+  const newPrimaries: Array<{ planId: string; symbol: string }> = [];
+  for (const candidate of input.rankedCandidates) {
+    if (existingSymbols.has(candidate.symbol)) continue;
+    const candInput = input.inputsBySymbol.get(candidate.symbol);
+    if (!candInput) continue;
+    const fields = computePlanFields(candidate, candInput, DEFAULT_TRADE_PLAN_THRESHOLDS, new Map());
+    if (!fields) continue;
+    const id = randomUUID();
+    await counted(db.insert(tradePlans).values({
+      id,
+      symbol: candidate.symbol,
+      planDate,
+      ...fields,
+      catalysts: JSON.stringify(fields.catalysts),
+      status: 'READY',
+      createdAt: nowIso,
+      validUntil: endOfTradingDayIso(planDate),
+      validUntilConfidence: 'ASSUMED_REGULAR_CLOSE_NO_EXCHANGE_CALENDAR',
+      refreshVersion: 1,
+      refreshedAt: null,
+      reasonForRefresh: KIND_REASON[kind],
+      originalCreatedAt: nowIso,
+      evidenceAsof: nowIso,
+      sessionPhase: 'PRE_MARKET',
+      scoreDecompositionJson: null,
+    }));
+    existingSymbols.add(candidate.symbol);
+    newPlans++;
+    if (fields.setupType === 'PRIMARY') newPrimaries.push({ planId: id, symbol: candidate.symbol });
+    emitTradePlanVersionCreated({
+      planId: id,
+      symbol: candidate.symbol,
+      tradingDate: planDate,
+      refreshKind: KIND_REASON[kind],
+      refreshVersion: 1,
+      refreshedAt: nowIso,
+      reasonForRefresh: KIND_REASON[kind],
+      changedFields: [],
+      tierChanged: null,
+      at: nowIso,
+    });
   }
 
-  const maxVersion = outcomes.reduce((m, o) => Math.max(m, o.newRefreshVersion), 1);
-  emitPremarketRefreshCompleted({
-    tradingDate: planDate,
-    refreshVersion: maxVersion,
-    refreshedAt: nowIso,
-    planCount: plans.length,
-    refreshedCount: outcomes.filter((o) => o.kind === 'REFRESHED').length,
-    unchangedCount: outcomes.filter((o) => o.kind === 'UNCHANGED').length,
-    expiredCount: outcomes.filter((o) => o.kind === 'EXPIRED').length,
-    skippedCount: outcomes.filter((o) => o.kind === 'SKIPPED').length,
-    at: nowIso,
+  // Reservation phase: sweep expired first (honest capacity accounting). New requests are skipped
+  // inside the PREOPEN_VALIDATION window — the 09:25 handover cap would born-expire them, and the
+  // 09:30 session handoff releases everything regardless. Expiry/tier-drop releases already ran
+  // inline above. A failure here never rolls back the plan writes.
+  try {
+    await sweepExpiredReservations(now);
+    if (!isPreopen) {
+      await requestPrimaryReservationsForPlans([...primarySurvivors, ...newPrimaries], now, input.rescuePort);
+    }
+  } catch (e) {
+    console.error('[TradePlanLifecycle] reservation phase failed (plan writes stand)', e);
+  }
+
+  const refreshedCount = outcomes.filter((o) => o.kind === 'REFRESHED').length;
+  const unchangedCount = outcomes.filter((o) => o.kind === 'UNCHANGED').length;
+  const expiredCount = outcomes.filter((o) => o.kind === 'EXPIRED').length;
+  const skippedCount = outcomes.filter((o) => o.kind === 'SKIPPED').length;
+  const downgradedCount = outcomes.filter((o) => o.kind === 'REFRESHED' && o.reason === 'DOWNGRADED').length;
+
+  if (refreshedCount === 0 && expiredCount === 0 && newPlans === 0) {
+    // Nothing material: no DB rows were written by this run (all UNCHANGED/SKIPPED) — say so
+    // once, loudly, and emit nothing further.
+    emitTradePlanUnchanged({
+      tradingDate: planDate, kind: KIND_REASON[kind], planCount: plans.length, at: nowIso,
+    });
+  }
+  if (isPreopen) {
+    emitPreopenRevalidationCompleted({
+      tradingDate: planDate, planCount: plans.length + newPlans,
+      refreshedCount, expiredCount, downgradedCount, at: nowIso,
+    });
+  }
+
+  const lagAfter = await measureEventLoopLagMs();
+  const plansChanged = refreshedCount + expiredCount + newPlans;
+  recordPerf({
+    kind: KIND_REASON[kind], tradingDate: planDate, startedAt: nowIso,
+    durationMs: performance.now() - perfStart,
+    dbQueries: planDbQueries + getManagerDbQueryCount(),
+    symbolsRanked: input.rankedCandidates.length, plansProcessed: plans.length,
+    plansChanged, eventLoopLagMsBefore: lagBefore, eventLoopLagMsAfter: lagAfter,
   });
-
-  return { ran: true, reason: 'COMPLETED', tradingDate: planDate, refreshedAt: nowIso, outcomes };
+  lifecycleMemoryByDate.set(planDate, { lastRunAt: nowIso, lastRunKind: KIND_REASON[kind] });
+  return {
+    kind, tradingDate: planDate, refreshedCount, unchangedCount, expiredCount, skippedCount, newPlans, outcomes,
+  };
 }
 
-function refreshNotRun(reason: string, tradingDate: string, at: string): LateRefreshSummary {
-  return { ran: false, reason, tradingDate, refreshedAt: at, outcomes: [] };
+function priorVersionOf(plan: TradePlanRow): number {
+  return plan.refreshVersion ?? 1;
 }
+
+// ── Tick entry point ──
 
 /**
- * Late-refresh trigger for SnapshotScanner's PRE_MARKET tick. Runs the refresh at most once per
- * trading date, and only while ET wall time (minutesInTimezone — DST-correct, never a hardcoded
- * offset) is inside the configured window. The once-per-date guarantee is best-effort across
- * restarts: refreshVersion>=2 on any of the date's plans means a previous run already versioned
- * the date (a refresh that changed anything always bumps at least one plan). An UNCHANGED-only
- * run bumps nothing, so a redundant re-run after a restart is write-free by the no-churn rule.
- * Never throws: every guard failure returns ran:false.
+ * Premarket plan lifecycle tick — called from SnapshotScanner's PRE_MARKET tick with fresh
+ * evidence. Decides: initial build (no plans yet), each due scheduled refresh (once per date per
+ * kind), and the debounced event-driven material refresh. Never throws into the caller.
  */
-export async function maybeRunLatePremarketRefresh(input: LateRefreshInput): Promise<LateRefreshSummary> {
+export async function maybeRunScheduledPremarketRefresh(input: LifecycleTickInput): Promise<LifecycleTickSummary> {
   const { planDate, now } = input;
-  const nowIso = now.toISOString();
+  const at = now.toISOString();
+  const actions: LifecycleTickSummary['actions'] = [];
   try {
-    // Defensive: the call site already sits inside the PRE_MARKET branch, but this function is
-    // exported and must enforce its own preconditions.
     if (classifyMarketSession(now.getTime(), TRADING_TIMEZONE, true) !== 'PRE_MARKET') {
-      return refreshNotRun('NOT_PRE_MARKET', planDate, nowIso);
-    }
-    const mins = minutesInTimezone(now.getTime(), TRADING_TIMEZONE);
-    const windowStart = refreshHhmmToMinutes(continuousIntelligence.premarketRefreshWindowStart);
-    const windowEnd = refreshHhmmToMinutes(continuousIntelligence.premarketRefreshWindowEnd);
-    if (mins < windowStart || mins >= windowEnd) {
-      return refreshNotRun('OUTSIDE_REFRESH_WINDOW', planDate, nowIso);
-    }
-    if (lateRefreshRunDates.has(planDate)) {
-      return refreshNotRun('ALREADY_REFRESHED_THIS_PROCESS', planDate, nowIso);
+      return { ran: false, tradingDate: planDate, at, actions: [{ action: 'SKIPPED', detail: 'NOT_PRE_MARKET' }] };
     }
     const plans = await getTradePlansForDate(planDate);
     if (plans.length === 0) {
-      return refreshNotRun('NO_PLANS_TO_REFRESH', planDate, nowIso);
+      const build = await buildInitialPlans(input);
+      pendingInitialBuild = false;
+      markKindCompleted(planDate, 'INITIAL_BUILD');
+      actions.push({ action: 'INITIAL_BUILD', detail: `${build.planCount} plans, ${build.primaryCount} PRIMARY` });
+      return { ran: true, tradingDate: planDate, at, actions };
     }
-    if (plans.some((p) => (p.refreshVersion ?? 1) >= 2)) {
-      lateRefreshRunDates.add(planDate);
-      return refreshNotRun('ALREADY_REFRESHED', planDate, nowIso);
+    pendingInitialBuild = false;
+
+    for (const kind of ['MID_MORNING', 'LATE_REFRESH', 'PREOPEN_VALIDATION'] as const) {
+      if (isKindDue(kind, now) && !isKindCompleted(planDate, kind)) {
+        const summary = await runLifecycleRefresh(kind, input);
+        markKindCompleted(planDate, kind);
+        actions.push({
+          action: 'REFRESH', kind,
+          detail: `${summary.refreshedCount} refreshed, ${summary.expiredCount} expired, ${summary.unchangedCount} unchanged, ${summary.newPlans} new`,
+        });
+      }
     }
-    if (input.rankedCandidates.length === 0) {
-      // No morning evidence at all — fail closed: leave the 04:00 plans untouched rather than
-      // expiring everything on a data outage. Retried on the next tick (guard not set).
-      return refreshNotRun('NO_RANKING_EVIDENCE', planDate, nowIso);
+
+    if (shouldRunEventDriven(now)) {
+      const summary = await runLifecycleRefresh('EVENT_DRIVEN', input);
+      lastEventDrivenRunAt = now.getTime();
+      pendingEventTriggers = [];
+      actions.push({
+        action: 'REFRESH', kind: 'EVENT_DRIVEN',
+        detail: `${summary.refreshedCount} refreshed, ${summary.expiredCount} expired, ${summary.unchangedCount} unchanged, ${summary.newPlans} new`,
+      });
     }
-    const summary = await runLatePremarketRefresh(input);
-    lateRefreshRunDates.add(planDate);
-    return summary;
+
+    return { ran: actions.length > 0, tradingDate: planDate, at, actions };
   } catch (e) {
-    console.error('[TradePlanBuilder] maybeRunLatePremarketRefresh failed (scan continues)', e);
-    return refreshNotRun('TRIGGER_ERROR', planDate, nowIso);
+    console.error('[TradePlanLifecycle] scheduled tick failed (scan continues)', e);
+    return { ran: false, tradingDate: planDate, at, actions: [{ action: 'SKIPPED', detail: 'TICK_ERROR' }] };
   }
+}
+
+/** Debounce: fire only after a quiet period with no new triggers. Cooldown: minimum spacing
+ *  between event-driven runs. The final materiality arbiter is the no-churn hash inside the
+ *  refresh itself. */
+function shouldRunEventDriven(now: Date): boolean {
+  if (pendingEventTriggers.length === 0) return false;
+  const nowMs = now.getTime();
+  const newestTriggerAt = Math.max(...pendingEventTriggers.map((t) => t.at));
+  const quietMs = nowMs - newestTriggerAt;
+  const sinceLastRun = lastEventDrivenRunAt == null
+    ? Number.POSITIVE_INFINITY
+    : nowMs - lastEventDrivenRunAt;
+  return quietMs >= continuousIntelligence.premarketEventDrivenDebounceMs
+    && sinceLastRun >= continuousIntelligence.premarketEventDrivenCooldownMs;
+}
+
+function queueEventTrigger(source: string, symbol: string | null): void {
+  pendingEventTriggers.push({ source, symbol, at: Date.now() });
+  if (pendingEventTriggers.length > MAX_PENDING_TRIGGERS) {
+    pendingEventTriggers.splice(0, pendingEventTriggers.length - MAX_PENDING_TRIGGERS);
+  }
+}
+
+/** Test-only: queue an event-driven trigger at an explicit timestamp (fake-clock friendly;
+ *  production handlers always use Date.now()). */
+export function queueEventTriggerForTests(source: string, symbol: string | null, at: Date): void {
+  pendingEventTriggers.push({ source, symbol, at: at.getTime() });
+  if (pendingEventTriggers.length > MAX_PENDING_TRIGGERS) {
+    pendingEventTriggers.splice(0, pendingEventTriggers.length - MAX_PENDING_TRIGGERS);
+  }
+}
+
+/** Test-only: inspect the queued event-driven triggers. */
+export function getPendingEventTriggersForTests(): Array<{ source: string; symbol: string | null; at: number }> {
+  return [...pendingEventTriggers];
+}
+
+// ── Event subscriptions ──
+
+async function handlePremarketSessionStarted(tradingDate: string): Promise<void> {
+  try {
+    const plans = await getTradePlansForDate(tradingDate);
+    if (plans.length === 0) {
+      // No plans yet: the next SnapshotScanner PRE_MARKET tick (which owns fresh evidence)
+      // performs the initial build from evidence-as-of that tick.
+      pendingInitialBuild = true;
+    } else {
+      // Restart recovery: engine started during PREMARKET with existing plans for today —
+      // resume/refresh/expire by age and evidence via the debounced event-driven path.
+      // Never creates duplicates: the refresh only mutates existing plans and the new-candidate
+      // path skips symbols that already have a plan.
+      queueEventTrigger('SESSION_START_RESUME', null);
+    }
+  } catch (e) {
+    console.error('[TradePlanLifecycle] PREMARKET_SESSION_STARTED handler failed', e);
+  }
+}
+
+async function handleSessionTransition(payload: {
+  from?: { marketPhase?: string } | null;
+  to?: { marketPhase?: string } | null;
+  tradingDate?: string;
+} | null | undefined): Promise<void> {
+  try {
+    const from = payload?.from?.marketPhase ?? null;
+    const to = payload?.to?.marketPhase ?? null;
+    if (from === 'PRE_MARKET' && to !== null && to !== 'PRE_MARKET') {
+      // Open handoff: release every ACTIVE pre-open reservation and hand the plans to RTH.
+      // Only this ledger's rows are touched — intraday Fast Lane / discovery subscriptions and
+      // MarketDataWorker's own rescue grants are never cancelled here.
+      const now = new Date();
+      const tradingDate = payload?.tradingDate ?? getTradingDateStr(now);
+      const released = await releaseAllActiveReservations('MARKET_OPEN_HANDOVER', now);
+      emitPremarketPlanHandedToRth({ tradingDate, releasedReservations: released, at: now.toISOString() });
+    }
+  } catch (e) {
+    console.error('[TradePlanLifecycle] session-transition handler failed', e);
+  }
+}
+
+/**
+ * Subscribes the premarket plan lifecycle to the existing session/event bus. Idempotent.
+ * Called once at boot (see src/server/core/ArgusCoreBoot.ts's SessionLifecycle block — the
+ * parent wiring adds `startPremarketPlanLifecycle()` there in a matching try/catch).
+ *
+ * Subscriptions (intent only — the SnapshotScanner tick executes; no timers here):
+ * - PREMARKET_SESSION_STARTED → initial build intent, or resume refresh when plans exist.
+ * - SESSION_LIFECYCLE_STATE_CHANGED leaving PRE_MARKET → open handoff (emit + release).
+ * - NEWS_CATALYST (catalystStrength HIGH only) → debounced material-refresh trigger.
+ * - MARKET_DATA_GAP_DETECTED → debounced data-readiness re-validation trigger.
+ * - MACRO_ANALYSIS_COMPLETED → debounced macro refresh trigger.
+ *
+ * Deliberately NOT subscribed (no bus event exists; not invented): new MARKET_MOVER, price
+ * acceleration, sector-RS change — all three flow through the ranking inputs every scanner tick
+ * and are therefore covered by the scheduled refreshes' re-ranking. Data-quality recovery is
+ * covered via MARKET_DATA_GAP_DETECTED (feed interruption detected → re-validate readiness).
+ */
+export function startPremarketPlanLifecycle(): void {
+  if (lifecycleSubscribed) return;
+  lifecycleSubscribed = true;
+
+  eventBus.on(EVENTS.PREMARKET_SESSION_STARTED, (payload: { tradingDate?: string }) => {
+    void handlePremarketSessionStarted(payload?.tradingDate ?? getTradingDateStr(new Date()));
+  });
+  eventBus.on(EVENTS.SESSION_LIFECYCLE_STATE_CHANGED, (payload: {
+    from?: { marketPhase?: string } | null;
+    to?: { marketPhase?: string } | null;
+    tradingDate?: string;
+  }) => {
+    void handleSessionTransition(payload);
+  });
+  eventBus.on(EVENTS.NEWS_CATALYST, (payload: { symbol?: string; catalystStrength?: string }) => {
+    if (payload?.symbol && payload?.catalystStrength === 'HIGH') {
+      queueEventTrigger('NEWS_CATALYST', payload.symbol);
+    }
+  });
+  eventBus.on(EVENTS.MARKET_DATA_GAP_DETECTED, () => {
+    queueEventTrigger('DATA_QUALITY', null);
+  });
+  eventBus.on(EVENTS.MACRO_ANALYSIS_COMPLETED, () => {
+    queueEventTrigger('MACRO', null);
+  });
+}
+
+// ── Workstream D CLI contract ──
+
+/**
+ * Synchronous premarket lifecycle status for workstream D's CLI. Reads the plan ledger with
+ * drizzle's synchronous better-sqlite3 API (.all()) — safe because trade_plans writes for a date
+ * are bounded (tier caps) and this never writes. Shape is stable; do not change without
+ * coordinating with workstream D. The optional `now` parameter is clock injection for tests
+ * only — production callers omit it.
+ */
+export function getPremarketLifecycleStatus(tradingDate?: string, now: Date = new Date()): PremarketLifecycleStatus {
+  const date = tradingDate ?? getTradingDateStr(now);
+  const nowMs = now.getTime();
+  const nowIso = now.toISOString();
+  const plans = db.select().from(tradePlans).where(eq(tradePlans.planDate, date)).all();
+
+  const isLive = (p: (typeof plans)[number]) => p.status !== 'EXPIRED' && p.status !== 'INVALIDATED';
+  const live = plans.filter(isLive);
+  const planCounts = {
+    PRIMARY: live.filter((p) => p.setupType === 'PRIMARY').length,
+    BACKUP: live.filter((p) => p.setupType === 'BACKUP').length,
+    WATCH: live.filter((p) => p.setupType === 'WATCHLIST').length,
+    // Overlapping buckets, not a partition: a plan demoted then expired counts in both.
+    DOWNGRADED: plans.filter((p) => p.reasonForRefresh === 'DOWNGRADED').length,
+    EXPIRED: plans.filter((p) => p.status === 'EXPIRED').length,
+  };
+
+  const stampOf = (p: (typeof plans)[number]) => p.refreshedAt ?? p.createdAt;
+  let lastBuildAt: string | null = null;
+  let lastBuildVersion = 0;
+  let evidenceAsof: string | null = null;
+  let sessionPhase: string = classifyMarketSession(nowMs, TRADING_TIMEZONE, true);
+  let oldestPlanAgeMinutes: number | null = null;
+  if (plans.length > 0) {
+    let latestStamp = '';
+    let latestEvidence = '';
+    let latestPhase: string | null = null;
+    let oldestCreated = '';
+    for (const p of plans) {
+      const stamp = stampOf(p);
+      if (stamp > latestStamp) {
+        latestStamp = stamp;
+        latestPhase = p.sessionPhase;
+      }
+      if (p.evidenceAsof && p.evidenceAsof > latestEvidence) latestEvidence = p.evidenceAsof;
+      const created = p.originalCreatedAt ?? p.createdAt;
+      if (oldestCreated === '' || created < oldestCreated) oldestCreated = created;
+      lastBuildVersion = Math.max(lastBuildVersion, p.refreshVersion ?? 1);
+    }
+    lastBuildAt = latestStamp;
+    evidenceAsof = latestEvidence === '' ? null : latestEvidence;
+    if (latestPhase) sessionPhase = latestPhase;
+    oldestPlanAgeMinutes = Math.max(0, Math.round((nowMs - Date.parse(oldestCreated)) / 60000));
+  }
+
+  const kinds = completedKindsByDate.get(date) ?? new Set<string>();
+  const mins = minutesInTimezone(nowMs, TRADING_TIMEZONE);
+  const windows: Array<{
+    kind: 'MID_MORNING' | 'LATE_REFRESH' | 'PREOPEN_VALIDATION';
+    start: number; end: number; startEt: string;
+  }> = (['MID_MORNING', 'LATE_REFRESH', 'PREOPEN_VALIDATION'] as const).map((kind) => {
+    const [startEt, endEt] = kindWindowEt(kind);
+    return { kind, start: hhmmToMinutes(startEt), end: hhmmToMinutes(endEt), startEt };
+  });
+  let nextRefreshAt: string | null = null;
+  let nextRefreshKind: PremarketLifecycleStatus['nextRefreshKind'] = null;
+  let refreshDue = false;
+  for (const w of windows) {
+    if (kinds.has(w.kind) || mins >= w.end) continue;
+    if (mins >= w.start) {
+      nextRefreshKind = w.kind;
+      nextRefreshAt = nowIso;
+      refreshDue = true;
+    } else {
+      nextRefreshKind = w.kind;
+      nextRefreshAt = tradingWallTimeToIso(date, w.startEt);
+    }
+    break;
+  }
+  if (nextRefreshKind === null && pendingEventTriggers.length > 0) {
+    const oldestTriggerAt = Math.min(...pendingEventTriggers.map((t) => t.at));
+    const fireAtMs = oldestTriggerAt + continuousIntelligence.premarketEventDrivenDebounceMs;
+    const cooldownOk = lastEventDrivenRunAt == null
+      || nowMs - lastEventDrivenRunAt >= continuousIntelligence.premarketEventDrivenCooldownMs;
+    nextRefreshKind = 'EVENT_DRIVEN';
+    nextRefreshAt = new Date(Math.max(fireAtMs, nowMs)).toISOString();
+    refreshDue = nowMs >= fireAtMs && cooldownOk;
+  }
+
+  return {
+    tradingDate: date,
+    sessionPhase,
+    lastBuildAt,
+    lastBuildVersion,
+    evidenceAsof,
+    nextRefreshAt,
+    nextRefreshKind,
+    planCounts,
+    oldestPlanAgeMinutes,
+    refreshDue,
+  };
 }
