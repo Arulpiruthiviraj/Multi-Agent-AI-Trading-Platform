@@ -4,7 +4,7 @@
  * For EVERY benchmark mover from moverCohort.ts, joins the real evidence already
  * persisted by the pipeline - discovery lineage ledger (observability_events),
  * transaction_traces, risk_assessments, trade_plans / trade_plan_revisions,
- * premarket_focus_reports, premarket_data_reservations, quant_assessments,
+ * premarket_focus_reports, FAST_LANE events, quant_assessments,
  * missed_opportunities, trades/fills - and assigns exactly one primary_fate plus
  * supporting secondary_reasons (JSON).
  *
@@ -125,7 +125,8 @@ export interface CoverageEvidenceStore {
   getMissedOpportunity(symbol: string, sinceIso: string, untilIso: string): Promise<{ classification: string } | null>;
   getTradePlans(symbol: string, planDate: string): Promise<TradePlanEvidence[]>;
   getFocusSymbols(planDate: string): Promise<{ primary: string[]; secondary: string[]; watch: string[]; rejected: string[] } | null>;
-  getReservationCount(symbol: string, planDate: string): Promise<number>;
+  /** Count of FAST_LANE observability events for the symbol in the window (real Fast Lane evidence, not a proxy). */
+  getFastLaneEventCount(symbol: string, sinceMs: number, untilMs: number): Promise<number>;
   /** True when the market-movers funnel logged at least one discovery decision today. */
   moversFunnelRan(sinceMs: number, untilMs: number): Promise<boolean>;
   getScanTopNPerSide(): number;
@@ -268,10 +269,10 @@ export async function reconcileMover(
     traces: ConsensusTrace[]; risks: RiskAssessmentEvidence[]; fillsOrders: { orders: number; fills: number };
     missed: { classification: string } | null; plans: TradePlanEvidence[];
     focus: { primary: string[]; secondary: string[]; watch: string[]; rejected: string[] } | null;
-    reservations: number;
+    fastLaneEvents: number;
   };
   try {
-    const [decisions, news, sub, quant, ideas, consensusRejected, traces, risks, fillsOrders, missed, plans, focus, reservations] = await Promise.all([
+    const [decisions, news, sub, quant, ideas, consensusRejected, traces, risks, fillsOrders, missed, plans, focus, fastLaneEvents] = await Promise.all([
       store.getDiscoveryDecisions(symbol, sinceMs, untilMs),
       store.getNewsEventCount(symbol, sinceMs, untilMs),
       store.getSubscribeCounts(symbol, sinceMs, untilMs),
@@ -284,9 +285,9 @@ export async function reconcileMover(
       store.getMissedOpportunity(symbol, sinceIso, untilIso),
       store.getTradePlans(symbol, tradingDate),
       store.getFocusSymbols(tradingDate),
-      store.getReservationCount(symbol, tradingDate),
+      store.getFastLaneEventCount(symbol, sinceMs, untilMs),
     ]);
-    ev = { decisions, news, sub, quant, ideas, consensusRejected, traces, risks, fillsOrders, missed, plans, focus, reservations };
+    ev = { decisions, news, sub, quant, ideas, consensusRejected, traces, risks, fillsOrders, missed, plans, focus, fastLaneEvents };
   } catch (e) {
     return {
       ...base,
@@ -299,11 +300,14 @@ export async function reconcileMover(
     };
   }
 
+  // Preliminary known-by flags from version/tier evidence. callOutcomeAudits()
+  // (outcomeAudits.ts) refines these post-persist with timestamp-aware semantics
+  // (v1-before-first-focus-report cutoff, FAST_LANE event timestamps).
   const premarketKnownBy: PremarketKnownBy = {
     plan0400: ev.plans.some((p) => p.refreshVersion === 1),
     refresh0915: (ev.focus != null && [ev.focus.primary, ev.focus.secondary, ev.focus.watch].some((tier) => tier.includes(symbol)))
       || ev.plans.some((p) => p.refreshVersion >= 2),
-    fastLane: ev.reservations > 0,
+    fastLane: ev.fastLaneEvents > 0,
     discovery: ev.decisions.some((d) => d.admitted),
   };
   const finish = (
@@ -550,11 +554,11 @@ export function createSqliteCoverageEvidenceStore(): CoverageEvidenceStore {
         rejected: parseTier(row.rejected_json),
       };
     },
-    async getReservationCount(symbol, planDate) {
+    async getFastLaneEventCount(symbol, sinceMs, untilMs) {
       const row = sqliteDb.prepare(`
-        SELECT COUNT(*) c FROM premarket_data_reservations
-        WHERE symbol = ? AND requested_at >= ? AND requested_at < ?
-      `).get(symbol, `${planDate}T00:00:00.000Z`, `${planDate}T23:59:59.999Z`) as { c: number };
+        SELECT COUNT(*) c FROM observability_events
+        WHERE symbol = ? AND category = 'FAST_LANE' AND ts >= ? AND ts < ?
+      `).get(symbol, sinceMs, untilMs) as { c: number };
       return row.c;
     },
     async moversFunnelRan(sinceMs, untilMs) {

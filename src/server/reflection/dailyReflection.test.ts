@@ -78,7 +78,7 @@ function emptyStore(): CoverageEvidenceStore {
     getMissedOpportunity: async () => null,
     getTradePlans: async () => [],
     getFocusSymbols: async () => null,
-    getReservationCount: async () => 0,
+    getFastLaneEventCount: async () => 0,
     moversFunnelRan: async () => true,
     getScanTopNPerSide: () => TEST_CFG.scanTopNPerSide,
   };

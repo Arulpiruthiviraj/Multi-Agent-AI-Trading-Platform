@@ -52,7 +52,7 @@ interface FakeEvidence {
   missed?: { classification: string } | null;
   plans?: TradePlanEvidence[];
   focus?: { primary: string[]; secondary: string[]; watch: string[]; rejected: string[] } | null;
-  reservations?: number;
+  fastLane?: number;
   funnelRan?: boolean;
   scanTopN?: number;
   throwOn?: 'getDiscoveryDecisions' | 'moversFunnelRan';
@@ -75,7 +75,7 @@ function fakeStore(ev: FakeEvidence = {}): CoverageEvidenceStore {
     getMissedOpportunity: async () => ev.missed ?? null,
     getTradePlans: async () => ev.plans ?? [],
     getFocusSymbols: async () => ev.focus ?? null,
-    getReservationCount: async () => ev.reservations ?? 0,
+    getFastLaneEventCount: async () => ev.fastLane ?? 0,
     moversFunnelRan: async () => { maybeThrow('moversFunnelRan'); return ev.funnelRan ?? true; },
     getScanTopNPerSide: () => ev.scanTopN ?? TEST_CFG.scanTopNPerSide,
   };
@@ -220,7 +220,7 @@ describe('coverageReconciler classification ladder', () => {
     const v = await reconcile(member(), {
       plans: [{ status: 'READY', direction: 'BUY', refreshVersion: 1 }],
       focus: { primary: ['MOVE'], secondary: [], watch: [], rejected: [] },
-      reservations: 1,
+      fastLane: 1,
     });
     expect(v.primaryFate).toBe('EVALUATED');
     expect(v.premarketKnownBy).toEqual({ plan0400: true, refresh0915: true, fastLane: true, discovery: false });
@@ -295,7 +295,7 @@ describe('exactly-one-primary-fate invariant (property test)', () => {
         missed: r() < 0.15 ? { classification: pick(r, ['CONSENSUS_REJECTION', 'RISK_REJECTION', 'SUBSCRIPTION_MISS', 'AGENT_MISS', 'THESIS_INVALIDATED', 'EXECUTION_MISS']) } : null,
         plans: r() < 0.2 ? [{ status: 'READY', direction: 'BUY', refreshVersion: pick(r, [1, 2]) }] : [],
         focus: r() < 0.15 ? { primary: ['MOVE'], secondary: [], watch: [], rejected: [] } : null,
-        reservations: r() < 0.1 ? 1 : 0,
+        fastLane: r() < 0.1 ? 1 : 0,
         funnelRan: r() < 0.7,
       };
       const m = member({
