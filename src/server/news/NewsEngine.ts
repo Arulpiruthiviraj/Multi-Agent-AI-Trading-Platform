@@ -7,6 +7,7 @@ import { NewsSymbolExtractor } from './NewsSymbolExtractor';
 import { NewsImpactEngine } from './NewsImpactEngine';
 import { NewsClusterEngine } from './NewsClusterEngine';
 import { NewsScoringEngine, AIAnalysisResult, buildLocalFirstNewsAnalysis } from './NewsScoringEngine';
+import { kickOffJevShadowScoring } from './JevNewsTriage';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { tradingSafety } from '../config/tradingSafety';
@@ -179,6 +180,10 @@ export class NewsEngine {
         });
 
         let aiAnalysis: AIAnalysisResult | null = null;
+        // Pure LLM result, captured separately for the Jev shadow agreement ledger
+        // (Phase 1): aiAnalysis may later be overwritten by the local-first fallback,
+        // but agreement measurement needs the LLM's own scores or an explicit null.
+        let llmAnalysisForShadow: AIAnalysisResult | null = null;
         if (escalationDecision.escalate && llmCallsThisCycle < tradingSafety.newsLlmMaxCallsPerCycle) {
           llmCallsThisCycle += 1;
           try {
@@ -190,6 +195,7 @@ export class NewsEngine {
               priorArticleCount,
               credibility,
             });
+            llmAnalysisForShadow = aiAnalysis;
           } catch (llmErr) {
             console.warn(`[NewsEngine] LLM analysis threw; using ${impact.sentimentSource} so the NewsAgent cycle is not blocked.`, llmErr);
             aiAnalysis = null;
@@ -256,6 +262,26 @@ export class NewsEngine {
           escalated: escalationDecision.escalate,
           reason: escalationDecision.reason,
         });
+
+        // Jev shadow scoring (Phase 1, 2026-10-06): fire-and-forget, flag-gated (default OFF).
+        // Scores this article with Jev in parallel and records the agreement observation.
+        // Never blocks, never throws, never influences any decision — trading is untouched.
+        if (finalSymbols.length > 0) {
+          kickOffJevShadowScoring({
+            article: normalized,
+            symbol: finalSymbols[0],
+            traceId,
+            llmAnalysis: llmAnalysisForShadow,
+            deterministic: {
+              category,
+              credibility,
+              isNewCluster,
+              priorArticleCount,
+              impactScore01: impact.impactScore,
+              timeHorizon: impact.timeHorizon,
+            },
+          });
+        }
 
         const articlePublishedMs = Date.parse(normalized.publishedAt);
 

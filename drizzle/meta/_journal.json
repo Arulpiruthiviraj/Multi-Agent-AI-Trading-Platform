@@ -617,6 +617,13 @@
       "when": 1791198000001,
       "tag": "0087_daily_loss_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "6",
+      "when": 1791258400000,
+      "tag": "0088_jev_shadow_scores",
+      "breakpoints": true
     }
   ]
 }
