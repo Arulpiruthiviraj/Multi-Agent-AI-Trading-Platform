@@ -277,6 +277,13 @@ function isGapMover(snap: AlpacaSnapshot): boolean {
  * No liquidity/ADV/spread/price gate is touched by this change.
  */
 function computeRvol(_snap: AlpacaSnapshot, _advMap: Map<string, number>): number | null {
+  // 2026-10-06 (workstream E, pre-market RVOL data-availability verdict): PREMARKET_RVOL=
+  // BLOCKED_BY_DATA. A correct PM_RVOL needs ~20+ prior premarket sessions of 1Min bars per
+  // symbol; ohlcv_bars holds ZERO rows of any kind and has no session-marker column, so the
+  // median baseline cannot be computed from anything stored today. Alpaca feed=iex 1Min bars DO
+  // include premarket minutes (see ARGUS_ARCHITECTURE.md "Opening-range session anchoring"), so
+  // the blocker is missing stored data, not provider capability - building it needs a separately-
+  // scoped backfill (new-API-call decision), not a formula tweak. This null-stub stays.
   return null;
 }
 

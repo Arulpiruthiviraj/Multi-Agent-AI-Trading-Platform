@@ -154,28 +154,76 @@ export async function fetchNewsCatalystDetails(symbols: string[], lookbackMs: nu
   return result;
 }
 
+/**
+ * Signed sentiment as CONTEXTUAL evidence in the newsCatalyst component (2026-10-06,
+ * workstream C). Read this before touching the formula:
+ *
+ * - Sentiment NEVER becomes a directional recommendation here. The score is a 0-1 catalyst-
+ *   salience magnitude used for discovery/subscription ranking only. This function returns a
+ *   number, never a side: positive and negative sentiment enter symmetrically via |.|, so
+ *   the sign of the sentiment can never be read as BUY vs SELL by this or any downstream
+ *   consumer. There is no path from this component to TRADE_IDEA_GENERATED.
+ * - Impact magnitude (news_clusters.impactScore) remains the anchor: a symbol with no
+ *   measured impact is still marked unavailable (never scored), and when sentiment is
+ *   missing the score degrades to the magnitude term alone — sentiment can never conjure
+ *   a catalyst out of nothing.
+ * - A strongly directional sentiment alone can add AT MOST sentimentSalienceWeight to the
+ *   score (config/continuousIntelligence.json, validated to [0,1]). It cannot flip a
+ *   neutral/zero-magnitude setup into a directional trigger by itself.
+ *
+ * Weights come from config/continuousIntelligence.json (continuousIntelligence.
+ * newsCatalystComponent), never TS literals — tests derive expected values from the same
+ * config object production loads.
+ */
+export function computeNewsCatalystComponentScore(
+  impactMagnitude: number,
+  signedSentiment: number | null,
+  cfg: { impactMagnitudeWeight: number; sentimentSalienceWeight: number } = continuousIntelligence.newsCatalystComponent,
+): number {
+  const magnitude = clamp01(impactMagnitude) * cfg.impactMagnitudeWeight;
+  // Symmetric salience: |sentiment| — a strongly negative catalyst is just as newsworthy as
+  // a strongly positive one; the sign carries no direction in this component.
+  const salience = signedSentiment == null || !Number.isFinite(signedSentiment)
+    ? 0
+    : cfg.sentimentSalienceWeight * Math.abs(Math.max(-1, Math.min(1, signedSentiment)));
+  return clamp01(magnitude + salience);
+}
+
 export async function fetchNewsCatalystScores(symbols: string[], lookbackMs: number): Promise<Map<string, ComponentResult>> {
   const result = new Map<string, ComponentResult>();
   const since = new Date(Date.now() - lookbackMs).toISOString();
+  const componentCfg = continuousIntelligence.newsCatalystComponent;
   try {
-    const rows = await db.select({ symbols: newsClusters.symbols, impactScore: newsClusters.impactScore })
+    const rows = await db.select({
+      symbols: newsClusters.symbols,
+      impactScore: newsClusters.impactScore,
+      sentimentScore: newsClusters.sentimentScore,
+    })
       .from(newsClusters)
       .where(gte(newsClusters.createdAt, since));
-    const bestBySymbol = new Map<string, number>();
+    // "Best cluster wins" keeps the existing convention: the highest-impact cluster per
+    // symbol is selected, and that same cluster's signed sentiment (FinBERT running average
+    // blended by NewsClusterEngine, null when never scored) adjusts its component score.
+    const bestBySymbol = new Map<string, { impact: number; sentiment: number | null }>();
     for (const row of rows) {
       if (!row.symbols || typeof row.impactScore !== 'number') continue;
       let parsed: string[] = [];
       try { parsed = JSON.parse(row.symbols); } catch { continue; }
       for (const sym of parsed) {
         const normalized = String(sym).toUpperCase();
-        const existing = bestBySymbol.get(normalized) ?? 0;
-        bestBySymbol.set(normalized, Math.max(existing, row.impactScore));
+        const existing = bestBySymbol.get(normalized);
+        if (!existing || row.impactScore > existing.impact) {
+          bestBySymbol.set(normalized, {
+            impact: row.impactScore,
+            sentiment: typeof row.sentimentScore === 'number' ? row.sentimentScore : null,
+          });
+        }
       }
     }
     for (const symbol of symbols) {
-      const impact = bestBySymbol.get(symbol);
-      result.set(symbol, impact != null
-        ? { score: clamp01(impact), available: true }
+      const best = bestBySymbol.get(symbol);
+      result.set(symbol, best != null
+        ? { score: computeNewsCatalystComponentScore(best.impact, best.sentiment, componentCfg), available: true }
         : { score: null, available: false, reason: `No news cluster mentioned this symbol in the last ${Math.round(lookbackMs / 60000)} minutes.` });
     }
   } catch (e) {

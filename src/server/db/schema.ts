@@ -1607,6 +1607,12 @@ export const tradePlans = sqliteTable('trade_plans', {
   reasonForRefresh: text('reason_for_refresh'),
   originalCreatedAt: text('original_created_at'),
   scoreDecompositionJson: text('score_decomposition_json'),
+  // Pre-market tradeplan lifecycle (2026-10-06, local-only): honesty about WHEN the
+  // plan was built and WHAT evidence it was built from. A plan built at 08:23 must
+  // never pretend to be a 04:00 plan. evidenceAsof = newest evidence timestamp
+  // incorporated (ISO); sessionPhase = market session at build (PREMARKET, etc.).
+  evidenceAsof: text('evidence_asof'),
+  sessionPhase: text('session_phase'),
 }, (table) => ({
   planDateIdx: index('idx_trade_plans_plan_date').on(table.planDate, table.setupType),
   symbolIdx: index('idx_trade_plans_symbol').on(table.symbol, table.createdAt),

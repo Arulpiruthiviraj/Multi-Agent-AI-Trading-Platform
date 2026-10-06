@@ -192,10 +192,32 @@ export interface ContinuousIntelligenceConfig {
    *  promote/reject bar, selected by real MarketSession instead of one hardcoded pair. Values are
    *  identical across sessions by default - see the JSON file's own comment for why. */
   rankingThresholdsBySession: Record<'PRE_MARKET' | 'REGULAR' | 'AFTER_HOURS', { promote: number; reject: number }>;
+  /**
+   * 2026-10-06 (workstream C): ComposableRanking's newsCatalyst component knobs.
+   * impactMagnitudeWeight scales the impact-magnitude anchor; sentimentSalienceWeight scales
+   * the |signed sentiment| contextual term. Sentiment is symmetric (|.|) and can never be
+   * read as a directional BUY/SELL signal — see computeNewsCatalystComponentScore.
+   */
+  newsCatalystComponent: { impactMagnitudeWeight: number; sentimentSalienceWeight: number };
   /** Session-Aware Trading Architecture Phase 3 follow-up (2026-09-05): how many top-momentum
    *  candidates may receive a real javaQuantScore (Java quant engine bar-fetch + HTTP call) during
    *  the once-per-day PRE_MARKET plan-building cycle. Never applied to the ~30s RTH ranking loop. */
   javaQuantScoreCandidateLimit: number;
+  /** 2026-10-06 pre-market focus engine (workstream B): late pre-market TradePlan refresh window,
+   *  ET wall-clock HH:MM. SnapshotScanner's PRE_MARKET tick refreshes plans at most once per
+   *  trading date while minutesInTimezone(now, TRADING_TIMEZONE) is in [start, end). */
+  premarketRefreshWindowStart: string;
+  premarketRefreshWindowEnd: string;
+  /** 2026-10-06 (same): bounded pre-open data reservation pool for PRIMARY-tier TradePlans.
+   *  Must be < maxActiveSubscriptions (enforced at load) so the 09:20-09:30 emerging-movers
+   *  rotation can never be fully starved by pre-open reservations. */
+  premarketReservedSlots: number;
+  /** 2026-10-06 (same): requested reservation lifetime, minutes. expiresAt is always
+   *  min(now + this, premarketReservationHandoverEt). */
+  premarketReservationTtlMinutes: number;
+  /** 2026-10-06 (same): ET wall-clock HH:MM by which every pre-open reservation must have
+   *  expired (market-open handover). Must be after premarketRefreshWindowEnd (enforced at load). */
+  premarketReservationHandoverEt: string;
   honesty: string;
 }
 
@@ -223,11 +245,37 @@ function requireHhmm(raw: unknown, label: string): string {
   return raw;
 }
 
+/** 2026-10-06 pre-market focus engine (workstream B): minutes since midnight for an already
+ *  requireHhmm-validated HH:MM wall time - used only for config cross-validation above. */
+function hhmmToMinutes(hhmm: string): number {
+  const [h, m] = hhmm.split(':').map(Number);
+  return h * 60 + m;
+}
+
 function requireNonNegativeNumber(raw: unknown, label: string): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) {
     throw new Error(`config/continuousIntelligence.json ${label} must be a finite number >= 0`);
   }
   return raw;
+}
+
+/** 2026-10-06 (workstream C): validates the newsCatalystComponent knobs. Both weights must be
+ *  finite and >= 0; sentimentSalienceWeight is additionally capped at 1 so a sentiment-only
+ *  term can never, by itself, exceed the component's 0-1 scale or dominate the impact anchor. */
+function requireNewsCatalystComponent(raw: unknown): ContinuousIntelligenceConfig['newsCatalystComponent'] {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new Error('config/continuousIntelligence.json newsCatalystComponent must be an object');
+  }
+  const obj = raw as Record<string, unknown>;
+  const impactMagnitudeWeight = obj.impactMagnitudeWeight;
+  const sentimentSalienceWeight = obj.sentimentSalienceWeight;
+  if (typeof impactMagnitudeWeight !== 'number' || !Number.isFinite(impactMagnitudeWeight) || impactMagnitudeWeight < 0) {
+    throw new Error('config/continuousIntelligence.json newsCatalystComponent.impactMagnitudeWeight must be a finite number >= 0');
+  }
+  if (typeof sentimentSalienceWeight !== 'number' || !Number.isFinite(sentimentSalienceWeight) || sentimentSalienceWeight < 0 || sentimentSalienceWeight > 1) {
+    throw new Error('config/continuousIntelligence.json newsCatalystComponent.sentimentSalienceWeight must be a finite number in [0,1]');
+  }
+  return { impactMagnitudeWeight, sentimentSalienceWeight };
 }
 
 const RANKING_THRESHOLD_SESSIONS = ['PRE_MARKET', 'REGULAR', 'AFTER_HOURS'] as const;
@@ -361,7 +409,13 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     calibrationDriftPriorWindowMs: requireNumber(raw.calibrationDriftPriorWindowMs, 'calibrationDriftPriorWindowMs'),
     calibrationDriftMinEffectiveSample: requireNumber(raw.calibrationDriftMinEffectiveSample, 'calibrationDriftMinEffectiveSample'),
     rankingThresholdsBySession: requireRankingThresholdsBySession(raw.rankingThresholdsBySession, 'rankingThresholdsBySession'),
+    newsCatalystComponent: requireNewsCatalystComponent(raw.newsCatalystComponent),
     javaQuantScoreCandidateLimit: requireNumber(raw.javaQuantScoreCandidateLimit, 'javaQuantScoreCandidateLimit'),
+    premarketRefreshWindowStart: requireHhmm(raw.premarketRefreshWindowStart, 'premarketRefreshWindowStart'),
+    premarketRefreshWindowEnd: requireHhmm(raw.premarketRefreshWindowEnd, 'premarketRefreshWindowEnd'),
+    premarketReservedSlots: requireNumber(raw.premarketReservedSlots, 'premarketReservedSlots'),
+    premarketReservationTtlMinutes: requireNumber(raw.premarketReservationTtlMinutes, 'premarketReservationTtlMinutes'),
+    premarketReservationHandoverEt: requireHhmm(raw.premarketReservationHandoverEt, 'premarketReservationHandoverEt'),
     honesty: raw.honesty,
   };
   if (cfg.coreStreamingSymbols.length > cfg.maxActiveSubscriptions) {
@@ -372,6 +426,27 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
   if (cfg.rescueReservedSlotsForPriorityClasses >= cfg.maxConcurrentTemporaryDataRescues) {
     throw new Error(
       'config/continuousIntelligence.json rescueReservedSlotsForPriorityClasses must be < maxConcurrentTemporaryDataRescues (routine recovery must retain at least one usable slot)',
+    );
+  }
+  // 2026-10-06 pre-market focus engine (workstream B): the pre-open reservation pool must leave at
+  // least one streaming slot un-reservable, or the 09:20-09:30 emerging-movers rotation could be
+  // fully starved by pre-open reservations alone.
+  if (cfg.premarketReservedSlots >= cfg.maxActiveSubscriptions) {
+    throw new Error(
+      'config/continuousIntelligence.json premarketReservedSlots must be < maxActiveSubscriptions (at least one streaming slot must remain un-reservable for the 09:20-09:30 movers rotation)',
+    );
+  }
+  const refreshWindowStartMin = hhmmToMinutes(cfg.premarketRefreshWindowStart);
+  const refreshWindowEndMin = hhmmToMinutes(cfg.premarketRefreshWindowEnd);
+  const reservationHandoverMin = hhmmToMinutes(cfg.premarketReservationHandoverEt);
+  if (refreshWindowStartMin >= refreshWindowEndMin) {
+    throw new Error(
+      'config/continuousIntelligence.json premarketRefreshWindowStart must be < premarketRefreshWindowEnd',
+    );
+  }
+  if (reservationHandoverMin <= refreshWindowEndMin) {
+    throw new Error(
+      'config/continuousIntelligence.json premarketReservationHandoverEt must be after premarketRefreshWindowEnd (a reservation granted inside the refresh window must never be born expired)',
     );
   }
   return cfg;

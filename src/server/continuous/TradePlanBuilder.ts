@@ -24,18 +24,36 @@
  *   cycle already fetched (last price, minuteHigh/Low, prevClose) - never a fabricated indicator
  *   (no ATR, no synthetic volatility estimate) that this deployment cannot honestly compute yet.
  */
-import { randomUUID } from 'node:crypto';
-import { tradingWallTimeToIso } from '../core/TradingCalendar';
+import { createHash, randomUUID } from 'node:crypto';
+import { tradingWallTimeToIso, TRADING_TIMEZONE } from '../core/TradingCalendar';
 import { db } from '../db';
-import { tradePlans, tradePlanRevalidations } from '../db/schema';
+import { tradePlans, tradePlanRevisions, tradePlanRevalidations } from '../db/schema';
 import { desc, eq } from 'drizzle-orm';
 import type { RankedCandidate, RankingInput, NewsCatalystDetail } from './ComposableRanking';
 import { eventBus } from '../core/EventBus';
 import { generateTraceId } from '../core/traceId';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
-import { isTradePlanIdeasEnabled } from '../config/continuousIntelligence';
+import { continuousIntelligence, isTradePlanIdeasEnabled } from '../config/continuousIntelligence';
 import { marketDataWorker } from '../services/MarketDataWorker';
+import { classifyMarketSession, minutesInTimezone } from '../replay/marketSession';
+import {
+  scorePremarketCandidate,
+  type PremarketCandidateInput,
+  type PremarketScoreBreakdown,
+} from '../premarket/PremarketOpportunityScore';
+import {
+  requestDataReservation,
+  releaseReservationsForPlan,
+  sweepExpiredReservations,
+  type DataRescuePort,
+} from '../premarket/PremarketDataReservation';
+import {
+  emitPremarketRefreshStarted,
+  emitPremarketRefreshCompleted,
+  emitTradePlanRefreshed,
+  emitTradePlanExpired,
+} from '../premarket/premarketRefreshEvents';
 
 export type SetupType = 'PRIMARY' | 'BACKUP' | 'WATCHLIST';
 export type TradePlanStatus = 'DRAFT' | 'READY' | 'REVALIDATING' | 'VALID' | 'INVALIDATED' | 'EXPIRED' | 'EXECUTED' | 'CLOSED';
@@ -168,6 +186,72 @@ function endOfTradingDayIso(planDate: string): string {
 }
 
 /**
+ * The decision-relevant field set of one trade plan, computed from a single ranking cycle's
+ * evidence. Shared by buildTradePlanDrafts() (04:00 creation) and the late pre-market refresh
+ * below (workstream B, 2026-10-06) so "recompute from current morning evidence" can never drift
+ * from "build from the ranking cycle" — one function, two call sites. Returns null when the
+ * candidate is not plan-eligible at all (REJECT, or ranked out of every tier).
+ */
+export interface RefreshedPlanFields {
+  setupType: SetupType;
+  direction: 'BUY' | 'SELL';
+  thesis: string;
+  catalysts: string[];
+  entryZoneLow: number | null;
+  entryZoneHigh: number | null;
+  invalidationLevel: number | null;
+  targetConcept: string;
+  confidence: number;
+  confluenceScore: number;
+  catalystType: string | null;
+  catalystSourceCount: number | null;
+  evidenceQuality: number;
+  rankAtCreation: number;
+  componentScoresJson: string;
+}
+
+export function computePlanFields(
+  candidate: RankedCandidate,
+  input: RankingInput,
+  thresholds: TradePlanThresholds = DEFAULT_TRADE_PLAN_THRESHOLDS,
+  /** Optional, caller-supplied (e.g. ComposableRanking.fetchNewsCatalystDetails()) - default empty
+   *  map means catalystType/catalystSourceCount stay null. */
+  catalystDetailsBySymbol: Map<string, NewsCatalystDetail> = new Map(),
+): RefreshedPlanFields | null {
+  const setupType = classifySetupType(candidate.rank, candidate.promotionRecommendation, thresholds);
+  if (!setupType) return null;
+
+  const direction: 'BUY' | 'SELL' = input.rawMomentumPct >= 0 ? 'BUY' : 'SELL';
+  const { low, high } = deriveEntryZone(input);
+  const invalidationLevel = deriveInvalidationLevel(input, direction);
+  const catalysts: string[] = [];
+  if (candidate.components.newsCatalyst.available) catalysts.push(`News catalyst (score ${candidate.components.newsCatalyst.score!.toFixed(2)})`);
+  if (candidate.components.gap.available && candidate.components.gap.score! > 0.3) catalysts.push('Gap behavior');
+  const catalystDetail = catalystDetailsBySymbol.get(candidate.symbol) ?? null;
+
+  return {
+    setupType,
+    direction,
+    thesis: buildThesis(candidate, input, direction),
+    catalysts,
+    entryZoneLow: low,
+    entryZoneHigh: high,
+    invalidationLevel,
+    targetConcept: direction === 'BUY' ? 'Momentum continuation toward the session high' : 'Momentum continuation toward the session low',
+    confidence: candidate.finalScore,
+    confluenceScore: computeConfluenceScore(candidate),
+    catalystType: catalystDetail?.eventType ?? null,
+    catalystSourceCount: catalystDetail?.sourceCount ?? null,
+    // Real completeness measure - fraction of the 8 named components that had actual data this
+    // cycle, independent of finalScore (a high score built on 2/8 available components is
+    // weaker evidence than the same score built on 6/8).
+    evidenceQuality: Object.values(candidate.components).filter((c) => c.available).length / Object.keys(candidate.components).length,
+    rankAtCreation: candidate.rank,
+    componentScoresJson: JSON.stringify(candidate.components),
+  };
+}
+
+/**
  * Builds one TradePlanDraft per eligible ranked candidate. `inputsBySymbol` must be the SAME
  * RankingInput data the ranking cycle itself computed from (no new network calls, no re-derivation).
  * Candidates with no matching input, or with all components unavailable, are skipped (never given
@@ -190,41 +274,16 @@ export function buildTradePlanDrafts(
   const createdAt = now.toISOString();
 
   for (const candidate of ranked) {
-    const setupType = classifySetupType(candidate.rank, candidate.promotionRecommendation, thresholds);
-    if (!setupType) continue;
     const input = inputsBySymbol.get(candidate.symbol);
     if (!input) continue;
-
-    const direction: 'BUY' | 'SELL' = input.rawMomentumPct >= 0 ? 'BUY' : 'SELL';
-    const { low, high } = deriveEntryZone(input);
-    const invalidationLevel = deriveInvalidationLevel(input, direction);
-    const catalysts: string[] = [];
-    if (candidate.components.newsCatalyst.available) catalysts.push(`News catalyst (score ${candidate.components.newsCatalyst.score!.toFixed(2)})`);
-    if (candidate.components.gap.available && candidate.components.gap.score! > 0.3) catalysts.push('Gap behavior');
-    const catalystDetail = catalystDetailsBySymbol.get(candidate.symbol) ?? null;
+    const fields = computePlanFields(candidate, input, thresholds, catalystDetailsBySymbol);
+    if (!fields) continue;
 
     drafts.push({
       id: randomUUID(),
       symbol: candidate.symbol,
       planDate,
-      setupType,
-      direction,
-      thesis: buildThesis(candidate, input, direction),
-      catalysts,
-      entryZoneLow: low,
-      entryZoneHigh: high,
-      invalidationLevel,
-      targetConcept: direction === 'BUY' ? 'Momentum continuation toward the session high' : 'Momentum continuation toward the session low',
-      confidence: candidate.finalScore,
-      confluenceScore: computeConfluenceScore(candidate),
-      catalystType: catalystDetail?.eventType ?? null,
-      catalystSourceCount: catalystDetail?.sourceCount ?? null,
-      // Real completeness measure - fraction of the 8 named components that had actual data this
-      // cycle, independent of finalScore (a high score built on 2/8 available components is
-      // weaker evidence than the same score built on 6/8).
-      evidenceQuality: Object.values(candidate.components).filter((c) => c.available).length / Object.keys(candidate.components).length,
-      rankAtCreation: candidate.rank,
-      componentScoresJson: JSON.stringify(candidate.components),
+      ...fields,
       status: 'READY',
       createdAt,
       validUntil,
@@ -429,4 +488,595 @@ export async function getTradePlansForDate(planDate: string): Promise<Array<type
 
 export async function getRevalidationHistory(planId: string): Promise<Array<typeof tradePlanRevalidations.$inferSelect>> {
   return db.select().from(tradePlanRevalidations).where(eq(tradePlanRevalidations.planId, planId)).orderBy(desc(tradePlanRevalidations.revalidatedAt));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Workstream B (2026-10-06): late pre-market refresh + TradePlan versioning/expiry.
+//
+// A 04:00 plan (refreshVersion 1) must not stay authoritative at 09:29 merely because it exists.
+// SnapshotScanner's PRE_MARKET tick calls maybeRunLatePremarketRefresh() once per trading date
+// inside the configured ET window (~09:00-09:15). For each plan the refresh snapshots the PRIOR
+// version into trade_plan_revisions (immutable, with a delta summary), then recomputes from
+// current morning evidence via the SAME computePlanFields() the 04:00 build uses — never a
+// second, divergent field computation. scorePremarketCandidate() is attempted inside try/catch
+// (workstream D owns the real scorer; the current stub throws) — on throw the refresh falls back
+// to the existing ranking path and an unchanged plan is marked UNCHANGED_NO_NEW_EVIDENCE.
+//
+// No-churn rule: recomputation is compared against a canonical snapshot hash of the plan's
+// decision-relevant fields; when nothing material changed, NO revision row is written and the
+// version is NOT bumped. Expiry (stale catalyst, invalidation hit, no fresh evidence) downgrades
+// or expires the plan — an expired catalyst never remains PRIMARY — and releases its data
+// reservation. Surviving PRIMARY plans receive a bounded pre-open data reservation
+// (PremarketDataReservation.ts); the reservation phase never affects the plan writes above.
+//
+// Governance: diagnostic/planning only. This section never emits TRADE_IDEA_GENERATED, never
+// imports OMS/RiskEngine/ChiefTraderAgent/the order-placement broker layer.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type PlanRefreshKind = 'UNCHANGED' | 'REFRESHED' | 'EXPIRED' | 'SKIPPED';
+
+/** Refresh reason codes. UNCHANGED_NO_NEW_EVIDENCE is also the fallback mark when the pre-market
+ *  scorer is unavailable (stub throws) and recomputation yields no material change. */
+export type PlanRefreshReason =
+  | 'UNCHANGED_NO_NEW_EVIDENCE'
+  | 'NEW_MORNING_EVIDENCE'
+  | 'TIER_PROMOTED'
+  | 'TIER_DEMOTED'
+  | 'CATALYST_STALE'
+  | 'INVALIDATION_LEVEL_HIT'
+  | 'NO_FRESH_EVIDENCE'
+  | 'RANKING_REJECTS_THESIS'
+  | 'FELL_OUT_OF_PLAN_TIERS'
+  | 'VALID_UNTIL_PASSED'
+  | 'STATUS_NOT_REFRESHABLE'
+  | 'PROCESSING_ERROR';
+
+export interface PlanFieldChange {
+  field: string;
+  from: unknown;
+  to: unknown;
+}
+
+export interface PlanDeltaSummary {
+  changedFields: PlanFieldChange[];
+  tierChanged: { from: SetupType; to: SetupType } | null;
+}
+
+export interface PlanRefreshOutcome {
+  planId: string;
+  symbol: string;
+  kind: PlanRefreshKind;
+  reason: PlanRefreshReason;
+  previousRefreshVersion: number;
+  newRefreshVersion: number;
+  deltaSummary: PlanDeltaSummary | null;
+  postRefreshSetupType: SetupType;
+  postRefreshStatus: TradePlanStatus;
+}
+
+export interface LateRefreshInput {
+  planDate: string;
+  now: Date;
+  rankedCandidates: RankedCandidate[];
+  inputsBySymbol: Map<string, RankingInput>;
+  /** Test-only injection for the reservation phase's rescue call; production omits it. */
+  rescuePort?: DataRescuePort;
+}
+
+export interface LateRefreshSummary {
+  ran: boolean;
+  reason: string;
+  tradingDate: string;
+  refreshedAt: string;
+  outcomes: PlanRefreshOutcome[];
+}
+
+type TradePlanRow = typeof tradePlans.$inferSelect;
+
+/** In-memory once-per-date guard: complements the refreshVersion>=2 DB check in
+ *  maybeRunLatePremarketRefresh(). Process-local by design — a restart re-derives from the DB. */
+const lateRefreshRunDates = new Set<string>();
+
+/** Test-only: clear the in-memory once-per-date guard. */
+export function resetLateRefreshGuardForTests(): void {
+  lateRefreshRunDates.clear();
+}
+
+function refreshHhmmToMinutes(hhmm: string): number {
+  const [h, m] = hhmm.split(':').map(Number);
+  return h * 60 + m;
+}
+
+/** Canonical, decision-relevant snapshot of a plan for the no-churn hash comparison. Deliberately
+ *  excludes componentScoresJson (raw component dump — confidence/confluence/evidenceQuality and
+ *  the catalysts array already carry its decision-relevant substance; including the raw dump
+ *  would churn on serialization noise) and all lifecycle/metadata columns (status, timestamps,
+ *  version counters are versioning metadata, not plan substance). */
+interface CanonicalPlanSnapshot {
+  setupType: string;
+  direction: string;
+  thesis: string;
+  catalysts: string[];
+  entryZoneLow: number | null;
+  entryZoneHigh: number | null;
+  invalidationLevel: number | null;
+  targetConcept: string;
+  confidence: number;
+  confluenceScore: number;
+  catalystType: string | null;
+  catalystSourceCount: number | null;
+  evidenceQuality: number;
+  rankAtCreation: number;
+  scoreDecompositionJson: string | null;
+}
+
+function round6(n: number | null): number | null {
+  return n == null || !Number.isFinite(n) ? n : Math.round(n * 1e6) / 1e6;
+}
+
+function parseCatalysts(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((s): s is string => typeof s === 'string').sort() : [];
+  } catch {
+    return [];
+  }
+}
+
+function snapshotFromRow(plan: TradePlanRow): CanonicalPlanSnapshot {
+  return {
+    setupType: plan.setupType,
+    direction: plan.direction,
+    thesis: plan.thesis,
+    catalysts: parseCatalysts(plan.catalysts),
+    entryZoneLow: round6(plan.entryZoneLow),
+    entryZoneHigh: round6(plan.entryZoneHigh),
+    invalidationLevel: round6(plan.invalidationLevel),
+    targetConcept: plan.targetConcept ?? '',
+    confidence: round6(plan.confidence) ?? 0,
+    confluenceScore: round6(plan.confluenceScore) ?? 0,
+    catalystType: plan.catalystType,
+    catalystSourceCount: plan.catalystSourceCount,
+    evidenceQuality: round6(plan.evidenceQuality) ?? 0,
+    rankAtCreation: plan.rankAtCreation ?? 0,
+    scoreDecompositionJson: plan.scoreDecompositionJson,
+  };
+}
+
+function snapshotFromRecomputed(fields: RefreshedPlanFields, scoreDecompositionJson: string | null): CanonicalPlanSnapshot {
+  return {
+    setupType: fields.setupType,
+    direction: fields.direction,
+    thesis: fields.thesis,
+    catalysts: [...fields.catalysts].sort(),
+    entryZoneLow: round6(fields.entryZoneLow),
+    entryZoneHigh: round6(fields.entryZoneHigh),
+    invalidationLevel: round6(fields.invalidationLevel),
+    targetConcept: fields.targetConcept,
+    confidence: round6(fields.confidence) ?? 0,
+    confluenceScore: round6(fields.confluenceScore) ?? 0,
+    catalystType: fields.catalystType,
+    catalystSourceCount: fields.catalystSourceCount,
+    evidenceQuality: round6(fields.evidenceQuality) ?? 0,
+    rankAtCreation: fields.rankAtCreation,
+    scoreDecompositionJson,
+  };
+}
+
+/** Fixed key order (interface declaration order) + rounded numbers => deterministic hash input. */
+function snapshotHash(snapshot: CanonicalPlanSnapshot): string {
+  return createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+}
+
+function canonicalSnapshotJson(snapshot: CanonicalPlanSnapshot): string {
+  return JSON.stringify(snapshot);
+}
+
+function valuesEqual(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function diffSnapshots(prior: CanonicalPlanSnapshot, next: CanonicalPlanSnapshot): PlanDeltaSummary {
+  const changedFields: PlanFieldChange[] = [];
+  const keys: Array<keyof CanonicalPlanSnapshot> = [
+    'setupType', 'direction', 'thesis', 'catalysts', 'entryZoneLow', 'entryZoneHigh',
+    'invalidationLevel', 'targetConcept', 'confidence', 'confluenceScore', 'catalystType',
+    'catalystSourceCount', 'evidenceQuality', 'rankAtCreation', 'scoreDecompositionJson',
+  ];
+  for (const key of keys) {
+    if (!valuesEqual(prior[key], next[key])) {
+      changedFields.push({ field: key, from: prior[key], to: next[key] });
+    }
+  }
+  const tierChanged = prior.setupType !== next.setupType
+    ? { from: prior.setupType as SetupType, to: next.setupType as SetupType }
+    : null;
+  return { changedFields, tierChanged };
+}
+
+function tierRank(tier: SetupType): number {
+  return tier === 'PRIMARY' ? 3 : tier === 'BACKUP' ? 2 : 1;
+}
+
+/** A plan is catalyst-backed when its 04:00 evidence recorded a news catalyst — either as a
+ *  catalysts[] entry or as structured catalyst metadata. */
+function planHasCatalyst(plan: TradePlanRow): boolean {
+  return parseCatalysts(plan.catalysts).some((c) => c.startsWith('News catalyst')) || plan.catalystType != null;
+}
+
+/** Honest mapping from the ranking cycle's evidence to the pre-market scorer's contract. Fields
+ *  the ranking cycle does not carry (FinBERT sentiment/recency, 20d ADV, spread, sector/market
+ *  relative strength, strategy applicability) are left undefined/null — never fabricated. The
+ *  scorer's own contract scores missing inputs 0 and lists them in inputsMissing. */
+function toPremarketCandidateInput(
+  symbol: string,
+  input: RankingInput,
+  candidate: RankedCandidate,
+): PremarketCandidateInput {
+  return {
+    symbol,
+    overnightGapPct: input.prevClose > 0 && input.open != null
+      ? ((input.open - input.prevClose) / input.prevClose) * 100
+      : undefined,
+    preMarketPctChange: input.rawMomentumPct,
+    catalyst: null,
+    dollarVolume: input.dailyVolume != null && input.last > 0 ? input.dailyVolume * input.last : undefined,
+    advShares: undefined,
+    spreadBps: null,
+    sectorRelativeStrength: undefined,
+    marketRelativeStrength: undefined,
+    strategyApplicability: undefined,
+    dataFresh: input.last > 0,
+  };
+}
+
+const REFRESHABLE_STATUSES: ReadonlySet<string> = new Set(['DRAFT', 'READY', 'VALID', 'REVALIDATING']);
+
+async function expirePlan(
+  plan: TradePlanRow,
+  reason: PlanRefreshReason,
+  now: Date,
+): Promise<PlanRefreshOutcome> {
+  const nowIso = now.toISOString();
+  const priorVersion = plan.refreshVersion ?? 1;
+  const newVersion = priorVersion + 1;
+  const delta: PlanDeltaSummary = {
+    changedFields: [{ field: 'status', from: plan.status, to: 'EXPIRED' }],
+    tierChanged: null,
+  };
+  // Immutable prior-version snapshot first — the revision row must exist before the mutation.
+  await db.insert(tradePlanRevisions).values({
+    id: randomUUID(),
+    planId: plan.id,
+    originalPlanId: plan.id,
+    planDate: plan.planDate,
+    symbol: plan.symbol,
+    refreshVersion: priorVersion,
+    snapshotJson: canonicalSnapshotJson(snapshotFromRow(plan)),
+    deltaSummaryJson: JSON.stringify(delta),
+    reasonForRefresh: reason,
+    createdAt: nowIso,
+  });
+  await db.update(tradePlans).set({
+    status: 'EXPIRED',
+    refreshVersion: newVersion,
+    refreshedAt: nowIso,
+    reasonForRefresh: reason,
+    originalCreatedAt: plan.originalCreatedAt ?? plan.createdAt,
+  }).where(eq(tradePlans.id, plan.id));
+  // Plan expiry releases any pre-open data reservation (release contract).
+  await releaseReservationsForPlan(plan.id, 'PLAN_EXPIRED', now);
+  emitTradePlanExpired({
+    planId: plan.id,
+    symbol: plan.symbol,
+    tradingDate: plan.planDate,
+    reason,
+    refreshVersion: newVersion,
+    at: nowIso,
+  });
+  return {
+    planId: plan.id,
+    symbol: plan.symbol,
+    kind: 'EXPIRED',
+    reason,
+    previousRefreshVersion: priorVersion,
+    newRefreshVersion: newVersion,
+    deltaSummary: delta,
+    postRefreshSetupType: plan.setupType as SetupType,
+    postRefreshStatus: 'EXPIRED',
+  };
+}
+
+async function refreshOnePlan(
+  plan: TradePlanRow,
+  rankedBySymbol: Map<string, RankedCandidate>,
+  inputsBySymbol: Map<string, RankingInput>,
+  now: Date,
+): Promise<PlanRefreshOutcome> {
+  const nowIso = now.toISOString();
+  const priorVersion = plan.refreshVersion ?? 1;
+  const skipped = (reason: PlanRefreshReason): PlanRefreshOutcome => ({
+    planId: plan.id,
+    symbol: plan.symbol,
+    kind: 'SKIPPED',
+    reason,
+    previousRefreshVersion: priorVersion,
+    newRefreshVersion: priorVersion,
+    deltaSummary: null,
+    postRefreshSetupType: plan.setupType as SetupType,
+    postRefreshStatus: plan.status as TradePlanStatus,
+  });
+
+  if (!REFRESHABLE_STATUSES.has(plan.status)) return skipped('STATUS_NOT_REFRESHABLE');
+  if (nowIso > plan.validUntil) return expirePlan(plan, 'VALID_UNTIL_PASSED', now);
+
+  const input = inputsBySymbol.get(plan.symbol) ?? null;
+  const candidate = rankedBySymbol.get(plan.symbol) ?? null;
+  // No current market data or no current ranking for the symbol: the thesis cannot be
+  // reconfirmed from morning evidence — expire, never silently keep VALID (fail closed, same
+  // stance as revalidateTradePlan's no-data invalidation).
+  if (!input || !candidate) return expirePlan(plan, 'NO_FRESH_EVIDENCE', now);
+
+  // Invalidation first: a broken level ends the thesis regardless of what the ranking says.
+  if (plan.invalidationLevel != null) {
+    const broke = plan.direction === 'BUY'
+      ? input.last < plan.invalidationLevel
+      : input.last > plan.invalidationLevel;
+    if (broke) return expirePlan(plan, 'INVALIDATION_LEVEL_HIT', now);
+  }
+  if (candidate.promotionRecommendation === 'REJECT') {
+    return expirePlan(plan, 'RANKING_REJECTS_THESIS', now);
+  }
+
+  // Pre-market score attempt (workstream D owns the real scorer; the current stub throws).
+  // On throw, fall back to the existing ranking path below — an unchanged plan is then marked
+  // UNCHANGED_NO_NEW_EVIDENCE rather than refreshed on phantom evidence.
+  let breakdown: PremarketScoreBreakdown | null = null;
+  try {
+    breakdown = scorePremarketCandidate(toPremarketCandidateInput(plan.symbol, input, candidate));
+  } catch {
+    breakdown = null;
+  }
+  const scoreDecompositionJson = breakdown ? JSON.stringify(breakdown) : plan.scoreDecompositionJson;
+
+  const fields = computePlanFields(candidate, input, DEFAULT_TRADE_PLAN_THRESHOLDS, new Map());
+  if (!fields) {
+    // Rank fell out of every plan tier — morning evidence no longer supports any setup.
+    return expirePlan(plan, 'FELL_OUT_OF_PLAN_TIERS', now);
+  }
+  // Preserve previously-recorded catalyst metadata: the refresh performs no catalyst-detail
+  // fetch (same no-new-network-calls constraint as the 04:00 build), so dropping it would be
+  // data loss rather than new evidence. Catalyst STALENESS is still detected below via the
+  // newsCatalyst component's current availability.
+  if (fields.catalystType == null) {
+    fields.catalystType = plan.catalystType;
+    fields.catalystSourceCount = plan.catalystSourceCount;
+  }
+
+  let catalystStale = false;
+  if (planHasCatalyst(plan) && !candidate.components.newsCatalyst.available) {
+    catalystStale = true;
+    // An expired catalyst must not remain PRIMARY.
+    if (fields.setupType === 'PRIMARY') fields.setupType = 'BACKUP';
+  }
+
+  const priorSnap = snapshotFromRow(plan);
+  const nextSnap = snapshotFromRecomputed(fields, scoreDecompositionJson);
+  if (snapshotHash(priorSnap) === snapshotHash(nextSnap)) {
+    return {
+      planId: plan.id,
+      symbol: plan.symbol,
+      kind: 'UNCHANGED',
+      reason: 'UNCHANGED_NO_NEW_EVIDENCE',
+      previousRefreshVersion: priorVersion,
+      newRefreshVersion: priorVersion,
+      deltaSummary: null,
+      postRefreshSetupType: plan.setupType as SetupType,
+      postRefreshStatus: plan.status as TradePlanStatus,
+    };
+  }
+
+  const delta = diffSnapshots(priorSnap, nextSnap);
+  const newVersion = priorVersion + 1;
+  const reason: PlanRefreshReason = delta.tierChanged
+    ? (tierRank(delta.tierChanged.to) > tierRank(delta.tierChanged.from) ? 'TIER_PROMOTED' : 'TIER_DEMOTED')
+    : catalystStale ? 'CATALYST_STALE' : 'NEW_MORNING_EVIDENCE';
+
+  await db.insert(tradePlanRevisions).values({
+    id: randomUUID(),
+    planId: plan.id,
+    originalPlanId: plan.id,
+    planDate: plan.planDate,
+    symbol: plan.symbol,
+    refreshVersion: priorVersion,
+    snapshotJson: canonicalSnapshotJson(priorSnap),
+    deltaSummaryJson: JSON.stringify(delta),
+    reasonForRefresh: reason,
+    createdAt: nowIso,
+  });
+  await db.update(tradePlans).set({
+    setupType: fields.setupType,
+    direction: fields.direction,
+    thesis: fields.thesis,
+    catalysts: JSON.stringify(fields.catalysts),
+    entryZoneLow: fields.entryZoneLow,
+    entryZoneHigh: fields.entryZoneHigh,
+    invalidationLevel: fields.invalidationLevel,
+    targetConcept: fields.targetConcept,
+    confidence: fields.confidence,
+    confluenceScore: fields.confluenceScore,
+    catalystType: fields.catalystType,
+    catalystSourceCount: fields.catalystSourceCount,
+    evidenceQuality: fields.evidenceQuality,
+    rankAtCreation: fields.rankAtCreation,
+    componentScoresJson: fields.componentScoresJson,
+    refreshVersion: newVersion,
+    refreshedAt: nowIso,
+    reasonForRefresh: reason,
+    originalCreatedAt: plan.originalCreatedAt ?? plan.createdAt,
+    scoreDecompositionJson,
+  }).where(eq(tradePlans.id, plan.id));
+
+  // Tier drop off PRIMARY releases the pre-open data reservation (release contract).
+  if (plan.setupType === 'PRIMARY' && fields.setupType !== 'PRIMARY') {
+    await releaseReservationsForPlan(plan.id, 'TIER_DROP', now);
+  }
+
+  emitTradePlanRefreshed({
+    planId: plan.id,
+    symbol: plan.symbol,
+    tradingDate: plan.planDate,
+    refreshVersion: newVersion,
+    refreshedAt: nowIso,
+    reasonForRefresh: reason,
+    changedFields: delta.changedFields.map((c) => c.field),
+    tierChanged: delta.tierChanged,
+    at: nowIso,
+  });
+
+  return {
+    planId: plan.id,
+    symbol: plan.symbol,
+    kind: 'REFRESHED',
+    reason,
+    previousRefreshVersion: priorVersion,
+    newRefreshVersion: newVersion,
+    deltaSummary: delta,
+    postRefreshSetupType: fields.setupType,
+    postRefreshStatus: plan.status as TradePlanStatus,
+  };
+}
+
+/**
+ * Runs the late pre-market refresh over every refreshable plan for planDate. Exported for tests;
+ * production callers go through maybeRunLatePremarketRefresh() (window + once-per-date guards).
+ * Emits PREMARKET_REFRESH_STARTED/COMPLETED plus per-plan TRADEPLAN_REFRESHED/TRADEPLAN_EXPIRED.
+ * A per-plan failure is isolated (SKIPPED) and never aborts the run; a reservation-phase failure
+ * never rolls back already-persisted plan writes.
+ */
+export async function runLatePremarketRefresh(input: LateRefreshInput): Promise<LateRefreshSummary> {
+  const { planDate, now } = input;
+  const nowIso = now.toISOString();
+  emitPremarketRefreshStarted(planDate, nowIso);
+
+  const plans = await getTradePlansForDate(planDate);
+  const rankedBySymbol = new Map(input.rankedCandidates.map((r) => [r.symbol, r]));
+  const outcomes: PlanRefreshOutcome[] = [];
+  const primarySurvivors: Array<{ planId: string; symbol: string }> = [];
+
+  for (const plan of plans) {
+    try {
+      const outcome = await refreshOnePlan(plan, rankedBySymbol, input.inputsBySymbol, now);
+      outcomes.push(outcome);
+      if (
+        (outcome.kind === 'REFRESHED' || outcome.kind === 'UNCHANGED') &&
+        outcome.postRefreshSetupType === 'PRIMARY' &&
+        REFRESHABLE_STATUSES.has(outcome.postRefreshStatus)
+      ) {
+        primarySurvivors.push({ planId: plan.id, symbol: plan.symbol });
+      }
+    } catch (e) {
+      console.error('[TradePlanBuilder] late pre-market refresh failed for plan', plan.id, e);
+      outcomes.push({
+        planId: plan.id,
+        symbol: plan.symbol,
+        kind: 'SKIPPED',
+        reason: 'PROCESSING_ERROR',
+        previousRefreshVersion: plan.refreshVersion ?? 1,
+        newRefreshVersion: plan.refreshVersion ?? 1,
+        deltaSummary: null,
+        postRefreshSetupType: plan.setupType as SetupType,
+        postRefreshStatus: plan.status as TradePlanStatus,
+      });
+    }
+  }
+
+  // Reservation phase: sweep expired first (honest capacity accounting), then request one bounded
+  // reservation per surviving PRIMARY plan. PRIMARY-only by policy: the pool is sized for the
+  // PRIMARY tier (3 plans <= 4 slots); BACKUP promotion at the open uses the normal discovery
+  // and rescue paths. A failure here never rolls back the plan writes above.
+  try {
+    await sweepExpiredReservations(now);
+    for (const survivor of primarySurvivors) {
+      await requestDataReservation(
+        survivor.symbol,
+        survivor.planId,
+        'PRIMARY',
+        'late_premarket_refresh',
+        continuousIntelligence.premarketReservationTtlMinutes,
+        { now, rescuePort: input.rescuePort },
+      );
+    }
+  } catch (e) {
+    console.error('[TradePlanBuilder] late-refresh reservation phase failed (plan writes stand)', e);
+  }
+
+  const maxVersion = outcomes.reduce((m, o) => Math.max(m, o.newRefreshVersion), 1);
+  emitPremarketRefreshCompleted({
+    tradingDate: planDate,
+    refreshVersion: maxVersion,
+    refreshedAt: nowIso,
+    planCount: plans.length,
+    refreshedCount: outcomes.filter((o) => o.kind === 'REFRESHED').length,
+    unchangedCount: outcomes.filter((o) => o.kind === 'UNCHANGED').length,
+    expiredCount: outcomes.filter((o) => o.kind === 'EXPIRED').length,
+    skippedCount: outcomes.filter((o) => o.kind === 'SKIPPED').length,
+    at: nowIso,
+  });
+
+  return { ran: true, reason: 'COMPLETED', tradingDate: planDate, refreshedAt: nowIso, outcomes };
+}
+
+function refreshNotRun(reason: string, tradingDate: string, at: string): LateRefreshSummary {
+  return { ran: false, reason, tradingDate, refreshedAt: at, outcomes: [] };
+}
+
+/**
+ * Late-refresh trigger for SnapshotScanner's PRE_MARKET tick. Runs the refresh at most once per
+ * trading date, and only while ET wall time (minutesInTimezone — DST-correct, never a hardcoded
+ * offset) is inside the configured window. The once-per-date guarantee is best-effort across
+ * restarts: refreshVersion>=2 on any of the date's plans means a previous run already versioned
+ * the date (a refresh that changed anything always bumps at least one plan). An UNCHANGED-only
+ * run bumps nothing, so a redundant re-run after a restart is write-free by the no-churn rule.
+ * Never throws: every guard failure returns ran:false.
+ */
+export async function maybeRunLatePremarketRefresh(input: LateRefreshInput): Promise<LateRefreshSummary> {
+  const { planDate, now } = input;
+  const nowIso = now.toISOString();
+  try {
+    // Defensive: the call site already sits inside the PRE_MARKET branch, but this function is
+    // exported and must enforce its own preconditions.
+    if (classifyMarketSession(now.getTime(), TRADING_TIMEZONE, true) !== 'PRE_MARKET') {
+      return refreshNotRun('NOT_PRE_MARKET', planDate, nowIso);
+    }
+    const mins = minutesInTimezone(now.getTime(), TRADING_TIMEZONE);
+    const windowStart = refreshHhmmToMinutes(continuousIntelligence.premarketRefreshWindowStart);
+    const windowEnd = refreshHhmmToMinutes(continuousIntelligence.premarketRefreshWindowEnd);
+    if (mins < windowStart || mins >= windowEnd) {
+      return refreshNotRun('OUTSIDE_REFRESH_WINDOW', planDate, nowIso);
+    }
+    if (lateRefreshRunDates.has(planDate)) {
+      return refreshNotRun('ALREADY_REFRESHED_THIS_PROCESS', planDate, nowIso);
+    }
+    const plans = await getTradePlansForDate(planDate);
+    if (plans.length === 0) {
+      return refreshNotRun('NO_PLANS_TO_REFRESH', planDate, nowIso);
+    }
+    if (plans.some((p) => (p.refreshVersion ?? 1) >= 2)) {
+      lateRefreshRunDates.add(planDate);
+      return refreshNotRun('ALREADY_REFRESHED', planDate, nowIso);
+    }
+    if (input.rankedCandidates.length === 0) {
+      // No morning evidence at all — fail closed: leave the 04:00 plans untouched rather than
+      // expiring everything on a data outage. Retried on the next tick (guard not set).
+      return refreshNotRun('NO_RANKING_EVIDENCE', planDate, nowIso);
+    }
+    const summary = await runLatePremarketRefresh(input);
+    lateRefreshRunDates.add(planDate);
+    return summary;
+  } catch (e) {
+    console.error('[TradePlanBuilder] maybeRunLatePremarketRefresh failed (scan continues)', e);
+    return refreshNotRun('TRIGGER_ERROR', planDate, nowIso);
+  }
 }

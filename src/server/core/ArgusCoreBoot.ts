@@ -202,6 +202,34 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
     console.warn(`[KronosForecastAgent] Boot start failed: ${e.message}`);
   }
 
+  // Pre-market discovery funnel state (2026-10-06, workstream A): one line at boot showing which
+  // discovery channels are actually live, derived from the same isRuntimeFlagEnabled()-backed
+  // readers production uses (env bootstrap + config_overrides DB overlay, already hydrated above).
+  // PREMARKET_REFRESH is the master loop switch: MarketUniverseScannerWorker's refresh intervals
+  // (broad universe / movers / news-catalyst caches) only run inside
+  // OpportunityDiscoveryWorker.start(), which itself is a no-op unless
+  // ARGUS_OPPORTUNITY_LOOP_ENABLED=true - so an individual funnel flag set ON with the loop OFF
+  // still prints honestly (funnel ON, refresh OFF). None of these flags emit trade ideas, enable
+  // QUANT, or arm LIVE.
+  try {
+    const {
+      isOpportunityLoopEnabled,
+      isBroadUniverseEnabled,
+      isMoversEnabled,
+      isNewsCatalystDiscoveryEnabled,
+    } = await import('../config/continuousIntelligence');
+    const onOff = (v: boolean) => (v ? 'ON' : 'OFF');
+    console.log(
+      '[PremarketDiscovery] '
+      + `PREMARKET_BROAD_UNIVERSE=${onOff(isBroadUniverseEnabled())} `
+      + `PREMARKET_MOVERS=${onOff(isMoversEnabled())} `
+      + `PREMARKET_NEWS=${onOff(isNewsCatalystDiscoveryEnabled())} `
+      + `PREMARKET_REFRESH=${onOff(isOpportunityLoopEnabled())}`,
+    );
+  } catch (e: any) {
+    console.warn(`[PremarketDiscovery] Boot funnel-state line skipped: ${e.message}`);
+  }
+
   try {
     const { opportunityDiscoveryWorker } = await import('../continuous/OpportunityDiscovery');
     opportunityDiscoveryWorker.start();

@@ -354,7 +354,7 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
       }));
       const { runRankingCycle } = await import('./ComposableRanking');
       const planDate = getTradingDateStr(now);
-      const { buildTradePlanDrafts, persistTradePlanDrafts, getTradePlansForDate, revalidateTradePlan, persistRevalidation, emitTradePlanIdea } = await import('./TradePlanBuilder');
+      const { buildTradePlanDrafts, persistTradePlanDrafts, getTradePlansForDate, revalidateTradePlan, persistRevalidation, emitTradePlanIdea, maybeRunLatePremarketRefresh } = await import('./TradePlanBuilder');
 
       let rankedCandidates = await runRankingCycle(rankingInputs, now, new Map(), marketSession);
 
@@ -424,6 +424,18 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
           // every deployment that has not made this explicit choice.
           for (const draft of drafts) {
             emitTradePlanIdea(draft, inputsBySymbol.get(draft.symbol)?.last ?? null);
+          }
+        } else {
+          // Workstream B (2026-10-06, local-only): late pre-market refresh, once per trading date
+          // inside the configured ET window (~09:00-09:15). A 04:00 plan must not stay
+          // authoritative at 09:29 merely because it exists. maybeRunLatePremarketRefresh() is a
+          // no-op outside the window and when a refresh already ran (in-memory + refreshVersion>=2
+          // guards); it never throws into the scan — a failure here can never affect the existing
+          // scan/rank return value, same contract as the plan-build block above.
+          try {
+            await maybeRunLatePremarketRefresh({ planDate, now, rankedCandidates, inputsBySymbol });
+          } catch (e) {
+            logErrorSafely('[SnapshotScanner] late pre-market refresh failed (does not affect the existing scan)', e);
           }
         }
       } else if (marketSession === 'REGULAR') {
