@@ -99,6 +99,13 @@ deliberately, so the comparison in shadow mode is apples-to-apples.
 
 ## 5. Hard boundaries (non-negotiable)
 
+- **AI is enhancement, never a dependency** (core architectural principle, 2026-10-05):
+  Argus must trade with zero AI. The deterministic spine — technical/quant agents, Java
+  quant engines, the 25 RiskEngine gates, OMS, broker — is the real trading system and
+  stands alone; AI failures already degrade gracefully (agents return null / log-and-continue,
+  local FinBERT fallback exists) and consensus needs only 2 independent agents, reachable by
+  non-AI voters alone. Jev (like the LLMs) is triage/classification only. If this integration
+  ever became load-bearing for trading, that would be a design failure, not a success.
 - Jev never emits a trading recommendation, never casts a vote, never touches consensus,
   RiskEngine, OMS, or any gate. It is a triage instrument, not a decision-maker.
 - Jev's confidence is not evidence of edge and is never presented as such.
