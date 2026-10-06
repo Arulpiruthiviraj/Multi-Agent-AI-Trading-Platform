@@ -160,7 +160,7 @@ export function getOpportunityScanUniverse(): string[] {
             };
           }),
       });
-    });
+    }, 'BROAD_UNIVERSE_TOPN_TRUNCATED');
   }
   const names = [
     ...continuousIntelligence.seedSymbols,
@@ -273,6 +273,22 @@ export function blendedHotSwapScore(sym: string, baseScoreOf: (symbol: string) =
  * from the actual scoring branches in blendedHotSwapScore()/scoreBroadUniverseChallenger(),
  * not invented — each maps to a specific missing/invalid component.
  */
+/**
+ * 2026-10-06 (October 5 forensic follow-up, Phase 1 - non-finite score eligibility): the real
+ * fail-closed invariant for any score used to decide challenger eligibility or ordering. Confirmed
+ * live defect this closes: the pre-existing `finalScore > 0` check alone let a +Infinity score (a
+ * corrupted upstream value - e.g. a bad getLastSnapshotScore() read) pass as "eligible" and win
+ * every comparison outright, since `Infinity > 0` is true in JS. -Infinity and NaN were already
+ * correctly excluded by `> 0` alone (`-Infinity > 0` and `NaN > 0` are both false), but relying on
+ * that as the ONLY guard left +Infinity specifically promotable - never a quant/ranking decision,
+ * a pure input-validation gap. isEligibleFinalScore() is the one place this is decided; every
+ * eligibility check in this file must go through it so the invariant cannot drift between call
+ * sites.
+ */
+export function isEligibleFinalScore(score: number): boolean {
+  return Number.isFinite(score) && score > 0;
+}
+
 export function classifyExclusionReason(
   symbol: string,
   breakdown: { finalScore: number; baseScore: number; gapPct: number | null; gapTerm: number; hasGapEvidence: boolean },
@@ -280,7 +296,9 @@ export function classifyExclusionReason(
 ): string {
   const { finalScore, baseScore, gapTerm, hasGapEvidence } = breakdown;
   if (Number.isNaN(finalScore)) return 'NAN_SCORE';
-  if (!Number.isFinite(finalScore)) return 'INFINITE_SCORE';
+  if (finalScore === Infinity) return 'POSITIVE_INFINITY_SCORE';
+  if (finalScore === -Infinity) return 'NEGATIVE_INFINITY_SCORE';
+  if (!Number.isFinite(finalScore)) return 'NON_FINITE_SCORE';
   // The IOVA case: not scored by SnapshotScanner/MarketDataWorker (base 0), not a verified
   // mover, no composable score, no gap evidence — literally nothing to score on.
   const isVerifiedMover = moverSymbols.has(symbol.toUpperCase());
@@ -531,13 +549,16 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
         .filter((row) => !active.has(row.symbol) && !topSymbols.has(row.symbol))
         .map((row) => ({ symbol: row.symbol, breakdown: priorityScoreBreakdownOf(row.symbol) }));
       const broadUniverseEligibleWithBreakdown = scoredCandidates
-        .filter((c) => c.breakdown.finalScore > 0)
+        .filter((c) => isEligibleFinalScore(c.breakdown.finalScore))
         .sort((a, b) => b.breakdown.finalScore - a.breakdown.finalScore);
       // 2026-10-05 (challenger zero-score visibility): the candidates excluded by the
-      // finalScore > 0 filter above were previously only counted in aggregate
+      // eligibility filter above were previously only counted in aggregate
       // (zeroScoreOrExcludedCount). Capture per-symbol reason codes here — purely
       // additive observability, does not change which candidates are eligible.
-      const zeroScoreExcluded = scoredCandidates.filter((c) => !(c.breakdown.finalScore > 0));
+      // 2026-10-06 (Phase 1 fail-closed fix): both sides of this filter now go through the SAME
+      // isEligibleFinalScore() so a +Infinity score can never pass the eligible side while also
+      // (impossibly) appearing in the excluded side, or vice versa - no drift between them.
+      const zeroScoreExcluded = scoredCandidates.filter((c) => !isEligibleFinalScore(c.breakdown.finalScore));
       // 2026-10-05 (Challenger Exclusion & Aging forensic follow-up): cycleId must be declared
       // before this block, not after it. This event previously referenced cycleId before its own
       // `const` declaration further down (same name, reused there for the pre-truncation snapshot
@@ -590,7 +611,7 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
               };
             }),
           });
-        });
+        }, 'BROAD_UNIVERSE_CHALLENGER_EXCLUDED');
       }
       const zeroOrExcludedCandidateCount = zeroScoreExcluded.length;
       const challengerLimit = continuousIntelligence.broadUniverseHotSwapChallengerLimit;
@@ -662,7 +683,7 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
               survivedTruncation: i < challengerLimit,
             })),
           });
-        });
+        }, 'DISCOVERY_CHALLENGER_CYCLE_SNAPSHOT');
       } catch (e) {
         console.error('[OpportunityDiscovery] Challenger cycle snapshot logging failed (observability only, does not affect the real hot-swap decision)', e);
       }
@@ -675,7 +696,31 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
       // `top`, even when a much stronger broad-universe challenger was also present - source
       // determined priority, not score. The prior IOVA-class test masked this by emptying `top`
       // entirely; it never exercised the case where both pools are non-empty.
-      const rankedTop: SnapshotCandidate[] = top.map((c) => ({ ...c, momentumScore: priorityScoreOf(c.symbol) }));
+      // 2026-10-06 (Phase 1 fail-closed fix): momentum-universe `top` candidates merge into
+      // combinedTop via this SAME priorityScoreOf() but, unlike the broad-universe challenger path
+      // above, had no finiteness guard at all - a corrupted score here (e.g. a bad
+      // getLastSnapshotScore() read) would flow straight into the real hot-swap comparison/sort
+      // with no exclusion and no record. Momentum candidates legitimately can have a score of 0 or
+      // negative (SnapshotScanner's own ranking, a different semantics from the broad-universe
+      // `> 0` gate) - only non-finite values are rejected here, never a sign/magnitude threshold.
+      const rankedTopAll: SnapshotCandidate[] = top.map((c) => ({ ...c, momentumScore: priorityScoreOf(c.symbol) }));
+      const rankedTop: SnapshotCandidate[] = rankedTopAll.filter((c) => Number.isFinite(c.momentumScore));
+      const nonFiniteMomentumCandidates = rankedTopAll.filter((c) => !Number.isFinite(c.momentumScore));
+      if (nonFiniteMomentumCandidates.length > 0) {
+        observeSafe(() => {
+          structuredLogger.info('momentum_candidate_non_finite_score_excluded', {
+            category: 'DISCOVERY',
+            eventType: 'MOMENTUM_CANDIDATE_NON_FINITE_SCORE_EXCLUDED',
+            reasoning: `cycleId=${cycleId} excluded=${nonFiniteMomentumCandidates.length}`,
+            cycleId,
+            excludedCount: nonFiniteMomentumCandidates.length,
+            excluded: nonFiniteMomentumCandidates.slice(0, 25).map((c) => ({
+              symbol: c.symbol,
+              reasonCode: Number.isNaN(c.momentumScore) ? 'NAN_SCORE' : c.momentumScore === Infinity ? 'POSITIVE_INFINITY_SCORE' : c.momentumScore === -Infinity ? 'NEGATIVE_INFINITY_SCORE' : 'NON_FINITE_SCORE',
+            })),
+          });
+        }, 'MOMENTUM_CANDIDATE_NON_FINITE_SCORE_EXCLUDED');
+      }
       const combinedTop = [...rankedTop, ...broadUniverseChallengers]
         .sort((a, b) => b.momentumScore - a.momentumScore || a.symbol.localeCompare(b.symbol));
       // 2026-09-29 correction: the SAME score that decided selection must be what gets stored as
@@ -732,7 +777,7 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
             swapsConsumed,
             swapsRemaining: Math.max(0, effectiveSwapBudget - swapsConsumed),
           });
-        });
+        }, 'DISCOVERY_CHALLENGER_SWAP_OUTCOME');
       } catch (e) {
         console.error('[OpportunityDiscovery] Swap-outcome logging failed (observability only, does not affect the real hot-swap decision)', e);
       }
@@ -795,7 +840,7 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
                 incumbentScore: priorityScoreOf(d.displaces),
               } : {}),
             });
-          });
+          }, 'SUBSCRIPTION_PRIORITY_DECISION');
         }
       } catch (e) {
         console.error('[OpportunityDiscovery] Subscription priority explainer failed (does not affect the real hot-swap decision)', e);

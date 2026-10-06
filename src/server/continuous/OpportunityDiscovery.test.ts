@@ -675,7 +675,12 @@ describe('OpportunityDiscovery observability hardening (2026-09-30)', () => {
   // end-to-end test proves that directly rather than only asserting the classifier's isolated,
   // unreachable-in-practice behavior. Not fixed here - patching it would change real scoring/
   // selection behavior, which an observability-only pass should not do silently.
-  it('[DOCUMENTS DEAD CODE] an Infinite base score is promoted, not excluded - classifyExclusionReason("INFINITE_SCORE") is never reached by the real pipeline', async () => {
+  // 2026-10-06 (Phase 1 fail-closed fix): this test previously documented the real defect
+  // (Infinity promoted rather than excluded, since the old bare `finalScore > 0` check is true for
+  // Infinity) as current-but-unfixed behavior. isEligibleFinalScore() now closes this gap - this
+  // test proves the fix end-to-end: the Infinite-scored candidate is REJECTED, not promoted, and
+  // carries an explicit POSITIVE_INFINITY_SCORE reason, never silently dropped.
+  it('a +Infinite base score is excluded (fail-closed), not promoted, with reasonCode POSITIVE_INFINITY_SCORE', async () => {
     process.env[FLAG_O] = 'true';
     setupFullCapacity();
     vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([]);
@@ -690,10 +695,40 @@ describe('OpportunityDiscovery observability hardening (2026-09-30)', () => {
     await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
     eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
 
-    expect(subs.find((s) => s.symbol === 'INFSC')).toBeTruthy(); // promoted, not excluded
+    expect(subs.find((s) => s.symbol === 'INFSC')).toBeUndefined(); // never promoted - fails closed
     const excludedCall = logSpy.mock.calls.find((c) => c[1]?.eventType === 'BROAD_UNIVERSE_CHALLENGER_EXCLUDED');
-    const sample = (excludedCall?.[1] as any)?.excluded as Array<Record<string, unknown>> | undefined;
-    expect(sample?.find((c) => c.symbol === 'INFSC')).toBeUndefined(); // never excluded, so never reason-coded either
+    expect(excludedCall).toBeTruthy();
+    const sample = (excludedCall![1] as any).excluded as Array<Record<string, unknown>>;
+    const infsc = sample.find((c) => c.symbol === 'INFSC');
+    expect(infsc).toBeTruthy();
+    expect(infsc!.reasonCode).toBe('POSITIVE_INFINITY_SCORE');
+  });
+
+  // Mirror case for the SEPARATE momentum-universe merge path (combinedTop), which previously had
+  // no finiteness guard at all - a corrupted top-N momentum candidate's score would flow straight
+  // into the real hot-swap sort/comparison with zero exclusion and zero record.
+  it('a momentum-universe candidate with a +Infinite score is excluded from combinedTop via MOMENTUM_CANDIDATE_NON_FINITE_SCORE_EXCLUDED, never promoted', async () => {
+    process.env[FLAG_O] = 'true';
+    setupFullCapacity();
+    vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([
+      { symbol: 'MOMIF', intradayPctChange: 0, rangeExpansion: 0, relativeVolume: 0, momentumScore: 0 },
+    ]);
+    vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockImplementation((s: string) => (s === 'MOMIF' ? Infinity : null));
+    vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume([]));
+    vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockReturnValue(null);
+
+    const subs: Array<{ symbol?: string }> = [];
+    const onSub = (p: { symbol?: string }) => subs.push(p);
+    eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+    const logSpy = vi.spyOn(structuredLogger, 'info');
+    await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+    eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+
+    expect(subs.find((s) => s.symbol === 'MOMIF')).toBeUndefined(); // never promoted - fails closed
+    const excludedCall = logSpy.mock.calls.find((c) => c[1]?.eventType === 'MOMENTUM_CANDIDATE_NON_FINITE_SCORE_EXCLUDED');
+    expect(excludedCall).toBeTruthy();
+    const sample = (excludedCall![1] as any).excluded as Array<Record<string, unknown>>;
+    expect(sample.find((c) => c.symbol === 'MOMIF' && c.reasonCode === 'POSITIVE_INFINITY_SCORE')).toBeTruthy();
   });
 
   it('a positive-score candidate ranked outside the challenger limit logs BELOW_CHALLENGER_LIMIT truncation via survivedTruncation:false, with its real rank and score recorded', async () => {

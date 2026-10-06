@@ -986,6 +986,7 @@ export const COMMAND_HELP: Record<string, string> = {
   'exploration-health': 'Usage: argus exploration-health\nExploration subsystem health.',
   'rescue-occupants': 'Usage: argus rescue-occupants\nCurrent rescue occupants.',
   'broad-universe-aging': 'Usage: argus broad-universe-aging [--sortBy=mostSkipped|mostEligible|longestSinceSelected]\nBroad-universe allocator aging state (who is being starved?).',
+  'observability-health': 'Usage: argus observability-health\nPer-tag observability health (is any event-logging path silently broken right now?).',
   'market-data-diagnostics': 'Usage: argus market-data-diagnostics [--symbols=AAPL,MSFT]\nMarket-data feed diagnostics.',
   'ai-cost-governor': 'Usage: argus ai-cost-governor\nAI cost governor status.',
   'discovery-challengers': 'Usage: argus discovery-challengers [--hours=N]\nDiscovery challenger strategies.',
@@ -1588,6 +1589,32 @@ const commands: Record<string, () => Promise<void>> = {
       signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
     });
     console.log(await res.text());
+  },
+  async 'observability-health'() {
+    // 2026-10-06 (October 5 forensic follow-up, Phase 2 - observability self-health): the cycleId
+    // TDZ bug showed a specific event path could silently fail on every cycle for hours with no
+    // external signal. Prints the per-tag breakdown from GET /api/v2/observability/metrics's
+    // observabilityHealth block - degraded tags (a failure with no success since) are flagged.
+    const res = await fetch(`${BASE}/api/v2/observability/metrics`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
+    });
+    const body = await res.json() as { observabilityHealth?: { anyTagDegraded: boolean; tags: Array<{ tag: string; failureCount: number; lastFailureAt: string | null; lastFailureType: string | null; lastSuccessAt: string | null; degraded: boolean }> } };
+    const health = body.observabilityHealth;
+    if (!health) { console.log('observabilityHealth not present in response'); return; }
+    console.log('OBSERVABILITY HEALTH (per-tag - is any event-logging path silently broken right now?)');
+    console.log('------------------------------------------------------------------------------------');
+    console.log(`anyTagDegraded: ${health.anyTagDegraded}`);
+    if (health.tags.length === 0) {
+      console.log('(no tagged observeSafe calls have run yet this process)');
+    } else {
+      for (const t of health.tags) {
+        console.log(
+          `${t.tag.padEnd(45)} degraded=${String(t.degraded).padEnd(6)} failures=${String(t.failureCount).padEnd(6)} `
+          + `lastFailure=${(t.lastFailureAt ?? 'never').padEnd(26)} lastSuccess=${t.lastSuccessAt ?? 'never'}`,
+        );
+      }
+    }
   },
   async 'market-data-diagnostics'() {
     // 2026-09-20 (delayed-data observability follow-up): read-only live in-memory market-data

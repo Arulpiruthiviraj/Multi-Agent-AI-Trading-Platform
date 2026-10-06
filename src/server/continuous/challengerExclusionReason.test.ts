@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyExclusionReason, scoreBroadUniverseChallenger } from './OpportunityDiscovery';
+import { classifyExclusionReason, scoreBroadUniverseChallenger, isEligibleFinalScore } from './OpportunityDiscovery';
 
 /**
  * 2026-10-05 (challenger zero-score visibility): regression tests for the per-symbol
@@ -32,11 +32,38 @@ describe('classifyExclusionReason', () => {
     expect(NaN > 0).toBe(false);
   });
 
-  it('D: Infinite score → INFINITE_SCORE', () => {
+  // 2026-10-06 (Phase 1 fail-closed fix, October 5 follow-up): a prior version of this test
+  // asserted 'INFINITE_SCORE' and treated reaching classifyExclusionReason() with an Infinite
+  // score as the expected/only concern. That missed the real defect: isEligibleFinalScore() (the
+  // actual real eligibility check) must itself reject +Infinity BEFORE this classifier is ever
+  // consulted - `Infinity > 0` is true in JS, so the old bare `finalScore > 0` check let it through
+  // as eligible. +Infinity and -Infinity now get distinct reason codes, matching NaN's own
+  // already-distinct code, rather than one shared ambiguous bucket.
+  it('D: +Infinity score is REJECTED by isEligibleFinalScore (fail-closed) and classified POSITIVE_INFINITY_SCORE', () => {
+    expect(isEligibleFinalScore(Infinity)).toBe(false);
     const reason = classifyExclusionReason('INFSTOCK', {
       finalScore: Infinity, baseScore: Infinity, gapPct: null, gapTerm: 0, hasGapEvidence: false,
     }, emptyMovers);
-    expect(reason).toBe('INFINITE_SCORE');
+    expect(reason).toBe('POSITIVE_INFINITY_SCORE');
+  });
+
+  it('D2: -Infinity score is REJECTED by isEligibleFinalScore (fail-closed) and classified NEGATIVE_INFINITY_SCORE', () => {
+    expect(isEligibleFinalScore(-Infinity)).toBe(false);
+    const reason = classifyExclusionReason('NEGINFSTOCK', {
+      finalScore: -Infinity, baseScore: -Infinity, gapPct: null, gapTerm: 0, hasGapEvidence: false,
+    }, emptyMovers);
+    expect(reason).toBe('NEGATIVE_INFINITY_SCORE');
+  });
+
+  it('isEligibleFinalScore: finite positive eligible; zero/negative/NaN/+-Infinity all rejected', () => {
+    expect(isEligibleFinalScore(1.5)).toBe(true);
+    expect(isEligibleFinalScore(0.0001)).toBe(true);
+    expect(isEligibleFinalScore(Number.MAX_SAFE_INTEGER)).toBe(true); // large but finite - existing policy, unchanged
+    expect(isEligibleFinalScore(0)).toBe(false);
+    expect(isEligibleFinalScore(-1)).toBe(false);
+    expect(isEligibleFinalScore(NaN)).toBe(false);
+    expect(isEligibleFinalScore(Infinity)).toBe(false);
+    expect(isEligibleFinalScore(-Infinity)).toBe(false);
   });
 
   it('E: missing gap evidence but valid base score → follows existing design', () => {
