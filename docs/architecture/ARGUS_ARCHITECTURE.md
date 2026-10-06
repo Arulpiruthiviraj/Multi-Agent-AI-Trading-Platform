@@ -3767,3 +3767,43 @@ Two audit/suggestion follow-ups, both measurement/validation (no strategy, sizin
 **1. DSR as a real WFO selection gate (`scripts/run_vectorbt_wfo.py`, audit finding).** The Python walk-forward previously computed the Deflated Sharpe Ratio and stored it (`dsr_train`) but the promotion decision only rejected `dsr is None` - any defined DSR passed, so the multiple-testing correction had no selective force. New `promotion_decision()` requires all three: positive out-of-sample expectancy, passed permutation test, **and** `dsr >= dsrMinThreshold` (new `config/researchSafety.json` field, default **0.95** - the Bailey & Lopez de Prado 95%-confidence bar; typed through `src/server/config/researchSafety.ts`, config-driven, never a TS literal). Skip reasons are now specific (`OOS_EXPECTANCY_FAIL` / `PERMUTATION_FAIL` / `DSR_UNDEFINED` / `DSR_BELOW_THRESHOLD`) instead of one opaque bucket; the report carries the threshold and per-candidate DSR. `python/argus_research/test_wfo_dsr_gate.py` (7 tests) pins the gate, including the boundary (`dsr == threshold` promotes). Verified: script runs clean on the golden fixture; no upserts (fixture is `SYNTHETIC_NOT_PROMOTABLE` by construction).
 
 **2. Synthesis certification proves the cost model is live.** The synthetic session already fills against a real cost profile (`replaySafety.json` `Base`: $0.005/share, 2bps spread, 5bps slippage), but the certification report never surfaced it - a silently-disabled cost model would have been invisible and every simulated P&L a gross-fiction. `SyntheticSessionResult` now carries the session's `costProfile`; `evaluateCertification` FAILs closed (`COSTS_NOT_APPLIED`) when fills occurred under a non-zero profile but the broker recorded zero fees/slippage, and the report now prints fees paid, slippage paid, and the active profile next to realized P&L. A zero-cost profile (explicit research mode) legitimately passes. 3 new `CertificationGate.test.ts` cases cover the liveness failure, the zero-cost pass, and the surfaced profile. Complements (does not duplicate) the 2026-09-23 Canonical Cost Model section: that work built the cost vocabulary for research/paper evidence; this work proves the cost model is actually biting inside the pre-market certification runs.
+
+## October 6, 2026 — Jev (noul/choice/score) news-triage integration, all three phases, fully inert
+
+Jev is a classification-only provider (returns structured noul/choice/score answers, generates no text).
+Integrated as a strict enhancement behind default-off flags, per the October 5 AI-as-enhancement
+architectural boundary: Argus must trade with zero AI, and Jev never influences a trading decision.
+
+**Adapter (already on main):** `src/server/ai/providers/JevProvider.ts` — `POST /v1/systemone` with
+noul/choice/score question types, strict fail-closed response validation, chat/stream/vision/embeddings
+throw (Jev generates no text). Supports `JEV_API_KEY` / `TYPESAFE_API_KEY` / `JEV_BASE_URL`. No key
+exists; live smoke has not run.
+
+**Phase 1 — shadow scoring (default OFF):** `JevNewsTriage.ts` builds one complete-validated-or-skip
+state per article (fresh ≤ `jevShadowMaxAgeHours`, body bounded by `jevShadowMaxBodyChars`) and scores
+it with one batched 6-question request (relevance, sentiment, market impact, surprise, contradiction,
+urgency). `JevShadowLedger.ts` persists the score plus, when the article also got LLM analysis, the
+LLM comparison and agreement into `jev_shadow_scores` (drizzle migration 0088). Fire-and-forget from
+`NewsEngine`; never replaces `aiAnalysis`; never blocks the cycle. `JevNewsTypes.ts` holds the shared
+`JevNewsScore` type and field mapping (extracted 2026-10-06 to break the triage↔ledger circular import).
+
+**Phase 2 — confidence-gated escalation (default OFF):** `JevEscalation.ts` — Jev scores first; the LLM
+runs only when Jev confidence is below `jevEscalationConfidenceThreshold` (0.75), relevance below
+`jevEscalationRelevanceThreshold` (0.6), the article is high-stakes (credibility ≥
+`jevHighStakesCredibility` 0.8 AND impact ≥ `jevHighStakesImpact` 7.0), or Jev is unavailable. Thresholds
+are conservative initials pending Phase 1 calibration data — not measured optima. `NewsEngine`
+integration is flag-gated (`ARGUS_JEV_ESCALATION_ENABLED`); when off, the FinBERT→LLM path runs
+byte-for-byte unchanged. Failures fall through to the existing path; Jev can never block news analysis.
+
+**Phase 3 — widening hooks (advisory only):** `analyzeAgreementByConfidence()` buckets Jev-vs-LLM
+agreement by Jev confidence so a human can see what agreement WOULD be at candidate thresholds —
+read-only, never auto-applies. `GET /api/v2/observability/jev-calibration` (+ `argus jev-calibration`
+CLI) exposes scored count, agreement rate, buckets, and cumulative cost. `JevClassificationTask.ts`
+is the extension contract for future classification tasks (perfect-data state → single batched
+evaluate() → validated mapping); no task is registered, and the contract is classification-only —
+never reasoning, recommendations, votes, or trading signals.
+
+**Boundaries (unchanged by this work):** no Jev vote, recommendation, consensus input, RiskEngine input,
+OMS access, or broker access. All operational thresholds live in `config/tradingSafety.json` (typed
+through `src/server/config/tradingSafety.ts`), never TS literals. All new env fields in `.env.example`
+with explanatory comments. 55 Jev tests pass; tsc clean.

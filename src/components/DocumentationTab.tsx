@@ -777,6 +777,10 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
                   <span className="text-indigo-400 font-bold">QUANT_ENGINE_ENABLED / QUANT_SMC_STRATEGY_ENABLED / QUANT_BULL_BEAR_ENABLED</span>
                   <p className="text-[10px] text-slate-400 mt-1">All default off. Do not enable them to “see if it works.” SMC stays UNVALIDATED. Bull/Bear notes are qualitative; invented numerics are nulled.</p>
                 </div>
+                <div className="border-t border-slate-800/80 pt-2">
+                  <span className="text-indigo-400 font-bold">JEV_API_KEY / ARGUS_JEV_SHADOW_SCORING_ENABLED / ARGUS_JEV_ESCALATION_ENABLED</span>
+                  <p className="text-[10px] text-slate-400 mt-1">Jev is a classification-only provider (noul/choice/score answers, no text). Both flags default off. Shadow scoring logs agreement evidence only; escalation lets confident Jev scores skip the LLM. Jev never influences a trading decision.</p>
+                </div>
               </div>
             </div>
 
