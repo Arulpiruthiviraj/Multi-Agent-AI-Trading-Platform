@@ -47,8 +47,23 @@
 export const CORE_QUANT_ENSEMBLE_EVIDENCE_GROUP = 'CORE_QUANT_ENSEMBLE';
 
 /** Agent names verified (see this file's header) to be structurally the same underlying
- *  CORE-strategy-ensemble computation over the same canonical bars, just in different languages. */
-const STRUCTURALLY_SAME_AS_CORE_QUANT_ENSEMBLE = new Set<string>(['QuantEngine', 'JavaCoreEnsemble']);
+ *  CORE-strategy-ensemble computation over the same canonical bars, just in different languages.
+ *
+ *  2026-10-06 (Fast Lane -> Canonical Decision Spine Integration): `FastOpportunityLane`
+ *  (`fastLaneEvaluator.ts`) added on the same evidentiary standard this file requires -
+ *  structural proof, not suspicion. Its evaluator calls `quantSignalAgent.evaluateSymbol()`
+ *  directly (the exact same function `QuantEngine`'s own live cycle calls), which runs the exact
+ *  same `evaluateAll(strategyContext)` over the exact same canonical bars and picks via the exact
+ *  same `bestStrategyIdea()`. There is no new feature computation, no new strategy, and no
+ *  separate data path - Fast Lane is a latency/transport difference (event-driven vs. scheduled
+ *  polling) around the identical underlying calculation, never an independent signal. Grouping it
+ *  here is what prevents arrival-path alone from manufacturing a second independent vote out of
+ *  one underlying piece of market evidence (the Fast Canonical Integration mandate's own stated
+ *  principle). `FastOpportunityLane` does not currently emit any TRADE_IDEA_GENERATED (see
+ *  fastLaneEvaluator.ts's own header - evaluation only, no emission in this phase) - this
+ *  registration is correctness preparation for when a future, separately-authorized phase wires
+ *  emission, not a behavior change today. */
+const STRUCTURALLY_SAME_AS_CORE_QUANT_ENSEMBLE = new Set<string>(['QuantEngine', 'JavaCoreEnsemble', 'FastOpportunityLane']);
 
 /**
  * Resolves the independent-evidence-group identity for one agreeing agent name. Two agreeing

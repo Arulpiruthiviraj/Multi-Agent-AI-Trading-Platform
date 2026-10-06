@@ -94,6 +94,38 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     expect(approval.confidence).toBeCloseTo(0.95, 5);
   });
 
+  // 2026-10-06 (Fast Lane Canonical Integration, Section 7 - "independence must not be inflated",
+  // the mandate's own explicit "most important test in this phase"). Uses the REAL, unmodified
+  // ChiefTraderAgent in this file's own safely-isolated harness (eventBus/db/AIRouter all mocked -
+  // never touches the live running engine). QuantEngine and FastOpportunityLane agreeing on the
+  // SAME symbol/side must NOT satisfy the 2-independent-agent floor, because
+  // resolveIndependentEvidenceGroup() (evidenceIndependence.ts) correctly resolves both to the
+  // same CORE_QUANT_ENSEMBLE group - they are the identical underlying evaluateSymbol/evaluateAll/
+  // bestStrategyIdea computation, just two arrival paths. This proves one underlying market fact
+  // cannot be manufactured into two independent votes merely because Fast Lane observed it too.
+  it('QuantEngine + FastOpportunityLane agreeing on the same idea does NOT satisfy the independent-agent floor - one underlying computation, not two independent votes', async () => {
+    agent.recentIdeas = [
+      { traceId: 't1', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'QuantEngine', reasoning: 'momentum breakout' },
+      { traceId: 't1', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'FastOpportunityLane', reasoning: 'momentum breakout (fast lane)' },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 't1');
+
+    // Behaves exactly like the single-agent case above - no real second independent voice exists.
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
+  it('a GENUINELY independent agent (e.g. NewsAgent) agreeing with FastOpportunityLane DOES satisfy the floor - independence is about the underlying evidence, not about suppressing Fast Lane entirely', async () => {
+    agent.recentIdeas = [
+      { traceId: 't1', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'FastOpportunityLane', reasoning: 'momentum breakout (fast lane)' },
+      { traceId: 't1', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'NewsAgent', reasoning: 'genuinely independent news evidence' },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 't1');
+
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+  });
+
   it('2026-09-15 regression: uses the triggering idea\'s own currentPrice, not whichever agreeing agent happens to sit first in evidence array order (a real synthetic-certification finding - a consensus combining a fresh TechnicalAgent tick with an older, cooldown-throttled KronosEngine price picked the stale Kronos price purely by array position, understating RiskEngine\'s real notional by ~5%)', async () => {
     agent.recentIdeas = [
       // Deliberately first in array order, but STALE - this is the trap the old

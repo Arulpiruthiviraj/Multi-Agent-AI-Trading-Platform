@@ -97,6 +97,11 @@ const FAMILY_DEFINITIONS: Record<string, FamilyDefinition> = {
   // Not currently wired to emitTradeIdea anywhere - see this const's own doc comment above.
   Ta4jTechnicalParity: { methodologyFamily: 'TA_LIBRARY_PARITY_CHECK', dataDependency: 'CANONICAL_BARS', currentlyLive: false },
   OjAlgoPortfolioRisk: { methodologyFamily: 'PORTFOLIO_OPTIMIZATION', dataDependency: 'PORTFOLIO_STATE', currentlyLive: false },
+  // 2026-10-06 (Fast Lane Canonical Integration): same methodology/data-dependency as QuantEngine/
+  // JavaCoreEnsemble above - fastLaneEvaluator.ts calls the identical quantSignalAgent.
+  // evaluateSymbol()/evaluateAll()/bestStrategyIdea() chain, never a new computation. Not
+  // currentlyLive: this evaluator does not emit any TRADE_IDEA_GENERATED yet (evaluation only).
+  FastOpportunityLane: { methodologyFamily: 'CORE_STRATEGY_ENSEMBLE', dataDependency: 'CANONICAL_BARS', currentlyLive: false },
 };
 
 /**

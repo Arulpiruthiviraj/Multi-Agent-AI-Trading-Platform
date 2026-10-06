@@ -51,4 +51,16 @@ describe('classifyEvidenceFamily', () => {
     expect(ojAlgo.methodologyFamily).toBe('PORTFOLIO_OPTIMIZATION');
     expect(ojAlgo.currentlyLive).toBe(false);
   });
+
+  // 2026-10-06 (Fast Lane Canonical Integration): FastOpportunityLane is classified and grouped
+  // now, inert (currentlyLive=false, matching the ta4j/ojAlgo precedent) since the evaluator does
+  // not emit any TRADE_IDEA_GENERATED yet - the classification decision is made and reviewable
+  // before it could ever vote, same as those two placeholders.
+  it('classifies FastOpportunityLane in the SAME methodology family as QuantEngine/JavaCoreEnsemble, explicitly not live yet', () => {
+    const fastLane = classifyEvidenceFamily('FastOpportunityLane');
+    expect(fastLane.methodologyFamily).toBe('CORE_STRATEGY_ENSEMBLE');
+    expect(fastLane.dataDependency).toBe('CANONICAL_BARS');
+    expect(fastLane.currentlyLive).toBe(false);
+    expect(fastLane.independentEvidenceGroup).toBe(classifyEvidenceFamily('QuantEngine').independentEvidenceGroup);
+  });
 });
