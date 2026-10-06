@@ -13,6 +13,7 @@ import { buildQuantEvidenceReport, formatQuantEvidenceReport } from '../observab
 import { buildReflectionEngineHealthReport, formatReflectionEngineHealthReport } from '../observability/reflectionEngineHealthReport';
 import { buildExtendedHoursSpreadReport, formatExtendedHoursSpreadReport } from '../observability/extendedHoursSpreadReport';
 import { buildWhyNoTradeReport, formatWhyNoTradeReport } from '../observability/whyNoTradeReport';
+import { buildDailyReflectionReport, getMostRecentCompletedTradingDate } from '../reflection/reflectionReportService';
 import { buildCalibrationMaturityReport, formatCalibrationMaturityReport } from '../continuous/calibrationMaturity';
 import { buildAgentEdgeDiscoveryReport, formatAgentEdgeDiscoveryReport } from '../observability/agentEdgeDiscoveryReport';
 import { buildStrategyReadinessReport, formatStrategyReadinessReport } from '../research/strategyReadiness';
@@ -125,6 +126,26 @@ observabilityRouter.get('/consensus-report', async (req, res) => {
       res.type('text/plain').send(formatConsensusPipelineReport(report));
       return;
     }
+    res.json({ ok: true, report });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 2026-10-06 (workstream J, daily reflection surfaces): read-only post-market
+// reflection report for one trading date. `:date` is YYYY-MM-DD or "latest"
+// (the most recent completed session). Assembled entirely by
+// reflectionReportService — the route does no DB logic of its own. Never
+// carries a direction/side; explains what happened, never what to trade.
+observabilityRouter.get('/daily-reflection/:date', async (req, res) => {
+  try {
+    const raw = String(req.params.date ?? '');
+    const date = raw === 'latest' ? await getMostRecentCompletedTradingDate() : raw;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      res.status(400).json({ ok: false, error: 'date must be YYYY-MM-DD or "latest"' });
+      return;
+    }
+    const report = await buildDailyReflectionReport(date);
     res.json({ ok: true, report });
   } catch (e: any) {
     if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
