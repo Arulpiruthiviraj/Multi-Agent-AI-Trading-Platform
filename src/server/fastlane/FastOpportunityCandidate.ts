@@ -110,27 +110,52 @@ export interface FastOpportunityCandidate {
 }
 
 /**
- * Result of strategy evaluation for a fast candidate.
- * This feeds into the EXISTING ChiefTrader consensus — it does not bypass it.
+ * 2026-10-06 (Fast Opportunity Lane Evaluator, research/paper only): result of evaluating a fast
+ * candidate through EXISTING strategy/quant logic. This object has NO execution authority - it is
+ * never passed to BrokerManager, OMS, or RiskEngine, and this phase deliberately does NOT emit it
+ * into ChiefTrader/emitTradeIdea either (see fastLaneEvaluator.ts's own header). Evaluation and
+ * execution integration are kept separately testable; a later, separately-authorized phase may
+ * convert a VALID_STRATEGY_EVIDENCE result into the existing canonical trade-idea pathway.
  */
+export type FastEvaluationStatus =
+  | 'INSUFFICIENT_DATA'
+  | 'NO_VALID_SETUP'
+  | 'VALID_STRATEGY_EVIDENCE'
+  | 'EXPIRED'
+  | 'DATA_STALE'
+  | 'ERROR';
+
+/** Per-required-feature data sufficiency, never fabricated when a strategy genuinely lacks it. */
+export type DataSufficiencyGrade = 'AVAILABLE' | 'MISSING' | 'STALE' | 'NOT_APPLICABLE';
+
 export interface FastEvaluationResult {
   candidateId: string;
   symbol: string;
   evaluatedAt: number;
+  /** The real timestamp (ms epoch) of the underlying data this evaluation is based on - distinct
+   *  from evaluatedAt, which is when the evaluation code ran. Never assumed equal. */
+  dataAsOf: number | null;
+  /** Real provenance of the price data this evaluation used - never silently upgraded to imply
+   *  live quality when the underlying feed was delayed/cached. */
+  marketDataType: 'REAL_TIME' | 'DELAYED' | 'CACHED_BARS' | 'UNKNOWN';
 
-  // Absolute eligibility (not relative ranking)
-  triggerMet: boolean;
-  expectedValuePasses: boolean;
-  riskRewardPasses: boolean;
-  freshnessPasses: boolean;
-  dataSufficient: boolean;
+  /** Every strategy ID the real evaluateAll() call actually evaluated for this candidate. */
+  strategiesEvaluated: string[];
+  /** The subset of strategiesEvaluated whose triggerMet was true, by strategy ID. */
+  validTriggers: string[];
+  bestStrategy?: string;
+  direction?: 'BUY' | 'SELL';
+  confidence?: number;
+  /** Real EV/RR only when the underlying strategy evaluation actually produced one - never
+   *  fabricated for a status that didn't reach that stage. */
+  expectedValue?: number | null;
+  riskReward?: number | null;
 
-  // Component scores for observability
-  baseScore: number | null;
-  momentumScore: number | null;
-  gapPct: number | null;
+  status: FastEvaluationStatus;
+  reasonCodes: string[];
 
-  // Overall verdict
-  verdict: 'ACTIONABLE' | 'WATCH' | 'NO_SETUP' | 'INSUFFICIENT_DATA' | 'EXPIRED';
-  reasoning: string;
+  /** Per-required-feature sufficiency, keyed by feature name (e.g. 'bars_1m', 'prevClose',
+   *  'volume'). Populated honestly - a feature this evaluation path never checks is simply
+   *  absent from this map, not defaulted to AVAILABLE. */
+  dataSufficiency: Record<string, DataSufficiencyGrade>;
 }

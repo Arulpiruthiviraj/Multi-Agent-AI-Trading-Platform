@@ -98,6 +98,66 @@ export function logFastExpired(candidateId: string, symbol: string, state: FastO
   });
 }
 
+// 2026-10-06 (Fast Opportunity Lane Evaluator): the specific per-candidate evaluation lifecycle
+// events requested by the evaluator research spec - distinct from the pre-existing, more generic
+// fast_strategy_evaluated/fast_no_setup/fast_actionable events above (which predate any real
+// evaluator and were never wired to one). Every event carries candidateId for end-to-end tracing.
+export function logFastEvaluationStarted(candidateId: string, symbol: string): void {
+  observeSafe(() => {
+    structuredLogger.info('fast_evaluation_started', {
+      category: 'FAST_LANE', eventType: 'FAST_EVALUATION_STARTED', candidateId, symbol,
+    });
+  });
+}
+
+export function logFastEvaluationDataReady(candidateId: string, symbol: string, dataAsOf: number | null): void {
+  observeSafe(() => {
+    structuredLogger.info('fast_evaluation_data_ready', {
+      category: 'FAST_LANE', eventType: 'FAST_EVALUATION_DATA_READY', candidateId, symbol, dataAsOf,
+    });
+  });
+}
+
+export function logFastEvaluationInsufficientData(candidateId: string, symbol: string, reasonCodes: string[]): void {
+  observeSafe(() => {
+    structuredLogger.info('fast_evaluation_insufficient_data', {
+      category: 'FAST_LANE', eventType: 'FAST_EVALUATION_INSUFFICIENT_DATA', candidateId, symbol, reasonCodes,
+    });
+  });
+}
+
+export function logFastEvaluationNoSetup(candidateId: string, symbol: string, strategiesEvaluated: string[]): void {
+  observeSafe(() => {
+    structuredLogger.info('fast_evaluation_no_setup', {
+      category: 'FAST_LANE', eventType: 'FAST_EVALUATION_NO_SETUP', candidateId, symbol, strategiesEvaluated,
+    });
+  });
+}
+
+export function logFastEvaluationValidEvidence(candidateId: string, symbol: string, bestStrategy: string, confidence: number): void {
+  observeSafe(() => {
+    structuredLogger.info('fast_evaluation_valid_evidence', {
+      category: 'FAST_LANE', eventType: 'FAST_EVALUATION_VALID_EVIDENCE', candidateId, symbol, bestStrategy, confidence,
+    });
+  });
+}
+
+export function logFastEvaluationExpired(candidateId: string, symbol: string): void {
+  observeSafe(() => {
+    structuredLogger.info('fast_evaluation_expired', {
+      category: 'FAST_LANE', eventType: 'FAST_EVALUATION_EXPIRED', candidateId, symbol,
+    });
+  });
+}
+
+export function logFastEvaluationFailed(candidateId: string, symbol: string, errorType: string): void {
+  observeSafe(() => {
+    structuredLogger.info('fast_evaluation_failed', {
+      category: 'FAST_LANE', eventType: 'FAST_EVALUATION_FAILED', candidateId, symbol, errorType,
+    });
+  });
+}
+
 export function logFastResourcePromotionRequested(
   candidateId: string, symbol: string,
   requestedTier: string, reason: string,

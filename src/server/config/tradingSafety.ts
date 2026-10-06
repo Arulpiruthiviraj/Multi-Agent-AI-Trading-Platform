@@ -8,6 +8,16 @@ import { loadRepoConfigJson } from './loadRepoConfigJson';
 import { isRuntimeFlagEnabled } from './effectiveRuntimeConfig';
 
 export interface TradingSafety {
+  /** 2026-10-06 (Fast Opportunity Lane Evaluator): bounded concurrency for
+   *  fastLaneEvaluator.ts's real strategy evaluations - prevents an evaluation fan-out from
+   *  flooding the historical-bar provider/quant pipeline the same way maxConcurrentTemporaryDataRescues
+   *  already bounds MarketDataWorker's rescue mechanism. This is a resource governor, not a
+   *  trading threshold. */
+  fastLaneMaxConcurrentEvaluations: number;
+  /** Minimum real time between two evaluations of the SAME symbol through the fast-lane
+   *  evaluator - prevents duplicate-evaluation races and bar-request storms from a symbol
+   *  receiving several near-simultaneous detection events (e.g. repeated news catalysts). */
+  fastLaneSymbolEvaluationCooldownMs: number;
   stalePriceThresholdMs: number;
   /** Bounded wait (NewsEngine's async fresh-price acquisition, waitForFreshPrice.ts) for a
    *  just-requested subscription to produce its first live tick before giving up and reporting
@@ -635,6 +645,8 @@ export interface TradingSafety {
 }
 
 const REQUIRED_KEYS: (keyof TradingSafety)[] = [
+  'fastLaneMaxConcurrentEvaluations',
+  'fastLaneSymbolEvaluationCooldownMs',
   'stalePriceThresholdMs',
   'newsPriceWaitTimeoutMs',
   'newsPriceWaitPollIntervalMs',

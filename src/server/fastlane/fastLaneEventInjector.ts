@@ -16,6 +16,7 @@ import { fastLaneManager } from './FastLaneManager';
 import { isFastLaneEnabled } from './fastLaneConfig';
 import type { NewsCatalyst } from '../services/NewsCatalystStore';
 import { observeSafe } from '../observability/StructuredLogger';
+import { evaluateFastCandidate } from './fastLaneEvaluator';
 
 let subscribed = false;
 
@@ -45,7 +46,7 @@ export function startFastLaneEventInjection(): void {
       if (catalyst.catalystStrength === 'LOW') return;
       if (!catalyst.symbol) return;
 
-      fastLaneManager.injectCandidate({
+      const candidate = fastLaneManager.injectCandidate({
         symbol: catalyst.symbol,
         detectionSource: 'NEWS_CATALYST',
         catalyst: catalyst.headline,
@@ -57,6 +58,15 @@ export function startFastLaneEventInjection(): void {
         requiredDataTier: 'TIER_1',
         applicableStrategies: applicabilityForCatalyst(catalyst),
       });
+      // 2026-10-06 (Fast Opportunity Lane Evaluator): real strategy evaluation, fire-and-forget.
+      // Produces a FastEvaluationResult and transitions the candidate's lifecycle state, but -
+      // deliberately, this phase - never emits a trade idea (see fastLaneEvaluator.ts's own
+      // header). A thrown/rejected promise here must never affect the real event-bus subscriber
+      // this callback runs inside; evaluateFastCandidate's own try/catch already handles the real
+      // evaluation failure path, this is defense-in-depth against the promise itself rejecting.
+      if (candidate) {
+        void evaluateFastCandidate(candidate.id).catch(() => {});
+      }
     });
   });
 }

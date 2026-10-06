@@ -1,5 +1,9 @@
 {
   "$comment": "Operational and safety thresholds. Changing this file is a reviewed config change, not an API or UI knob. Restricted-live caps must never be loosened via settings. Numbers preserve pre-extraction behavior.",
+  "_fastLaneMaxConcurrentEvaluationsComment": "2026-10-06 (Fast Opportunity Lane Evaluator): resource governor bounding how many real strategy evaluations (quantSignalAgent.evaluateSymbol, real bar fetches) the fast lane may run concurrently - prevents an evaluation fan-out from flooding the historical-bar provider. Not a trading threshold.",
+  "fastLaneMaxConcurrentEvaluations": 3,
+  "_fastLaneSymbolEvaluationCooldownMsComment": "2026-10-06: minimum real time between two evaluations of the SAME symbol through the fast-lane evaluator, preventing duplicate-evaluation races / bar-request storms from repeated near-simultaneous detection events (e.g. several news catalysts for the same symbol in a short window).",
+  "fastLaneSymbolEvaluationCooldownMs": 60000,
   "stalePriceThresholdMs": 300000,
   "newsPriceWaitTimeoutMs": 8000,
   "newsPriceWaitPollIntervalMs": 250,

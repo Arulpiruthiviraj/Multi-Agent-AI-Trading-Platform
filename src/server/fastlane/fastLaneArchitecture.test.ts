@@ -80,4 +80,27 @@ describe('FastLane architecture safety boundary', () => {
       expect(f.content, `${f.name} must not hardcode flag=true`).not.toMatch(/FAST_OPPORTUNITY_LANE_ENABLED['"]?\s*=\s*['"]?true/);
     }
   });
+
+  // 2026-10-06 (Fast Opportunity Lane Evaluator, research/paper only): this phase deliberately
+  // does NOT wire evaluation into ChiefTrader yet (see fastLaneEvaluator.ts's own header) -
+  // evaluation and execution integration are kept separately testable. If a future phase adds
+  // emission, it must do so through a NEW, separately-reviewed module (matching the
+  // JavaCoreEnsembleVoteService precedent) - not by quietly adding emitTradeIdea here.
+  it('fastLaneEvaluator.ts never calls emitTradeIdea - evaluation has no execution authority in this phase', () => {
+    const evaluator = files.find((f) => f.name === 'fastLaneEvaluator.ts');
+    expect(evaluator, 'fastLaneEvaluator.ts must exist').toBeTruthy();
+    expect(evaluator!.content, 'fastLaneEvaluator.ts must not call emitTradeIdea').not.toMatch(/emitTradeIdea\s*\(/);
+    expect(evaluator!.content, 'fastLaneEvaluator.ts must not reference ChiefTrader').not.toMatch(/ChiefTrader/);
+  });
+
+  it('fastLaneEvaluator.ts and fastLaneEventInjector.ts never reference RiskEngine, PositionSizing, or trading-state mutation', () => {
+    for (const name of ['fastLaneEvaluator.ts', 'fastLaneEventInjector.ts']) {
+      const f = files.find((x) => x.name === name);
+      expect(f, `${name} must exist`).toBeTruthy();
+      expect(f!.content, `${name} must not reference RiskEngine`).not.toMatch(/RiskEngine/);
+      expect(f!.content, `${name} must not reference PositionSizing`).not.toMatch(/PositionSizing/);
+      expect(f!.content, `${name} must not mutate trading state`).not.toMatch(/setTradingState|TRADING_ENABLED\s*=|tradingState\s*=\s*['"]ENABLED/);
+      expect(f!.content, `${name} must not set LIVE mode`).not.toMatch(/setLiveMode|LIVE_ARM\s*=\s*true/);
+    }
+  });
 });
