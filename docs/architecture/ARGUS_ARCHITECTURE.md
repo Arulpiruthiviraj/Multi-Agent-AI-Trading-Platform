@@ -1,5 +1,36 @@
 # Argus Architecture
 
+## 2026-10-06: Synthetic Market Session Simulator — synthetic daily-bar provider closes the CORE-strategy certification gap
+
+**Test infrastructure only — no live/paper decision path, gate, threshold, or consensus rule
+changed.** `src/server/replay/synthetic/SyntheticDailyBarProvider.ts` gives
+`HistoricalDataGateway`'s existing cache-first `ensureBars()` check real, scenario/seed-derived
+synthetic `1Day` bars to find during an isolated synthetic session, closing the gap the same-day
+earlier pass found and documented (`docs/testing/ARGUS_SYNTHETIC_MARKET_CERTIFICATION.md` §4):
+`QuantSignalAgent` — the only real caller of `StrategyEngine.evaluateAll()` (the 5 CORE
+strategies) — always requests `1Day` bars, and the gateway correctly refuses a real network fetch
+for them under `SYNTHETIC_SIMULATION=true`; with no synthetic substitute, every CORE-strategy
+evaluation attempt failed closed on every prior run. Two pure functions, both derived from the
+session's own seed/scenario (never a second data source): `generateSyntheticPriorDayHistory()`
+(260 trading days of backward-anchored, Brownian-scaled daily OHLCV ending at the session's own
+`config.startPrice`) and `rollupTodaysDailyBar()` (a real, point-in-time-safe OHLCV rollup of the
+session's own already-revealed minute bars). Both refuse to run unless
+`SYNTHETIC_SIMULATION === 'true'` (`assertSyntheticDailyBarProviderOnlyInSyntheticSession()`), and
+a dedicated architecture-boundary test (`SyntheticDailyBarProvider.architectureBoundary.test.ts`)
+proves no file outside `src/server/replay/synthetic/` can import it. A real ordering bug was found
+and fixed while building this (seeding must run BEFORE `bootArgusCore()`, not after — see
+`SyntheticSessionEngine.ts`'s own comment at the call site) — a background worker's own early
+query of one symbol's `1Day` bars, with no synthetic rows present yet, poisoned
+`HistoricalDataGateway`'s 60-second in-memory cache for the practical duration of that
+400x-accelerated session. Re-run Strategy Certification Matrix: all 5 CORE strategies now evaluate
+every cycle with real `triggerMet` results (3 of 5 — `RANGE_REVERSION`, `PULLBACK_CONTINUATION`,
+`MEAN_REVERSION` — triggered with real conditions in at least one scenario; `MOMENTUM_BREAKOUT` and
+`TREND_FOLLOWING` evaluated but never triggered in any scenario/seed tried, a documented
+fixture-strength finding, not a strategy bug). See
+`docs/testing/ARGUS_SYNTHETIC_MARKET_CERTIFICATION.md` §4a (design) and
+`docs/audits/ARGUS_SYNTHETIC_CERTIFICATION_RESULT_2026-10-06-FOLLOWUP.md` (full re-run result and
+verdict).
+
 ## 2026-10-05: quant research implementation - Form 4 scraper, meta-label capture, S-curve sizing
 
 **SEC EDGAR Form 4 scraper** (`src/server/data/SecEdgarForm4Scraper.ts`). Polls the free SEC EDGAR

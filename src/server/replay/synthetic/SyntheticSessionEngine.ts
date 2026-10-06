@@ -276,6 +276,39 @@ export class SyntheticSessionEngine {
       autoBotEnabled: true, tradingState: 'TRADING_ENABLED',
     } as any);
 
+    // --- Synthetic daily-bar history (closes the gap documented in
+    // docs/testing/ARGUS_SYNTHETIC_MARKET_CERTIFICATION.md §4 / ARGUS_SYNTHETIC_CERTIFICATION_RESULT.md
+    // §2-4): QuantSignalAgent - the only real production caller of StrategyEngine.evaluateAll(),
+    // i.e. the 5 CORE strategies - always requests '1Day' bars, and HistoricalDataGateway correctly
+    // refuses a real network fetch for them while SYNTHETIC_SIMULATION=true. Without a synthetic
+    // '1Day' substitute already cached, every CORE-strategy evaluation failed closed on every run.
+    // generateSyntheticPriorDayHistory() is derived from this SAME seed/scenario (a separate,
+    // symbol-specific RNG stream - see SyntheticDailyBarProvider.ts's own header - never a second,
+    // disconnected synthetic data source), anchored to connect smoothly to this session's own
+    // config.startPrice.
+    //
+    // MUST run BEFORE bootArgusCore() (real finding, 2026-10-06 - reproduced live): HistoricalDataGateway
+    // keeps a 60-second in-process memory cache keyed by symbol|timeframe|hour-bucket
+    // (HistoricalDataGateway.ts's own memoryKey()/cacheGet()/cacheSet()). bootArgusCore() starts
+    // several real background workers immediately, and one of them (confirmed live via a temporary
+    // debug probe: rawDbCount=0 at the moment of the very first QQQ 1Day query, well before this
+    // seeding had run) queries QQQ's '1Day' bars before any synthetic bars exist - caching an EMPTY
+    // result for 60 real seconds. Because this harness runs at up to 400x speed, an entire session's
+    // worth of QuantSignalAgent cycles can complete inside that same 60-second real-wall-clock window,
+    // so a cache entry poisoned even once near boot stayed poisoned for the practical duration of the
+    // whole session - QQQ specifically failed on every cycle while every other seeded symbol (queried
+    // for the first time only after this seeding had already run) succeeded. Seeding before boot means
+    // nothing can query these symbols before real synthetic rows already exist, so no empty result is
+    // ever cached in the first place - fixing the root cause rather than invalidating a cache after
+    // the fact. ---
+    {
+      const { generateSyntheticPriorDayHistory } = await import('./SyntheticDailyBarProvider');
+      for (const config of universeConfigs) {
+        const priorDays = generateSyntheticPriorDayHistory(config, scenario, options.seed, sessionStartMs);
+        for (const bar of priorDays) await persistDailyBar(config.symbol, bar);
+      }
+    }
+
     const { bootArgusCore } = await import('../../core/ArgusCoreBoot');
     await bootArgusCore();
     await sleep(1500); // let boot's own async settle (matches every other harness this session)
@@ -428,6 +461,14 @@ export class SyntheticSessionEngine {
     this.timeline = new DecisionTimelineClass(this.clock);
     this.timeline.start();
 
+    // Point-in-time accumulator for today's own synthetic '1Day' rollup bar - see
+    // rollupTodaysDailyBar()'s own doc comment. Only ever fed bars the loop below has already
+    // revealed (pushed immediately after persistBar() reveals that same minute bar), so this can
+    // never leak a later-session high/low/close into an earlier QuantSignalAgent cycle.
+    const { rollupTodaysDailyBar } = await import('./SyntheticDailyBarProvider');
+    const revealedBarsBySymbol = new Map<string, SyntheticBar[]>();
+    for (const symbol of universe) revealedBarsBySymbol.set(symbol, []);
+
     // --- The main loop: mirrors FullArgusReplayEngine.processTimestamp()'s exact NEXT_BAR_OPEN
     // sequencing (see that file's own comment this was modeled on) - the bar AT t is the fill
     // vehicle for orders placed using the PREVIOUS bar's close as the last known decision price. ---
@@ -468,6 +509,10 @@ export class SyntheticSessionEngine {
           this.broker.nextFillPrice.set(symbol, currentBar.open);
           this.broker.nextFillVolume.set(symbol, currentBar.volume);
           await persistBar(symbol, currentBar);
+          const revealed = revealedBarsBySymbol.get(symbol)!;
+          revealed.push(currentBar);
+          const todayBar = rollupTodaysDailyBar(revealed, sessionStartMs);
+          if (todayBar) await persistDailyBar(symbol, todayBar);
         }
 
         if (previousBar) {
@@ -553,5 +598,25 @@ async function persistBar(symbol: string, bar: SyntheticBar): Promise<void> {
     open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume,
     source: 'synthetic_simulation',
   }).onConflictDoNothing();
+}
+
+/**
+ * Writes/updates one synthetic '1Day' bar (prior-history or today's running rollup) into ohlcv_bars
+ * via the real HistoricalDataGateway cache table - the same table/shape persistBars() itself writes,
+ * just through a direct upsert since this is a one-shot deterministic seed rather than a paced
+ * Alpaca/IBKR fetch. ON CONFLICT DO UPDATE (not DO NOTHING) because today's rollup bar is
+ * re-written every minute bar as more of the session is revealed - see rollupTodaysDailyBar()'s own
+ * doc comment for why that is still point-in-time safe. source='synthetic_simulation_daily' keeps
+ * this instantly distinguishable from both real 'alpaca'/'ibkr' rows and the '1Min' synthetic rows
+ * above in any forensic query.
+ */
+async function persistDailyBar(symbol: string, bar: { timestamp: number; open: number; high: number; low: number; close: number; volume: number }): Promise<void> {
+  const { sqliteDb } = await import('../../db');
+  sqliteDb.prepare(
+    `INSERT INTO ohlcv_bars (id, symbol, timeframe, timestamp, open, high, low, close, volume, source, provisional)
+     VALUES (?, ?, '1Day', ?, ?, ?, ?, ?, ?, 'synthetic_simulation_daily', 0)
+     ON CONFLICT(id) DO UPDATE SET
+       high=excluded.high, low=excluded.low, close=excluded.close, volume=excluded.volume`,
+  ).run(`${symbol}:1Day:${bar.timestamp}`, symbol, bar.timestamp, bar.open, bar.high, bar.low, bar.close, bar.volume);
 }
 
