@@ -1028,6 +1028,7 @@ export const COMMAND_HELP: Record<string, string> = {
   'subscription-queue': 'Usage: argus subscription-queue [decisions]\nSubscription priority queue snapshot; `decisions` shows promotion/eviction reasons.',
   'trade-plan': 'Usage: argus trade-plan [date] [planId]\nPre-market trade plan (default: today); with planId shows revalidations.',
   'premarket-focus': 'Usage: argus premarket-focus [--date=YYYY-MM-DD]\nPre-market focus: lifecycle status, plan tiers with scores, movements since previous build. Tiers mean "deserves attention", never "trade this".',
+  'daily-reflection': 'Usage: argus daily-reflection [--date=YYYY-MM-DD]\nDaily reflection report (default: most recent completed session): pre-market focus performance, discovery coverage funnel, top movers with Argus fate per symbol, never-seen blind spots, filtered winners-losers, consensus/risk rejections, data-readiness failures, catalyst coverage. Read-only.',
   'missed-opportunities': 'Usage: argus missed-opportunities [sinceMs]\nDetected missed opportunities (default 24h lookback).',
   'learning': 'Usage: argus learning <observations|versions|promotions|rollbacks|calibration [worker-status]> [args...]\nLearning / self-evolution observability.',
   'session-lifecycle': 'Usage: argus session-lifecycle\nSession lifecycle snapshot + recent history.',
@@ -2112,6 +2113,37 @@ const commands: Record<string, () => Promise<void>> = {
     }
   },
   /**
+   * Daily reflection report (workstream J, 2026-10-06). Usage:
+   *   argus daily-reflection [--date=YYYY-MM-DD]
+   * Read-only post-market reflection: pre-market focus performance, the
+   * discovery coverage funnel (movers -> seen -> evaluated -> acted), top
+   * movers with Argus's fate per symbol, never-seen blind spots, filtered
+   * winners-losers, consensus/risk rejections, data-readiness failures, and
+   * catalyst coverage. Default date is the most recent completed session.
+   * Explains what happened — never what to trade. This command never places
+   * orders; the service layer owns all DB reads and the CLI only formats.
+   */
+  async 'daily-reflection'() {
+    const dateArg = process.argv.slice(3).find((a) => a.startsWith('--date='));
+    const dateInput = dateArg ? dateArg.slice('--date='.length) : null;
+    if (dateInput && !/^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
+      console.error('Usage: argus daily-reflection [--date=YYYY-MM-DD]');
+      return;
+    }
+    const { buildDailyReflectionReport, getMostRecentCompletedTradingDate, formatDailyReflectionReport } =
+      await import('../src/server/reflection/reflectionReportService');
+    const tradingDate = dateInput ?? (await getMostRecentCompletedTradingDate());
+    let report: Awaited<ReturnType<typeof buildDailyReflectionReport>>;
+    try {
+      report = await buildDailyReflectionReport(tradingDate);
+    } catch (e) {
+      console.error(`daily-reflection: failed to load report for ${tradingDate}: ${(e as Error).message}`);
+      return;
+    }
+    if (isJsonOutput()) return printJson(report);
+    console.log(formatDailyReflectionReport(report));
+  },
+  /**
    * Phase 4F (Missed Opportunity Intelligence, 2026-08-27). Usage:
    *   argus missed-opportunities [sinceMs]  - detected misses + classification breakdown
    *   (default lookback 24h if sinceMs omitted)
@@ -2472,7 +2504,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'premarket-focus', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
-      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'trade-economic-attribution', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'discovery-challengers', 'strategy-scorecard', 'market-data-diagnostics', 'quant-evidence', 'reflection-engine-health', 'portfolio-impact']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'trade-economic-attribution', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'discovery-challengers', 'strategy-scorecard', 'market-data-diagnostics', 'quant-evidence', 'reflection-engine-health', 'portfolio-impact', 'daily-reflection']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
       ['Doctor & shell integration', ['doctor', 'completion']],
