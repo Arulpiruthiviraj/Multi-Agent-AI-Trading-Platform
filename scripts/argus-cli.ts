@@ -32,6 +32,28 @@ import {
   unauthorizedMessage,
   writeSessionCookie,
 } from './cli/cliSession';
+import {
+  argusBanner,
+  badge,
+  bar,
+  bold,
+  box,
+  brightCyan,
+  cyan,
+  dim,
+  gray,
+  green,
+  isPretty,
+  kv,
+  pnl,
+  red,
+  sectionHeader,
+  setPrettyEnabled,
+  table,
+  tradingModeBadge,
+  tradingStateBadge,
+  yellow,
+} from './lib/cliPretty';
 
 /** Default API base; may be overridden per-invocation by --api-url= (see dispatch). */
 let BASE = process.env.ARGUS_API_URL || 'http://127.0.0.1:3000';
@@ -948,7 +970,10 @@ export const COMMAND_HELP: Record<string, string> = {
   'watchdog-stop': 'Usage: argus watchdog-stop\nStop the watchdog supervisor.',
   'watchdog-restart': 'Usage: argus watchdog-restart\nRestart the watchdog supervisor.',
   'watchdog-status': 'Usage: argus watchdog-status\nShow whether the watchdog is running and its PID.',
-  'status': 'Usage: argus status\nEngine runtime status (JSON).',
+  'status': 'Usage: argus status [--pretty]\nEngine runtime status (JSON, or beautiful colorful output with --pretty).',
+  'dashboard': 'Usage: argus dashboard [--pretty]\nBeautiful live trading dashboard: state, mode, P&L, positions, readiness. Always pretty; --pretty forces colors even when piped.',
+  'tui': 'Usage: argus tui\nOptional interactive mainframe-style terminal UI (keyboard: 1-7 pages, r refresh, ? help, q quit). Read-only; additively layered over existing APIs.',
+  'ui': 'Usage: argus ui\nAlias for `argus tui`.',
   'health': 'Usage: argus health [--json]\nFull health report: runtime, broker, AI providers, Kronos/Chronos, QuantCore. --json prints pure JSON for scripting.',
   'ready': 'Usage: argus ready\nLive-readiness snapshot (paper/live posture, gates).',
   'wait-ready': 'Usage: argus wait-ready [--timeout-ms=N]\nBlock until the API answers /health (default timeout 240s). Prints progress.',
@@ -1056,6 +1081,88 @@ export function suggestCommands(input: string, names: string[], maxDistance = 3,
     .map(({ n }) => n);
 }
 
+// ---------------------------------------------------------------------------
+// Pretty output (2026-10-06): colorful rendering for --pretty and dashboard.
+// ---------------------------------------------------------------------------
+
+/** Render /api/v2/runtime/status as a colorful summary (used by `status --pretty`). */
+function printPrettyStatus(data: any): void {
+  console.log(argusBanner());
+  console.log('');
+  const tradingState = data?.tradingState ?? data?.status?.tradingState;
+  const tradingMode = data?.tradingMode ?? data?.status?.tradingMode;
+  const pid = data?.pid ?? data?.status?.pid;
+  const uptime = data?.uptimeSec ?? data?.status?.uptimeSec;
+  console.log(box([
+    kv('Trading state', tradingStateBadge(tradingState)),
+    kv('Trading mode', tradingModeBadge(tradingMode)),
+    kv('PID', pid != null ? String(pid) : gray('unknown')),
+    kv('Uptime', uptime != null ? `${Math.round(Number(uptime) / 60)} min` : gray('unknown')),
+  ], 'Engine Status'));
+}
+
+/** Beautiful live dashboard: state, mode, P&L, positions. Read-only. */
+async function printDashboard(): Promise<void> {
+  console.log(argusBanner());
+  console.log('');
+
+  const [statusRes, portfolioRes] = await Promise.allSettled([
+    fetchJson('/api/v2/runtime/status'),
+    fetchJson('/api/v2/portfolio'),
+  ]);
+  const status = statusRes.status === 'fulfilled' ? statusRes.value : null;
+  const portfolio = portfolioRes.status === 'fulfilled' ? (portfolioRes.value as any)?.portfolio : null;
+
+  if (!status && !portfolio) {
+    console.log(red('  ✖ Cannot reach the Argus engine. Is it running? Try: argus start'));
+    return;
+  }
+
+  // -- Engine -------------------------------------------------------------
+  const tradingState = (status as any)?.tradingState ?? (status as any)?.status?.tradingState;
+  const tradingMode = (status as any)?.tradingMode ?? (status as any)?.status?.tradingMode;
+  console.log(sectionHeader('Engine'));
+  console.log(`  ${kv('State', tradingStateBadge(tradingState))}`);
+  console.log(`  ${kv('Mode', tradingModeBadge(tradingMode))}`);
+  console.log('');
+
+  // -- Portfolio ----------------------------------------------------------
+  console.log(sectionHeader('Portfolio'));
+  if (Array.isArray(portfolio) && portfolio.length > 0) {
+    const rows: string[][] = [['Symbol', 'Qty', 'Avg Price', 'Market Value', 'Unrealized P&L']];
+    let totalPnl = 0;
+    for (const h of portfolio.slice(0, 15)) {
+      const symbol = String(h.symbol ?? h.ticker ?? '?');
+      const qty = Number(h.quantity ?? h.qty ?? 0);
+      const avgPrice = Number(h.avgPrice ?? h.averageCost ?? 0);
+      const marketValue = Number(h.marketValue ?? h.currentValue ?? 0);
+      const unrealized = Number(h.unrealizedPnl ?? h.unrealizedPL ?? 0);
+      if (Number.isFinite(unrealized)) totalPnl += unrealized;
+      const pnlText = Number.isFinite(unrealized)
+        ? pnl(`${unrealized >= 0 ? '+' : ''}$${unrealized.toFixed(2)}`, unrealized)
+        : gray('--');
+      rows.push([
+        bold(symbol),
+        String(qty),
+        `$${avgPrice.toFixed(2)}`,
+        `$${marketValue.toFixed(2)}`,
+        pnlText,
+      ]);
+    }
+    console.log(table(rows));
+    if (portfolio.length > 15) console.log(dim(`  … and ${portfolio.length - 15} more positions`));
+    console.log('');
+    console.log(`  ${kv('Total unrealized', pnl(`${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`, totalPnl))}`);
+  } else {
+    console.log(dim('  No open positions.'));
+  }
+  console.log('');
+
+  // -- Footer -------------------------------------------------------------
+  console.log(dim('  ─'.repeat(30)));
+  console.log(dim(`  ${new Date().toLocaleString()} · PAPER only · LIVE_NO_GO`));
+}
+
 const commands: Record<string, () => Promise<void>> = {
   async version() {
     let version = '0.0.0';
@@ -1120,7 +1227,33 @@ const commands: Record<string, () => Promise<void>> = {
     console.log(JSON.stringify({ ok: true, running, pid: running ? readWatchdogPid() : null }, null, 2));
   },
   async status() {
-    console.log(JSON.stringify(await fetchJson('/api/v2/runtime/status'), null, 2));
+    const data = await fetchJson('/api/v2/runtime/status');
+    if (isPretty()) {
+      printPrettyStatus(data);
+      return;
+    }
+    console.log(JSON.stringify(data, null, 2));
+  },
+  async dashboard() {
+    // 2026-10-06: beautiful live trading dashboard. Fetches runtime status,
+    // portfolio, and trading state in parallel, then renders a colorful
+    // overview. Read-only: never places orders, never changes state.
+    await printDashboard();
+  },
+  async tui() {
+    // 2026-10-06: optional interactive mainframe-style terminal UI.
+    // ADDITIVE: existing commands are untouched. The TUI is a pure
+    // presentation/controller layer over existing HTTP endpoints — it never
+    // imports BrokerManager, OMS, RiskEngine, or TradingEngine, and it never
+    // duplicates trading logic. Ink is imported lazily so invoking any other
+    // command pays zero TUI cost (no polling, no timers, no UI init).
+    const { runTui } = await import('./tui/index.js');
+    await runTui(apiBase());
+  },
+  async ui() {
+    // Alias for `tui`.
+    const { runTui } = await import('./tui/index.js');
+    await runTui(apiBase());
   },
   async health() {
     return printFullHealthReport(process.argv.slice(3).includes('--json'));
@@ -2227,7 +2360,7 @@ const commands: Record<string, () => Promise<void>> = {
     console.log('  -h, --help        Show help (global or per-command: argus <cmd> --help)');
     console.log('');
     const groups: Array<[string, string[]]> = [
-      ['System / lifecycle', ['status', 'health', 'start', 'stop', 'restart', 'wait-ready', 'config']],
+      ['System / lifecycle', ['status', 'dashboard', 'tui', 'ui', 'health', 'start', 'stop', 'restart', 'wait-ready', 'config']],
       ['Watchdog (detached auto-restart supervisor)', ['watchdog-start', 'watchdog-stop', 'watchdog-restart', 'watchdog-status']],
       ['Trading state / portfolio', ['resume', 'pause', 'ready', 'positions', 'portfolio', 'brokers', 'set-broker', 'paper-profile']],
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
@@ -2269,6 +2402,10 @@ if (isMainModule) {
   const apiUrlFlag = rawArgs.find((a) => a.startsWith('--api-url='));
   if (apiUrlFlag) setApiBaseOverride(apiUrlFlag.slice('--api-url='.length));
   if (rawArgs.includes('--json')) setJsonOutput(true);
+  // 2026-10-06: --pretty / --color enables beautiful colorful CLI output.
+  // Default is plain (scripts stay parseable); NO_COLOR env also disables.
+  if (rawArgs.includes('--pretty') || rawArgs.includes('--color')) setPrettyEnabled(true);
+  if (rawArgs.includes('--no-color')) setPrettyEnabled(false);
 
   const cmd = rawArgs.find((a) => !a.startsWith('--')) || 'status';
   const onlyFlags = !rawArgs.some((a) => !a.startsWith('--'));
