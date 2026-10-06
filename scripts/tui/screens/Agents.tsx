@@ -11,11 +11,14 @@ import { theme } from '../theme.js';
 export function AgentsScreen({ client, refreshTick }: { client: TuiApiClient; refreshTick: number; compact: boolean }) {
   const agents = usePoll(client, (c) => c.agentHealth(), 5000, refreshTick);
 
+  // /api/v2/system/status returns { workers: [...] }; accept .agents too.
   const list: any[] = Array.isArray((agents.data as any)?.agents)
     ? (agents.data as any).agents
-    : Array.isArray(agents.data)
-      ? (agents.data as any[])
-      : [];
+    : Array.isArray((agents.data as any)?.workers)
+      ? (agents.data as any).workers
+      : Array.isArray(agents.data)
+        ? (agents.data as any[])
+        : [];
 
   return (
     <Box flexDirection="column">

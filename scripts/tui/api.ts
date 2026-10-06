@@ -38,11 +38,14 @@ export class TuiApiClient {
   readiness() { return getJson<any>(this.base, '/api/v2/live-readiness'); }
   portfolio() { return getJson<any>(this.base, '/api/v2/portfolio'); }
   orders() { return getJson<any>(this.base, '/api/v2/orders'); }
-  observability() { return getJson<any>(this.base, '/api/v2/observability/health'); }
-  marketStatus() { return getJson<any>(this.base, '/api/v2/market/status'); }
-  agentHealth() { return getJson<any>(this.base, '/api/v2/agents/health'); }
-  consensus() { return getJson<any>(this.base, '/api/v2/consensus/recent'); }
-  risk() { return getJson<any>(this.base, '/api/v2/risk/status'); }
+  // 2026-10-06: paths verified against the real route table (endpoint audit).
+  // Watchdog, subscription list, movers, and Fast Lane have no HTTP routes —
+  // those screens stay honest about missing data rather than guessing.
+  observability() { return getJson<any>(this.base, '/api/v2/observability/metrics'); }
+  marketStatus() { return getJson<any>(this.base, '/api/v2/runtime/market/status'); }
+  agentHealth() { return getJson<any>(this.base, '/api/v2/system/status'); }
+  consensus() { return getJson<any>(this.base, '/api/v2/observability/consensus-report'); }
+  risk() { return getJson<any>(this.base, '/api/v2/runtime/risk/status'); }
   events() { return getJson<any>(this.base, '/api/v2/observability/events?limit=50'); }
 }
 
