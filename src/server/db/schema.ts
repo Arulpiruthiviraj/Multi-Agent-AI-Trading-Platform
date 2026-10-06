@@ -1690,6 +1690,72 @@ export const postmarketReports = sqliteTable('postmarket_reports', {
   tradingDateIdx: index('idx_postmarket_reports_trading_date').on(table.tradingDate),
 }));
 
+/**
+ * Weekly reflection digest (2026-10-06, workstream K, migration 0095). One row per
+ * (week, recurring blind-spot pattern). A pattern is persisted ONLY after occurring on
+ * >= 2 distinct trading days in the week (see weeklyDigestAggregate.ts) - one-day
+ * anomalies never reach this table. Diagnostic only; never read by the live pipeline.
+ */
+export const weeklyReflectionDigest = sqliteTable('weekly_reflection_digest', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  weekStart: text('week_start').notNull(),
+  patternKey: text('pattern_key').notNull(),
+  occurrences: integer('occurrences').notNull(),
+  symbols: text('symbols').notNull(), // JSON array of distinct symbols, capped by the aggregator
+  firstSeen: text('first_seen').notNull(),
+  lastSeen: text('last_seen').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  weekPatternUnique: uniqueIndex('weekly_reflection_digest_week_pattern_unique').on(table.weekStart, table.patternKey),
+  weekIdx: index('idx_weekly_reflection_digest_week').on(table.weekStart),
+}));
+
+/**
+ * Day-movers-vs-coverage reconciliation (2026-10-06, local-only, Part B workstream H).
+ * One row per (trading_date, market mover): the EOD benchmark mover cohort (real,
+ * investable-universe day movers from the Alpaca movers screener / historical bars -
+ * never fabricated) reconciled against Argus's real discovery/evaluation coverage for
+ * that date. Written by src/server/reflection/dailyReflection.ts only - diagnostic,
+ * never read by the trading spine, never emits TRADE_IDEA_GENERATED, never gates a
+ * trade, never changes a threshold.
+ *
+ * primary_fate is exactly one of: ACTED_ON | APPROVED_NOT_EXECUTED |
+ * CONSENSUS_REJECTED | RISK_REJECTED | STRATEGY_NO_SETUP | EVALUATED |
+ * SUBSCRIBED_NOT_EVALUATED | DISCOVERED_FILTERED | DISCOVERED_NOT_PROMOTED |
+ * NEVER_SEEN | INSUFFICIENT_EVIDENCE (see coverageReconciler.ts for the
+ * funnel-ordered classification ladder).
+ *
+ * never_seen_cause is one of: UNIVERSE_COVERAGE | NEWS_SOURCE_COVERAGE |
+ * MARKET_MOVER_SOURCE | RANK_CAP | DATA_UNAVAILABLE | SYMBOL_EXTRACTION |
+ * PREMARKET_REFRESH_TIMING | OTHER | UNKNOWN. UNKNOWN is honest - a cause is
+ * never invented without positive evidence.
+ *
+ * premarket_known_by is JSON { plan0400, refresh0915, fastLane, discovery } -
+ * which pre-market surface knew this symbol before the open (trade_plans v1,
+ * premarket_focus_reports ~09:15 tiers, premarket_data_reservations, discovery
+ * admission). outcome_windows is JSON (currently the real EOD window from bars;
+ * intraday windows are a future extension for outcome audits).
+ */
+export const moverCoverage = sqliteTable('mover_coverage', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  tradingDate: text('trading_date').notNull(),
+  symbol: text('symbol').notNull(),
+  eodMovePct: real('eod_move_pct'),
+  primaryFate: text('primary_fate').notNull(),
+  secondaryReasons: text('secondary_reasons').notNull().default('[]'),
+  neverSeenCause: text('never_seen_cause'),
+  referencePrice: real('reference_price'),
+  outcomeWindows: text('outcome_windows'),
+  filterReason: text('filter_reason'),
+  filterPremiseCorrect: integer('filter_premise_correct', { mode: 'boolean' }),
+  premarketKnownBy: text('premarket_known_by'),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  dateSymbolUnique: uniqueIndex('idx_mover_coverage_date_symbol').on(table.tradingDate, table.symbol),
+  dateIdx: index('idx_mover_coverage_date').on(table.tradingDate),
+  fateIdx: index('idx_mover_coverage_fate').on(table.primaryFate),
+}));
+
 export const missedOpportunities = sqliteTable('missed_opportunities', {
   id: text('id').primaryKey(),
   symbol: text('symbol').notNull(),
@@ -2324,3 +2390,39 @@ export const premarketFocusReports = sqliteTable('premarket_focus_reports', {
 }, (table) => ({
   dateVersionIdx: index('idx_premarket_focus_reports_date_version').on(table.planDate, table.refreshVersion),
 }));
+
+/**
+ * Post-market reflection metrics (2026-10-06, local-only, workstream I): per-session
+ * outcome-audit scorecard for the discovery-filter / risk-rejection / pre-market
+ * effectiveness audits in src/server/reflection/outcomeAudits.ts. One row per trading
+ * date; written by callOutcomeAudits(), never by the trading path. Diagnostic only -
+ * these numbers describe what happened; they never gate a trade, never loosen a
+ * filter, and never feed the trading spine. Column semantics (documented in
+ * outcomeAudits.ts):
+ * - movers_total/movers_seen: major movers for the date / movers discovery actually saw
+ * - focus_recall: share of major movers named in the latest pre-market focus report
+ * - primary_data_readiness: share of PRIMARY focus entries with fresh data at the open
+ * - catalyst_coverage: share of movers with real news coverage
+ * - never_seen_rate: share of movers discovery never saw
+ * - discovery_filter_rate: share of seen movers filtered at discovery
+ * - evaluation_rate: share of admitted movers that got a real quant evaluation
+ * - valid_trigger_rate: share of evaluated movers that produced a valid entry trigger
+ * - consensus_approval_rate: share of consensus evaluations that approved
+ * - primary_precision: share of PRIMARY selections that developed a legitimate setup
+ *   (better discovery, not more symbols)
+ */
+export const reflectionSessionMetrics = sqliteTable('reflection_session_metrics', {
+  tradingDate: text('trading_date').primaryKey(),
+  moversTotal: integer('movers_total'),
+  moversSeen: integer('movers_seen'),
+  focusRecall: real('focus_recall'),
+  primaryDataReadiness: real('primary_data_readiness'),
+  catalystCoverage: real('catalyst_coverage'),
+  neverSeenRate: real('never_seen_rate'),
+  discoveryFilterRate: real('discovery_filter_rate'),
+  evaluationRate: real('evaluation_rate'),
+  validTriggerRate: real('valid_trigger_rate'),
+  consensusApprovalRate: real('consensus_approval_rate'),
+  primaryPrecision: real('primary_precision'),
+  createdAt: text('created_at').notNull(),
+});
