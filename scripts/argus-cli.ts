@@ -979,6 +979,7 @@ export const COMMAND_HELP: Record<string, string> = {
   'wait-ready': 'Usage: argus wait-ready [--timeout-ms=N]\nBlock until the API answers /health (default timeout 240s). Prints progress.',
   'resume': 'Usage: argus resume [--reason="..."]\nResume autonomous trading (operator-controlled; records the reason).',
   'pause': 'Usage: argus pause [--reason="..."]\nPause autonomous trading (records the reason).',
+  'cover-short': 'Usage: argus cover-short <SYMBOL>\nOperator-directed BUY to cover an existing short, through RiskEngine gate 26 (close_short_position_exists) - clamps to exactly the short\'s quantity. Refuses if the symbol is not actually short. Requires TRADING_ENABLED (same gate 1 as any order).',
   'set-broker': 'Usage: argus set-broker <id>\nSwitch the active execution broker at runtime (e.g. alpaca, ibkr_gateway, internal_paper). Persists to settings.',
   'brokers': 'Usage: argus brokers [--json]\nList broker capabilities and saved connections (table; --json for raw JSON).',
   'research-recommend': 'Usage: argus research-recommend [--strategy=<id>]\nShow research recommendations.',
@@ -1304,6 +1305,25 @@ const commands: Record<string, () => Promise<void>> = {
     console.log(JSON.stringify(await fetchJson('/api/v1/system/pause', {
       method: 'POST',
       body: JSON.stringify({ reason }),
+    }), null, 2));
+  },
+  /**
+   * 2026-10-07: real, missing CLI capability found while resolving the OKTA PAPER short
+   * (docs/audits/ARGUS_OKTA_RECONCILIATION_FORENSIC_2026-10-06.md) - no CLI command existed for
+   * POST /api/v1/portfolio/cover-short (RiskEngine gate 26, close_short_position_exists), unlike
+   * resume/pause/liquidate. Thin pass-through reusing fetchJson's same authenticated session, same
+   * pattern as every other command here - no raw curl, no credential handling of its own.
+   */
+  async 'cover-short'() {
+    const symbol = process.argv.slice(3).find((a) => !a.startsWith('--'));
+    if (!symbol) {
+      console.error('Usage: argus cover-short <SYMBOL>');
+      process.exitCode = 1;
+      return;
+    }
+    console.log(JSON.stringify(await fetchJson('/api/v1/portfolio/cover-short', {
+      method: 'POST',
+      body: JSON.stringify({ symbol }),
     }), null, 2));
   },
   /**

@@ -29,6 +29,40 @@ describe('calculatePositionSizing - real, shared RiskEngine/BacktestEngine sizin
     expect(result.maxQuantity).toBe(Math.min(200, Math.floor((100000 * tradingSafety.maxCorrelatedExposurePct - 48000) / 100)));
   });
 
+  // 2026-10-07 (OKTA PAPER reconciliation follow-up): valueHoldings() used to treat ANY negative
+  // quantity the same as a non-finite one, unconditionally poisoning the whole correlated/sector
+  // sum to null/UNKNOWN the moment a short was present anywhere in existingPositions - including
+  // the proposal's own symbol, which is exactly what blocked a RiskEngine-gated attempt to cover
+  // the real OKTA short. A genuine short now values correctly (a real negative dollar figure).
+  it('values a genuine short (negative quantity) holding correctly instead of failing closed as UNKNOWN', async () => {
+    const closes = Array.from({ length: 30 }, (_, i) => 200 + i);
+    const result = await calculatePositionSizing(baseCtx({
+      symbol: 'OKTA',
+      currentPrice: 218.42,
+      existingPositions: [{ symbol: 'OKTA', quantity: -14 }],
+      getRecentCloses: async () => closes,
+    }));
+    const gate = result.gates.find(g => g.gate === 'correlation_exposure');
+    expect(gate?.detail.correlatedValue).toBeCloseTo(-14 * 218.42, 5);
+    expect(gate?.detail.status).not.toBe('UNKNOWN');
+    expect(gate?.passed).toBe(true);
+  });
+
+  // A genuinely corrupt (non-finite) quantity must still fail closed - this fix only stopped
+  // treating a real negative number as corrupt, it did not loosen the non-finite guard itself.
+  it('still rejects a genuinely non-finite (NaN) holding quantity as invalid', async () => {
+    const closes = Array.from({ length: 30 }, (_, i) => 200 + i);
+    const result = await calculatePositionSizing(baseCtx({
+      symbol: 'OKTA',
+      currentPrice: 218.42,
+      existingPositions: [{ symbol: 'OKTA', quantity: NaN }],
+      getRecentCloses: async () => closes,
+    }));
+    const gate = result.gates.find(g => g.gate === 'correlation_exposure');
+    expect(gate?.detail.correlatedValue).toBeNull();
+    expect(gate?.detail.holdingValuations?.[0]?.reason).toBe('INVALID_HOLDING_QUANTITY');
+  });
+
   it.each([null, 0, NaN, Infinity])('rejects an invalid required holding price %s', async price => {
     const result = await calculatePositionSizing(baseCtx({ existingPositions: [
       { symbol: 'MSFT', quantity: 1, mark: { price, priceAgeMs: 0, source: 'ibkr_gateway' } },

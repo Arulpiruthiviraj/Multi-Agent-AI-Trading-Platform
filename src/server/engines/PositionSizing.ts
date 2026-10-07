@@ -215,7 +215,20 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
           ? { price: ctx.currentPrice, priceAgeMs: null, source: 'PROPOSAL_PRICE' }
           : p.mark;
         const freshness = p.symbol === ctx.symbol ? null : evaluateQuoteFreshness({ priceAgeMs: mark?.priceAgeMs ?? null });
-        const reason = !Number.isFinite(p.quantity) || p.quantity < 0 ? 'INVALID_HOLDING_QUANTITY'
+        // Real defect found and fixed 2026-10-07 (OKTA PAPER reconciliation follow-up): this used
+        // to treat ANY negative quantity the same as a non-finite one - 'INVALID_HOLDING_QUANTITY'
+        // - written 2026-09-19 when no legitimate negative-quantity (short) holding was a modeled
+        // case anywhere in this codebase (no comment or test ever defended it as intentional). The
+        // 2026-10-01 OKTA incident proved a short CAN legitimately reach this function - gate 26
+        // (close_short_position_exists, RiskEngine.ts) already validates it as genuine before
+        // sizing ever runs - and this unconditionally poisoned the WHOLE correlated/sector sum to
+        // null/UNKNOWN (fail-closed) the moment a short was present anywhere in `positions`, for
+        // ANY correlated/same-sector BUY proposal, not just one involving the shorted symbol
+        // itself. A finite negative quantity now values correctly (quantity * price yields a real
+        // negative dollar figure, correctly reducing - never inflating - the correlated/sector
+        // sum, matching the sign of a short's actual economic exposure). Only a genuinely
+        // non-finite quantity (NaN/Infinity - real corrupt data) is still invalid.
+        const reason = !Number.isFinite(p.quantity) ? 'INVALID_HOLDING_QUANTITY'
           : !mark || !isPositiveFiniteMoney(mark.price) ? 'MISSING_OR_INVALID_HOLDING_PRICE'
           : !mark.source?.trim() ? 'UNKNOWN_HOLDING_PRICE_SOURCE'
           : freshness && !freshness.passed ? 'STALE_OR_UNKNOWN_HOLDING_PRICE'
