@@ -188,3 +188,52 @@ THREE_HOUR_SOAK = BLOCKED
    point-in-time discipline, not a hand-built vote.
 
 No defect was found or fixed this pass. No threshold, gate, or consensus parameter was touched.
+
+---
+
+# 2026-10-07 follow-up pass (Phases 16-20 of the Calibration Trust mission): not attempted —
+# honest stop before Phase 5, three prior sections above preserved untouched
+
+**SYNTHETIC/REPLAY ONLY.** No real broker, no real PAPER account, `data/argus.db` never touched.
+`LIVE_NO_GO` unchanged throughout. No code was changed in this pass.
+
+This pass was assigned a 20-phase mission (`ARGUS_CALIBRATION_TRUST_FORENSIC.md`, same date) whose
+Phases 1-4 (confirm the existing AAPL/MSFT fixtures above, trace the calibration-trust gate, find the
+real cause of TechnicalAgent's 0 calibration sample size, audit the full calibration data-flow) are
+written up in full, with file:line citations, in that document. **Read that document for the real
+finding: `PredictionOutcomeEvaluator`/`ConsensusDebateOutcomeEvaluator` (5-real-minute
+`setInterval`) and `ReflectionEngine` (~60-real-second interval) are real-wall-clock-timer-driven, and
+a typical `speedMultiplier: 400` synthetic session's entire bar-generation loop completes in
+roughly 2 real seconds — so neither worker can fire even once within a session's lifetime, regardless
+of simulated minutes elapsed. This is why TechnicalAgent's calibration sample size was 0 in the AAPL
+case above, and it is a scheduling gap in the harness, not a defect in the calibration-trust gate
+itself (which traced clean) and not merely "no history yet."**
+
+**Phases 5-20 of that mission — a multi-day earned (never hand-seeded) calibration warmup, the
+cold-vs-warm AAPL control, the 0.6511 mathematical decomposition, the Quant-regime-abstention
+research, the four pre-defined scenario families, regressions, and any round trip — were NOT
+attempted this pass.** Per the forensic doc's own "Stop condition" section: a mission-compliant
+Phase 5 cannot reuse `src/server/replay/synthetic/CalibrationHistorySeeder.ts` (it hand-inserts
+rows, which this mission's hard prohibitions forbid); it requires a new multi-day synthetic-session
+driver that, after each simulated day, directly invokes the real `evaluatePending()`/`ReflectionEngine`
+evaluation functions (bypassing only their wall-clock *trigger*, never their logic) with point-in-time
+discipline enforced and tested — a new engineering effort comparable in size to this entire document,
+not attempted given this pass's reasoning-effort budget.
+
+Both golden negative fixtures from the sections above (MSFT `CERTIFIED_BULLISH_ENTRY_EXIT`: 79
+`triggerMet` instances, 0 clearing consensus; AAPL `COMPANY_BULLISH_CATALYST_CONVERGENCE`: 0.6511 raw
+confidence, `MODERATE_REJECT_UNTRUSTED_CALIBRATION`) are preserved exactly as committed at `91dca9a`
+and above in this file — nothing in this pass touched, re-ran, or reinterpreted either one beyond
+what `ARGUS_CALIBRATION_TRUST_FORENSIC.md` already states explicitly as "not re-executed this pass."
+
+## Final block (this pass — supersedes nothing above; Phases 16-20 scope only)
+
+```
+NATURAL_075_CONSENSUS = NOT_CERTIFIED (not attempted; AAPL cold-start ceiling remains the last real
+  measurement, 0.6511, from the section above)
+FULL_PIPELINE_TRADE_CAPABILITY = NOT_CERTIFIED
+THREE_HOUR_SOAK = BLOCKED
+```
+
+See `docs/audits/ARGUS_CALIBRATION_TRUST_FORENSIC.md` for the full Phase 1-4 trace and its own
+Phase 1-15-scope verdict blocks.
