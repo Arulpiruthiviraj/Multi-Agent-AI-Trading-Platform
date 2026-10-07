@@ -555,6 +555,49 @@ describe('RiskEngine.evaluateRisk', () => {
     expect(assessment.maxQuantity).toBe(5);
   });
 
+  // 2026-10-07 (OKTA PAPER reconciliation follow-up): operator-directed short-cover path. Normal
+  // BUY sizing (above) is budget/risk/buying-power only and has zero awareness of an existing
+  // negative (short) position — these two tests cover the new, opt-in close_short_position_exists
+  // gate that clamps a closePositionIntent:true BUY to exactly the short's own quantity, and
+  // refuses outright when the symbol isn't actually short (so it can't be used to disguise opening
+  // a fresh long as "covering").
+  it('clamps a closePositionIntent BUY to exactly the existing short quantity, even when budget sizing would allow far more', async () => {
+    mockBrokerHolder.broker = makeBroker(basePortfolio({
+      equity: 1000000,
+      buyingPower: 1000000,
+      positions: [{ symbol: 'OKTA', quantity: -14, entryPrice: 212.61 }],
+    }));
+    setTableRows(schema.settings, [{ riskLevel: 'Aggressive', maxTradeSize: 1000000 }]);
+
+    await riskEngine.evaluateRisk({ traceId: 't-cover-1', symbol: 'OKTA', side: 'BUY', currentPrice: 100, closePositionIntent: true });
+
+    const assessment = lastAssessment();
+    expect(assessment.approved).toBe(true);
+    expect(assessment.maxQuantity).toBe(14);
+  });
+
+  it('refuses a closePositionIntent BUY when the symbol is not actually short (cannot disguise a fresh long as a cover)', async () => {
+    mockBrokerHolder.broker = makeBroker(basePortfolio({ positions: [] }));
+
+    await riskEngine.evaluateRisk({ traceId: 't-cover-2', symbol: 'OKTA', side: 'BUY', currentPrice: 100, closePositionIntent: true });
+
+    const assessment = lastAssessment();
+    expect(assessment.approved).toBe(false);
+    expect(assessment.maxQuantity).toBe(0);
+  });
+
+  it('refuses a closePositionIntent BUY when the symbol is a long, not a short', async () => {
+    mockBrokerHolder.broker = makeBroker(basePortfolio({
+      positions: [{ symbol: 'OKTA', quantity: 14, entryPrice: 212.61 }],
+    }));
+
+    await riskEngine.evaluateRisk({ traceId: 't-cover-3', symbol: 'OKTA', side: 'BUY', currentPrice: 100, closePositionIntent: true });
+
+    const assessment = lastAssessment();
+    expect(assessment.approved).toBe(false);
+    expect(assessment.maxQuantity).toBe(0);
+  });
+
   it('skips the market-hours gate (does not block) when Alpaca credentials are not configured', async () => {
     await riskEngine.evaluateRisk({ traceId: 't12', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
     const assessment = lastAssessment();

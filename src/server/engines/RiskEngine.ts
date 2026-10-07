@@ -830,6 +830,27 @@ export class RiskEngine {
                     }
                 }
 
+                // Operator-directed short-cover path (2026-10-07, OKTA PAPER reconciliation
+                // follow-up — docs/audits/ARGUS_OKTA_RECONCILIATION_FORENSIC_2026-10-06.md §18
+                // Option B). Normal BUY sizing above has zero awareness that an existing position
+                // can be negative (a short) — it sizes purely from budget/risk/buying-power, the
+                // same as opening any brand-new long, which is NOT guaranteed to land on exactly
+                // the short's own quantity. This is NEVER reached by autonomous trading: it only
+                // fires when the caller (PipelineFlatten.ts's submitPipelineOrder, via the explicit
+                // operator-only POST /api/v1/portfolio/cover-short route) sets
+                // `closePositionIntent: true` on the approved idea. Mirrors sell_position_exists'
+                // existing pattern exactly — recorded only when applicable, clamps maxQuantity down
+                // (never up), and explicitly refuses (maxQuantity=0) if the symbol is not actually
+                // short, so this cannot be used to disguise opening a fresh long as "covering."
+                if (proposal.side === 'BUY' && proposal.closePositionIntent === true) {
+                    const existingPosition = portfolio.positions.find((p: any) => p.symbol === proposal.symbol);
+                    const isGenuineShort = !!existingPosition && existingPosition.quantity < 0;
+                    recordGate('close_short_position_exists', isGenuineShort, {
+                        existingQuantity: existingPosition?.quantity ?? 0,
+                    });
+                    maxQuantity = isGenuineShort ? Math.min(maxQuantity, Math.abs(existingPosition.quantity)) : 0;
+                }
+
                 // Argus allocation is a hard authority ceiling, distinct from broker buying power.
                 // Replay uses allocationBudget from ReplayConfig; live uses settings.budget.
                 const rawBudget = replay

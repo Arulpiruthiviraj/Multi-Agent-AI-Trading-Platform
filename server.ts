@@ -104,7 +104,7 @@ import { shadowPortfolioState, saveShadowPortfolio } from "./src/server/state/sh
 import { integrationRouter } from "./src/server/routes/integrationRoutes";
 import { tradingEngine } from "./src/server/engines/TradingEngine";
 import { marketDataWorker } from "./src/server/services/MarketDataWorker";
-import { submitPipelineSells } from "./src/server/services/PipelineFlatten";
+import { submitPipelineSells, submitPipelineOrder } from "./src/server/services/PipelineFlatten";
 import { validateTargetAllocations, executeRebalance } from "./src/server/services/PortfolioRebalance";
 import { brokerPortfolioError, withTimeout } from "./src/server/services/brokerPortfolioResponse";
 import { resolvePositionStopTarget } from "./src/server/services/PortfolioMonitor";
@@ -1221,6 +1221,37 @@ let portfolioState = loadPortfolio();
         ok: result.refused.length === 0,
         ...result,
         note: "SELL ideas were emitted as CHIEF_APPROVED_IDEA. RiskEngine and OMS still run. This does not call broker.closePosition.",
+      });
+    } catch (e: any) {
+      res.status(502).json({ ok: false, error: e.message });
+    }
+  });
+
+  // Operator-directed short-cover (2026-10-07, OKTA PAPER reconciliation follow-up —
+  // docs/audits/ARGUS_OKTA_RECONCILIATION_FORENSIC_2026-10-06.md §18 Option B). Submits a single
+  // BUY idea through the exact same CHIEF_APPROVED_IDEA -> RiskEngine -> OMS pipeline
+  // /liquidate uses, with closePositionIntent:true so RiskEngine's close_short_position_exists
+  // gate clamps the quantity to exactly the existing short (never broker.closePosition/
+  // placeOrder directly, never a raw DB write). Refuses (maxQuantity=0 inside RiskEngine) if the
+  // symbol is not actually short - this cannot be used to open a fresh long disguised as a cover.
+  app.post("/api/v1/portfolio/cover-short", tradingLimiter, async (req: Request, res: Response) => {
+    try {
+      const symbol = typeof req.body?.symbol === "string" ? req.body.symbol.trim().toUpperCase() : "";
+      if (!symbol) {
+        return res.status(400).json({ ok: false, error: "symbol is required" });
+      }
+      const broker = BrokerManager.getInstance().getActiveBroker();
+      const portfolio = await broker.portfolio();
+      const existing = portfolio.positions.find((p) => p.symbol === symbol);
+      if (!existing || existing.quantity >= 0) {
+        return res.json({ ok: true, submitted: [], refused: [{ symbol, reason: `${symbol} is not currently short at the broker (quantity=${existing?.quantity ?? 0}) — nothing to cover.` }] });
+      }
+      const result = await submitPipelineOrder(symbol, "BUY", `Operator short-cover: BUY submitted through ChiefTrader event (closePositionIntent) so RiskEngine and OMS still run and clamp to exactly the existing short quantity. Not a raw broker.placeOrder.`, true);
+      res.json({
+        ok: !("reason" in result),
+        submitted: "reason" in result ? [] : [result],
+        refused: "reason" in result ? [result] : [],
+        note: "BUY idea was emitted as CHIEF_APPROVED_IDEA with closePositionIntent:true. RiskEngine's close_short_position_exists gate clamps quantity to the existing short. This does not call broker.placeOrder directly.",
       });
     } catch (e: any) {
       res.status(502).json({ ok: false, error: e.message });

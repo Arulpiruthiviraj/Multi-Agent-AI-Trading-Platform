@@ -1,5 +1,5 @@
 {
-  "$comment": "RiskEngine.evaluateRiskSerialized evaluation order for UI catalog only. Pass/fail must come from RISK_GATE_EVALUATED / risk_gate_results — never from this file. sell_position_exists is recorded on SELL only; BUY assessments omit it.",
+  "$comment": "RiskEngine.evaluateRiskSerialized evaluation order for UI catalog only. Pass/fail must come from RISK_GATE_EVALUATED / risk_gate_results — never from this file. sell_position_exists is recorded on SELL only; BUY assessments omit it. close_short_position_exists is recorded only when a BUY carries closePositionIntent=true (the operator-directed short-cover path, PipelineFlatten.ts) — never during normal autonomous BUY evaluation.",
   "gates": [
     "emergency_stop",
     "autobot_enabled",
@@ -23,6 +23,7 @@
     "correlation_exposure",
     "sufficient_size",
     "sell_position_exists",
+    "close_short_position_exists",
     "argus_capital_allocation",
     "daily_buy_notional",
     "extended_hours_execution_policy"

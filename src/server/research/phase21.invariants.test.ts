@@ -238,9 +238,9 @@ describe('Phase 21 evidence-path invariants', () => {
     expect(gate.allowBuy).toBe(false);
   });
 
-  it('RiskEngine catalog still has 25 recorded gates (25th added 2026-09-05: extended_hours_execution_policy, Session-Aware Trading Architecture Phase 5)', () => {
+  it('RiskEngine catalog still has 26 recorded gates (26th added 2026-10-07: close_short_position_exists, operator-only short-cover gate, never fires for autonomous trading)', () => {
     const catalog = loadRepoConfigJson<{ gates: string[] }>('riskGateOrder.json');
-    expect(catalog.gates).toHaveLength(25);
+    expect(catalog.gates).toHaveLength(26);
   });
 
   it('never auto-flattens on reconciliation mismatch; consensus floors stay 0.75 / min 2', () => {

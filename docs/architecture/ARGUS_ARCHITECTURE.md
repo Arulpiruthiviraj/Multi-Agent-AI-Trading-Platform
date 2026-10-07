@@ -1,5 +1,41 @@
 # Argus Architecture
 
+## 2026-10-07: RiskEngine gate 26 — operator-directed short-cover sizing (`close_short_position_exists`)
+
+**One new, additive, operator-only RiskEngine gate — the autonomous BUY/SELL spine is unaffected
+and still evaluates exactly the original 25.** Built to resolve the real OKTA PAPER short found and
+forensically traced on 2026-10-06 (`docs/audits/ARGUS_OKTA_RECONCILIATION_FORENSIC_2026-10-06.md`):
+broker and the authoritative fill ledger both agree OKTA is short -14 shares, but Argus's normal BUY
+sizing (`RiskEngine.ts` → `PositionSizing.ts`) has no concept that an existing position can be
+negative — it sizes a BUY purely from budget/risk/buying-power, the same as opening a brand-new
+long, which is not guaranteed to land on exactly the short's own quantity (and PortfolioMonitor has
+no short-monitoring path at all, per the 2026-10-05 fix already documented above). A plain BUY
+through the normal autonomous pipeline could under- or over-cover the short, creating a new,
+different problem.
+
+Gate 26 (`close_short_position_exists`, `config/riskGateOrder.json`) mirrors gate 22
+(`sell_position_exists`) exactly: recorded only when the proposal carries `closePositionIntent:
+true` (never during ordinary autonomous BUY evaluation — omitted from every normal assessment,
+same convention as gate 22 being SELL-only), requires a genuine existing short
+(`existingPosition.quantity < 0`), and clamps `maxQuantity` to exactly
+`Math.abs(existingPosition.quantity)`. Fails closed (`maxQuantity=0`, approval refused) when the
+symbol is not actually short — this cannot be used to disguise opening a fresh long as "covering."
+
+Reachable only via `PipelineFlatten.ts`'s `submitPipelineOrder(symbol, 'BUY', reasoning,
+closePositionIntent)` → the new `POST /api/v1/portfolio/cover-short` route (`server.ts`, mirrors
+the existing `/api/v1/portfolio/liquidate` route's safety pattern: emits a real
+`CHIEF_APPROVED_IDEA` with `agentsContext: 'ManualOverride'`, so ChiefTrader consensus is skipped
+but RiskEngine and OMS still run in full — never a raw `broker.placeOrder`/`closePosition` call,
+never a DB write). Gate 1 (`emergency_stop`) still requires `tradingState === 'TRADING_ENABLED'`
+for this path exactly as for every other order — there is no bypass of the kill switch; the
+operator must explicitly resume trading to place the one cover order, per
+`tradingEngine.setTradingState()`'s existing, audited path.
+
+Tests: `RiskEngine.test.ts` — clamps to exactly the short's quantity even when budget sizing would
+allow far more; refuses when the symbol has no position; refuses when the symbol is a long, not a
+short. Full targeted suite (RiskEngine, RiskAgent, PipelineFlatten, architecture-protection) green;
+`tsc --noEmit` clean; build green.
+
 ## 2026-10-06: Synthetic Market Session Simulator — synthetic daily-bar provider closes the CORE-strategy certification gap
 
 **Test infrastructure only — no live/paper decision path, gate, threshold, or consensus rule

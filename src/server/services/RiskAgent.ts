@@ -31,7 +31,7 @@ export class RiskValidationAgent {
     });
   }
 
-  assessRisk(approval: { traceId: string, transactionId?: string, symbol: string, side: string, confidence: number, reasoning: string, agentsContext: string, currentPrice?: number, newsDetails?: any, supportingQuantDetail?: any }) {
+  assessRisk(approval: { traceId: string, transactionId?: string, symbol: string, side: string, confidence: number, reasoning: string, agentsContext: string, currentPrice?: number, newsDetails?: any, supportingQuantDetail?: any, closePositionIntent?: boolean }) {
      console.log(`[RiskManager] Validating ${approval.side} on ${approval.symbol}`);
 
      const request: any = {
@@ -42,6 +42,9 @@ export class RiskValidationAgent {
         currentPrice: approval.currentPrice,
         confidence: approval.confidence,
         newsDetails: approval.newsDetails,
+        // Operator-directed short-cover path (2026-10-07) — see RiskEngine.ts's own
+        // close_short_position_exists gate comment. Undefined/false for every normal idea.
+        closePositionIntent: approval.closePositionIntent,
         // Phase 16B (ARGUS_PHASE16_READINESS_REPORT.md) - forwarded so RiskEngine can pass the
         // real per-strategy stop/target on to OrderManagement, which persists it onto the trade
         // row so PortfolioMonitor can honor that strategy's own exit logic instead of the

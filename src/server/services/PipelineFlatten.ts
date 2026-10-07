@@ -14,7 +14,7 @@ export type FlattenSubmitted = { symbol: string; traceId: string; transactionId:
  * submitPipelineOrder (PortfolioRebalance.ts's directional rebalance ideas) use - the exact same
  * CHIEF_APPROVED_IDEA emission + TransactionRegistry recording either way, only `side` and
  * `reasoning` differ. Never calls broker.closePosition or any other broker method directly. */
-async function submitPipelineIdea(symbol: string, side: 'BUY' | 'SELL', reasoning: string): Promise<FlattenSubmitted | FlattenRefusal> {
+async function submitPipelineIdea(symbol: string, side: 'BUY' | 'SELL', reasoning: string, closePositionIntent?: boolean): Promise<FlattenSubmitted | FlattenRefusal> {
   const currentPrice = marketDataWorker.getLatestPrice(symbol);
   if (currentPrice === null) {
     return { symbol, reason: `No live price for ${symbol} — cannot size a ${side} without one. RiskEngine refuses missing prices.` };
@@ -48,6 +48,7 @@ async function submitPipelineIdea(symbol: string, side: 'BUY' | 'SELL', reasonin
     reasoning,
     agentsContext: 'ManualOverride',
     currentPrice,
+    closePositionIntent,
   });
 
   return { symbol, traceId, transactionId, currentPrice };
@@ -77,6 +78,6 @@ export async function submitPipelineSells(symbols: string[]): Promise<{
 /** One directional (BUY or SELL) idea per already-deduped/validated symbol, same real
  * pipeline/safety properties as submitPipelineSells. Used by PortfolioRebalance.ts - callers are
  * responsible for deciding direction (this function invents no allocation logic of its own). */
-export async function submitPipelineOrder(symbol: string, side: 'BUY' | 'SELL', reasoning: string): Promise<FlattenSubmitted | FlattenRefusal> {
-  return submitPipelineIdea(symbol.toUpperCase(), side, reasoning);
+export async function submitPipelineOrder(symbol: string, side: 'BUY' | 'SELL', reasoning: string, closePositionIntent?: boolean): Promise<FlattenSubmitted | FlattenRefusal> {
+  return submitPipelineIdea(symbol.toUpperCase(), side, reasoning, closePositionIntent);
 }
