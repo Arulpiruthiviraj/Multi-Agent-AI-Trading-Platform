@@ -69,6 +69,9 @@ export interface ContinuousIntelligenceConfig {
    *  capacity increase (the existing swap-cap/pacing below is unchanged; this only widens the
    *  CANDIDATE POOL competing for that same bounded budget). */
   broadUniverseHotSwapChallengerLimit: number;
+  /** Control-plane fairness only; does not modify scores or trade gates. Default off. */
+  subscriptionDeferralFairnessEnabled: boolean;
+  subscriptionDeferralFairnessMinCycles: number;
   /** 2026-09-29 (same fix): weight applied to a broad-universe challenger's |gapPct| * 100 (percent
    *  units, matching SnapshotScanner's own SCORE_WEIGHT_PCT=0.5 convention for intradayPctChange)
    *  when computing its hot-swap challenger score. gapPct is real, already-fetched evidence
@@ -376,6 +379,8 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     moverPriorityScoreBonus: requireNonNegativeNumber(raw.moverPriorityScoreBonus, 'moverPriorityScoreBonus'),
     composableRankingHotSwapWeight: requireNonNegativeNumber(raw.composableRankingHotSwapWeight, 'composableRankingHotSwapWeight'),
     broadUniverseHotSwapChallengerLimit: requireNumber(raw.broadUniverseHotSwapChallengerLimit, 'broadUniverseHotSwapChallengerLimit'),
+    subscriptionDeferralFairnessEnabled: raw.subscriptionDeferralFairnessEnabled === true,
+    subscriptionDeferralFairnessMinCycles: Math.ceil(requireNumber(raw.subscriptionDeferralFairnessMinCycles, 'subscriptionDeferralFairnessMinCycles')),
     broadUniverseGapHotSwapWeight: requireNonNegativeNumber(raw.broadUniverseGapHotSwapWeight, 'broadUniverseGapHotSwapWeight'),
     gapMoverMinAbsPct: requireNonNegativeNumber(raw.gapMoverMinAbsPct, 'gapMoverMinAbsPct'),
     gapPctMaxPlausibleOpenToPrevCloseRatio: requireNumber(raw.gapPctMaxPlausibleOpenToPrevCloseRatio, 'gapPctMaxPlausibleOpenToPrevCloseRatio'),

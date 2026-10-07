@@ -4085,3 +4085,42 @@ recurrence, RUNNING reports excluded, upsert idempotent); `PostMarketAnalysis.un
 — 3 tests (TRUE_UNIVERSE_MISS genuinely populated with real cause; seen symbols not
 mislabeled). Existing PostMarketAnalysis (18) + MissedOpportunityDetector (30) + Detector
 persistence (8) suites pass unchanged after the taxonomy edits.
+## 2026-10-07: bounded full-capacity subscription deferral fairness
+
+The CIEN forensic snapshot (`docs/audits/archive/ARGUS_CIEN_SUBSCRIPTION_FORENSIC_2026-10-07.md`)
+identified six qualified challenger cycles lost to stronger newcomers under the intentional
+one-swap budget. Shortlist aging did not reach the final full-capacity handoff.
+
+`OpportunityDiscovery.orderDeferredSubscriptionCandidates()` adds opt-in scheduling fairness
+under `continuousIntelligence.subscriptionDeferralFairnessEnabled` (default **false**). After
+`subscriptionDeferralFairnessMinCycles` qualified skips (initial policy: three), the oldest
+waiting broad-universe challenger receives first consideration for the existing single swap.
+Canonical bounded `candidateLifecycle` records own this wait evidence; no additional scheduler,
+quantitative score calculation, broker channel or trading path is introduced. Candidate scores
+are unchanged. The existing planner independently checks the real score margin, swap budget,
+active set and MarketDataWorker's protected/dwell/rescue-aware eviction subset. Missing, future,
+non-finite or stale broad-universe snapshot timestamps disallow fairness. Wait continuity expires
+using the existing `recentCandidatePriorityMaxAgeMs`; repeated calls for one cycle are idempotent.
+Selection clears the wait, as does an observed loss of eligibility. Restart resets this in-memory
+scheduling evidence. At the existing record cap, waiting records take retention priority over
+ordinary discovery records; if all records are waiting, oldest activity is evicted. The cap never
+increases. Candidates outside the bounded challenger pool do not receive this preference.
+
+Both real planning and its explainer receive the same ordered pool. Subscription decision logs
+include cycleId, remaining deferredCycles and schedulingPolicy. A selected request is **not**
+provider acknowledgment, fresh quote receipt, quantitative assessment, consensus or a fill.
+The feature does not guarantee assessment completion, change existing data dwell duration,
+certify warm calibration, establish edge or authorize LIVE. Follow-up work remains to verify
+the acknowledgment-to-assessment lifetime and conduct the isolated warm-calibration/soak checks.
+This implementation has not been activated in the running process; deployment and runtime
+verification remain separate. Archived forensic evidence is immutable.
+
+Validation for this batch: the real scan regression verifies three qualified deferrals followed
+by one CIEN subscription request, unchanged propagated score and reset wait evidence. Seven
+scheduling/lifecycle regressions cover opt-out, score margin, protected incumbents, budget,
+missing/stale/future/non-finite snapshot evidence, deterministic ordering, record-cap retention
+and stale-state cleanup. The sequential related run passed 537/538 tests across 38 files; its
+remaining SnapshotScanner ranking integration timeout reproduced on a separate recheck.
+The full-suite attempt terminated with a memory-allocation failure. That recheck also reproduced
+a dailyReflection coverage-count assertion failure. These failures remain unresolved; no clean
+full-suite certificate, deployment, provider acknowledgment or real-session improvement is claimed.

@@ -19,7 +19,7 @@ import { isPennyStockEnabled } from '../config/multiAsset';
 import { classifyAsset, isPennyOrMicro, type AssetSnapshot } from '../multiAsset/AssetClassifier';
 import { evaluateAssetSafety } from '../multiAsset/SafetyFilter';
 import { marketDataWorker } from '../services/MarketDataWorker';
-import { upsertCandidate, expireStaleCandidates } from './candidateLifecycle';
+import { upsertCandidate, expireStaleCandidates, getCandidate, recordSubscriptionDeferral } from './candidateLifecycle';
 import { recordCandidate } from '../core/recentCandidateRegistry';
 import { tradingSafety } from '../config/tradingSafety';
 import { getCachedBroadUniverseCandidatesWithVolume, getCachedBroadUniverseGapPct, getCachedBroadUniverseSnapshotFetchedAt, getCachedMoverSymbols, getCachedNewsCatalystSymbols, marketUniverseScannerWorker } from './MarketUniverseScanner';
@@ -382,6 +382,31 @@ export function planSnapshotHotSwap(opts: {
   return toRequest;
 }
 
+/** Control-plane ordering: waiting never increases a quantitative score. Only candidates that
+ * independently pass the existing planner can take the single full-capacity swap. */
+export function orderDeferredSubscriptionCandidates(
+  opts: Parameters<typeof planSnapshotHotSwap>[0],
+  broadSymbols: Set<string>, now: number, snapshotFetchedAt: number | null,
+): SnapshotCandidate[] {
+  const maxAge = tradingSafety.recentCandidatePriorityMaxAgeMs;
+  if (!continuousIntelligence.subscriptionDeferralFairnessEnabled || opts.emptySlots !== 0 ||
+      snapshotFetchedAt == null || !Number.isFinite(snapshotFetchedAt) || snapshotFetchedAt > now ||
+      now - snapshotFetchedAt > maxAge) return opts.top;
+  const waiting = opts.top.filter(c => {
+    const wait = getCandidate(c.symbol)?.subscriptionWait;
+    return broadSymbols.has(c.symbol) && Number.isFinite(c.momentumScore) && c.momentumScore > 0 &&
+      wait && now >= wait.lastCycleAt && now - wait.lastCycleAt <= maxAge &&
+      wait.deferredCycles >= continuousIntelligence.subscriptionDeferralFairnessMinCycles &&
+      planSnapshotHotSwap({ ...opts, top: [c] }).includes(c.symbol);
+  }).sort((a, b) => {
+    const aw = getCandidate(a.symbol)!.subscriptionWait!;
+    const bw = getCandidate(b.symbol)!.subscriptionWait!;
+    return aw.since - bw.since || a.symbol.localeCompare(b.symbol);
+  });
+  const first = waiting[0];
+  return first ? [first, ...opts.top.filter(c => c.symbol !== first.symbol)] : opts.top;
+}
+
 export async function runOpportunityScan(now: Date = new Date()): Promise<OpportunityScanStats> {
   try {
     const { runCampaignOpeningSurge } = await import('../services/CampaignOpeningSurge');
@@ -476,6 +501,13 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
     // (the scoreOf callback below) with no double-counting risk - see that callback's own comment.
     const priorityScoreOf = (symbol: string): number =>
       scoreBroadUniverseChallenger(symbol, getCachedBroadUniverseGapPct(symbol), baseScoreOf);
+
+    // Register this cycle before recording scheduling outcomes (previously the lifecycle upsert
+    // ran after planning). Use the supplied scan clock consistently for deterministic replay.
+    for (const row of shortlist) {
+      upsertCandidate({ symbol: row.symbol, state: active.has(row.symbol) ? 'WATCHING' : 'DISCOVERED',
+        assetClass: row.assetClass, reason: row.reason, now: now.getTime() });
+    }
 
     if (continuousIntelligence.momentumRotationEnabled) {
       const top = await getTopMomentumCandidates(continuousIntelligence.snapshotTopCandidates, { now });
@@ -746,7 +778,7 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
           });
         }, 'MOMENTUM_CANDIDATE_NON_FINITE_SCORE_EXCLUDED');
       }
-      const combinedTop = [...rankedTop, ...broadUniverseChallengers]
+      let combinedTop = [...rankedTop, ...broadUniverseChallengers]
         .sort((a, b) => b.momentumScore - a.momentumScore || a.symbol.localeCompare(b.symbol));
       // 2026-09-29 correction: the SAME score that decided selection must be what gets stored as
       // this symbol's ongoing eviction priority (MarketDataWorker.dynamicMomentumScores) - real
@@ -769,15 +801,33 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
       // score while an otherwise-identical challenger's gap term counted in full - a real,
       // source-dependent scoring bias, not just a challenger-side gap. Safe to unify now that
       // baseScoreOf (above) never reads back an already-bonused stored value.
-      const planned = planSnapshotHotSwap({
+      const plannerOptions = {
         top: combinedTop,
         active,
         activeDynamic,
         emptySlots,
         maxSwaps,
         scoreEdge: continuousIntelligence.snapshotMomentumScoreEdge,
-        scoreOf: (sym) => priorityScoreOf(sym),
-      });
+        scoreOf: (sym: string) => priorityScoreOf(sym),
+      };
+      const scoreRankWinner = planSnapshotHotSwap(plannerOptions)[0];
+      combinedTop = orderDeferredSubscriptionCandidates(plannerOptions, broadUniverseChallengerSymbols,
+        now.getTime(), getCachedBroadUniverseSnapshotFetchedAt());
+      const planned = planSnapshotHotSwap({ ...plannerOptions, top: combinedTop });
+      // Canonical bounded lifecycle owns wait evidence, not the best-effort logger. Count only
+      // qualified full-capacity skips; stale/unqualified/non-present candidates lose continuity.
+      if (continuousIntelligence.subscriptionDeferralFairnessEnabled) {
+        const snapshotAt = getCachedBroadUniverseSnapshotFetchedAt();
+        const fresh = snapshotAt != null && Number.isFinite(snapshotAt) && snapshotAt <= now.getTime() &&
+          now.getTime() - snapshotAt <= tradingSafety.recentCandidatePriorityMaxAgeMs;
+        for (const c of combinedTop) {
+          if (!broadUniverseChallengerSymbols.has(c.symbol)) continue;
+          const eligible = emptySlots === 0 && fresh && c.momentumScore > 0 &&
+            planSnapshotHotSwap({ ...plannerOptions, top: [c] }).includes(c.symbol);
+          recordSubscriptionDeferral(c.symbol, planned.includes(c.symbol) || !eligible,
+            now.getTime(), tradingSafety.recentCandidatePriorityMaxAgeMs);
+        }
+      }
       toRequest = planned;
       momentumHotSwap = planned.length > 0 && (emptySlots === 0 || rth);
       const broadUniverseHotSwapWinners = new Set(planned.filter((s) => broadUniverseChallengerSymbols.has(s)));
@@ -850,6 +900,10 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
               symbol: d.symbol,
               reasoning: d.reason,
               reasonCode,
+              cycleId,
+              deferredCycles: getCandidate(d.symbol)?.subscriptionWait?.deferredCycles ?? 0,
+              schedulingPolicy: planned[0] !== scoreRankWinner && d.symbol === planned[0]
+                ? 'DEFERRAL_FAIRNESS' : 'SCORE_RANK',
               source: broadUniverseChallengerSymbols.has(d.symbol) ? 'BROAD_UNIVERSE_CHALLENGER' : 'MOMENTUM_UNIVERSE',
               // §5: promotion/displacement detail - only meaningful (and only present) when this
               // decision actually displaced an incumbent (d.displaces is set by the explainer only
@@ -913,15 +967,6 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
         }
         toRequest = toRequest.concat(topUp);
       }
-    }
-
-    for (const row of shortlist) {
-      upsertCandidate({
-        symbol: row.symbol,
-        state: active.has(row.symbol) ? 'WATCHING' : 'DISCOVERED',
-        assetClass: row.assetClass,
-        reason: row.reason,
-      });
     }
 
     for (const symbol of toRequest) {

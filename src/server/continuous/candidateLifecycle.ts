@@ -18,6 +18,7 @@ export interface CandidateRecord {
   reason: string;
   updatedAt: number;
   lastIdeaAt: number | null;
+  subscriptionWait?: { since: number; lastCycleAt: number; deferredCycles: number };
 }
 
 const candidates = new Map<string, CandidateRecord>();
@@ -25,7 +26,10 @@ const candidates = new Map<string, CandidateRecord>();
 function cap(): void {
   const max = continuousIntelligence.maxCandidateRecords;
   if (candidates.size <= max) return;
-  const ordered = [...candidates.values()].sort((a, b) => a.updatedAt - b.updatedAt);
+  // Prefer retaining real scheduling wait evidence over an untouched discovery record. Still
+  // strictly bounded; if every record is waiting, oldest activity is evicted first.
+  const ordered = [...candidates.values()].sort((a, b) =>
+    Number(Boolean(a.subscriptionWait)) - Number(Boolean(b.subscriptionWait)) || a.updatedAt - b.updatedAt);
   for (const row of ordered.slice(0, candidates.size - max)) {
     candidates.delete(row.symbol);
   }
@@ -48,6 +52,7 @@ export function upsertCandidate(input: {
     reason: input.reason || prev?.reason || '',
     updatedAt: now,
     lastIdeaAt: prev?.lastIdeaAt ?? null,
+    subscriptionWait: input.state === 'STALE' || input.state === 'FILTERED_OUT' ? undefined : prev?.subscriptionWait,
   };
   candidates.set(symbol, next);
   cap();
@@ -83,7 +88,7 @@ export function expireStaleCandidates(maxAgeMs: number, now: number = Date.now()
   for (const [symbol, record] of candidates) {
     if (record.state === 'PROMOTED' || record.state === 'FILTERED_OUT' || record.state === 'STALE') continue;
     if (now - record.updatedAt > maxAgeMs) {
-      candidates.set(symbol, { ...record, state: 'STALE' });
+      candidates.set(symbol, { ...record, state: 'STALE', subscriptionWait: undefined });
       expired++;
     }
   }
@@ -92,6 +97,24 @@ export function expireStaleCandidates(maxAgeMs: number, now: number = Date.now()
 
 export function getCandidate(symbol: string): CandidateRecord | undefined {
   return candidates.get(symbol.toUpperCase());
+}
+
+/** Scheduling evidence only: a request is not an acknowledgment or an assessment. */
+export function recordSubscriptionDeferral(symbol: string, selected: boolean, now: number, maxAgeMs: number): void {
+  const record = candidates.get(symbol.toUpperCase());
+  if (!record) return;
+  if (selected) {
+    record.subscriptionWait = undefined;
+    return;
+  }
+  const previous = record.subscriptionWait;
+  if (previous?.lastCycleAt === now) return; // idempotent within a scan
+  const continuous = previous && now > previous.lastCycleAt && now - previous.lastCycleAt <= maxAgeMs;
+  record.subscriptionWait = {
+    since: continuous ? previous.since : now,
+    lastCycleAt: now,
+    deferredCycles: continuous ? previous.deferredCycles + 1 : 1,
+  };
 }
 
 export function listCandidates(): CandidateRecord[] {

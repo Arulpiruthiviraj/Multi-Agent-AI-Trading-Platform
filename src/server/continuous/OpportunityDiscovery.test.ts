@@ -28,6 +28,7 @@ import * as SnapshotScanner from './SnapshotScanner';
 import * as MarketUniverseScanner from './MarketUniverseScanner';
 import { resetBroadUniverseAllocatorForTests } from './BroadUniverseSubscriptionAllocator';
 import { structuredLogger } from '../observability/StructuredLogger';
+import { getCandidate, resetCandidatesForTests } from './candidateLifecycle';
 
 const FLAG_O = continuousIntelligence.opportunityLoopEnabledEnvVar;
 
@@ -64,6 +65,44 @@ afterEach(() => {
 describe('OpportunityDiscovery', () => {
   beforeEach(() => {
     resetOpportunityScanForTests();
+  });
+
+  it('routes a repeatedly deferred broad challenger through the real scan and preserves its score and one-request budget', async () => {
+    const original = continuousIntelligence.subscriptionDeferralFairnessEnabled;
+    const subs: Array<{ symbol?: string; momentumScore?: number }> = [];
+    const onSub = (p: { symbol?: string; momentumScore?: number }) => subs.push(p);
+    const start = Date.parse('2026-10-07T14:00:00Z');
+    process.env[FLAG_O] = 'true';
+    continuousIntelligence.subscriptionDeferralFairnessEnabled = true;
+    resetCandidatesForTests();
+    vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
+      Array.from({ length: marketDataWorker.getEffectiveStreamingCap() }, (_, i) => `ZZ${i}`));
+    mockDynamicSymbols(['WEAK']);
+    vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([
+      { symbol: 'RBLX', intradayPctChange: 0, rangeExpansion: 0, relativeVolume: 0, momentumScore: 10 },
+    ]);
+    vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockImplementation(s => s === 'RBLX' ? 10 : null);
+    vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['CIEN']));
+    vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockImplementation(s => s === 'CIEN' ? 0.04 : null);
+    vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseSnapshotFetchedAt').mockReturnValue(start);
+    eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+    try {
+      for (let i = 0; i < continuousIntelligence.subscriptionDeferralFairnessMinCycles; i++) {
+        subs.length = 0;
+        await runOpportunityScan(new Date(start + i * 1000));
+        expect(subs.map(s => s.symbol)).toEqual(['RBLX']);
+      }
+      expect(getCandidate('CIEN')?.subscriptionWait?.deferredCycles).toBe(continuousIntelligence.subscriptionDeferralFairnessMinCycles);
+      subs.length = 0;
+      await runOpportunityScan(new Date(start + continuousIntelligence.subscriptionDeferralFairnessMinCycles * 1000));
+      expect(subs.map(s => s.symbol)).toEqual(['CIEN']);
+      expect(subs[0].momentumScore).toBe(0.04 * 100 * continuousIntelligence.broadUniverseGapHotSwapWeight);
+      expect(getCandidate('CIEN')?.subscriptionWait).toBeUndefined();
+    } finally {
+      eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+      continuousIntelligence.subscriptionDeferralFairnessEnabled = original;
+      resetCandidatesForTests();
+    }
   });
 
   it('never emits TRADE_IDEA_GENERATED even when the opportunity loop is on', async () => {
