@@ -265,6 +265,72 @@ export const CERTIFIED_BULLISH_ENTRY_EXIT: ScenarioProfile = {
   ],
 };
 
+/** SCENARIO: COMPANY_BULLISH_CATALYST_CONVERGENCE (2026-10-06, News+Quant independent round-trip
+ *  mission, Phase 1). Built to a economic story defined BEFORE any run of this scenario was
+ *  attempted, and BEFORE any consensus/confidence number from it was observed - per the operator's
+ *  explicit "define the story first, then let the real agents decide" instruction:
+ *
+ *   - A genuine company-specific bullish catalyst (an AAPL product-cycle upside report) lands just
+ *     after an orderly pre-event open - not into chaos, not into an already-extended move.
+ *   - The repricing happens as a real structural break: a gap + a volume/volatility pop (the same
+ *     BOS_BULLISH / RVOL-EXPANDING shape MOMENTUM_BREAKOUT already checks for), matching Phase B of
+ *     CERTIFIED_BULLISH_ENTRY_EXIT and the opening segment of VALIDATED_CONVERGENCE_CONTROL.
+ *   - The move then HOLDS rather than mean-reverting: a long, sustained, volume-confirmed uptrend
+ *     at VALIDATED_CONVERGENCE_CONTROL's own empirically-tuned volatilityMultiplier (1.3) - that
+ *     scenario's own header documents the real, already-discovered failure mode of using a lower
+ *     multiplier (RSI pins in the 85-97 extreme-overbought band, so TechnicalAgent's own real
+ *     mean-reversion rule and JavaCoreEnsemble's own real MEAN_REVERSION_FAMILY strategies correctly
+ *     flip bearish on an overextended move). Reusing that exact, already-validated ratio here is
+ *     applying a known-good lesson, not tuning against this scenario's own outcome.
+ *   - Volume stays elevated (real RVOL confirmation) for the whole trending segment, not just the
+ *     open, and the session is long enough for SMA20/50/200 and ADX-class conditions to actually
+ *     evaluate from this session's own bars (same rationale VALIDATED_CONVERGENCE_CONTROL's header
+ *     already gives).
+ *   - Controlled pullbacks exist (a short, bounded dip, reusing CERTIFIED_BULLISH_ENTRY_EXIT's own
+ *     Phase C1 parameters) rather than a suspiciously monotonic ramp - a real market gives back some
+ *     of a move without reversing it.
+ *   - The broader market is not made to oppose the move: no contrary index/macro event is injected
+ *     anywhere in this scenario.
+ *   - A genuine later reversal exists (reusing CERTIFIED_BULLISH_ENTRY_EXIT's own Phase F drift/vol/
+ *     volume parameters verbatim) so a real trailing-stop/thesis-invalidation exit has a real trigger
+ *     to fire on - required for this mission's round-trip phases, not optional.
+ *
+ *  Symbol choice (AAPL) predates this scenario and is not a result of searching this scenario for a
+ *  passing score: `docs/audits/ARGUS_SYNTHETIC_CERTIFICATION_RESULT.md` run #2 already documents a
+ *  real, organic `CHIEF_APPROVED_IDEA` BUY fill on AAPL from `VALIDATED_CONVERGENCE_CONTROL` via
+ *  TechnicalAgent+KronosEngine convergence alone (QuantEngine was not evaluable in that run due to
+ *  the HistoricalDataGateway synthetic-session block since fixed by `da7b527`/`624b2ee`) - i.e. this
+ *  scenario/symbol pairing already has a documented precedent for organic Technical+Kronos BUY
+ *  agreement on AAPL, independent of this mission's own news-injection work. This scenario reuses
+ *  that same structural shape on the same symbol and adds the Phase F reversal tail needed for exit
+ *  testing, then (separately, in the forensic driver, not in this file) tests whether a now-fixed
+ *  QuantEngine ALSO organically agrees, and whether a company-specific news catalyst timed into the
+ *  same window independently agrees too - this file makes no claim about that outcome; it only
+ *  encodes the economic story above. */
+export const COMPANY_BULLISH_CATALYST_CONVERGENCE: ScenarioProfile = {
+  id: 'COMPANY_BULLISH_CATALYST_CONVERGENCE',
+  description: 'Company-specific bullish catalyst + orderly structural-break repricing that holds (not mean-reverts) in a clean, volume-confirmed uptrend with a bounded pullback, then a genuine later reversal for exit testing. No broader-market opposition injected.',
+  expectedToBeTradeable: true,
+  segments: [
+    // Opening structural break: gap + volume/volatility pop (VALIDATED_CONVERGENCE_CONTROL shape).
+    { fromOffsetMs: 0, toOffsetMs: 10 * MIN, regime: 'HIGH_VOL', driftPerBarMean: 0.0011, volatilityMultiplier: 1.7, volumeMultiplier: 2.5 },
+    // Bounded pullback (CERTIFIED_BULLISH_ENTRY_EXIT Phase C1 parameters, verbatim) - a real give-
+    // back, not a reversal; kept short so it cannot dominate bestStrategyIdea() selection.
+    { fromOffsetMs: 10 * MIN, toOffsetMs: 18 * MIN, regime: 'TRENDING_DOWN', driftPerBarMean: -0.0009, volatilityMultiplier: 1.1, volumeMultiplier: 1.4 },
+    // Clean, sustained, volume-confirmed uptrend at the empirically-tuned 1.3x volatility ratio
+    // (VALIDATED_CONVERGENCE_CONTROL's own lesson) - the move HOLDS, long enough for SMA/ADX
+    // conditions and Kronos's forecast to have real data.
+    { fromOffsetMs: 18 * MIN, toOffsetMs: 220 * MIN, regime: 'TRENDING_UP', driftPerBarMean: 0.00055, volatilityMultiplier: 1.3, volumeMultiplier: 1.8 },
+    { fromOffsetMs: 220 * MIN, toOffsetMs: 230 * MIN, regime: 'SIDEWAYS', driftPerBarMean: 0.0001, volatilityMultiplier: 0.6, volumeMultiplier: 1.2 },
+    // Genuine later reversal, reusing CERTIFIED_BULLISH_ENTRY_EXIT's Phase F parameters verbatim -
+    // real exit-trigger runway, not a fabricated rule.
+    { fromOffsetMs: 230 * MIN, toOffsetMs: 400 * MIN, regime: 'TRENDING_DOWN', driftPerBarMean: -0.0010, volatilityMultiplier: 1.4, volumeMultiplier: 1.9 },
+  ],
+  events: [
+    { type: 'GAP', atOffsetMs: 0, gapPct: 0.02 },
+  ],
+};
+
 /** SCENARIO 7 - TRENDING BEAR. Sustained negative drift, volume-confirmed, mirroring
  *  TRENDING_BULL_GAP_AND_GO's shape on the short side. A real, distinct gap this codebase's own
  *  2026-09-16 synthetic-coverage audit found: TRENDING_BEAR did not exist as a dedicated,
@@ -338,6 +404,7 @@ export const SCENARIOS: Record<string, ScenarioProfile> = {
   NEWS_SHOCK,
   VALIDATED_CONVERGENCE_CONTROL,
   CERTIFIED_BULLISH_ENTRY_EXIT,
+  COMPANY_BULLISH_CATALYST_CONVERGENCE,
 };
 
 export function getScenario(id: string): ScenarioProfile {
