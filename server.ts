@@ -1246,6 +1246,20 @@ let portfolioState = loadPortfolio();
       if (!existing || existing.quantity >= 0) {
         return res.json({ ok: true, submitted: [], refused: [{ symbol, reason: `${symbol} is not currently short at the broker (quantity=${existing?.quantity ?? 0}) — nothing to cover.` }] });
       }
+      // Real gap found live (2026-10-07): an existing short position gets none of the active-
+      // position subscription priority a long position gets, so a symbol that isn't otherwise in
+      // the discovery/watchlist universe can have zero live quote after a fresh restart -
+      // submitPipelineOrder would then refuse with "No live price". Reuses the same bounded,
+      // already-tested requestTemporaryDataRescue() TradePlanBuilder.emitTradePlanIdea() already
+      // uses for this identical problem - real chance, not a guarantee, of a tick landing in time.
+      // Does not bypass data_freshness/price_validity - if no tick arrives, submitPipelineOrder
+      // still refuses honestly below, same as before this addition.
+      if (marketDataWorker.getLatestPrice(symbol) === null) {
+        marketDataWorker.requestTemporaryDataRescue(symbol, "Operator short-cover: needs a live quote to size the cover BUY", { requestClass: "ROUTINE_RECOVERY" });
+        for (let i = 0; i < 20 && marketDataWorker.getLatestPrice(symbol) === null; i++) {
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
       const result = await submitPipelineOrder(symbol, "BUY", `Operator short-cover: BUY submitted through ChiefTrader event (closePositionIntent) so RiskEngine and OMS still run and clamp to exactly the existing short quantity. Not a raw broker.placeOrder.`, true);
       res.json({
         ok: !("reason" in result),

@@ -809,6 +809,9 @@ export class RiskEngine {
                     quantityStep: cryptoInstrumentForSizing?.quantityStep,
                     minimumQuantity: cryptoInstrumentForSizing?.minimumQuantity,
                     minimumNotional: cryptoInstrumentForSizing?.minimumNotional,
+                    // Operator-directed short-cover (2026-10-07) - see SizingContext.closePositionIntent's
+                    // own doc comment. undefined/false for every normal idea (strict no-op).
+                    closePositionIntent: proposal.closePositionIntent,
                 });
                 maxQuantity = sizingResult.maxQuantity;
                 for (const g of sizingResult.gates) recordGate(g.gate, g.passed, g.detail);

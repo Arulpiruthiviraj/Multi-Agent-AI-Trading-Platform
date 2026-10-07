@@ -576,6 +576,48 @@ describe('RiskEngine.evaluateRisk', () => {
     expect(assessment.maxQuantity).toBe(14);
   });
 
+  // Real incident reproduced and fixed 2026-10-07: the first version of this gate only CLAMPED
+  // DOWN against the normal budget/risk caps - it never overrode them. A real attempt to cover
+  // OKTA's -14 short with the default $3000 maxTradeSize at a price that had moved to $216.94
+  // (vs the original $211.72) computed only 13 shares from budget alone (3000/216.94≈13.8),
+  // which was LESS than 14 - so Math.min(13, 14) silently filled 13, leaving a real -1 residual
+  // short at the broker instead of fully closing it. This test pins the fix: a closePositionIntent
+  // BUY must get the FULL existing short quantity regardless of the default budget cap, exactly as
+  // sell_position_exists already works for closing a long - RiskEngine.ts §PositionSizing.ts's
+  // closePositionIntent branch skips order_notional_cap/risk-per-share (not buying power) for this
+  // case, the same way SELL already skips them.
+  it('covers the FULL existing short even when the default budget alone would compute fewer shares (real 2026-10-07 incident)', async () => {
+    mockBrokerHolder.broker = makeBroker(basePortfolio({
+      equity: 1000000,
+      buyingPower: 1000000,
+      positions: [{ symbol: 'OKTA', quantity: -14, entryPrice: 212.61 }],
+    }));
+    setTableRows(schema.settings, [{ riskLevel: 'Aggressive', maxTradeSize: 3000 }]);
+
+    await riskEngine.evaluateRisk({ traceId: 't-cover-3', symbol: 'OKTA', side: 'BUY', currentPrice: 216.94, closePositionIntent: true });
+
+    const assessment = lastAssessment();
+    expect(assessment.approved).toBe(true);
+    expect(assessment.maxQuantity).toBe(14);
+  });
+
+  // Unlike SELL's full exemption, a closePositionIntent BUY still genuinely spends cash - buying
+  // power must remain a real, non-skippable cap even when covering a short.
+  it('still caps a closePositionIntent BUY at real buying power (unlike SELL, a cover BUY spends real cash)', async () => {
+    mockBrokerHolder.broker = makeBroker(basePortfolio({
+      equity: 1000000,
+      buyingPower: 1000, // enough for only ~4 shares at $216.94, far short of the full -14
+      positions: [{ symbol: 'OKTA', quantity: -14, entryPrice: 212.61 }],
+    }));
+    setTableRows(schema.settings, [{ riskLevel: 'Aggressive', maxTradeSize: 3000 }]);
+
+    await riskEngine.evaluateRisk({ traceId: 't-cover-4', symbol: 'OKTA', side: 'BUY', currentPrice: 216.94, closePositionIntent: true });
+
+    const assessment = lastAssessment();
+    expect(assessment.maxQuantity).toBeLessThan(14);
+    expect(assessment.maxQuantity).toBe(Math.floor(1000 / 216.94));
+  });
+
   it('refuses a closePositionIntent BUY when the symbol is not actually short (cannot disguise a fresh long as a cover)', async () => {
     mockBrokerHolder.broker = makeBroker(basePortfolio({ positions: [] }));
 

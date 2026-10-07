@@ -119,6 +119,17 @@ export interface SizingContext {
   /** Below this notional (maxQuantity * currentPrice), BUY sizing is rejected rather than
    * increased to meet it. Omitted = no minimum-notional floor. BUY only. */
   minimumNotional?: number;
+  /** Operator-directed short-cover (2026-10-07). A closePositionIntent BUY is reducing an
+   * existing short, not deploying new capital at policy discretion - order_notional_cap
+   * (maxTradeSizeDollar budget policy) and the per-share stop-loss risk cap are skipped for the
+   * SAME reason SELL already skips them (see the BUY/SELL branch below), because this BUY is a
+   * close, not a new position. Buying power is NOT skipped - unlike SELL, a covering BUY does
+   * spend real cash. The caller (RiskEngine.ts) still independently clamps maxQuantity to exactly
+   * the existing short's size via close_short_position_exists - this flag only removes the
+   * mismatched "new capital" caps that were silently under-covering a short whose price had moved
+   * since it was opened (real incident: a $3,000 budget covered only 13 of 14 shares at a higher
+   * price, leaving a smaller residual short - docs/audits/ARGUS_OKTA_RECONCILIATION_FORENSIC_2026-10-06.md). */
+  closePositionIntent?: boolean;
 }
 
 export interface SizingGateResult {
@@ -167,7 +178,21 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
 
   let maxQuantity: number;
 
-  if (ctx.side === 'BUY') {
+  if (ctx.side === 'BUY' && ctx.closePositionIntent) {
+    // Operator-directed short-cover (2026-10-07, see SizingContext.closePositionIntent's own doc
+    // comment for the real incident this fixes). order_notional_cap (budget policy) and the
+    // per-share stop-loss risk cap are skipped for the same reason SELL skips them below - this
+    // BUY is extinguishing existing risk, not taking on new risk at policy discretion. Buying
+    // power is NOT skipped (unlike SELL): a covering BUY genuinely spends real cash. The caller
+    // (RiskEngine.ts's close_short_position_exists gate) still independently clamps the result to
+    // exactly the existing short's size - this only removes the mismatched "new capital" caps
+    // that could otherwise under-cover a short whose price moved since it was opened.
+    record('order_notional_cap', true, {
+      status: 'SKIPPED',
+      reason: 'closePositionIntent BUY is not capped by notional/risk-per-share - those limit new capital deployment and new position risk, not covering an existing short. Buying power still applies.',
+    });
+    maxQuantity = quantizeQuantityDown(ctx.buyingPower / ctx.currentPrice, quantityStep);
+  } else if (ctx.side === 'BUY') {
     // Real bug fixed: these three caps (order-notional, risk-per-share, buying-power) are all
     // "how much NEW capital/risk can be deployed" concepts - they used to apply unconditionally to
     // SELL too, meaning a protective stop-loss/thesis-invalidation exit could be silently shrunk or
