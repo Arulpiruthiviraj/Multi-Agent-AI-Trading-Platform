@@ -9,6 +9,7 @@ import { marketDataWorker } from '../services/MarketDataWorker';
 import { listRecentNewsCatalysts } from '../services/NewsCatalystStore';
 import { evaluateQuoteFreshness, type MarketDataGrade } from './marketDataQuality';
 import { recordPitLive } from '../engines/backtest/PitLedgerRecorder';
+import { getActiveReplaySession } from '../replay/ReplayContext';
 
 export type DataQualityColor = MarketDataGrade;
 
@@ -32,7 +33,23 @@ function worst(a: DataQualityColor, b: DataQualityColor): DataQualityColor {
 
 export function assessDataQuality(symbol: string): DataQualitySnapshot {
   const { yellowMaxStaleMs } = deskIntelligence.dataQuality;
-  const ageMs = marketDataWorker.getLatestPriceAgeMs?.(symbol) ?? null;
+  // Real defect found and fixed (2026-10-06, synthetic/replay trigger-to-idea forensic pass):
+  // this was the ONLY live freshness check in the QuantEngine emission path that never consulted
+  // an active replay/synthetic session - RiskEngine.ts already does this in three places
+  // (`replay ? 0 : marketDataWorker.getLatestPriceAgeMs(...)`, e.g. its own gate 13
+  // `data_freshness`), because a replay/synthetic session's `MarketDataWorker.cacheObservedQuote()`
+  // timestamps are stamped with the session's own simulated clock (deterministic, often far from
+  // real wall-clock `Date.now()` by design - see SyntheticSessionEngine.ts's fixed
+  // `defaultSessionStartMs()`), so a raw `Date.now() - t` here is never a real staleness signal
+  // during replay/synthetic - it is always "stale" regardless of how fresh the simulated tick
+  // actually is. Verified live: this was the real, sole reason every triggered CORE strategy's
+  // cold-start-bootstrap/EV-backed idea was silently discarded as STALE_MARKET_DATA before ever
+  // reaching ChiefTrader, while TechnicalAgent/KronosForecastAgent ideas (which never call
+  // assessDataQuality()) emitted normally in the same runs. Matches RiskEngine's own precedent
+  // exactly - never changes real-production wall-clock freshness behavior (getActiveReplaySession()
+  // is always null outside replay/synthetic), never weakens stalePriceThresholdMs itself.
+  const replay = getActiveReplaySession();
+  const ageMs = replay ? 0 : (marketDataWorker.getLatestPriceAgeMs?.(symbol) ?? null);
   const freshness = evaluateQuoteFreshness({
     priceAgeMs: ageMs,
     staleThresholdMs: tradingSafety.stalePriceThresholdMs,
