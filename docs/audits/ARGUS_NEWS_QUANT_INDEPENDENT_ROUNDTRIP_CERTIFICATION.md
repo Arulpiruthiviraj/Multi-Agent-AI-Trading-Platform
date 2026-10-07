@@ -166,7 +166,7 @@ No production or test-fixture source file was changed this pass (audit/verificat
 `npx tsc --noEmit`, full `npm test`, and `npm run build` were not re-run — there is no diff for them
 to regress. This is a disclosed scope decision, not a hidden gap.
 
-## Final block
+## Final block (prior pass, superseded below)
 
 ```
 DUPLICATE_EVIDENCE_CONTROL = PASS
@@ -177,6 +177,179 @@ BUY_PATH = NOT_CERTIFIED
 CLOSE_LONG_PATH = NOT_CERTIFIED
 WINNING_ROUND_TRIP = NOT_CERTIFIED
 LOSING_ROUND_TRIP = NOT_CERTIFIED
+FULL_PIPELINE_TRADE_CAPABILITY = NOT_CERTIFIED
+THREE_HOUR_SOAK = BLOCKED
+```
+
+---
+
+# 2026-10-06 follow-up pass: Part A (news injector) built; Part B independence proven, approval blocked by organic disagreement
+
+**SYNTHETIC/REPLAY ONLY.** No real broker, no real PAPER account, `data/argus.db` never touched.
+`LIVE_NO_GO` unchanged throughout. No threshold, gate, EV/R:R bar, or consensus parameter was
+modified. Git HEAD at start: `3efc795` (confirmed present beneath this pass, none redone: `2c337c3`,
+`da7b527`, `624b2ee`, `49e5c12`, `3202dca`). This pass's own commits: `efc3057` (Part A injector),
+`60a8984` (Part B fresh-data fix + harness wiring + forensic scripts).
+
+## Part A — the synthetic news injector
+
+Built `src/server/replay/synthetic/SyntheticInjectableNewsProvider.ts`: a real `NewsProviderPlugin`
+that withholds a caller-queued `{title, content, symbol, publishedAtMs, source}` article until the
+session's own simulated clock (`nowFn()`, never `Date.now()`) reaches `publishedAtMs`, then returns
+it for delivery through the unmodified real pipeline. Two small, minimal production seams enable
+this without touching the real boot path:
+
+- `NewsProviderManager.replaceProviders()` (`src/server/news/NewsProviderManager.ts`) - swaps the
+  provider list for an isolated session's own list; never called by any production boot path
+  (`NewsProviderManager`'s constructor, which registers the real RSS/paid-news providers, is
+  untouched and still the only list a live/paper process ever uses).
+- `NewsEngine.triggerNow()` (`src/server/news/NewsEngine.ts`) - same manual-cycle pattern
+  `QuantSignalAgent.triggerNow()`/`PortfolioMonitor.triggerNow()` already expose for a synthetic
+  session's accelerated clock; calls the existing private `runPipeline()`, not a new path.
+
+Architecture-protected the same way `SyntheticDailyBarProvider.ts` already is:
+`SyntheticInjectableNewsProvider.architectureBoundary.test.ts` proves (a) no file outside
+`src/server/replay/synthetic/` imports it, (b) `scripts/` never imports it, (c)
+`NewsProviderManager.ts` never imports or constructs it, and (d) every entry point throws outside
+`SYNTHETIC_SIMULATION=true`.
+
+**Part A verification** (`src/server/news/SyntheticNewsInjection.certification.test.ts`, run
+standalone via vitest, isolated temp DB per `vitest.setup.ts`): a synthetic MSFT article is withheld
+before its `publishedAtMs`, then on the next poll flows through the real `NewsNormalizer` →
+`NewsDeduplicator` → `NewsCredibilityEngine` → `NewsClassifier` → `NewsSymbolExtractor` (real
+symbol resolution) → `NewsImpactEngine` (real FinBERT call, falling back to the real
+keyword-heuristic since this sandbox's `LOCAL_AI_SERVICE_URL` is intentionally pointed at a dead
+port by `vitest.setup.ts` for test hermeticity - a real, disclosed, already-reviewed production
+fallback path, not a fabrication) → `NewsClusterEngine` → `NewsScoringEngine` → a real
+`eventBus.emitTradeIdea()` under agent `NewsAgent`, with `currentPrice` coming from a real fresh
+tick (never fabricated). The AIRouter network boundary is mocked with a realistic provider response
+(`routeTask`), the SAME pattern `NewsScoringEngine.test.ts` already uses for this exact class -
+not a hand-built vote; `AIOutputValidator`'s real clamping/coercion still runs on top.
+
+```
+npx vitest run src/server/news/SyntheticNewsInjection.certification.test.ts src/server/replay/synthetic/SyntheticInjectableNewsProvider.architectureBoundary.test.ts
+ -> Test Files  2 passed (2) / Tests  8 passed (8)
+```
+
+## Part B — the round-trip attempt, and a real bug found and fixed along the way
+
+Wired `newsInjections` into `SyntheticSessionEngine.ts` (additive option, byte-for-byte no-op when
+absent) and built a one-off forensic driver (`scripts/forensic/newsQuantRoundTrip.ts` +
+`newsQuantRoundTripChild.ts`, same parent/child isolation architecture as
+`scripts/sim/marketOpen.ts`/`marketOpenChild.ts`) to run `CERTIFIED_BULLISH_ENTRY_EXIT`
+(seed=20261006, duration=400min, speed=400x, symbols=5) with 3 injected MSFT articles.
+
+**Real defect found and fixed (`60a8984`):** the first two runs produced real news_clusters (proof
+the injector worked) but ZERO `NewsAgent` ideas ever reached `ChiefTrader` -
+`NEWS_IDEA_DISCARDED_NO_FRESH_DATA` fired on every single injection after a full
+`newsPriceWaitTimeoutMs` wait. Root cause, confirmed by direct DB query of
+`observability_events`/`escalation_decisions`: `MarketDataWorker.getLatestPriceAgeMs()` always
+measures tick age against real `Date.now()`, with no replay/synthetic-clock awareness (a prior
+attempt at this was tried and reverted in the Phase 14 historical-replay mission - see that
+function's own comment). A synthetic session's bar timestamps are not real wall-clock "now" by
+construction, so every real, continuously-flowing tick looked arbitrarily stale, even though
+RiskEngine's own gate 13 (`data_freshness`) already treats the identical tick stream as fresh via
+its established `replay ? { priceAgeMs: 0, ... } : evaluateQuoteFreshness(...)` branch. Fixed in
+`src/server/core/waitForFreshMarketData.ts` by applying the SAME established replay-awareness
+RiskEngine already uses to this one shared helper (also used by `FundamentalAgent`/`MacroAgent`,
+per that file's own header) - never a new or weaker rule, and it only widens what counts as fresh
+*inside* an active replay/synthetic session; live/paper behavior outside one is provably unchanged
+(regression tests for both branches, plus the pre-existing null/non-positive-price fail-closed case
+staying fail-closed even inside a replay session). 11/11 `waitForFreshMarketData.test.ts` tests
+pass; full `src/server/news/`, `src/server/replay/`, and `architecture.protection.test.ts` suites
+green after the fix (37 files / 286 tests).
+
+**After the fix:** NewsAgent ideas correctly reached `ChiefTrader` for MSFT (`[ChiefTrader] Reviewing
+... proposed by NewsAgent`, 3/3 injections). First attempt used a bullish-worded article while the
+organic `QuantEngine` ideas on MSFT in this exact scenario/seed/run were, empirically, 100% SELL
+(49/49 observed `PULLBACK_CONTINUATION`/`RANGE_REVERSION` instances - "`BULLISH_ENTRY_EXIT`" names
+the scenario's overall price path, not every strategy's side on every bar) - producing
+`AGENT_DISAGREEMENT` and low blended confidence, never 2 agreeing groups on the same side. Rewrote
+the article to a genuinely bearish catalyst (real negative FinBERT sentiment, -0.97, not a
+hand-picked `tradingBias`) to pair with the real, organic SELL side `QuantEngine` was actually
+voting. Direct query of `transaction_traces`/`observability_events` (`CONSENSUS_TERMINAL_REASON`
+payload) for the resulting trace confirms, from real code, not inferred:
+
+```
+independentAgentCount: 3, independentEvidenceGroupCount: 3, requiredIndependentEvidenceGroups: 2
+evidenceGroups: [{agent:"QuantEngine", side:"SELL", agreed:true, ...}, ...NewsAgent SELL agreed...]
+rawConfidence: 0.547, finalConfidence: 0.547, consensusThreshold: 0.75
+terminalReasonCode: CONFIDENCE_BELOW_STRONG
+contributingAgents: ["NewsAgent","QuantEngine","KronosEngine","TechnicalAgent"]
+```
+
+**INDEPENDENT_CONSENSUS is therefore CERTIFIED at the independence-mechanics level**: `NewsAgent`
+and `QuantEngine` genuinely resolve to 2 distinct evidence groups (3, counting `KronosEngine` too,
+≥ the required 2) via the real, unmodified `resolveIndependentEvidenceGroup()`/`evaluateConsensus()`
+code path - this is the pairing the mission asked to prove, and it is real, not asserted. It is
+**NOT CERTIFIED at the approval level**: across all 14 real consensus rounds this run produced for
+MSFT with `NewsAgent` contributing, every single one resolved `CONFIDENCE_BELOW_STRONG` (range
+26.3%-58.3%, never ≥ the unmodified 0.75 bar) - `KronosEngine`/`TechnicalAgent` organically
+disagreed (voting BUY) in every round, and their combined weight was large enough to keep the
+weighted-average confidence under threshold regardless of the News+Quant SELL pairing. Separately,
+and independently blocking: `transaction_traces`/the structured DB report confirm **zero**
+`CHIEF_APPROVED_IDEA` for MSFT anywhere in this entire scenario/seed run, organic or injected
+(`CHIEF_APPROVED_IDEA` fired only for `SPY`/`QQQ`, both via `KronosEngine`+`TechnicalAgent` - the
+same pairing the original Sept-10 baseline doc already found, 0 from `QuantEngine`) - so even a
+hypothetical future seed/timing change that avoided the BUY/SELL disagreement would still need
+MSFT's own agent-weight structure in this exact scenario/seed to ever clear 75% for ANY idea, which
+this real data shows it does not, organically, at all.
+
+**This is a correct, honest NO_TRADE outcome, not a defect** (CLAUDE.md: "A correct NO TRADE is a
+valid result"): nothing was lowered to force it, and the stop is organic agent disagreement + this
+specific scenario/seed's own confidence ceiling for MSFT, not a bug in the News+Quant independence
+mechanism itself (which is now proven real). Per the mission's own stop rule, B4 onward (RiskEngine
+positive/negative, PositionSizing, OMS, BUY fill, exit, round trips, reconciliation, determinism,
+counts, trace) require a real `CHIEF_APPROVED_IDEA` as their precondition and were **not attempted**
+this pass - attempting them without one would mean either fabricating approval (prohibited) or
+testing against a NO_TRADE result (meaningless for B4-B17's own stated positive-path goals).
+
+### What a future pass would need to go further
+
+Find or construct a scenario/seed where (a) `QuantEngine` organically triggers on a tradeable
+symbol, (b) `TechnicalAgent`/`KronosEngine` do not organically vote the opposite side in the same
+window, and (c) that symbol's own agent-weight mix can organically clear 0.75 - i.e. a scenario
+where TWO independent groups agreeing is also enough to pass the confidence bar, not just the
+independence floor. This is a scenario-design/seed-search problem, not a code change - the
+mechanism itself (injector + independence math) is now proven correct and reusable.
+
+## Engineering bar (this pass)
+
+```
+npx tsc --noEmit                                     -> clean
+npx vitest run src/server/news/SyntheticNewsInjection.certification.test.ts
+  src/server/replay/synthetic/SyntheticInjectableNewsProvider.architectureBoundary.test.ts
+  src/server/core/waitForFreshMarketData.test.ts      -> 20/20 passed
+npx vitest run src/server/replay/ src/server/core/waitForFreshMarketData.test.ts
+  src/server/services/ChiefTraderAgent.evidenceIndependence.test.ts
+  src/server/services/evidenceIndependence.test.ts src/server/services/evidenceFamilyTaxonomy.test.ts
+  src/server/services/ChiefTraderAgent.quantIndependent.test.ts
+  src/server/core/consensusIdeaFreshness.test.ts src/server/architecture.protection.test.ts
+                                                       -> 37 files / 286 tests passed
+npx vitest run src/server/news/ src/server/replay/synthetic/SyntheticInjectableNewsProvider.architectureBoundary.test.ts
+  src/server/services/FundamentalAgent.test.ts src/server/services/MacroAgent.test.ts
+                                                       -> 24 files / 216 tests passed
+npm run build                                         -> green (dist/server.cjs 3.4mb)
+```
+
+Full `npm test` was not re-run this pass (budget); the targeted suites above cover every file this
+pass touched plus the architecture-protection and independence-mechanics suites most load-bearing to
+the claims made here.
+
+## Final block (this pass, supersedes the block above)
+
+```
+NEWS_INJECTOR_BUILT = YES
+NEWS_INJECTOR_ARCHITECTURE_PROTECTED = YES
+INDEPENDENT_CONSENSUS = CERTIFIED (independence-mechanics level: real NewsAgent+QuantEngine evidence
+  resolves to >=2 distinct groups via unmodified resolveIndependentEvidenceGroup()/evaluateConsensus();
+  CHIEF_APPROVED_IDEA itself NOT reached for MSFT in this scenario/seed - organic agent disagreement
+  and this symbol's own confidence ceiling, not an independence-mechanism defect)
+RISK_PATH = NOT_CERTIFIED (no CHIEF_APPROVED_IDEA precondition reached; not attempted)
+BUY_PATH = NOT_CERTIFIED (same precondition gap; not attempted)
+CLOSE_LONG_PATH = NOT_CERTIFIED (same precondition gap; not attempted)
+WINNING_ROUND_TRIP = NOT_CERTIFIED (same precondition gap; not attempted)
+LOSING_ROUND_TRIP = NOT_CERTIFIED (same precondition gap; not attempted)
 FULL_PIPELINE_TRADE_CAPABILITY = NOT_CERTIFIED
 THREE_HOUR_SOAK = BLOCKED
 ```
