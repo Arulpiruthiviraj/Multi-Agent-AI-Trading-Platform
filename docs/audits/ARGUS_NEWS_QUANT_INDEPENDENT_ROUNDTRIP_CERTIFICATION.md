@@ -353,3 +353,188 @@ LOSING_ROUND_TRIP = NOT_CERTIFIED (same precondition gap; not attempted)
 FULL_PIPELINE_TRADE_CAPABILITY = NOT_CERTIFIED
 THREE_HOUR_SOAK = BLOCKED
 ```
+
+---
+
+# 2026-10-07 follow-up pass: compatible-scenario search (Phase 1) — a genuinely better, still
+# insufficient, convergence point found; MSFT negative fixture preserved untouched above
+
+**SYNTHETIC/REPLAY ONLY.** No real broker, no real PAPER account, `data/argus.db` never touched.
+`LIVE_NO_GO` unchanged throughout. **No threshold, gate, EV/R:R bar, independence floor, or
+consensus parameter was modified or lowered at any point in this pass.** Git HEAD at start: `1c9bcb4`
+(confirmed present beneath this pass, none redone: `2c337c3`, `da7b527`, `624b2ee`, `49e5c12`,
+`3202dca`, `3efc795`, `efc3057`, `60a8984`, `1c9bcb4`).
+
+**Mid-pass operator refinement applied:** do not brute-force a passing seed; define the economic
+scenario story FIRST, independently of any resulting consensus score, then let the real unmodified
+agents decide; trace WHY (real indicator/forecast numbers) for both the existing MSFT disagreement
+and any new case; preserve the MSFT negative fixture untouched as a permanent golden negative
+control; classify a still-insufficient result honestly rather than force a pass. This section follows
+that discipline throughout — see §1 below for the economic story, written and committed to the
+scenario file's own header comment BEFORE this scenario was ever executed, and §2 for the real,
+un-redacted indicator/forecast numbers behind both the AAPL and MSFT cases.
+
+**The MSFT negative fixture from the section above is preserved verbatim, unmodified** — it remains
+valid evidence that "independent evidence sources existing" does not imply "automatic approval," and
+nothing in this pass alters it.
+
+## 1. The economic story, defined before any run
+
+Added `COMPANY_BULLISH_CATALYST_CONVERGENCE` to `src/server/replay/synthetic/SyntheticScenario.ts`
+(full reasoning in that file's own header comment, written before the scenario was ever executed —
+diff is part of this pass's first commit). The story, in plain terms, decided first and never revised
+after seeing a score: a genuine company-specific bullish catalyst (an AAPL product-cycle demand
+beat) lands inside an orderly session; the repricing is a real structural break (gap + volume/
+volatility pop — the same shape `MOMENTUM_BREAKOUT` already checks for); the move then **holds**
+rather than mean-reverting, via a long, clean, volume-confirmed uptrend at the exact
+`volatilityMultiplier: 1.3` ratio `VALIDATED_CONVERGENCE_CONTROL`'s own header already proved (in an
+earlier, independent pass, 2026-09-15) avoids RSI pinning into extreme-overbought and the resulting
+spurious mean-reversion SELL that a too-smooth ramp produces; a bounded pullback exists (reusing
+`CERTIFIED_BULLISH_ENTRY_EXIT`'s own Phase C1 parameters verbatim, not retuned) so the path is
+realistic, not suspiciously monotonic; no contrary broad-market/index event is injected anywhere;
+and a genuine later reversal exists (reusing `CERTIFIED_BULLISH_ENTRY_EXIT`'s own Phase F parameters
+verbatim) to give a real exit trigger for the round-trip phases. AAPL was chosen for a documented,
+pre-existing reason, not a result of searching this new scenario for a score:
+`ARGUS_SYNTHETIC_CERTIFICATION_RESULT.md` run #2 already recorded a real, organic
+`CHIEF_APPROVED_IDEA` BUY fill on AAPL from `VALIDATED_CONVERGENCE_CONTROL` via
+TechnicalAgent+KronosEngine convergence alone, from a pass that predates this mission entirely.
+
+Driver: `scripts/forensic/newsQuantConvergenceRoundTrip.ts` /
+`newsQuantConvergenceRoundTripChild.ts` (same parent/child isolation pattern as the MSFT driver),
+injecting 3 copies of a real bullish AAPL product-cycle-beat article (distinct fingerprints, same
+catalyst) at session offsets 40/90/150 min — inside the scenario's own clean-uptrend segment
+(18–220 min), clear of the opening gap and the bounded pullback.
+
+## 2. What actually happened, and why (real numbers, not inferred)
+
+Ran `COMPANY_BULLISH_CATALYST_CONVERGENCE`, seed 20261006 (the same baseline seed every other
+scenario in this file uses — not searched), 400 min, 400x speed, 5-symbol universe
+(SPY/QQQ/AAPL/MSFT/NVDA). Real `CONSENSUS_TERMINAL_REASON` payloads pulled directly from
+`observability_events` (same method the MSFT pass used), 13 AAPL rounds total.
+
+**TechnicalAgent — real, substantive flip, not noise:** in the earliest rounds (still inside the
+opening HIGH_VOL gap+pop segment, 0–10 min), TechnicalAgent voted **SELL at confidence 0.639–0.648**
+— a real overbought-mean-reversion read on a price that popped too fast relative to its own
+Bollinger/RSI bands, the same class of behavior `VALIDATED_CONVERGENCE_CONTROL`'s header already
+documented and is why that scenario's volatility ratio was tuned the way it was. Once the session
+moved into the clean 18–220 min uptrend, TechnicalAgent genuinely flipped to **BUY, confidence rising
+0.563 → 0.671 → 0.73 → 0.725 → 0.723** across successive rounds — a real trend-confirmation read
+strengthening as the move persisted and volume stayed confirmed, not a static number.
+
+**KronosEngine — real forecast correctly tracking regime, not static either:** early-to-mid rounds
+show KronosEngine voting **BUY, confidence 0.619**, consistent with its own forecast extrapolating
+the real uptrend. Later rounds show KronosEngine flipping to **SELL, confidence 0.85** — this
+coincides with the scenario's own engineered Phase F reversal (230–400 min, real negative drift,
+reused verbatim from `CERTIFIED_BULLISH_ENTRY_EXIT`): Kronos's forecast correctly tracked the
+regime change once the reversal began. This is the SAME kind of organic, model-grounded disagreement
+the MSFT case exhibited, not a defect — different agents reading different real signals at different
+points in the same session.
+
+**NewsAgent — stable, as designed:** BUY, confidence 0.765 in every round — the injected catalyst's
+own real FinBERT/keyword sentiment, unchanged across rounds since the article content does not
+evolve mid-session (by design — this pass did not vary it further).
+
+**The single best round reached** (`terminalReasonCode: MODERATE_REJECT_CALIBRATION`,
+`independentAgentCount: 3`, `independentEvidenceGroupCount: 3 >= requiredIndependentEvidenceGroups: 2`):
+KronosEngine BUY 0.619, NewsAgent BUY 0.765, TechnicalAgent BUY 0.563 — all three genuinely agreed on
+the SAME side for the first time in this pass's data, with 3 independent evidence groups clearing the
+2-group floor by a full group. **`rawConfidence`/`finalConfidence` = 0.6511** — a real, substantial
+improvement over the MSFT case's best round (0.583) but **still short of the unmodified 0.75 bar**,
+and additionally rejected on a second, independent gate: `moderateReasonCode:
+MODERATE_REJECT_UNTRUSTED_CALIBRATION` (TechnicalAgent's own calibration sample size was 0 —
+`NO_CALIBRATION_DATA` — so even a hypothetical confidence recompute that cleared 0.75 would still
+have been blocked by the calibration-trust check this session's short real history cannot yet
+satisfy). Neither gate was touched, weakened, or special-cased to try to force this round through.
+
+**A separate, real, and arguably more important finding for this specific mission: QuantEngine never
+voted on AAPL at all, in any of the 13 rounds.** Every QuantEngine evaluation cycle for AAPL (and for
+SPY/QQQ/MSFT, all three also genuinely trending up in this scenario) produced
+`DESK_NO_TRADE ... reason=Quant live emit requires a strategy idea that clears live EV and min R:R.
+Regime-only fallback is not a trade.` — i.e. the 5 CORE strategies' `bestStrategyIdea()` selection
+never produced a directional setup for these 4 symbols that cleared its own EV/R:R bar in this run,
+so `QuantSignalAgent` correctly emitted nothing rather than a regime-only non-trade (CLAUDE.md's own
+"Kelly/EV... can suppress Quant ideas" + "setup quality and trigger eligibility are separate" rules
+working exactly as designed). The one symbol that DID get a real, repeating QuantEngine vote this run
+— NVDA, via `RANGE_REVERSION`'s cold-start-bootstrap BUY path, because NVDA's own higher
+`baseVolatility` (0.0014 vs AAPL's 0.0009) caused its regime classifier to read `SIDEWAYS_RANGE`
+rather than trending even while every other symbol in the same scenario read a clean uptrend — was
+**not** pursued as a pivot target this pass: doing so after already seeing this log output, purely
+because it showed a Quant vote, would be exactly the score/output-directed scenario selection the
+operator's refinement explicitly prohibited (picking a target "because of the resulting score"
+instead of because an economic story was defined for it first). This is reported as a real, honest
+finding about *why* News+Quant pairings are hard to construct in this scenario family — not just
+organic disagreement (the MSFT finding) but QuantEngine structurally abstaining on cleanly-trending
+symbols altogether — rather than acted on as a shortcut.
+
+## 3. Classification (per the operator's own taxonomy, not a forced pass)
+
+```
+AAPL_CASE_CLASSIFICATION = CONFIDENCE_CALIBRATION_ISSUE (primary) + EVIDENCE_WEIGHTING_ISSUE (secondary)
+```
+Primary: a real 3-way same-side, 3-independent-group agreement (0.6511 raw confidence) was blocked a
+second time by `MODERATE_REJECT_UNTRUSTED_CALIBRATION` — TechnicalAgent's own calibration sample size
+was 0 this session, so the calibration-trust layer correctly refused to let an uncalibrated signal's
+raw confidence stand in for a trusted one. This is the consensus design doing exactly what it is
+supposed to do with a thin real-history sample, not a bug. Secondary: even setting calibration aside,
+0.6511 itself is below 0.75 — the weighted blend of a moderate-confidence Technical read (0.563) with
+two higher-confidence agents (0.619, 0.765) still averages under the bar; this is a property of how
+these three particular real confidences combine under the existing (unmodified) weighting, not a
+defect to patch.
+
+A second, distinct classification for the QuantEngine-abstention finding:
+```
+QUANT_ABSTENTION_ON_TRENDING_SYMBOLS = OTHER (real, structural, not a defect — EV/R:R gate working
+  as designed; worth naming explicitly for a future pass, since it explains why this scenario family
+  struggles to produce a genuine News+Quant pairing at all, independent of agent disagreement)
+```
+
+## 4. Stop condition for this pass
+
+Per the mission's own stop rule and the operator's refinement (a genuinely coherent scenario that
+still cannot clear 0.75 is a valid, reportable result, not something to force past): this pass did
+not reach `CHIEF_APPROVED_IDEA` for the News+Quant pairing in either the existing MSFT case or the
+new AAPL case, so Phases 4 onward (RiskEngine, PositionSizing, OMS, BUY, exit, round trips,
+reconciliation, determinism, counts, trace) were **not attempted** — attempting them without a real
+approved idea would mean fabricating the precondition, which is prohibited. No seed search, threshold
+change, agent mute, or direct vote injection was used anywhere in this pass.
+
+## Engineering bar (this pass)
+
+```
+npx tsc --noEmit                                                        -> clean
+npx vitest run src/server/replay/synthetic/ src/server/architecture.protection.test.ts
+                                                                         -> 9 files / 88 tests passed
+npm run build                                                           -> green (dist/server.cjs 3.4mb)
+```
+Full `npm test` was not re-run this pass; the targeted suites above cover every production file this
+pass touched (`SyntheticScenario.ts`'s new scenario entry) plus the architecture-protection suite —
+the two forensic driver scripts are one-off, unexported scripts outside any existing test's import
+graph, run directly and inspected above rather than wrapped in a new permanent test this pass.
+
+## Confirmation requested by the operator's refinement
+
+This pass's scenario-construction approach followed "define the economic story first, then run the
+real agents" — `COMPANY_BULLISH_CATALYST_CONVERGENCE`'s header comment and §1 above were written
+before the scenario was ever executed, and the symbol (AAPL) was chosen from a documented prior-pass
+precedent, not from searching this scenario's own output. No seed was searched; the pre-existing
+baseline seed (20261006) was reused unchanged. The MSFT negative-disagreement fixture from the
+2026-10-06 follow-up section above survives in this document completely untouched, directly above
+this section, and both now coexist as this document's two real data points.
+
+## Final block (this pass — Phase-1-onward status; MSFT finding stands unchanged above)
+
+```
+COMPATIBLE_SCENARIO_FOUND = NO (AAPL case reached a genuine 3-way same-side 3-independent-group
+  convergence, 0.6511 raw confidence - materially closer than MSFT's 0.583 ceiling - but still below
+  0.75 and separately blocked by an untrusted-calibration gate; QuantEngine itself never voted on
+  AAPL/SPY/QQQ/MSFT in this run at all, so the News+Quant pairing specifically was not exercised by
+  this case either)
+CHIEF_APPROVAL = NOT_CERTIFIED
+RISK_PATH = NOT_CERTIFIED (precondition not reached; not attempted)
+BUY_PATH = NOT_CERTIFIED (precondition not reached; not attempted)
+CLOSE_LONG_PATH = NOT_CERTIFIED (precondition not reached; not attempted)
+WINNING_ROUND_TRIP = NOT_CERTIFIED (precondition not reached; not attempted)
+LOSING_ROUND_TRIP = NOT_CERTIFIED (precondition not reached; not attempted)
+FULL_PIPELINE_TRADE_CAPABILITY = NOT_CERTIFIED
+THREE_HOUR_SOAK = BLOCKED
+```
