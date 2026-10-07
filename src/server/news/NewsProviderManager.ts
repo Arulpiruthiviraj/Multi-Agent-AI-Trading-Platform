@@ -43,6 +43,20 @@ export class NewsProviderManager {
     return Array.from(this.providers.values());
   }
 
+  /**
+   * Test/harness seam only - no production boot path calls this
+   * (SyntheticInjectableNewsProvider.architectureBoundary.test.ts asserts this file never even
+   * imports that class). Swaps the entire provider list for an explicit one, e.g. an isolated
+   * synthetic session that must never reach the real RSS feeds/paid news APIs constructed above.
+   * Real deployments never call this - the constructor's provider list is the only one a live/
+   * paper process ever uses.
+   */
+  public replaceProviders(providers: NewsProviderPlugin[]): void {
+    this.providers.clear();
+    this.stats.clear();
+    for (const p of providers) this.registerProvider(p);
+  }
+
   public getStats(providerId: string): ProviderStats {
     return this.stats.get(providerId) ?? { lastFetchAt: null, lastSuccessAt: null, lastArticleCount: 0, errorCount: 0, lastError: null };
   }

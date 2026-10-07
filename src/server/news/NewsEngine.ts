@@ -116,6 +116,16 @@ export class NewsEngine {
     );
   }
 
+  /** Synthetic Market Session Simulator test seam (2026-10-06) - same pattern as
+   *  QuantSignalAgent.triggerNow()/PortfolioMonitor.triggerNow(): exposes the existing real
+   *  runPipeline() cycle for an explicit caller running on an injected/accelerated clock, where
+   *  this engine's own real setInterval never fires because .start() was skipped
+   *  (ARGUS_NEWS_ENGINE_ENABLED=false in that harness). Not a parallel decision path - the
+   *  identical private cycle the timer already calls. */
+  public async triggerNow(): Promise<void> {
+    await this.runPipeline();
+  }
+
   public stop() {
     if (this.intervalId) {
       clearInterval(this.intervalId);
