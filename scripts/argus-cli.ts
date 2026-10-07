@@ -980,6 +980,7 @@ export const COMMAND_HELP: Record<string, string> = {
   'resume': 'Usage: argus resume [--reason="..."]\nResume autonomous trading (operator-controlled; records the reason).',
   'pause': 'Usage: argus pause [--reason="..."]\nPause autonomous trading (records the reason).',
   'cover-short': 'Usage: argus cover-short <SYMBOL>\nOperator-directed BUY to cover an existing short, through RiskEngine gate 26 (close_short_position_exists) - clamps to exactly the short\'s quantity. Refuses if the symbol is not actually short. Requires TRADING_ENABLED (same gate 1 as any order).',
+  'autobot-toggle': 'Usage: argus autobot-toggle <on|off>\nTurn Autobot on/off (gate 2, autobot_enabled). Off blocks new BUY risk; SELL/exits are unaffected.',
   'set-broker': 'Usage: argus set-broker <id>\nSwitch the active execution broker at runtime (e.g. alpaca, ibkr_gateway, internal_paper). Persists to settings.',
   'brokers': 'Usage: argus brokers [--json]\nList broker capabilities and saved connections (table; --json for raw JSON).',
   'research-recommend': 'Usage: argus research-recommend [--strategy=<id>]\nShow research recommendations.',
@@ -1314,6 +1315,18 @@ const commands: Record<string, () => Promise<void>> = {
    * resume/pause/liquidate. Thin pass-through reusing fetchJson's same authenticated session, same
    * pattern as every other command here - no raw curl, no credential handling of its own.
    */
+  async 'autobot-toggle'() {
+    const arg = process.argv.slice(3).find((a) => !a.startsWith('--'));
+    if (arg !== 'on' && arg !== 'off') {
+      console.error('Usage: argus autobot-toggle <on|off>');
+      process.exitCode = 1;
+      return;
+    }
+    console.log(JSON.stringify(await fetchJson('/api/v1/autobot/toggle', {
+      method: 'POST',
+      body: JSON.stringify({ enabled: arg === 'on' }),
+    }), null, 2));
+  },
   async 'cover-short'() {
     const symbol = process.argv.slice(3).find((a) => !a.startsWith('--'));
     if (!symbol) {
