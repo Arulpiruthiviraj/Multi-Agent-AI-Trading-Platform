@@ -35,6 +35,7 @@ import { marketDataWorker } from '../services/MarketDataWorker';
 import type { RescueRequestClass } from '../services/MarketDataWorker';
 import { tradingSafety } from '../config/tradingSafety';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
+import { getActiveReplaySession } from '../replay/ReplayContext';
 
 export type WaitForFreshPriceOutcome =
   | { ok: true; price: number; alreadyFresh: boolean }
@@ -50,13 +51,28 @@ function sleep(ms: number): Promise<void> {
 
 function readFreshPrice(symbol: string): number | null {
   const price = marketDataWorker.getLatestPrice(symbol);
+  // Real defect found 2026-10-06 (News+Quant Independent-Consensus Round-Trip Certification):
+  // MarketDataWorker.getLatestPriceAgeMs() always measures age against REAL Date.now() - it has
+  // no replay/synthetic-clock awareness (a prior attempt to give it one was tried and reverted in
+  // the Phase 14 historical-replay mission; see that function's own comment for why). A synthetic
+  // or replay session's bar timestamps are not real wall-clock "now" by construction, so every
+  // tick looked arbitrarily stale here even while flowing continuously and even while RiskEngine's
+  // own gate 13 (data_freshness) was already treating the identical tick stream as fresh via its
+  // established `replay ? { passed: true, priceAgeMs: 0, ... } : evaluateQuoteFreshness(...)`
+  // branch ("Replay uses last completed bar at T; daily age is not live-tick staleness" -
+  // RiskEngine.ts's own comment at that check). Confirmed live: every synthetic-session
+  // NewsAgent idea was silently discarded as NEWS_IDEA_DISCARDED_NO_FRESH_DATA after a full
+  // newsPriceWaitTimeoutMs wait, 100% of the time, regardless of how fresh the session's own
+  // ticks actually were. This applies the SAME established replay-awareness RiskEngine already
+  // uses, not a new or weaker rule - and it only ever WIDENS when a price counts as fresh inside
+  // an active replay/synthetic session, never outside one (live/paper behavior is unchanged).
+  // Always read ageMs (even when about to be ignored below) - callers/tests may rely on this call
+  // happening every poll tick as part of their own bookkeeping, matching this function's pre-fix
+  // behavior.
   const ageMs = marketDataWorker.getLatestPriceAgeMs(symbol);
-  if (
-    typeof price === 'number' && Number.isFinite(price) && price > 0 &&
-    typeof ageMs === 'number' && ageMs <= tradingSafety.stalePriceThresholdMs
-  ) {
-    return price;
-  }
+  if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) return null;
+  if (getActiveReplaySession()) return price;
+  if (typeof ageMs === 'number' && ageMs <= tradingSafety.stalePriceThresholdMs) return price;
   return null;
 }
 

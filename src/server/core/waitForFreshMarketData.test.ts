@@ -11,6 +11,8 @@ vi.mock('../services/MarketDataWorker', () => ({
 }));
 const { logInfo } = vi.hoisted(() => ({ logInfo: vi.fn() }));
 vi.mock('../observability/StructuredLogger', () => ({ observeSafe: (fn: () => void) => fn(), structuredLogger: { info: logInfo } }));
+const { getActiveReplaySession } = vi.hoisted(() => ({ getActiveReplaySession: vi.fn(() => null) }));
+vi.mock('../replay/ReplayContext', () => ({ getActiveReplaySession }));
 
 import { waitForFreshMarketData, resetWaitForFreshMarketDataForTests } from './waitForFreshMarketData';
 
@@ -21,6 +23,8 @@ describe('waitForFreshMarketData (NewsEngine price-race fix, Sept-2 audit remedi
     getLatestPrice.mockReset();
     getLatestPriceAgeMs.mockReset();
     logInfo.mockClear();
+    getActiveReplaySession.mockReset();
+    getActiveReplaySession.mockReturnValue(null);
     resetWaitForFreshMarketDataForTests();
   });
 
@@ -122,5 +126,48 @@ describe('waitForFreshMarketData (NewsEngine price-race fix, Sept-2 audit remedi
     const outcome = await waitForFreshMarketData('BOOM', { requestClass: 'NEWS_CATALYST', reason: 'test' });
     expect(outcome.ok).toBe(false);
     if (outcome.ok === false) expect(outcome.reason).toBe('ERROR');
+  });
+
+  // Real defect regression (2026-10-06, News+Quant Independent-Consensus Round-Trip
+  // Certification): getLatestPriceAgeMs() always measures against real Date.now(), so inside an
+  // active replay/synthetic session (whose bar timestamps are not real "now") a real, continuously
+  // flowing tick was always rejected as stale, discarding every NewsAgent idea with
+  // NEWS_IDEA_DISCARDED_NO_FRESH_DATA regardless of how fresh the session's own data really was.
+  describe('replay/synthetic-session awareness (2026-10-06 fix)', () => {
+    it('treats a real-wall-clock-stale tick as fresh when an active replay/synthetic session exists', async () => {
+      getActiveReplaySession.mockReturnValue({ replayId: 'r1' } as any);
+      requestTemporaryDataRescue.mockReturnValue({ granted: true, symbol: 'MSFT', alreadySubscribed: true, evictedSymbol: null });
+      getLatestPrice.mockReturnValue(430.0);
+      // Enormous real age (e.g. the synthetic session's simulated clock is weeks behind real
+      // Date.now()) - must NOT matter while a replay session is active.
+      getLatestPriceAgeMs.mockReturnValue(30 * 24 * 60 * 60 * 1000);
+
+      const outcome = await waitForFreshMarketData('MSFT', { requestClass: 'NEWS_CATALYST', reason: 'test' });
+      expect(outcome).toEqual({ ok: true, price: 430.0, alreadyFresh: true });
+    });
+
+    it('still rejects a stale tick as before when no replay/synthetic session is active (live/paper behavior unchanged)', async () => {
+      getActiveReplaySession.mockReturnValue(null);
+      requestTemporaryDataRescue.mockReturnValue({ granted: true, symbol: 'MSFT', alreadySubscribed: true, evictedSymbol: null });
+      getLatestPrice.mockReturnValue(430.0);
+      getLatestPriceAgeMs.mockReturnValue(600_000); // 10 minutes - stale
+
+      const promise = waitForFreshMarketData('MSFT', { requestClass: 'NEWS_CATALYST', reason: 'test' });
+      await vi.advanceTimersByTimeAsync(20_000);
+      const outcome = await promise;
+      expect(outcome).toEqual({ ok: false, reason: 'TIMEOUT' });
+    });
+
+    it('still rejects a null/non-positive price even inside an active replay session - never fabricates a price', async () => {
+      getActiveReplaySession.mockReturnValue({ replayId: 'r1' } as any);
+      requestTemporaryDataRescue.mockReturnValue({ granted: true, symbol: 'MSFT', alreadySubscribed: true, evictedSymbol: null });
+      getLatestPrice.mockReturnValue(null);
+      getLatestPriceAgeMs.mockReturnValue(null);
+
+      const promise = waitForFreshMarketData('MSFT', { requestClass: 'NEWS_CATALYST', reason: 'test' });
+      await vi.advanceTimersByTimeAsync(20_000);
+      const outcome = await promise;
+      expect(outcome).toEqual({ ok: false, reason: 'TIMEOUT' });
+    });
   });
 });

@@ -49,6 +49,7 @@ import { replaySafety, type ReplayCostProfile } from '../replaySafety';
 import { setActiveReplaySession, type ActiveReplaySession, defaultReplayConfig } from '../ReplayContext';
 import type { ResearchBar } from '../../research/ohlcvTypes';
 import type { CalibrationSeedSpec, CalibrationSeedResult } from './CalibrationHistorySeeder';
+import type { SyntheticNewsArticleSpec } from './SyntheticInjectableNewsProvider';
 
 /**
  * Isolation note (2026-09-14, real incident - see below): DecisionTimeline (imports eventBus),
@@ -82,6 +83,10 @@ const REAL_SETTLE_MS = 3000;
 const QUANT_TRIGGER_EVERY_BARS = 5;
 /** Same rationale as QUANT_TRIGGER_EVERY_BARS, for PortfolioMonitor's real exit-review cycle. */
 const PORTFOLIO_MONITOR_TRIGGER_EVERY_BARS = 3;
+/** Same rationale, for NewsEngine's real pipeline cycle - only used when options.newsInjections is
+ *  non-empty (see SyntheticSessionOptions.newsInjections's own doc comment). A tighter cadence than
+ *  QUANT_TRIGGER_EVERY_BARS so an injected article's own publishedAtMs bar is checked promptly. */
+const NEWS_TRIGGER_EVERY_BARS = 1;
 
 export interface SyntheticSessionOptions {
   simulationId: string;
@@ -100,6 +105,19 @@ export interface SyntheticSessionOptions {
    *  CalibrationHistorySeeder.ts's real runCalibrationValidationCycle() call. Undefined/empty by
    *  default (no seeding) - see that file's own header for the full disclosure this represents. */
   calibrationSeeds?: CalibrationSeedSpec[];
+  /**
+   * News+Quant Independent-Consensus Round-Trip Certification (2026-10-06 follow-up) - caller-
+   * supplied synthetic articles, each delivered through the REAL NewsEngine pipeline once the
+   * session's own simulated clock reaches its publishedAtMs (never Date.now() - see
+   * SyntheticInjectableNewsProvider.ts). Undefined/empty by default: a session with no
+   * newsInjections behaves byte-for-byte as before this option was added (NewsEngine stays off,
+   * exactly as ARGUS_NEWS_ENGINE_ENABLED=false already disabled it for every existing scenario).
+   * When present, this engine installs SyntheticInjectableNewsProvider as NewsEngine's ONLY
+   * provider for the session (NewsProviderManager.replaceProviders() - never the real RSS/paid
+   * feeds) and calls the real newsEngine.triggerNow() periodically during the main loop, the same
+   * manual-cycle pattern already used for QuantSignalAgent/PortfolioMonitor.
+   */
+  newsInjections?: SyntheticNewsArticleSpec[];
 }
 
 export interface MemorySample {
@@ -135,7 +153,7 @@ export interface SyntheticSessionResult {
   costProfile: ReplayCostProfile;
 }
 
-function defaultSessionStartMs(): number {
+export function defaultSessionStartMs(): number {
   // Fixed, deterministic MARKET_OPEN-shaped timestamp (09:30 America/New_York, a real weekday) -
   // never `Date.now()`, so a given seed reproduces the exact same session regardless of when it
   // is actually run.
@@ -254,6 +272,16 @@ export class SyntheticSessionEngine {
    *  drive bars through the real EventBus, wait for the real pipeline to settle, collect results.
    *  Must be called from a process where prepareIsolatedEnvironment() has already run. */
   async run(options: SyntheticSessionOptions): Promise<SyntheticSessionResult> {
+    // Must happen BEFORE bootArgusCore() below, not merely before the main loop: config/
+    // deskIntelligence.ts resolves `NEWS_AGENT_MODE` into a module-level const exactly once, at
+    // import time (loadDeskIntelligence()) - and some module bootArgusCore() transitively imports
+    // already pulls deskIntelligence.ts in. Setting this any later (real bug found 2026-10-06
+    // building this option - the provider swap worked, articles clustered, but zero NewsAgent
+    // ideas ever emitted because newsAgentEmitsTradeIdeas() had already frozen CATALYST_ONLY)
+    // would silently no-op this entire option.
+    if (options.newsInjections && options.newsInjections.length > 0) {
+      process.env.NEWS_AGENT_MODE = 'ACTIVE_VOTE';
+    }
     const wallClockStart = Date.now();
     const sessionStartMs = options.sessionStartMs ?? defaultSessionStartMs();
     const sessionDurationMs = (options.sessionDurationMinutes ?? 90) * 60_000;
@@ -342,6 +370,26 @@ export class SyntheticSessionEngine {
     if (options.calibrationSeeds && options.calibrationSeeds.length > 0) {
       const { seedSyntheticCalibrationHistory } = await import('./CalibrationHistorySeeder');
       calibrationSeedResults = await seedSyntheticCalibrationHistory(options.calibrationSeeds);
+    }
+
+    // News+Quant Independent-Consensus Round-Trip Certification (2026-10-06 follow-up): installed
+    // here, BEFORE the main loop, so the provider swap and NEWS_AGENT_MODE override are in place
+    // before any bar is processed. Dynamic imports only, after env vars + DB isolation (same rule
+    // as every other db-touching import in this file).
+    let injectableNewsProvider: import('./SyntheticInjectableNewsProvider').SyntheticInjectableNewsProvider | null = null;
+    let newsEngineForInjection: import('../../news/NewsEngine').NewsEngine | null = null;
+    if (options.newsInjections && options.newsInjections.length > 0) {
+      // NEWS_AGENT_MODE itself was already set at the very top of run() (before bootArgusCore()) -
+      // see that comment for why it cannot be set here.
+      const { SyntheticInjectableNewsProvider } = await import('./SyntheticInjectableNewsProvider');
+      const { newsEngine } = await import('../../news/NewsEngine');
+      newsEngineForInjection = newsEngine;
+      injectableNewsProvider = new SyntheticInjectableNewsProvider(() => this.clock.now());
+      // Real production seam (NewsProviderManager.replaceProviders(), 2026-10-06) - swaps out the
+      // real RSS/paid-news providers so this isolated session never reaches the real network, the
+      // same isolation guarantee this file already applies to FundamentalAgent/MacroAgent above.
+      newsEngine.providerManager.replaceProviders([injectableNewsProvider]);
+      for (const spec of options.newsInjections) injectableNewsProvider.inject(spec);
     }
 
     // These three imports must stay here (dynamic, after env vars + DB isolation are already in
@@ -534,6 +582,9 @@ export class SyntheticSessionEngine {
       }
       if (i > 0 && i % PORTFOLIO_MONITOR_TRIGGER_EVERY_BARS === 0) {
         await portfolioMonitor.triggerNow().catch(() => { /* same per-worker isolation as above */ });
+      }
+      if (newsEngineForInjection && i % NEWS_TRIGGER_EVERY_BARS === 0) {
+        await newsEngineForInjection.triggerNow().catch(() => { /* same per-worker isolation as above */ });
       }
 
       memorySamples.push(sampleMemory(i));
