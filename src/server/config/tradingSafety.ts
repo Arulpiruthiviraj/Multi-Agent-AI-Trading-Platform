@@ -18,6 +18,15 @@ export interface TradingSafety {
    *  evaluator - prevents duplicate-evaluation races and bar-request storms from a symbol
    *  receiving several near-simultaneous detection events (e.g. repeated news catalysts). */
   fastLaneSymbolEvaluationCooldownMs: number;
+  /** 2026-10-08 (fast-lane D4 defect fix): liveness watchdog for a single fast-lane strategy
+   *  evaluation. A hung evaluateSymbol() promise is abandoned after this long; the candidate is
+   *  terminally transitioned and the concurrency slot released. Resource governor, not a trading
+   *  threshold. */
+  fastLaneEvaluationTimeoutMs: number;
+  /** 2026-10-08 (fast-lane D5 defect fix): bound for fastCanonicalDedup.ts's in-memory
+   *  evidence-fingerprint idempotency cache. Oldest-first eviction past this size.
+   *  Resource governor, not a trading threshold. */
+  fastLaneCanonicalIdeaCacheMaxEntries: number;
   stalePriceThresholdMs: number;
   /** Bounded wait (NewsEngine's async fresh-price acquisition, waitForFreshPrice.ts) for a
    *  just-requested subscription to produce its first live tick before giving up and reporting
@@ -660,6 +669,8 @@ export interface TradingSafety {
 const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'fastLaneMaxConcurrentEvaluations',
   'fastLaneSymbolEvaluationCooldownMs',
+  'fastLaneEvaluationTimeoutMs',
+  'fastLaneCanonicalIdeaCacheMaxEntries',
   'stalePriceThresholdMs',
   'newsPriceWaitTimeoutMs',
   'newsPriceWaitPollIntervalMs',
