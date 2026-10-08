@@ -240,4 +240,19 @@ describe('ChiefTraderAgent policy router', () => {
     expect(noTrade).toBeTruthy();
     expect(noTrade[1].quantReasonCode).toBe('QUANT_POLICY_ERROR');
   });
+
+  it('AI-on parity: with providers available, the quant path still never consults AI', async () => {
+    // AI is UP for this test only — the quant path must remain AI-free regardless.
+    hasAnyRoutableProvider.mockResolvedValue(true);
+    routeConsensus.mockResolvedValue({ action: 'TRADE', confidence: 0.9, reasoning: 'ai' } as any);
+    resolveQuantStrategyAuthorization.mockResolvedValue(authorized());
+    evaluateQuantExecutionPolicy.mockResolvedValue(approvedDecision());
+
+    await agent.reviewIdea(quantIdea());
+
+    expect(routeConsensus).not.toHaveBeenCalled();
+    expect(routeTask).not.toHaveBeenCalled();
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+    expect(emitChiefApproval.mock.calls[0][0].decisionPolicy).toBe('QUANT_EXECUTION');
+  });
 });
