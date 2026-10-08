@@ -68,7 +68,7 @@ import { transactionLifecycleTracker } from '../services/TransactionLifecycleTra
 import { marketDataCrossChecker } from '../services/MarketDataCrossChecker';
 import { alertingService } from '../services/AlertingService';
 import { aiFailureCircuitBreaker } from '../services/AIFailureCircuitBreaker';
-import { startResearchTriggerEngine } from '../services/ResearchTriggerEngine';
+import { startResearchTriggerEngine, stopResearchTriggerEngine } from '../services/ResearchTriggerEngine';
 import { startEnabledIdeaAgents, stopAllIdeaAgents } from './pipelineAgentRuntime';
 import { stopAIProviderHealthMonitor } from '../ai/AIProviderHealthCheck';
 
@@ -182,6 +182,15 @@ export class SystemBootstrap {
     // news_veto clusters and Digital Twin NEWS_* telemetry keep refreshing. newsEngine.stop()
     // remains available for process shutdown via gracefulShutdown.
     stopAllIdeaAgents();
+    // Memory-leak hunt (2026-10-08, TIMERS/SCHEDULERS): confluenceCoordinator is started in
+    // start() above but was never stopped here - its TRADE_IDEA_GENERATED subscription stayed
+    // armed through the graceful-shutdown drain, where a late idea could trigger on-demand
+    // agent evaluations against a closing DB. Symmetric stop; behavior-neutral while running
+    // (maybeTrigger already no-ops when isLiveIdeaGenerationEnabled() is false).
+    confluenceCoordinator.stop();
+    // Same start/stop asymmetry: the ORDER_EXECUTED listener armed by
+    // startResearchTriggerEngine() was never unwired on shutdown.
+    stopResearchTriggerEngine();
     reflectionEngine.stop();
     predictionOutcomeEvaluator.stop();
     multiHorizonOutcomeEvaluator.stop();

@@ -890,6 +890,9 @@ export class AICallGovernor {
     inFlight: number;
     circuits: Record<string, 'CLOSED' | 'OPEN' | 'HALF_OPEN'>;
     cacheSize: number;
+    /** Per-symbol budget/cooldown tracking (bounded: MAX_SYMBOL_BUCKETS). */
+    symbolWindows: number;
+    symbolCooldowns: number;
   } {
     const sorted = [...this.diag.latencies].sort((a, b) => a - b);
     const pct = (p: number): number => {
@@ -908,6 +911,8 @@ export class AICallGovernor {
       inFlight: this.inFlightCount.jev + this.inFlightCount.generative,
       circuits: { jev: this.circuits.jev.state, generative: this.circuits.generative.state },
       cacheSize: this.cache.size,
+      symbolWindows: this.symbolWindows.size,
+      symbolCooldowns: this.symbolCooldownAt.size,
     };
   }
 

@@ -292,6 +292,24 @@ export function stopAIProviderHealthMonitor(): void {
 async function tick(): Promise<void> {
   const entries = AIRouter.getInstance().listProviders();
   await Promise.all(entries.map(([id, provider]) => checkProviderHealth(id, provider)));
+  // Drop tracker entries for providers that are no longer registered (removed or
+  // reconfigured under a new id). getAIProviderHealthSnapshot() only ever looks
+  // up DB rows, so a stale entry for a gone provider is never surfaced - without
+  // this it would accumulate forever as provider rows churn.
+  pruneAIProviderHealthTracker();
+}
+
+/**
+ * Remove in-memory health-tracker entries for provider ids that are no longer
+ * registered on AIRouter. Called by the periodic tick(); exported so tests can
+ * prove stale entries are actually dropped. Pure cleanup: it never changes what
+ * getAIProviderHealthSnapshot() reports for any still-known provider.
+ */
+export function pruneAIProviderHealthTracker(): void {
+  const registered = new Set(AIRouter.getInstance().listProviders().map(([id]) => id));
+  for (const id of tracker.keys()) {
+    if (!registered.has(id)) tracker.delete(id);
+  }
 }
 
 /** Test-only - clears in-memory tracker without touching AIRouter's own state. */
