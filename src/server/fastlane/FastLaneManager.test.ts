@@ -98,13 +98,66 @@ describe('FastLaneManager', () => {
 
   it('fails closed for LIVE mode even with flag set', () => {
     process.env.FAST_OPPORTUNITY_LANE_ENABLED = 'true';
-    process.env.TRADING_MODE = 'LIVE';
+    // Canonical env var is ARGUS_TRADING_MODE (tradingModeEnv.resolveEnvTradingMode);
+    // bare TRADING_MODE is legacy and no longer consulted.
+    process.env.ARGUS_TRADING_MODE = 'LIVE';
     const result = fastLaneManager.injectCandidate({
       symbol: 'MXL',
       detectionSource: 'PRICE_ACCELERATION',
       liquidityEvidence: { dollarVolume: 1_000_000, spreadBps: 20, meetsMinLiquidity: true },
     });
     expect(result).toBeNull();
-    delete process.env.TRADING_MODE;
+    delete process.env.ARGUS_TRADING_MODE;
+  });
+
+  it('D2: terminal candidates are removed, not accumulated - the candidate map stays bounded', () => {
+    process.env.FAST_OPPORTUNITY_LANE_ENABLED = 'true';
+    const mk = (symbol: string, ttlMs: number) => fastLaneManager.injectCandidate({
+      symbol,
+      detectionSource: 'PRICE_ACCELERATION',
+      liquidityEvidence: { dollarVolume: 1_000_000, spreadBps: 20, meetsMinLiquidity: true },
+      ttlMs,
+    })!;
+    const a = mk('D2A', 1);
+    const b = mk('D2B', 1);
+    const c = mk('D2C', 60 * 60_000);
+    expect(fastLaneManager.countForTests()).toBe(3);
+    fastLaneManager.transitionState(b.id, 'NO_SETUP', 'evaluated, no setup');
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        // Sweep: past-TTL EXPIRED/NO_SETUP records are deleted; the live candidate survives.
+        fastLaneManager.expireStale();
+        expect(fastLaneManager.getCandidate(a.id)).toBeUndefined();
+        expect(fastLaneManager.getCandidate(b.id)).toBeUndefined();
+        expect(fastLaneManager.getCandidate(c.id)).not.toBeUndefined();
+        expect(fastLaneManager.countForTests()).toBe(1);
+        resolve();
+      }, 10);
+    });
+  });
+
+  it('D3: injectCandidate sweeps stale candidates so a stuck symbol regains fast-lane coverage', () => {
+    process.env.FAST_OPPORTUNITY_LANE_ENABLED = 'true';
+    const first = fastLaneManager.injectCandidate({
+      symbol: 'D3X',
+      detectionSource: 'NEWS_CATALYST',
+      liquidityEvidence: { dollarVolume: 1_000_000, spreadBps: 20, meetsMinLiquidity: true },
+      ttlMs: 1, // expires almost immediately, never evaluated
+    })!;
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        // Without the D3 sweep-on-inject, this second injection would be blocked forever by the
+        // never-evaluated, never-converted first candidate (dedup only ignores EXPIRED/NO_SETUP).
+        const second = fastLaneManager.injectCandidate({
+          symbol: 'D3X',
+          detectionSource: 'NEWS_CATALYST',
+          liquidityEvidence: { dollarVolume: 1_000_000, spreadBps: 20, meetsMinLiquidity: true },
+        });
+        expect(second).not.toBeNull();
+        expect(second!.id).not.toBe(first.id);
+        expect(fastLaneManager.getCandidate(first.id)).toBeUndefined(); // swept as EXPIRED
+        resolve();
+      }, 10);
+    });
   });
 });

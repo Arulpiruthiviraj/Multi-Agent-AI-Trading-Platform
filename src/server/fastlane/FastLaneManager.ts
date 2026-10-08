@@ -71,6 +71,13 @@ class FastLaneManager {
   injectCandidate(input: FastCandidateInput): FastOpportunityCandidate | null {
     if (!isFastLaneEnabled()) return null;
 
+    // 2026-10-08 (D3): expiry was previously enforced only opportunistically inside
+    // getActiveCandidates(), which has no production callers - a never-evaluated,
+    // never-converted candidate could sit non-EXPIRED forever and, via the dedup below,
+    // silently block re-injection for its symbol. Sweep on every injection (cheap O(n)
+    // over a small map) so TTLs are actually enforced.
+    this.expireStale();
+
     // Deduplicate: one active candidate per symbol at a time.
     for (const c of this.candidates.values()) {
       if (c.symbol === input.symbol && c.state !== 'EXPIRED' && c.state !== 'NO_SETUP') {
@@ -91,11 +98,6 @@ class FastLaneManager {
       priceAnomaly: input.priceAnomaly,
       volumeAnomaly: input.volumeAnomaly,
       relativeStrength: input.relativeStrength,
-      sessionContext: {
-        tradingDateStr: new Date().toISOString().slice(0, 10),
-        minutesSinceOpen: 0, // TODO: compute from market calendar
-        isRegularHours: true, // TODO: compute from market calendar
-      },
       liquidityEvidence: input.liquidityEvidence,
       requiredDataTier: input.requiredDataTier ?? 'TIER_1',
       currentDataTier: 'TIER_0',
@@ -136,7 +138,17 @@ class FastLaneManager {
     return true;
   }
 
-  /** Expire candidates past their TTL. Returns count expired. */
+  /**
+   * Expire candidates past their TTL. Returns count expired.
+   *
+   * 2026-10-08 (D2): this manager previously never deleted anything - expireStale() only
+   * transitioned state, so every injected candidate (including every per-symbol news injection)
+   * accumulated in the Map forever: a slow, unbounded memory leak in a 24/7 process.
+   * Terminal candidates are now REMOVED after their terminal transition is logged:
+   * EXPIRED always, and NO_SETUP/WATCH/ACTIONABLE once also past TTL (a past-TTL ACTIONABLE is
+   * no longer valid by definition - intraday opportunities decay - and the dedup in
+   * injectCandidate already ignores EXPIRED/NO_SETUP, so removal changes no live decision).
+   */
   expireStale(): number {
     const now = Date.now();
     let expired = 0;
@@ -144,6 +156,16 @@ class FastLaneManager {
       if (c.state !== 'EXPIRED' && now > c.expiresAt) {
         this.transitionState(c.id, 'EXPIRED', 'TTL elapsed');
         expired++;
+      }
+    }
+    for (const [id, c] of this.candidates) {
+      const terminal = c.state === 'EXPIRED' || c.state === 'NO_SETUP' || c.state === 'WATCH' || c.state === 'ACTIONABLE';
+      // EXPIRED is by construction always past TTL (both transition sites check Date.now() >
+      // expiresAt first). Other terminal states are removed once their TTL elapses too - a
+      // past-TTL ACTIONABLE is no longer valid by definition (intraday opportunities decay),
+      // and the inject dedup already ignores EXPIRED/NO_SETUP, so removal changes no decision.
+      if (terminal && (c.state === 'EXPIRED' || now > c.expiresAt)) {
+        this.candidates.delete(id);
       }
     }
     return expired;
