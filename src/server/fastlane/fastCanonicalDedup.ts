@@ -33,6 +33,7 @@ import {
   logFastCanonicalIdeaDeduped,
   logFastCanonicalIdeaRejected,
 } from './fastLaneObservability';
+import { tradingSafety } from '../config/tradingSafety';
 
 const canonicalIdeaCache = new Map<string, CanonicalIdeaFromFastLane>();
 
@@ -47,6 +48,16 @@ export function getOrCacheCanonicalIdea(idea: CanonicalIdeaFromFastLane): { idea
   const existing = canonicalIdeaCache.get(key);
   if (existing) return { idea: existing, wasAlreadyCached: true };
   canonicalIdeaCache.set(key, idea);
+  // 2026-10-08 (D5): the header's "bounded in-memory cache" claim is now true - oldest-first
+  // eviction (Map preserves insertion order) keeps this from growing without bound in a 24/7
+  // process. Evicting an old fingerprint only means a re-delivered old evaluation rebuilds its
+  // canonical idea object instead of reusing the identical one - no decision changes.
+  const maxEntries = tradingSafety.fastLaneCanonicalIdeaCacheMaxEntries;
+  while (canonicalIdeaCache.size > maxEntries) {
+    const oldest = canonicalIdeaCache.keys().next();
+    if (oldest.done) break;
+    canonicalIdeaCache.delete(oldest.value);
+  }
   return { idea, wasAlreadyCached: false };
 }
 

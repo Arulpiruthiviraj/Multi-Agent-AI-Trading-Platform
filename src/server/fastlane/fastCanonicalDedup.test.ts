@@ -16,7 +16,6 @@ function fakeCandidate(overrides: Partial<FastOpportunityCandidate> = {}): FastO
     expiresAt: now + 60 * 60_000,
     lastEvidenceAt: now,
     detectionSource: 'NEWS_CATALYST',
-    sessionContext: { tradingDateStr: '2026-10-06', minutesSinceOpen: 0, isRegularHours: true },
     liquidityEvidence: { dollarVolume: null, spreadBps: null, meetsMinLiquidity: false },
     requiredDataTier: 'TIER_1',
     currentDataTier: 'TIER_0',
@@ -78,6 +77,27 @@ describe('processFastEvaluationForCanonicalIdea - idempotency (Section 5)', () =
     const second = processFastEvaluationForCanonicalIdea(fakeResult({ symbol: 'MSFT', id: 'cand-2:123', candidateId: 'cand-2' }), fakeCandidate({ id: 'cand-2', symbol: 'MSFT' }));
     expect(first.ok && second.ok).toBe(true);
     expect(fastCanonicalDedupCacheSizeForTests()).toBe(2);
+  });
+
+  it('D5: the cache is bounded - oldest entries are evicted past fastLaneCanonicalIdeaCacheMaxEntries', async () => {
+    const { tradingSafety } = await import('../config/tradingSafety');
+    const originalMax = tradingSafety.fastLaneCanonicalIdeaCacheMaxEntries;
+    (tradingSafety as any).fastLaneCanonicalIdeaCacheMaxEntries = 5;
+    try {
+      const candidate = fakeCandidate();
+      // 8 genuinely different evaluations (different symbols => different fingerprints)
+      for (let i = 0; i < 8; i++) {
+        const sym = `SYM${i}`;
+        const outcome = processFastEvaluationForCanonicalIdea(
+          fakeResult({ symbol: sym, id: `cand-${i}:123`, candidateId: `cand-${i}` }),
+          fakeCandidate({ id: `cand-${i}`, symbol: sym }),
+        );
+        expect(outcome.ok).toBe(true);
+      }
+      expect(fastCanonicalDedupCacheSizeForTests()).toBe(5); // bounded, not 8
+    } finally {
+      (tradingSafety as any).fastLaneCanonicalIdeaCacheMaxEntries = originalMax;
+    }
   });
 });
 
