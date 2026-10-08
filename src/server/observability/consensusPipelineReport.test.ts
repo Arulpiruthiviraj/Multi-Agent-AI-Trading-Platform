@@ -69,6 +69,10 @@ describe('consensusPipelineReport', () => {
     expect(report.confidenceAtLeast75).toBe(1);
     // All three seeded rows carry the default participatingAgents: [{agent: 'TechnicalAgent', side: 'BUY'}]
     expect(report.directionalVotesByAgent.TechnicalAgent).toBe(3);
+    // Legacy producer-name counts cannot establish the current evidence-group gate outcome.
+    expect(report.evidenceDiagnostics.independenceUnknown).toBe(3);
+    expect(report.evidenceDiagnostics.belowRequiredEvidenceGroups).toBe(0);
+    expect(report.evidenceDiagnostics.roundsWithCalibrationReduction).toBe(0);
   });
 
   it('buckets independent-agent-count and ranks top terminal reasons by frequency', async () => {
@@ -171,5 +175,36 @@ describe('consensusPipelineReport', () => {
     const text = mod.formatConsensusPipelineReport(report);
     expect(text).toContain('CONSENSUS PIPELINE');
     expect(text).toContain('TOP NO-TRADE REASONS');
+  });
+
+  it('bounds every funnel stage to an exclusive end and excludes replay terminal evidence', async () => {
+    const start = '2026-10-07T13:30:00.000Z', end = '2026-10-07T20:00:00.000Z';
+    const payload = { approved: false, terminalReasonCode: 'CONFIDENCE_BELOW_STRONG',
+      independentEvidenceGroupCount: 1, requiredIndependentEvidenceGroups: 2,
+      participatingAgents: [{ agent: 'TechnicalAgent', side: 'BUY', rawSignalStrength: 0.85,
+        confidence: 0.48, historicalReliability: 0.48 }] };
+    await db.insert(schema.observabilityEvents).values([
+      { id: 'bounded-organic', ts: Date.parse(start), level: 'INFO', category: 'CONSENSUS', eventType: 'CONSENSUS_TERMINAL_REASON', loggerName: 'test', message: 'test', sessionId: 'test', traceId: 'organic', payload: JSON.stringify(payload) },
+      { id: 'bounded-replay', ts: Date.parse(start), level: 'INFO', category: 'CONSENSUS', eventType: 'CONSENSUS_TERMINAL_REASON', loggerName: 'test', message: 'test', sessionId: 'test', traceId: 'replay-fixture-AAPL', payload: JSON.stringify(payload) },
+      { id: 'bounded-close', ts: Date.parse(end), level: 'INFO', category: 'CONSENSUS', eventType: 'CONSENSUS_TERMINAL_REASON', loggerName: 'test', message: 'test', sessionId: 'test', payload: JSON.stringify(payload) },
+      { id: 'bounded-null', ts: Date.parse(start), level: 'INFO', category: 'CONSENSUS', eventType: 'CONSENSUS_TERMINAL_REASON', loggerName: 'test', message: 'test', sessionId: 'test', payload: 'null' },
+    ]);
+    await db.insert(schema.riskAssessments).values({ traceId: 'after-close', symbol: 'AAPL', side: 'BUY', approved: true, maxQuantity: 1, createdAt: end });
+    await db.insert(schema.trades).values({ id: 'after-close', symbol: 'AAPL', side: 'BUY', quantity: 1, price: 100, status: 'FILLED', timestamp: end, submittedAt: end });
+    await db.insert(schema.fills).values({ orderId: 'after-close', quantity: 1, price: 100, filledAt: end, cumulativeQuantity: 1 });
+    const report = await mod.buildConsensusPipelineReport(start, end);
+    expect(report.evaluations).toBe(1);
+    expect(report.riskEngineReached).toBe(0);
+    expect(report.ordersPlaced).toBe(0);
+    expect(report.fillsRecorded).toBe(0);
+    expect(report.evidenceDiagnostics).toEqual({ independenceKnown: 1, independenceUnknown: 0,
+      belowRequiredEvidenceGroups: 1, roundsWithCalibrationReduction: 1, confidenceBelowStrongAndBelowRequiredGroups: 1 });
+    const offsetReport = await mod.buildConsensusPipelineReport('2026-10-07T09:30:00-04:00', '2026-10-07T16:00:00-04:00');
+    expect(offsetReport).toEqual(report);
+  });
+
+  it('rejects invalid or inverted windows instead of reporting misleading counts', async () => {
+    await expect(mod.buildConsensusPipelineReport('bad')).rejects.toThrow('time window');
+    await expect(mod.buildConsensusPipelineReport('2026-10-08', '2026-10-07')).rejects.toThrow('time window');
   });
 });

@@ -10,15 +10,38 @@ import path from 'path';
  */
 describe('refreshSnapshotRanks -> composable ranking persistence', () => {
   let tmpDbPath: string;
+  let snapshots: Record<string, unknown>;
+  let connection: { close(): void };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     tmpDbPath = path.join(os.tmpdir(), `argus-snapshot-ranking-${Date.now()}-${process.pid}.db`);
     process.env.ARGUS_DB_PATH = tmpDbPath;
     vi.resetModules();
+    // Database migrations/bootstrap are setup, not ranking latency. Let the existing hook
+    // timeout cover cold bootstrap; retain the ordinary test deadline for behavior assertions.
+    ({ sqliteDb: connection } = await import('../db'));
+    snapshots = {};
+    vi.doMock('../core/alpacaTls', () => ({
+      alpacaFetch: vi.fn(async () => new Response(JSON.stringify(snapshots), { status: 200 })),
+    }));
+    vi.doMock('../config/continuousIntelligence', async (importOriginal) => {
+      const actual = await importOriginal<any>();
+      return { ...actual, continuousIntelligence: { ...actual.continuousIntelligence, seedSymbols: ['AAPL', 'MSFT'], watchUniverseSymbols: [], campaignOpeningSurgeSymbols: [], momentumScanUniverseSymbols: [] } };
+    });
+    await import('./SnapshotScanner');
+    // refreshSnapshotRanks lazily loads these real collaborators. Include their cold module
+    // initialization in setup too; no collaborator result is mocked or injected.
+    await import('./ComposableRanking');
+    await import('./TradePlanBuilder');
+    await import('./MissedOpportunityDetector');
+    await import('../services/MarketDataWorker');
+    await import('../db/schema');
   });
 
   afterEach(() => {
+    connection?.close();
     delete process.env.ARGUS_DB_PATH;
+    vi.doUnmock('../config/continuousIntelligence');
     vi.doUnmock('../core/alpacaTls');
     for (const suffix of ['', '-wal', '-shm']) {
       try { fs.unlinkSync(tmpDbPath + suffix); } catch { /* */ }
@@ -26,7 +49,7 @@ describe('refreshSnapshotRanks -> composable ranking persistence', () => {
   });
 
   it('persists a candidate_rankings row for a real scanned symbol without altering the existing return value', async () => {
-    const fakeSnapshot = {
+    snapshots = {
       AAPL: {
         minuteBar: { c: 150, h: 151, l: 149, v: 1000 },
         dailyBar: { c: 149, v: 40_000_000, o: 148 },
@@ -34,16 +57,6 @@ describe('refreshSnapshotRanks -> composable ranking persistence', () => {
         latestTrade: { p: 150 },
       },
     };
-    vi.doMock('../core/alpacaTls', () => ({
-      alpacaFetch: vi.fn(async () => new Response(JSON.stringify(fakeSnapshot), { status: 200 })),
-    }));
-    vi.doMock('../config/continuousIntelligence', async (importOriginal) => {
-      const actual = await importOriginal<any>();
-      return {
-        ...actual,
-        continuousIntelligence: { ...actual.continuousIntelligence, seedSymbols: ['AAPL'], watchUniverseSymbols: [], campaignOpeningSurgeSymbols: [], momentumScanUniverseSymbols: [] },
-      };
-    });
 
     const { db } = await import('../db');
     const { candidateRankings } = await import('../db/schema');
@@ -73,7 +86,7 @@ describe('refreshSnapshotRanks -> composable ranking persistence', () => {
    * not its neighbor's.
    */
   it('preserves each symbol\'s own raw momentum/range-expansion values when scan order and rank order differ', async () => {
-    const fakeSnapshot = {
+    snapshots = {
       // Scanned first (universe order), but a small move -> ranks LAST after the momentum sort.
       AAPL: {
         minuteBar: { c: 100.5, h: 101, l: 100, v: 1_000_000 },
@@ -89,16 +102,7 @@ describe('refreshSnapshotRanks -> composable ranking persistence', () => {
         latestTrade: { p: 120 },
       },
     };
-    vi.doMock('../core/alpacaTls', () => ({
-      alpacaFetch: vi.fn(async () => new Response(JSON.stringify(fakeSnapshot), { status: 200 })),
-    }));
-    vi.doMock('../config/continuousIntelligence', async (importOriginal) => {
-      const actual = await importOriginal<any>();
-      return {
-        ...actual,
-        continuousIntelligence: { ...actual.continuousIntelligence, seedSymbols: ['AAPL', 'MSFT'], watchUniverseSymbols: [], campaignOpeningSurgeSymbols: [], momentumScanUniverseSymbols: [] },
-      };
-    });
+
 
     const { db } = await import('../db');
     const { candidateRankings } = await import('../db/schema');

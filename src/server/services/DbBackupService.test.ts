@@ -4,6 +4,8 @@ import path from 'path';
 import os from 'os';
 import Database from 'better-sqlite3';
 
+const isPublishedName = (f: string) => f.startsWith('argus_') && f.endsWith('.db');
+
 /**
  * Real end-to-end backup/restore drill (Phase 23): BACKUP -> ISOLATE/LOSE THE "LIVE" FILE ->
  * RESTORE -> VERIFY DATA, against real files on disk (not mocks). This exists because Section 15's
@@ -56,6 +58,49 @@ describe('DbBackupService - real backup/restore drill (Phase 23)', () => {
     expect(fs.existsSync(oldFile)).toBe(false); // pruned
     const stamp = new Date().toISOString().slice(0, 10);
     expect(fs.existsSync(backupFile)).toBe(true); // today's backup kept
+  });
+
+  it('sweeps orphaned .partial/-wal/-shm/-journal artifacts older than the cleanup age, keeps fresh ones', async () => {
+    const service = new DbBackupService();
+    const old = path.join(backupDir, 'argus_old_orphan.db.partial');
+    const oldWal = path.join(backupDir, 'argus_old_orphan.db.partial-wal');
+    const fresh = path.join(backupDir, 'argus_fresh_orphan.db.partial');
+    fs.writeFileSync(old, 'abandoned mid-copy');
+    fs.writeFileSync(oldWal, 'abandoned mid-copy wal');
+    fs.writeFileSync(fresh, 'copy in progress right now');
+    const oldTime = Date.now() - 2 * 60 * 60 * 1000; // 2h ago, beyond ORPHAN_CLEANUP_AGE_MS (1h default)
+    fs.utimesSync(old, oldTime / 1000, oldTime / 1000);
+    fs.utimesSync(oldWal, oldTime / 1000, oldTime / 1000);
+
+    await service.runBackup();
+
+    expect(fs.existsSync(old)).toBe(false); // swept - no restore value, old enough
+    expect(fs.existsSync(oldWal)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true); // too young to assume abandoned
+    fs.rmSync(fresh, { force: true }); // cleanup for subsequent tests in this suite
+  });
+
+  it('caps published backups by count even when all are within the age retention window', async () => {
+    const service = new DbBackupService();
+    // Seed 6 fake published backups, deliberately older than anything else this suite creates
+    // (10-15min back - the whole suite runs in well under that), to isolate the count cap
+    // (default 5) from the age-based rule without assuming isolation from earlier tests' own
+    // real backups sharing this same directory.
+    const seeded: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const f = path.join(backupDir, `argus_seed_${i}.db`);
+      fs.writeFileSync(f, 'seed');
+      const t = Date.now() - (15 - i) * 60 * 1000; // staggered, oldest first, all well in the past
+      fs.utimesSync(f, t / 1000, t / 1000);
+      seeded.push(f);
+    }
+
+    const newest = await service.runBackup(); // newest published backup in the directory
+
+    const totalPublished = fs.readdirSync(backupDir).filter(isPublishedName);
+    expect(totalPublished.length).toBeLessThanOrEqual(5); // MAX_COUNT, regardless of how many pre-existed
+    expect(fs.existsSync(newest)).toBe(true); // newest always survives the count cap
+    expect(fs.existsSync(seeded[0])).toBe(false); // oldest file in the whole directory, pruned first
   });
 
   it('preserves same-day snapshots and propagates failure without publishing a partial backup', async () => {

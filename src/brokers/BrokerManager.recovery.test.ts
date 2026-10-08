@@ -74,6 +74,17 @@ describe('BrokerManager recovery after failed startup', () => {
     expect(allowsNewEntryIdeas()).toBe(false);
     expect(sqliteDb.prepare('SELECT matches FROM reconciliation_events').all()).toEqual([{ matches: 0 }]);
     expect(tradingEngine.state.tradingState).toBe('TRADING_PAUSED');
+    expect(sqliteDb.prepare('SELECT action_taken AS action FROM reconciliation_events').get())
+      .toEqual({ action: 'DISCREPANCY_CONFIRMATION_PENDING' });
+
+    // A clean subsequent provider read, rather than elapsed debounce time, releases the hold.
+    vi.mocked(broker.portfolio).mockResolvedValue({ cash: 1000, equity: 1000, buyingPower: 1000, positions: [] });
+    await manager.setActiveBroker(broker.id, { apiKey: 'fixture' });
+    expect(allowsNewEntryIdeas()).toBe(true);
+    expect(sqliteDb.prepare('SELECT matches FROM reconciliation_events ORDER BY id').all())
+      .toEqual([{ matches: 0 }, { matches: 1 }]);
+    expect(tradingEngine.state.tradingState).toBe('TRADING_PAUSED');
+    expect(broker.placeOrder).not.toHaveBeenCalled();
   });
 
   it('keeps the hold when the broker cannot return positions', async () => {

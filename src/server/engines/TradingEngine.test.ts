@@ -6,7 +6,7 @@ import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 
 /**
- * Real integration test (isolated temp SQLite DB, no per-module mocks) for the P0 trading-safety
+ * Real integration test (isolated temp SQLite DB) for the P0 trading-safety
  * kill switch: TradingEngine.setTradingState()'s tri-state machine, its persisted audit trail
  * (kill_switch_events), restart-persistence (settings.tradingState), real outstanding-order
  * cancellation on EMERGENCY_STOP, and the toggle() field-allowlist fix for a real bug found this
@@ -30,11 +30,18 @@ describe('TradingEngine - trading-safety kill switch (P0)', () => {
     schema = await import('../db/schema');
     ({ tradingEngine } = await import('./TradingEngine'));
     ({ BrokerManager } = await import('../../brokers/BrokerManager'));
+    // This suite verifies state/settings/cancellation, not background worker startup.
+    // Autobot off intentionally leaves feed/reconciliation/news workers alive in production;
+    // starting them here leaks async work past DB/RPC teardown. Control only scheduling.
+    const { system } = await import('../core/SystemBootstrap');
+    vi.spyOn(system, 'start').mockImplementation(() => {});
+    vi.spyOn(system, 'stop').mockImplementation(() => {});
 
     await tradingEngine.initialize(); // seeds the default settings row in this fresh temp DB
   });
 
   afterAll(() => {
+    vi.restoreAllMocks();
     try { sqliteDb.close(); } catch { /* already closed */ }
     for (const suffix of ['', '-shm', '-wal']) {
       try { fs.unlinkSync(tmpDbPath + suffix); } catch { /* best-effort cleanup */ }

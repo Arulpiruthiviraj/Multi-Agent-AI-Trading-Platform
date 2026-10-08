@@ -691,8 +691,16 @@ export class PortfolioReconciliationWorker {
         } else if (warmupActive && worstImpact >= SIGNIFICANT_MISMATCH_DOLLARS) {
           actionTaken = 'WARMUP_SUPPRESSED_PAUSE';
         }
-      } else {
+      } else if (liveFaultKeys.size === 0) {
         eventBus.publish(EVENTS.RECONCILIATION_MATCH, { timestamp, broker: broker.name });
+      } else {
+        // Debouncing escalation does not prove a match. In particular, a restart hold
+        // must remain until a later read actually clears every observed discrepancy.
+        actionTaken = 'DISCREPANCY_CONFIRMATION_PENDING';
+        eventBus.publish(EVENTS.RECONCILIATION_MISMATCH, {
+          timestamp, broker: broker.name, mismatches: [], worstImpactDollars: 0,
+          pendingFaultKeys: [...liveFaultKeys],
+        });
       }
 
       // Phase 3 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md) - previously RECONCILIATION_MISMATCH/
@@ -703,8 +711,12 @@ export class PortfolioReconciliationWorker {
         const inserted = await db.insert(reconciliationEvents).values({
           checkedAt: timestamp,
           broker: broker.name,
-          matches: mismatches.length === 0,
-          mismatches: mismatches.length > 0 ? JSON.stringify(mismatches) : null,
+          matches: mismatches.length === 0 && liveFaultKeys.size === 0,
+          mismatches: mismatches.length > 0 ? JSON.stringify(mismatches)
+            : liveFaultKeys.size > 0 ? JSON.stringify([...liveFaultKeys].map(faultKey => ({
+              type: 'DISCREPANCY_CONFIRMATION_PENDING', faultKey,
+              consecutiveObservations: this.consecutiveFaults.get(faultKey),
+            }))) : null,
           worstImpactDollars: mismatches.length > 0 ? Number(worstImpact.toFixed(2)) : null,
           actionTaken,
         }).returning({ id: reconciliationEvents.id });

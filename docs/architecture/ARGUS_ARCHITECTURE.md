@@ -1,5 +1,51 @@
 # Argus Architecture
 
+## 2026-10-07: `DbBackupService` retention defect fix (unbounded backup growth filled the disk)
+
+**Real, live-reproduced defect, not a hypothetical.** The disk hosting `data/argus.db` ran to
+exactly 0 bytes free on 2026-10-07, traced to `data/backups/` having accumulated 172.73GB across
+56 files — only a fraction of which were usable backups. Root causes, all in
+`src/server/services/DbBackupService.ts`:
+
+1. `start()` ran an unconditional immediate backup on every call, independent of
+   `dbBackupIntervalMs` — 5 process restarts in one day (themselves unrelated OKTA remediation,
+   see the gate-26 section below) produced 5 immediate multi-GB backup attempts clustered within
+   hours, instead of the intended once-daily cadence.
+2. `pruneOldBackups()` only ran after a *successful* backup (`await this.pruneOldBackups()` sat
+   inside the try block's happy path). A run of failed/interrupted backups never triggered
+   pruning, and orphaned `.partial`/`.partial-wal`/`.partial-shm`/`.partial-journal` files left by
+   a copy interrupted mid-write (e.g. by one of the day's process restarts) were never cleaned by
+   anything — confirmed live: 62GB of such orphans had accumulated, several individual `.partial`
+   files themselves 10-14GB.
+3. Retention was age-only (`dbBackupRetentionDays: 30`), with no count/size cap. At the live DB's
+   observed size (~13GB), 30 daily backups would be ~390GB — structurally unsustainable regardless
+   of the bugs above, since this single mechanism alone can exceed most deployments' disk budget.
+4. No pre-flight free-disk-space check before starting a multi-GB `sqliteDb.backup()` copy — a
+   backup could start and run the disk to zero mid-write rather than refusing early with a clear
+   reason.
+
+**Fix** (`config/runtimeIntervals.json` + `DbBackupService.ts`, all additive config, no behavior
+change to `start()`'s public contract or `runBackup()`'s return value):
+- `start()` now checks the newest existing published backup's age before running an immediate
+  backup, skipping it if younger than `dbBackupIntervalMs` (the scheduled timer is unaffected and
+  still fires on schedule either way).
+- `pruneOldBackups()` now runs in a `finally` block — always, whether the backup succeeded or
+  failed — and additionally sweeps any `.partial`/`.partial-wal`/`.partial-shm`/`.partial-journal`
+  file older than `dbBackupOrphanCleanupAgeMs` (default 1h; a genuinely in-progress copy is always
+  younger than this).
+- Published backups are now pruned by whichever of (age cutoff, `dbBackupMaxCount` — default 5) is
+  more restrictive, so disk usage stays bounded regardless of DB growth.
+- `runBackup()` refuses to start (same failure path as any other backup error, so pruning still
+  runs) if free disk space is below `dbBackupMinFreeSpaceMultiplier` (default 2x) times the live
+  DB's current size, via `fs.statfs` (returns `null`/skips the check if the platform can't report
+  it — a missing signal never blocks a backup that would otherwise be fine).
+
+New tests in `DbBackupService.test.ts` cover the orphan sweep and the count cap in isolation from
+the age-based rule. No change to the backup/restore mechanism itself (SQLite's online backup API,
+integrity-check-before-publish, atomic rename) — this is purely the retention/cleanup layer around
+it. Not part of the protected trading spine; this module has no RiskEngine/OMS/ChiefTrader/
+BrokerManager contact.
+
 ## 2026-10-07: RiskEngine gate 26 — operator-directed short-cover sizing (`close_short_position_exists`)
 
 **One new, additive, operator-only RiskEngine gate — the autonomous BUY/SELL spine is unaffected
@@ -4124,3 +4170,144 @@ remaining SnapshotScanner ranking integration timeout reproduced on a separate r
 The full-suite attempt terminated with a memory-allocation failure. That recheck also reproduced
 a dailyReflection coverage-count assertion failure. These failures remain unresolved; no clean
 full-suite certificate, deployment, provider acknowledgment or real-session improvement is claimed.
+## 2026-10-07: session-bounded consensus diagnostics and test isolation repairs
+
+`buildConsensusPipelineReport(sinceIso, untilIso?)` now fixes an exclusive end boundary across
+terminal events, risk assessments, orders and fills. Offset-bearing timestamps normalize to UTC,
+invalid/inverted windows reject, replay terminal traces are excluded consistently with the
+downstream replay exclusions, and null/scalar/array JSON payloads cannot become fictitious rounds.
+The default end is the report invocation time. Existing downstream counts still mean non-replay
+activity; they do not by themselves establish organic activity or separate manual instructions.
+
+Additive `evidenceDiagnostics` records overlap between insufficient independent evidence groups,
+the observed terminal reason and directional votes whose calibrated confidence is below raw
+signal strength. Missing independence fields are explicitly unknown, never inferred from agent
+names. These are telemetry counts, not quantitative signals, approvals or counterfactual trades.
+No ChiefTrader calibration, vote math, gate, risk or execution code changed.
+
+Read-only production evidence gathered at 21:13 UTC for the fixed October 7 RTH window
+13:30 <= timestamp < 20:00 UTC shows 12,180 terminal records, including 11,577
+CONFIDENCE_BELOW_STRONG. Of those, 10,896 also have fewer than the required evidence groups;
+all 11,577 include at least one directional calibrated-confidence reduction. Conditions overlap.
+LLY/HPE/ABBV/MU reached respectively 129/140/121/147 terminal decisions; CIEN and CVS show
+six/sixteen not-promoted events and zero quant assessments in this window. These are session
+coverage observations, not proof that the final daily winners offered executable profitable entries.
+Four risk rows are all OKTA: two approvals, one autobot_enabled rejection, one
+correlation_exposure rejection. The two durable BUY fills (13 and 1) close inventory -14 to -1
+to zero, rather than opening new long positions. This differs from the unbounded-day counts in
+the earlier external audit and must not be mixed with them.
+
+The saved isolated cold calibration-multiday certification DB was read independently as well:
+approved AAPL confidence 0.7710714285714287, three groups, Kronos/Technical/News confidence
+0.85/0.714/0.765, all with null historicalReliability and zero calibration samples. Its two
+trades carry REPLAY. This certifies the observed cold fixture path, not the earned-warm
+calibration behavior present in production. Generated market/news inputs alone do not mean
+signals or approvals were injected; the real decision code must be distinguished from its
+controlled environment.
+
+The reflection test suite now isolates date-scoped mover/report rows per test and masks/restores
+provider credentials; its former fixture date can coincide with the real current date. The
+ranking integration suite now runs actual database and lazy collaborator module initialization
+in the setup hook, closes its own DB and removes mocks afterward. Its five-second behavior
+deadline and real ranking/persistence assertions remain unchanged; no downstream result is injected.
+
+The three directly touched suites initially passed 19/19 tests after these repairs. Expanded
+related validation passed 30 files / 222 tests. Build/full-suite results must be reported
+separately, not inferred from targeted success.
+Final typecheck and production build passed; the diagnostic suite was rerun after adding legacy
+unknown-evidence assertions and passed 9/9. These results certify only the exercised repairs.
+The subsequent full-suite attempt reported a BrokerManager recovery assertion failure and five
+frontend files with zero collected tests. It was stopped before a final summary as available
+physical memory fell to approximately 670 MB; only the owned Vitest runner/workers were stopped.
+Those failures remain unclassified and full-suite validation is incomplete, not green. The
+running trading engine was not restarted, resumed or stopped by this batch.
+Historical replay certification remains separate from organic PAPER readiness, discovery coverage,
+earned calibration and empirical edge. Strategy coverage, point-in-time winning-stock replays and
+deployment/runtime verification remain outstanding; no activation or restart is part of this batch.
+
+### 2026-10-07: reconciliation confirmation and frontend dependency repairs
+
+The recovery test exposed a real regression: discrepancy debounce delayed not only pause
+escalation but also the evidence of a discrepancy, allowing a false RECONCILIATION_MATCH to
+release an interrupted-session entry hold. PortfolioReconciliation now emits MATCH only when
+there are neither confirmed mismatches nor outstanding fault keys. Unconfirmed discrepancies
+are persisted as DISCREPANCY_CONFIRMATION_PENDING and published through the existing mismatch
+event, with zero escalation impact. The existing consecutive-observation pause threshold,
+warmup behavior, operator reactivation, order path and inventory accounting remain unchanged.
+A clean subsequent read can release the entry hold; it cannot resume paused trading.
+
+The frontend suites failed collection because the lockfile resolved React 19.3.0 alongside
+React DOM 19.2.7. Both dependencies are now pinned to 19.3.0 in the manifest and lockfile,
+also satisfying the existing Ink renderer's React peer requirement.
+Installation used the operating system certificate store without disabling TLS verification.
+The first reconciliation regression run passed 10 files / 80 tests. Additional validation
+and deployment remain separate; no running engine restart or activation is part of this repair.
+
+### 2026-10-07: prediction outcome endpoint evidence
+
+PredictionOutcomeEvaluator previously accepted any two minute bars inside its requested horizon.
+Its own fixtures graded hour/day-scale predictions using only seven minutes of evidence. The
+generic evaluator now requires bars at both endpoints within the requested one-minute bar
+duration, requests missing endpoint ranges through the existing HistoricalDataGateway, and
+leaves incomplete windows unevaluated for subsequent retry. Invalid input times/horizons also
+remain ungraded. This is a data-admission correction, not new quant arithmetic or a change to
+confidence, grading formulas, evaluation horizons, consensus or order routing. No Java outcome
+evaluator counterpart was found. Endpoint coverage does not certify uninterrupted interior bar
+coverage or corporate-action handling. Closed-market endpoints remain unavailable rather than
+being substituted by an arbitrary earlier close. Existing persisted outcomes/calibration rows
+are not rewritten; assessing contaminated historical samples requires separate evidence and
+review. Positive fixtures now include their configured horizon endpoints; incomplete-start/end
+cases exercise non-persistence through the real worker.
+
+The TradingEngine state/settings/cancellation suite now controls SystemBootstrap's scheduling
+boundary rather than starting real background workers. Autobot off intentionally retains
+feed/reconciliation/news workers in production, so toggling it off is not test teardown.
+The assertions still use the real state machine, durable settings and paper-broker cancellation;
+this suite does not certify worker startup. The prior full run, launched before the endpoint
+guard was edited, finished with 689/690 files passing, two endpoint assertions failing and one
+TradingEngine RPC teardown error. Fresh endpoint/debate suites passed 26 tests, and a fresh
+paired endpoint/TradingEngine run passed 37 tests before scheduling isolation. A frozen rerun
+is required; these failures are not dismissed as pre-existing flakes. Latest typecheck and
+production build passed after the endpoint admission change.
+
+### 2026-10-07: prediction evaluation backlog progress
+
+A read-only production check found the most recent graded TechnicalAgent prediction dated
+September 3; there were no joined TechnicalAgent outcomes for October 7 RTH. The evaluator's
+configured first page contained 2,000 ungraded agent predictions from August 9–27. Its bounded
+oldest-first anti-join repeatedly selected the same unavailable rows, with no path to newer work.
+This verifies queue starvation capability, not that it alone explains every stale grade or trade.
+
+The existing evaluator now scans pending work by `(timestamp, id)` keyset pages for each of its
+three ledgers. Scan positions advance only for attempted rows, wrap to retry unresolved older
+rows, and reset on process restart; outcomes remain the durable source of completion. Source
+priority rotates each cycle so one slow provider cannot always preempt lower ledgers. Existing
+page limits, single-flight guard, wall-clock budget, horizons and grading formulas are unchanged.
+Metrics expose copied scan positions, the next source and whether the reported backlog count
+covers all sources. Backfill becomes eligible within a sweep rather than necessarily next cycle.
+This does not promise immediate freshness under arrival overload, repeated restarts, unavailable
+providers or windows that lack endpoint data. No outcome/history repair or trading activation.
+
+Regression fixtures use the real isolated DB and evaluator across all three ledgers, verifying
+progress beyond a full unavailable page, timestamp ties, wraparound, idempotence and restart.
+Provider delay/clock injection verifies another ledger gets its turn after budget exhaustion.
+The intermediate frozen full-suite attempt was stopped before completion to implement this
+newly verified defect; it is not counted as passing. Final validation must use the finished code.
+
+### October 7 repair validation — final checkpoint (2026-10-08 00:04 UTC)
+
+The frozen-code full regression completed with 690/691 files and 5,857/5,859 tests passing,
+exit 1. Both failures were in TrainingExampleBuilder.test.ts: its positive fixtures supplied
+only five minutes of bars while the shared evaluator now correctly requires the configured
+horizon endpoint. No production code was changed after that run. The fixture was extended
+with a real stored endpoint derived from EVALUATION_HORIZON_MS; a subsequent run of the
+training builder, prediction evaluator, backlog and debate suites passed 4/4 files and 32/32
+tests (exit 0). The full suite was not rerun after this test-only fixture repair; do not report
+an all-green final full-suite run. Latest production typecheck and build passed before the
+fixture edit. Source hashes confirmed no production edits during the frozen full run.
+
+These are code-level repairs, not deployment or organic PAPER certification. The running
+engine was not restarted, resumed or armed. Existing historical outcome/calibration records
+were not rewritten. The protected ChiefTrader aggregate-provider lookup proposal remains
+not implemented; earned calibration quality, runtime backlog progress, subscription coverage,
+multi-hour soak and strategy profitability still require independent evidence.

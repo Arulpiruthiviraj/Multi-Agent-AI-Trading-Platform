@@ -28,6 +28,18 @@ TradingAgents (https://github.com/TauricResearch/TradingAgents, Apache-2.0) is *
 
 ## Ground truth (do not inflate)
 
+**2026-10-07 reconciliation confirmation contract:** a discrepancy awaiting consecutive-cycle
+confirmation is not a clean match. Persisted pending evidence and the existing mismatch event
+retain interrupted-session entry holds until a genuinely clean subsequent read. Pause escalation
+still uses the configured debounce; a clean read never resumes paused trading automatically.
+Prediction outcome grading also requires evidence at both configured horizon endpoints; two
+early bars cannot certify an hour/day outcome. Missing endpoints remain ungraded. Existing
+historical outcomes and calibration are not repaired automatically by this correction.
+Bounded outcome evaluation scans pending rows cyclically across all three ledgers; unavailable
+old rows must not monopolize every page. Scan positions are scheduling hints, not completion
+watermarks. Source priority rotates under the unchanged cycle budget; backlog metrics identify
+partial counts. Restart retains all pending work and resets only those scheduling hints.
+
 **2026-10-04 operational evidence:** IBKR positions without real marks carry NULL valuation,
 never average-cost-as-price or invented zero P&L. Spread evidence requires independently fresh
 BID and ASK. Shutdown requests share one drain; only successful completion marks the session

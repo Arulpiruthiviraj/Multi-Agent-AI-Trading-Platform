@@ -33,12 +33,18 @@ describe('ConsensusDebateOutcomeEvaluator', () => {
     delete process.env.ARGUS_DB_PATH;
   });
 
-  function seedBars(symbol: string, closes: number[], startMs: number) {
-    return db.insert(schema.ohlcvBars).values(closes.map((close, i) => ({
+  async function seedBars(symbol: string, closes: number[], startMs: number) {
+    const { tradingSafety } = await import('../config/tradingSafety');
+    const rows = closes.map((close, i) => ({
       id: `${symbol}:1Min:${startMs + i * 60000}`,
       symbol, timeframe: '1Min', timestamp: startMs + i * 60000,
       open: close, high: close, low: close, close, volume: 1000, source: 'test',
-    })));
+    }));
+    const timestamp = startMs + tradingSafety.evaluationHorizonMs;
+    const close = closes[closes.length - 1];
+    rows.push({ id: `${symbol}:1Min:${timestamp}`, symbol, timeframe: '1Min', timestamp,
+      open: close, high: close, low: close, close, volume: 1000, source: 'test' });
+    return db.insert(schema.ohlcvBars).values(rows);
   }
 
   function insertPrediction(id: string, symbol: string, baseConsensusSide: string, createdAt: string, debateStatus = 'VALID_PREDICTION') {

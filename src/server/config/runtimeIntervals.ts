@@ -44,6 +44,19 @@ export interface RuntimeIntervals {
   externalDataRateLimitCooldownMs: number;
   dbBackupIntervalMs: number;
   dbBackupRetentionDays: number;
+  /** 2026-10-07 defect fix: day-based retention alone is unsustainable once the live DB is
+   *  multi-GB (30 days x ~13GB observed = ~390GB) - this caps the number of successful backups
+   *  kept regardless of age, whichever bound (this or dbBackupRetentionDays) is more restrictive. */
+  dbBackupMaxCount: number;
+  /** 2026-10-07 defect fix: a `.partial`/`.partial-wal`/`.partial-shm`/`.partial-journal` file
+   *  orphaned by a process restart mid-copy (previously never cleaned by anything, confirmed live:
+   *  62GB of these accumulated) is swept once older than this age - a legitimate in-progress
+   *  backup is always younger than this. */
+  dbBackupOrphanCleanupAgeMs: number;
+  /** 2026-10-07 defect fix: refuse to start a new backup copy if free disk space is below the
+   *  live DB's current size times this multiplier, rather than starting a multi-GB copy that can
+   *  run the disk to zero mid-write. */
+  dbBackupMinFreeSpaceMultiplier: number;
   eventStoreMaxRecentEvents: number;
   eventStoreMaxTraces: number;
   eventStoreSchemaVersion: number;
@@ -96,6 +109,7 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'kronosHttpTimeoutMs', 'kronosForecastMaxConcurrent', 'openAlicePollMs', 'openAliceRequestTimeoutMs', 'openAliceMcpDefaultTimeoutMs',
   'modelRuntimeProbeTimeoutMs', 'ollamaCompletionProbeTimeoutMs', 'fundamentalsCacheMaxAgeMs', 'macroCacheMaxAgeMs',
   'externalDataRateLimitCooldownMs', 'dbBackupIntervalMs', 'dbBackupRetentionDays',
+  'dbBackupMaxCount', 'dbBackupOrphanCleanupAgeMs', 'dbBackupMinFreeSpaceMultiplier',
   'eventStoreMaxRecentEvents', 'eventStoreMaxTraces', 'eventStoreSchemaVersion',
   'agentActivityWindowMs', 'opportunityWindowHours', 'omsFollowUpMinAgeMs', 'omsFollowUpIntervalMs',
   'omsPollForFillTimeoutMs', 'omsPollForFillIntervalMs', 'autoTradeSchedulerMs', 'strategyEngineShadowMs',

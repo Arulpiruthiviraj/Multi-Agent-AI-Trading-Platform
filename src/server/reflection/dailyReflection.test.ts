@@ -3,7 +3,7 @@
  * Uses the isolated test DB (vitest.setup.ts sets ARGUS_DB_PATH before imports);
  * provider and evidence store are injected fakes - no network.
  */
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { db, sqliteDb } from '../db';
 import * as schema from '../db/schema';
 import { eq } from 'drizzle-orm';
@@ -92,11 +92,15 @@ async function countCoverage(date: string): Promise<number> {
 }
 
 describe('dailyReflection', () => {
-  beforeAll(() => {
-    // Defensive: the worker-wiring test must see "no provider keys".
-    delete process.env.ALPACA_API_KEY;
-    delete process.env.ALPACA_SECRET_KEY;
+  beforeEach(async () => {
+    // Each test owns its rows: the real current date can equal the worker fixture date.
+    await db.delete(schema.moverCoverage);
+    await db.delete(schema.postmarketReports);
+    // Empty values prevent a transitive dotenv import from restoring developer credentials.
+    vi.stubEnv('ALPACA_API_KEY', '');
+    vi.stubEnv('ALPACA_SECRET_KEY', '');
   });
+  afterEach(() => vi.unstubAllEnvs());
 
   it('migration 0093 created the mover_coverage table with the UNIQUE(trading_date, symbol) constraint', () => {
     const table = sqliteDb.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='mover_coverage'`).get();
@@ -176,7 +180,7 @@ describe('dailyReflection', () => {
     const { PostMarketAnalysisWorker } = await import('../continuous/PostMarketAnalysis');
     const worker = new PostMarketAnalysisWorker();
     // 2026-10-08T01:30Z = 2026-10-07 21:30 EDT -> after close. Uses 2026-10-07
-    // (distinct from the same-date test's rows) to keep the assertion isolated.
+    // Rows are isolated by beforeEach even when the real current date is 2026-10-07.
     await worker.tick(new Date('2026-10-08T01:30:00Z'));
     const reports = await db.select().from(schema.postmarketReports).where(eq(schema.postmarketReports.tradingDate, '2026-10-07'));
     expect(reports).toHaveLength(1);

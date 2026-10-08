@@ -31,6 +31,10 @@ describe('PortfolioReconciliationWorker - open orders and account consistency (P
   });
 
   beforeEach(async () => {
+    // Each case owns its discrepancy history; orphan-order fixtures from earlier
+    // cases must not trigger a pause in a later account-only scenario.
+    sqliteDb.exec('DELETE FROM trades; DELETE FROM portfolio; DELETE FROM reconciliation_events;');
+    portfolioReconciliationWorker.resetFaultDebounceForTests();
     const { BrokerManager } = await import('../../brokers/BrokerManager');
     BrokerManager.getInstance().resetSyncStateForTests('READY');
   });
@@ -132,6 +136,11 @@ describe('PortfolioReconciliationWorker - open orders and account consistency (P
 
     // 2026-10-05 P1: account tripwires are debounced — needs 2 consecutive cycles.
     await portfolioReconciliationWorker.reconcile();
+    const firstEvents = await db.select().from(schema.reconciliationEvents);
+    const pending = firstEvents[firstEvents.length - 1];
+    expect(pending.matches).toBe(false);
+    expect(pending.actionTaken).toBe('DISCREPANCY_CONFIRMATION_PENDING');
+    expect(tradingEngine.state.tradingState).toBe('TRADING_ENABLED');
     await portfolioReconciliationWorker.reconcile();
 
     const events = await db.select().from(schema.reconciliationEvents);

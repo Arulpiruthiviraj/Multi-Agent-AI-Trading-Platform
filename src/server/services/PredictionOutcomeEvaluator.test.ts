@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -44,6 +44,22 @@ describe('PredictionOutcomeEvaluator (Phase 4)', () => {
     for (const row of rows) {
       await db.insert(schema.ohlcvBars).values(row);
     }
+    // Endpoint evidence for the actual generic and News INTRADAY horizons.
+    const { tradingSafety } = await import('../config/tradingSafety');
+    const { evaluationHorizons } = await import('../config/evaluationHorizons');
+    for (const horizon of new Set([EVALUATION_HORIZON_MS, tradingSafety.newsPredictionEvalIntradayMs,
+      evaluationHorizons.byQuantStrategyId.PULLBACK_CONTINUATION])) {
+      const timestamp = PRED_TIME + horizon;
+      await db.insert(schema.ohlcvBars).values({ id: `UPTEST:1Min:${timestamp}`,
+        symbol: 'UPTEST', timeframe: '1Min', timestamp,
+        open: 110, high: 110, low: 110, close: 110, volume: 1000, source: 'test' });
+    }
+  });
+
+  beforeEach(async () => {
+    const { PredictionOutcomeEvaluator } = await import('./PredictionOutcomeEvaluator');
+    // Keep durable fixtures, but each case owns its scheduling/overlap state.
+    predictionOutcomeEvaluator = new PredictionOutcomeEvaluator();
   });
 
   afterAll(() => {
@@ -89,6 +105,34 @@ describe('PredictionOutcomeEvaluator (Phase 4)', () => {
     expect(result).toBeNull();
   });
 
+  it.each(['missing-end', 'missing-start'])('leaves %s evidence ungraded and requests the missing endpoint', async kind => {
+    const symbol = kind === 'missing-end' ? 'SHORTWINDOW' : 'LATEWINDOW';
+    const timestamps = kind === 'missing-end'
+      ? [PRED_TIME, PRED_TIME + 60_000]
+      : [PRED_TIME + EVALUATION_HORIZON_MS - 60_000, PRED_TIME + EVALUATION_HORIZON_MS];
+    await db.insert(schema.ohlcvBars).values(timestamps.map((timestamp, i) => ({
+      id: `${symbol}:1Min:${timestamp}`, symbol, timeframe: '1Min', timestamp,
+      open: 100 + i, high: 100 + i, low: 100 + i, close: 100 + i, volume: 1000, source: 'test',
+    })));
+    const { historicalDataGateway } = await import('../engines/backtest/HistoricalDataGateway');
+    const fetchEndpoint = vi.spyOn(historicalDataGateway, 'ensureBars').mockResolvedValue(undefined);
+    try {
+      const result = await evaluatePrediction(`partial-${kind}`, 'agent_predictions', symbol, 'BUY', PRED_TIME);
+      expect(result).toBeNull();
+      expect(fetchEndpoint).toHaveBeenCalledExactlyOnceWith(symbol, '1Min',
+        kind === 'missing-end' ? PRED_TIME + EVALUATION_HORIZON_MS - 60_000 : PRED_TIME,
+        kind === 'missing-end' ? PRED_TIME + EVALUATION_HORIZON_MS : PRED_TIME + 60_000);
+      await db.insert(schema.agentPredictions).values({
+        id: `partial-${kind}`, agentName: 'TechnicalAgent', symbol, prediction: 'BUY',
+        confidence: 0.8, reasoning: 'endpoint coverage fixture', timestamp: new Date(PRED_TIME).toISOString(),
+      });
+      await predictionOutcomeEvaluator.evaluatePending();
+      const persisted = await db.select().from(schema.predictionOutcomes)
+        .where(eq(schema.predictionOutcomes.predictionId, `partial-${kind}`));
+      expect(persisted).toHaveLength(0);
+    } finally { fetchEndpoint.mockRestore(); }
+  });
+
   it('evaluatePending persists a real prediction_outcomes row for an aged agent_predictions entry, and skips ones still within the horizon', async () => {
     const oldTimestamp = new Date(PRED_TIME).toISOString();
     const freshTimestamp = new Date(Date.now() - 1000).toISOString(); // 1s old - far inside the horizon
@@ -122,7 +166,7 @@ describe('PredictionOutcomeEvaluator (Phase 4)', () => {
     const flatTime = PRED_TIME + 100 * 60000;
     await db.insert(schema.ohlcvBars).values([
       { id: `FLATTEST:1Min:${flatTime}`, symbol: 'FLATTEST', timeframe: '1Min', timestamp: flatTime, open: 50, high: 50, low: 50, close: 50, volume: 1000, source: 'test' },
-      { id: `FLATTEST:1Min:${flatTime + 60000}`, symbol: 'FLATTEST', timeframe: '1Min', timestamp: flatTime + 60000, open: 50, high: 50, low: 50, close: 50, volume: 1000, source: 'test' },
+      { id: `FLATTEST:1Min:${flatTime + EVALUATION_HORIZON_MS}`, symbol: 'FLATTEST', timeframe: '1Min', timestamp: flatTime + EVALUATION_HORIZON_MS, open: 50, high: 50, low: 50, close: 50, volume: 1000, source: 'test' },
     ]);
     const buyResult = await evaluatePrediction('pred-flat-buy', 'agent_predictions', 'FLATTEST', 'BUY', flatTime);
     const sellResult = await evaluatePrediction('pred-flat-sell', 'agent_predictions', 'FLATTEST', 'SELL', flatTime);
@@ -447,7 +491,7 @@ describe('PredictionOutcomeEvaluator (Phase 4)', () => {
       expect(restartBRows).toHaveLength(0); // correctly still pending (no bars), not silently dropped
     });
 
-    it('deliberate backfill: deleting an existing outcome row makes that prediction a real candidate again on the very next cycle', async () => {
+    it('deliberate backfill: deleting an outcome makes its prediction eligible again within a bounded sweep', async () => {
       const oldTimestamp = new Date(PRED_TIME - 3).toISOString();
       await db.insert(schema.agentPredictions).values({
         id: 'backfill-target', agentName: 'TechnicalAgent', symbol: 'UPTEST', prediction: 'BUY',
@@ -462,8 +506,15 @@ describe('PredictionOutcomeEvaluator (Phase 4)', () => {
       // is needed: the anti-join has no persistent memory beyond the DB tables themselves.
       await db.delete(schema.predictionOutcomes).where(eq(schema.predictionOutcomes.predictionId, 'backfill-target'));
 
-      await predictionOutcomeEvaluator.evaluatePending();
-      const afterBackfill = await db.select().from(schema.predictionOutcomes).where(eq(schema.predictionOutcomes.predictionId, 'backfill-target'));
+      const { tradingSafety } = await import('../config/tradingSafety');
+      const maximumSweepCycles = Math.ceil(predictionOutcomeEvaluator.getMetrics().lastCycle.rowsRemaining
+        / tradingSafety.predictionOutcomeBatchSize) + 2;
+      let afterBackfill: any[] = [];
+      for (let cycle = 0; cycle < maximumSweepCycles && afterBackfill.length === 0; cycle++) {
+        await predictionOutcomeEvaluator.evaluatePending();
+        afterBackfill = await db.select().from(schema.predictionOutcomes)
+          .where(eq(schema.predictionOutcomes.predictionId, 'backfill-target'));
+      }
       expect(afterBackfill).toHaveLength(1); // re-evaluated, not permanently excluded
     });
   });

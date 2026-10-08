@@ -27,6 +27,7 @@ describe('TrainingExampleBuilder (Phase 7)', () => {
     ({ db, sqliteDb } = await import('../db'));
     schema = await import('../db/schema');
     ({ trainingExampleBuilder } = await import('./TrainingExampleBuilder'));
+    const { EVALUATION_HORIZON_MS } = await import('./PredictionOutcomeEvaluator');
 
     // Real bars for the evaluator's label computation.
     const closes = [100, 101, 103, 105, 108, 110];
@@ -40,6 +41,14 @@ describe('TrainingExampleBuilder (Phase 7)', () => {
         id: `LEAKTX:1Min:${DECISION_MS + i * 60000}`,
         symbol: 'LEAKTX', timeframe: '1Min', timestamp: DECISION_MS + i * 60000,
         open: closes[i], high: closes[i], low: closes[i], close: closes[i], volume: 1000, source: 'test',
+      });
+    }
+    // A real outcome requires the configured horizon endpoint, not only an opening sample.
+    for (const symbol of ['CLEANTX', 'LEAKTX']) {
+      const endpoint = DECISION_MS + EVALUATION_HORIZON_MS;
+      await db.insert(schema.ohlcvBars).values({
+        id: `${symbol}:1Min:${endpoint}`, symbol, timeframe: '1Min', timestamp: endpoint,
+        open: 110, high: 110, low: 110, close: 110, volume: 1000, source: 'test',
       });
     }
   });
