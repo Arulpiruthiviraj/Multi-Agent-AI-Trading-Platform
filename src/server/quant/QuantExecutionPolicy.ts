@@ -36,7 +36,7 @@
  * Control-plane code (same category as ChiefTraderAgent itself): composes existing canonical
  * functions. Contains no new indicator/strategy/signal calculations (Java 26 Engine Authority).
  */
-import { riskRewardRatio } from './risk/ExpectedValue';
+import { riskRewardRatio, levelsAreDirectionallyConsistent } from './risk/ExpectedValue';
 import { bucketFor, isCalibrationSampleSufficient } from '../services/ConfidenceCalibration';
 import { tradingSafety } from '../config/tradingSafety';
 import { deskIntelligence } from '../config/deskIntelligence';
@@ -319,9 +319,17 @@ export async function evaluateQuantExecutionPolicy(
   if (!triggerMet) return fail('QUANT_TRIGGER_NOT_FIRED', 'Strategy trigger did not fire; confirming conditions alone never authorize execution.');
 
   // ---- REQUIRED: risk is really defined (reuses ExpectedValue.riskRewardRatio) ----
+  // 2026-10-07 (strategy-layer audit D3): riskRewardRatio() is direction-agnostic (measures
+  // |distances| only), so a strategy bug emitting an inverted stop/target pair still yields a
+  // positive "valid" ratio. levelsAreDirectionallyConsistent() closes that hole: BUY requires
+  // stop < entry < target, SELL mirrored, strict. Directionally-inconsistent levels fail here
+  // as QUANT_RISK_UNDEFINED - a data defect, never a real R:R. No threshold changed.
   const stopPrice = evaluation.stop?.price;
   const targetPrice = evaluation.target?.price;
-  const rr = isFiniteNumber(stopPrice) && isFiniteNumber(targetPrice)
+  // SIDE_VALID above already fail-closed on anything but BUY/SELL; the cast below is honest,
+  // and levelsAreDirectionallyConsistent() itself still returns false for a non-BUY/SELL side.
+  const levelsConsistent = levelsAreDirectionallyConsistent(side as 'BUY' | 'SELL', currentPrice as number, stopPrice as number, targetPrice as number);
+  const rr = isFiniteNumber(stopPrice) && isFiniteNumber(targetPrice) && levelsConsistent
     ? riskRewardRatio(currentPrice as number, stopPrice, targetPrice)
     : null;
   rrRatio = rr?.ratio ?? null;
@@ -332,10 +340,10 @@ export async function evaluateQuantExecutionPolicy(
       riskOk,
       riskOk
         ? `R:R=${(rrRatio as number).toFixed(2)} (stop=${stopPrice} target=${targetPrice} entry=${currentPrice})`
-        : 'No usable stop/target risk-reward: stop equals entry, or stop/target missing/non-finite',
+        : 'No usable stop/target risk-reward: stop equals entry, stop/target missing/non-finite, or stop/target on the wrong side of entry for this side (directionally inconsistent)',
     ),
   );
-  if (!riskOk) return fail('QUANT_RISK_UNDEFINED', 'Risk is undefined (missing stop/target or stop == entry). No trade without defined risk.');
+  if (!riskOk) return fail('QUANT_RISK_UNDEFINED', 'Risk is undefined (missing stop/target, stop == entry, or stop/target directionally inconsistent with the idea side). No trade without defined risk.');
 
   // ---- REQUIRED: canonical data-quality snapshot does not block ----
   // Reuses the emitter-attached DataQualitySnapshot (assessDataQuality). Absent snapshot is

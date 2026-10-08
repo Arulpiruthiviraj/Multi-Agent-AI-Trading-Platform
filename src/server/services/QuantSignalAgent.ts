@@ -47,8 +47,9 @@ import { assembleTradeThesis } from '../quant/thesis/assembleTradeThesis';
 import { StrategyContext, StrategyEvaluation } from '../quant/strategies/types';
 import { computeGroupedScores, GroupedScores } from '../quant/scoring/GroupedScores';
 import { recordCandidate } from '../core/recentCandidateRegistry';
-import { analyzeContradictions, ContradictionAnalysisResult } from '../quant/ai/QuantContradictionAnalyzer';
-import { riskRewardRatio, expectedValue, MIN_SAMPLE_SIZE_FOR_KELLY } from '../quant/risk/ExpectedValue';
+import { analyzeContradictions, ContradictionAnalysisResult, ContradictionAnalysisInput } from '../quant/ai/QuantContradictionAnalyzer';
+import { riskRewardRatio, expectedValue, levelsAreDirectionallyConsistent, MIN_SAMPLE_SIZE_FOR_KELLY } from '../quant/risk/ExpectedValue';
+import type { RiskRewardResult } from '../quant/risk/ExpectedValue';
 import { computeLiveStrategyWinRate } from '../quant/risk/LiveStrategyPerformance';
 import { MIN_BARS } from '../quant/RegimeEngine';
 import { tradingSafety, isQuantColdStartBootstrapEnabled, isQuantIndependentQualificationEnabled, isStrategySelectionConfluenceGuardEnabled } from '../config/tradingSafety';
@@ -140,6 +141,75 @@ export function deriveIdeaFromRegime(regime: RegimeResult): DerivedIdea | null {
     };
   }
   return null; // SIDEWAYS_RANGE - no directional idea
+}
+
+/**
+ * EV-gate R:R computation (2026-10-07, strategy-layer audit D3) - the exact decision this
+ * agent's EV gate makes about a strategy's stop/target before computing expected value.
+ * riskRewardRatio() is direction-agnostic (measures |distances| only), so a strategy bug
+ * emitting an inverted stop/target pair (e.g. a BUY whose "stop" sits above the entry) would
+ * still yield a positive "valid" ratio and sail through the EV gate. levelsAreDirectionallyConsistent()
+ * closes that hole: inconsistent levels return null here, which routes the idea to the
+ * EXPECTED_VALUE_UNCOMPUTABLE refusal path - a strategy-data defect, never a real R:R.
+ * Extracted as a pure, separately-testable function (same pattern as
+ * deriveColdStartBootstrapIdea below): crafting real market bars that make a real strategy
+ * emit an inverted stop/target through the full evaluateSymbol() pipeline is impractical for
+ * a focused regression test, but the gate's decision logic must still be pinned.
+ */
+export function computeEvGateRiskReward(
+  side: 'BUY' | 'SELL',
+  entry: number,
+  stopPrice: number | null,
+  targetPrice: number | null,
+): RiskRewardResult | null {
+  if (stopPrice === null || targetPrice === null) return null;
+  if (!levelsAreDirectionallyConsistent(side, entry, stopPrice, targetPrice)) return null;
+  return riskRewardRatio(entry, stopPrice, targetPrice);
+}
+
+/**
+ * Provider-D4 (2026-10-07, strategy-layer audit): QuantSignalAgent used to `await
+ * analyzeContradictions()` in-cycle before TRADE_IDEA_GENERATED emission - a hung generative-AI
+ * provider added its full (failure-neutral, worst-case ~aiProviderTimeoutMs x N providers,
+ * sequential) latency to every real idea's decision path, violating quant-first: AI is advisory
+ * and must never sit on the critical path. The review's own result can never change an idea's
+ * side/confidence, and it already degrades honestly to available:false when no AI provider is
+ * configured - so the wait is now bounded by tradingSafety.quantContradictionMaxWaitMs, a
+ * LATENCY BOUND, not a trading threshold. On timeout the emission proceeds with the same
+ * honest-degradation available:false shape; the timed-out review is left to settle on its own
+ * (never an unhandled rejection) and its late result is discarded, never retro-applied.
+ * The `analyze`/`maxWaitMs` overrides exist for unit tests only - production always passes the
+ * real analyzer and the config value.
+ */
+export async function analyzeContradictionsBounded(
+  input: ContradictionAnalysisInput,
+  traceId: string,
+  analyze: (input: ContradictionAnalysisInput, traceId: string) => Promise<ContradictionAnalysisResult> = analyzeContradictions,
+  maxWaitMs: number = tradingSafety.quantContradictionMaxWaitMs,
+): Promise<ContradictionAnalysisResult> {
+  const unavailable = (reason: string): ContradictionAnalysisResult => ({
+    available: false,
+    aiAgreesWithSide: null,
+    additionalContradictions: [],
+    scenarioAnalysis: '',
+    disagreementNote: null,
+    reason,
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      // analyzeContradictions() already catches internally, but a substituted analyzer (or a
+      // future refactor) must never turn this race into an unhandled rejection.
+      analyze(input, traceId).catch((e) => unavailable(`AI contradiction analysis failed: ${e?.message ?? e}`)),
+      new Promise<ContradictionAnalysisResult>((resolve) => {
+        timer = setTimeout(() => resolve(unavailable(
+          `AI contradiction review exceeded the ${maxWaitMs}ms latency bound (quantContradictionMaxWaitMs) - proceeding without it; the review is advisory-only and cannot change the deterministic side/confidence.`,
+        )), maxWaitMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /**
@@ -598,7 +668,10 @@ export class QuantSignalAgent {
     if (strategyIdea && matchedStrategyEvaluation) {
       const stopPrice = matchedStrategyEvaluation.stop.price;
       const targetPrice = matchedStrategyEvaluation.target.price;
-      const rr = stopPrice !== null && targetPrice !== null ? riskRewardRatio(currentPrice, stopPrice, targetPrice) : null;
+      // D3 (2026-10-07): computeEvGateRiskReward() fail-closes on directionally-inconsistent
+      // stop/target (returns null -> EXPECTED_VALUE_UNCOMPUTABLE below) instead of letting a
+      // direction-agnostic |distance| ratio through the EV gate.
+      const rr = computeEvGateRiskReward(strategyIdea.side, currentPrice, stopPrice, targetPrice);
       const liveWinRate = await computeLiveStrategyWinRate(matchedStrategyEvaluation.strategy);
       // Real defect fixed this pass: a strategy with e.g. 1 closed trade (100% or 0% win rate) used
       // to be treated as a fully-trusted EV estimate here - the exact same MIN_SAMPLE_SIZE_FOR_KELLY
@@ -653,7 +726,20 @@ export class QuantSignalAgent {
       } else if (!ev) {
         // rr/liveWinRate both exist here (the branch above already handled their absence) - `!ev`
         // means expectedValue() itself had nothing usable, i.e. riskRewardRatio() returned null
-        // (missing/invalid stop or target price) - a data/setup gap, not a measured negative edge.
+        // (missing/invalid stop or target price) OR computeEvGateRiskReward() refused a
+        // directionally-inconsistent stop/target pair for this side (2026-10-07 D3) - a
+        // data/setup gap, not a measured negative edge.
+        // D1 honest interaction (2026-10-07, comment-only): TREND_FOLLOWING's target.price is
+        // unconditionally null by design (trendFollowing.ts - trend-following trails a stop, it
+        // never sets a fixed target), so rr is ALWAYS null for this strategy and it can never
+        // pass the EV gate: before it accumulates a trustworthy live win-rate it takes the
+        // cold-start/bootstrap-or-refuse path above, and once it does have one it ALWAYS lands
+        // in THIS EXPECTED_VALUE_UNCOMPUTABLE branch - it can never emit a strategy-sourced
+        // (EV-backed) idea, even though strategyFocus.json prefers it in every trend regime.
+        // That is a real, permanent selection-vs-emission mismatch: TREND_FOLLOWING is
+        // selection/ensemble-only until an honest trailing-target convention is defined - an
+        // operator decision. Do NOT "fix" it here by inventing a target price; a fabricated
+        // target would be worse than no emission at all.
         console.log(`[QuantSignalAgent] ${symbol}: ${matchedStrategyEvaluation.strategy} expected value is uncomputable (no usable stop/target risk-reward this cycle) - not emitting a live trade idea from it.`);
         noTradeCode = 'EXPECTED_VALUE_UNCOMPUTABLE';
         strategyIdea = null;
@@ -693,9 +779,13 @@ export class QuantSignalAgent {
     // "AI must NOT overwrite deterministic calculations" rule. Degrades to available:false honestly
     // (see QuantContradictionAnalyzer.ts) when no AI provider is configured - never blocks the real
     // TRADE_IDEA_GENERATED emission below on this being available.
+    // 2026-10-07 (Provider-D4): the wait is bounded via analyzeContradictionsBounded() -
+    // tradingSafety.quantContradictionMaxWaitMs is a LATENCY BOUND, not a trading threshold. A
+    // hung provider can no longer add unbounded latency to the idea path; the emission proceeds
+    // with the same honest available:false degradation instead.
     let aiContradictionAnalysis: ContradictionAnalysisResult | null = null;
     if (idea) {
-      aiContradictionAnalysis = await analyzeContradictions({
+      aiContradictionAnalysis = await analyzeContradictionsBounded({
         symbol, side: idea.side, regime, strategyEvaluation: matchedStrategyEvaluation, groupedScores: groupedScores[idea.side],
       }, traceId);
     }
@@ -746,9 +836,14 @@ export class QuantSignalAgent {
       // Java calls for every deployment that hasn't made this choice. Attached to evidence
       // regardless of outcome so real qualification/non-qualification history accumulates either
       // way; ChiefTraderAgent.ts is the only place this can actually change an approval.
+      // 2026-10-07 (strategy-layer audit D4): the TS vote list is emissionEligibleEvaluations -
+      // the SAME quarantine-filtered pool bestStrategyIdea() picks from - not the unfiltered
+      // strategyEvaluations. A RETIRED/DEGRADED strategy's vote must never inflate
+      // ENSEMBLE_CONFLUENCE or help clear the 2-of-4 support bar after being quarantined out of
+      // selection; lifecycle-enforcement consistency, not a strategy change.
       const confluenceGuardOn = isStrategySelectionConfluenceGuardEnabled();
       const internalEnsemble = (isQuantIndependentQualificationEnabled() || confluenceGuardOn) && (idea.side === 'BUY' || idea.side === 'SELL')
-        ? await computeInternalEnsembleQualification(symbol, bars, strategyEvaluations, idea.side)
+        ? await computeInternalEnsembleQualification(symbol, bars, emissionEligibleEvaluations, idea.side)
         : null;
       // 2026-09-10, real observability gap closed (see InternalEnsembleQualification.sideMismatch's
       // own doc comment): when the broader correlation-adjusted ensemble disagrees with

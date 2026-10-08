@@ -7,7 +7,9 @@
  *
  * Combines the currently-firing TypeScript strategy evaluations (evaluateAll()'s own output, real
  * regime-scoped strategies) with the newly-HTTP-wired Java RESEARCH engines
- * (strategyFamilies.ts's JAVA_RESEARCH_STRATEGY_IDS) into ONE real vote list, sends it through
+ * (strategyFamilies.ts's VOTABLE_JAVA_RESEARCH_STRATEGY_IDS - the 10 ids javaResultToVote()
+ * below actually maps to a vote, never the full 14-id classification list) into ONE real vote
+ * list, sends it through
  * QuantEnsembleEngine.java's correlation-adjusted effectiveIndependentCount() math (never a naive
  * majority vote), and reports whether the result clears the higher bar
  * (minQuantIndependentFamilies / minQuantIndependentEffectiveCount) required to stand in for a
@@ -17,7 +19,7 @@
 import { quantCoreBridge, type EnsembleModelVote, type EnsembleSide } from '../services/QuantCoreBridge';
 import { tradingSafety } from '../config/tradingSafety';
 import type { StrategyEvaluation } from './strategies/types';
-import { familyForStrategyId, JAVA_RESEARCH_STRATEGY_IDS } from './strategyFamilies';
+import { familyForStrategyId, VOTABLE_JAVA_RESEARCH_STRATEGY_IDS } from './strategyFamilies';
 import type { ResearchBar } from '../research/ohlcvTypes';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 
@@ -172,20 +174,26 @@ export async function computeInternalEnsembleQualification(
   // to the same reviewed concurrency cap the timeout-investigation grounded in real family-count
   // evidence, never an arbitrary number - the real fan-out amount, just spread over fewer
   // simultaneous requests rather than firing all 10 at once.
-  const fanoutConcurrency = Math.max(1, Math.min(tradingSafety.quantResearchStrategyFanoutMaxConcurrency, JAVA_RESEARCH_STRATEGY_IDS.length));
-  const javaResults: Array<Record<string, unknown> | null> = new Array(JAVA_RESEARCH_STRATEGY_IDS.length).fill(null);
+  // 2026-10-07 (strategy-layer audit D5): fan out ONLY over VOTABLE_JAVA_RESEARCH_STRATEGY_IDS -
+  // the 10 ids javaResultToVote() actually maps to a vote. The 4 INSTITUTIONAL_* ids return null
+  // in the mapper (default case), so calling their HTTP endpoints per symbol per cycle was pure
+  // waste (results unconditionally discarded). JAVA_RESEARCH_STRATEGY_IDS keeps all 14 for
+  // family classification (strategyCatalog.ts, familyForStrategyId) - classification is not
+  // fan-out.
+  const fanoutConcurrency = Math.max(1, Math.min(tradingSafety.quantResearchStrategyFanoutMaxConcurrency, VOTABLE_JAVA_RESEARCH_STRATEGY_IDS.length));
+  const javaResults: Array<Record<string, unknown> | null> = new Array(VOTABLE_JAVA_RESEARCH_STRATEGY_IDS.length).fill(null);
   let nextIndex = 0;
   await Promise.all(
     Array.from({ length: fanoutConcurrency }, async () => {
       while (true) {
         const i = nextIndex++;
-        if (i >= JAVA_RESEARCH_STRATEGY_IDS.length) return;
-        javaResults[i] = await quantCoreBridge.fetchResearchStrategy(JAVA_RESEARCH_STRATEGY_IDS[i], symbol, bars);
+        if (i >= VOTABLE_JAVA_RESEARCH_STRATEGY_IDS.length) return;
+        javaResults[i] = await quantCoreBridge.fetchResearchStrategy(VOTABLE_JAVA_RESEARCH_STRATEGY_IDS[i], symbol, bars);
       }
     }),
   );
-  for (let i = 0; i < JAVA_RESEARCH_STRATEGY_IDS.length; i++) {
-    const id = JAVA_RESEARCH_STRATEGY_IDS[i];
+  for (let i = 0; i < VOTABLE_JAVA_RESEARCH_STRATEGY_IDS.length; i++) {
+    const id = VOTABLE_JAVA_RESEARCH_STRATEGY_IDS[i];
     const result = javaResults[i];
     if (!result) continue;
     const vote = javaResultToVote(id, result);

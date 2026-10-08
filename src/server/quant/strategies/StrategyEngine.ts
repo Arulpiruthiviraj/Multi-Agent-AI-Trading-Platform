@@ -63,6 +63,13 @@ export const CORE_STRATEGIES: StrategyDefinition[] = [momentumBreakout, pullback
 /**
  * Backtestable and listed under experimentalStrategies on GET /api/v2/quant/strategies.
  * Per-id live inclusion is checked at call time from config env vars (not import time).
+ *
+ * D2 honest interaction (2026-10-07, comment-only - no behavior change): being live-evaluated
+ * here is NOT the same as being selectable. Under the default ADAPTIVE_MULTI_STRATEGY focus,
+ * strategyFocus.ts's selectEvaluationsForAdaptiveRegime() hard-filters the emit pool to the
+ * regime-preferred CORE ids, so an experimental flag buys background evaluation and telemetry
+ * only - never selection, never emission - unless the focus is changed. Do not read "live
+ * evaluated" as "in the running for real ideas".
  */
 export const EXPERIMENTAL_STRATEGIES: StrategyDefinition[] = [
   smcLiquiditySweep,

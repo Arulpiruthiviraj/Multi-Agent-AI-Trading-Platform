@@ -103,3 +103,28 @@ export function familyForStrategyId(strategyId: string): QuantFamilyId | null {
 /** All Java RESEARCH strategyIds this codebase currently knows how to HTTP-evaluate for a
  *  symbol's internal ensemble (see QuantCoreServer.java's evaluateResearchStrategy() switch). */
 export const JAVA_RESEARCH_STRATEGY_IDS: string[] = Object.keys(JAVA_RESEARCH_STRATEGY_FAMILIES);
+
+/**
+ * 2026-10-07 (strategy-layer audit D5): the subset of JAVA_RESEARCH_STRATEGY_IDS that
+ * javaResultToVote() (internalQuantEnsemble.ts) actually maps to a vote. The 4 INSTITUTIONAL_*
+ * ids are family-classified above (honest classification for the correlation math) but return
+ * null in the vote mapper's default case - they have no vote mapping (wired to paper
+ * verification via InstitutionalStrategyVoteService's own per-strategy vote flags, or
+ * research-only like INSTITUTIONAL_STAT_ARB). The per-symbol/per-cycle Java HTTP fan-out MUST
+ * use THIS list, never JAVA_RESEARCH_STRATEGY_IDS, or every cycle fires 4 wasted HTTP calls
+ * whose results are unconditionally discarded. Listed explicitly (not derived from the switch)
+ * so a future mapper case added without updating this list fails loudly in the fanout test
+ * below instead of silently re-wasting calls.
+ */
+export const VOTABLE_JAVA_RESEARCH_STRATEGY_IDS: string[] = [
+  'rsi_mean_reversion',
+  'macd_crossover',
+  'bollinger_mean_reversion',
+  'moving_average_crossover',
+  'donchian_channel',
+  'trend_strength_adx',
+  'mean_reversion_zscore',
+  'stochastic_oscillator',
+  'time_series_momentum',
+  'volume_signal',
+];

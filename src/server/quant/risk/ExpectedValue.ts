@@ -44,6 +44,12 @@ export interface RiskRewardResult {
 /**
  * Real risk/reward ratio from three real price levels. Null (never a fabricated ratio) when the
  * stop equals the entry (undefined risk - division by zero) or when either input isn't finite.
+ *
+ * NOTE (2026-10-07, strategy-layer audit D3): this function is deliberately direction-agnostic -
+ * it measures |distances| only. A strategy bug emitting an inverted stop/target pair (e.g. a BUY
+ * whose "stop" sits above the entry) still yields a positive "valid" ratio here. Callers that
+ * gate real ideas on this number MUST ALSO check levelsAreDirectionallyConsistent() first -
+ * a directionally-inconsistent stop/target is a strategy-data defect, never a real R:R.
  */
 export function riskRewardRatio(entry: number, stop: number, target: number): RiskRewardResult | null {
   if (!Number.isFinite(entry) || !Number.isFinite(stop) || !Number.isFinite(target)) return null;
@@ -51,6 +57,28 @@ export function riskRewardRatio(entry: number, stop: number, target: number): Ri
   const rewardPerUnit = Math.abs(target - entry);
   if (riskPerUnit === 0) return null; // stop == entry: undefined risk, not a fabricated "infinite" ratio
   return { ratio: rewardPerUnit / riskPerUnit, riskPerUnit, rewardPerUnit };
+}
+
+/**
+ * Fail-closed directional sanity check for a (side, entry, stop, target) level set
+ * (2026-10-07, strategy-layer audit D3). riskRewardRatio() above is direction-agnostic by
+ * design - it measures |distances| only - so a strategy bug emitting an inverted stop/target
+ * pair still yields a positive "valid" ratio. This check closes that hole: BUY requires
+ * stop < entry < target (strict), SELL requires stop > entry > target (strict). Any
+ * non-finite level, any equality (stop == entry is already undefined risk; target == entry is
+ * zero reward), or any unrecognized side returns false - never a "best guess". Pure function,
+ * no thresholds, no strategy logic: it only verifies the levels are on the correct sides of
+ * the entry for the declared direction.
+ */
+export function levelsAreDirectionallyConsistent(
+  side: 'BUY' | 'SELL',
+  entry: number,
+  stop: number,
+  target: number,
+): boolean {
+  if (side !== 'BUY' && side !== 'SELL') return false;
+  if (!Number.isFinite(entry) || !Number.isFinite(stop) || !Number.isFinite(target)) return false;
+  return side === 'BUY' ? stop < entry && entry < target : stop > entry && entry > target;
 }
 
 export interface ExpectedValueResult {

@@ -89,6 +89,15 @@ export const trendFollowing: StrategyDefinition = {
       stop: trailStop !== null
         ? { price: trailStop, basis: 'SMA50 as a trailing stop - designed to be moved with the trend, not a fixed level.' }
         : { price: null, basis: 'No real SMA50 available yet to derive a trailing stop.' },
+      // D1 honest interaction (2026-10-07, comment-only - no behavior change): target.price is
+      // unconditionally null here by design, and that permanently interacts with QuantSignalAgent's
+      // EV gate: rr is always null for TREND_FOLLOWING, so this CORE strategy can never emit a
+      // strategy-sourced (EV-backed) idea (EXPECTED_VALUE_UNCOMPUTABLE once it has a trustworthy
+      // live win-rate; cold-start/bootstrap-or-refuse before that), even though strategyFocus.json
+      // prefers it in every trend regime. TREND_FOLLOWING is therefore selection/ensemble-only
+      // until an honest trailing-target convention is defined - an operator decision. Do NOT
+      // invent a target price here to "fix" it; a fabricated target would be worse than no
+      // emission at all.
       target: { price: null, basis: 'Trend-following is intentionally open-ended - no fixed target; trail the stop (e.g. along SMA50) as the trend extends.' },
       applicableRegimes: trendFollowing.applicableRegimes,
     };
