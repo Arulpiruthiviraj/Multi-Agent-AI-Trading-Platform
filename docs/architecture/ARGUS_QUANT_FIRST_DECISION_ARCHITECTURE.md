@@ -162,6 +162,13 @@ does not compute a second EV.
   (2026-09-09). It operates on a **disjoint idea set** (it can never see a
   validated-strategy idea — the router diverts those first), requires the full 0.75 bar
   plus vetoes. Removing it would change consensus-path behavior, which Phase 12 forbids.
+  **Known pre-existing gap (flagged, not introduced, by the Phase 9 investigation):**
+  `computeInternalEnsembleQualification()` consumes raw `evaluateAll()` output and never
+  consults `StrategyEmissionEligibility`, so the tier can in principle qualify votes from
+  UNTESTED/SHADOW/CANDIDATE — even RETIRED/DEGRADED — strategies. Fixing that would change
+  consensus-path behavior (Phase 12) and override an explicit operator decision; it is
+  recorded here as a known limitation for a future operator-directed change, not fixed in
+  this mission.
 - Risk exits (`PortfolioManager` + `SELL`) bypass the router — protective exits never
   need strategy authorization or LLMs.
 - `CHIEF_APPROVED_IDEA` emitter allowlist unchanged; emission stays in
