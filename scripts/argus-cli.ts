@@ -1017,6 +1017,7 @@ export const COMMAND_HELP: Record<string, string> = {
   'observability-health': 'Usage: argus observability-health\nPer-tag observability health (is any event-logging path silently broken right now?).',
   'jev-calibration': 'Usage: argus jev-calibration\nJev shadow agreement ledger: scored count, Jev-vs-LLM agreement rate, confidence buckets, cost.',
   'market-data-diagnostics': 'Usage: argus market-data-diagnostics [--symbols=AAPL,MSFT]\nMarket-data feed diagnostics.',
+  'ai': 'Usage: argus ai <subcommand> [args]\nAI utilities. Subcommands: test jev — opt-in Jev (TypeSafe) connectivity smoke test: checks JEV_API_KEY presence (never printed), GET /v1/models, and one minimal evaluate() with a single noul question. Reports auth, models, latency, schema, usage. Manual only — never runs in tests or at startup.',
   'ai-cost-governor': 'Usage: argus ai-cost-governor\nAI cost governor status.',
   'discovery-challengers': 'Usage: argus discovery-challengers [--hours=N]\nDiscovery challenger strategies.',
   'discovery-lineage': 'Usage: argus discovery-lineage --symbol=<SYM> [--hours=N]\nLineage of a discovered opportunity.',
@@ -1166,6 +1167,131 @@ async function printDashboard(): Promise<void> {
   // -- Footer -------------------------------------------------------------
   console.log(dim('  ─'.repeat(30)));
   console.log(dim(`  ${new Date().toLocaleString()} · PAPER only · LIVE_NO_GO`));
+}
+
+/**
+ * Opt-in Jev (TypeSafe) connectivity smoke test (2026-10-07, Phase-40).
+ * MANUAL ONLY: reachable solely via `argus ai test jev` — never runs in automated
+ * tests, never at startup. Verifies, in order:
+ *   1. JEV_API_KEY presence (the key itself is NEVER printed or logged)
+ *   2. GET /v1/models reachability + auth
+ *   3. One minimal evaluate() with a single noul question (schema + latency + usage)
+ * Reports auth, models, latency, schema validation, and usage.
+ */
+async function cmdAiTestJev(): Promise<void> {
+  const { JevProvider } = await import('../src/server/ai/providers/JevProvider');
+  const apiKey = (process.env.JEV_API_KEY || process.env.TYPESAFE_API_KEY || '').trim();
+  const baseUrl = (process.env.JEV_BASE_URL || 'https://api.typesafe.ai').replace(/\/+$/, '');
+  const report: Record<string, unknown> = {
+    keyPresent: apiKey.length > 0,
+    keySource: apiKey ? (process.env.JEV_API_KEY ? 'JEV_API_KEY' : 'TYPESAFE_API_KEY') : null,
+    baseUrl,
+  };
+  if (!apiKey) {
+    report.verdict = 'NO-GO';
+    report.reason =
+      'JEV_API_KEY (or TYPESAFE_API_KEY) is not set. Nothing was called; the key itself is never printed.';
+    emitJevTestReport(report);
+    process.exitCode = 1;
+    return;
+  }
+  const authed: Record<string, string> = { Authorization: `Bearer ${apiKey}` };
+
+  // 1) Model discovery (informational — absence of this endpoint is not a failure).
+  try {
+    const t0 = Date.now();
+    const res = await fetch(`${baseUrl}/v1/models`, { headers: authed, signal: AbortSignal.timeout(10_000) });
+    const text = await res.text();
+    report.modelsEndpoint = {
+      status: res.status,
+      reachable: true,
+      latencyMs: Date.now() - t0,
+      models: tryParseJevModelIds(text),
+    };
+  } catch (e) {
+    report.modelsEndpoint = { reachable: false, error: e instanceof Error ? e.message : String(e) };
+  }
+
+  // 2) Minimal evaluate: one noul question. This is the authoritative check.
+  try {
+    const provider = new JevProvider();
+    await provider.initialize(apiKey);
+    const t0 = Date.now();
+    const result = await provider.evaluate(
+      { smoke: 'argus ai test jev connectivity probe' },
+      {
+        connectivity_probe: {
+          type: 'noul',
+          instructions: 'Is this message a connectivity smoke test? Answer yes.',
+        },
+      },
+      { timeoutMs: 15_000 },
+    );
+    report.evaluate = {
+      ok: true,
+      latencyMs: Date.now() - t0,
+      model: result.model,
+      schemaValid: true,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      answer: result.answers['connectivity_probe'],
+    };
+  } catch (e) {
+    report.evaluate = {
+      ok: false,
+      error: e instanceof Error ? `${e.name}: ${e.message}` : String(e),
+    };
+  }
+
+  const go = (report.evaluate as { ok?: boolean } | undefined)?.ok === true;
+  report.verdict = go ? 'GO' : 'NO-GO';
+  emitJevTestReport(report);
+  if (!go) process.exitCode = 1;
+}
+
+/** Best-effort extraction of model ids from a /v1/models response body. */
+function tryParseJevModelIds(text: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    const list =
+      (parsed as { data?: unknown }).data ?? (parsed as { models?: unknown }).models;
+    if (Array.isArray(list)) {
+      return list
+        .map((m) => (typeof m === 'string' ? m : (m as { id?: unknown }).id))
+        .filter((id): id is string => typeof id === 'string')
+        .slice(0, 20);
+    }
+  } catch {
+    /* not JSON — report an empty list instead */
+  }
+  return [];
+}
+
+function emitJevTestReport(report: Record<string, unknown>): void {
+  if (isJsonOutput()) {
+    printJson(report);
+    return;
+  }
+  const verdict = String(report.verdict ?? 'UNKNOWN');
+  console.log(sectionHeader('Jev smoke test'));
+  console.log(`  ${kv('verdict', verdict === 'GO' ? green('GO') : red('NO-GO'))}`);
+  console.log(`  ${kv('key present', report.keyPresent ? green('yes') : red('no'))}${report.keySource ? dim(` (${report.keySource}; value never printed)`) : ''}`);
+  console.log(`  ${kv('base URL', String(report.baseUrl))}`);
+  const me = report.modelsEndpoint as { reachable?: boolean; status?: number; latencyMs?: number; models?: string[]; error?: string } | undefined;
+  if (me) {
+    console.log(
+      `  ${kv('GET /v1/models', me.reachable ? `${me.status} in ${me.latencyMs}ms${me.models && me.models.length > 0 ? ` — ${me.models.join(', ')}` : ''}` : red(`unreachable: ${me.error}`))}`,
+    );
+  }
+  const ev = report.evaluate as { ok?: boolean; latencyMs?: number; model?: string; inputTokens?: number; error?: string } | undefined;
+  if (ev) {
+    console.log(
+      `  ${kv('evaluate (1 noul)', ev.ok ? green(`ok in ${ev.latencyMs}ms — model ${ev.model}, input tokens ${ev.inputTokens}, schema valid`) : red(`failed: ${ev.error}`))}`,
+    );
+  }
+  if (report.reason) console.log(`  ${kv('reason', String(report.reason))}`);
+  console.log('');
+  console.log(dim('  Opt-in manual check only — never runs in automated tests or at startup.'));
 }
 
 const commands: Record<string, () => Promise<void>> = {
@@ -1862,6 +1988,24 @@ const commands: Record<string, () => Promise<void>> = {
       signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
     });
     console.log(await res.text());
+  },
+  async ai() {
+    // `argus ai <subcommand>` — subcommand dispatch follows the `research` pattern.
+    const [sub, ...rest] = process.argv.slice(3);
+    const restArgs = rest.filter((a) => !a.startsWith('--'));
+    const usage = () => {
+      console.log([
+        'Usage: argus ai <subcommand> [args]',
+        '  test jev        Opt-in Jev (TypeSafe) connectivity smoke test: checks JEV_API_KEY',
+        '                  presence (never printed), GET /v1/models, and one minimal',
+        '                  evaluate() with a single noul question. Reports auth, models,',
+        '                  latency, schema, usage. Manual only — never in tests or at startup.',
+      ].join('\n'));
+    };
+    if (!sub || sub === '--help' || sub === '-h') { usage(); return; }
+    if (sub === 'test' && restArgs[0] === 'jev') { await cmdAiTestJev(); return; }
+    usage();
+    process.exitCode = 1;
   },
   async 'ai-cost-governor'() {
     // Project A (2026-09-02): current policy, per-(agent,provider) real graded-outcome quality
@@ -2591,7 +2735,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'premarket-focus', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
-      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'trade-economic-attribution', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'reconciliation-status', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'discovery-challengers', 'strategy-scorecard', 'market-data-diagnostics', 'quant-evidence', 'reflection-engine-health', 'portfolio-impact', 'daily-reflection']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'trade-economic-attribution', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'reconciliation-status', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai', 'ai-cost-governor', 'discovery-lineage', 'discovery-challengers', 'strategy-scorecard', 'market-data-diagnostics', 'quant-evidence', 'reflection-engine-health', 'portfolio-impact', 'daily-reflection']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
       ['Doctor & shell integration', ['doctor', 'completion']],

@@ -71,6 +71,12 @@ export interface QuantPolicyIdeaInput {
     dataQuality?: { tradeBlocked?: unknown; blockReason?: unknown } | null;
     aiContradictionAnalysis?: { available?: unknown; aiAgreesWithSide?: unknown } | null;
   } | null;
+  /**
+   * Advisory-only note from AiAdvisoryService (2026-10-07, Phase-40 AI value channel).
+   * Recorded on the decision for operator context; never consulted by any check,
+   * never gates approval. Absent/null for every caller that does not pass one.
+   */
+  aiAdvisoryNote?: string | null;
 }
 
 export interface QuantPolicyCheckResult {
@@ -358,11 +364,18 @@ export async function evaluateQuantExecutionPolicy(
   if (expired) return fail('QUANT_SIGNAL_EXPIRED', 'Signal is past its explicit expiry; no longer actionable.');
 
   // ---- AI advisory: recorded, never gating (veto/advice split) ----
+  // The AiAdvisoryService note (2026-10-07) arrives as an optional idea input; it is
+  // recorded here and never consulted by any REQUIRED/SUPPORT check below.
+  const ideaAdvisoryNote =
+    typeof idea?.aiAdvisoryNote === 'string' && idea.aiAdvisoryNote.trim() !== ''
+      ? idea.aiAdvisoryNote
+      : null;
   const aiReview = idea?.quantDetail?.aiContradictionAnalysis;
   aiAdvisoryNote =
-    aiReview && (aiReview as { available?: unknown }).available === true
+    ideaAdvisoryNote ??
+    (aiReview && (aiReview as { available?: unknown }).available === true
       ? `AI contradiction review present (agreesWithSide=${String((aiReview as { aiAgreesWithSide?: unknown }).aiAgreesWithSide)}): advisory only, not a veto.`
-      : null;
+      : null);
 
   // ---- SUPPORT: independent quantitative dimensions (need >= minQuantSupportDimensions) ----
   // S1 — regime compatibility: the market-regime model is a different computation from the

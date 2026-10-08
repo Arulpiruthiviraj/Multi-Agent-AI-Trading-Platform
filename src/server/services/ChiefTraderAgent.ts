@@ -1,4 +1,5 @@
 import { AIRouter } from '../ai/AIRouter';
+import { aiAdvisoryService } from '../ai/AiAdvisoryService';
 import * as schema from '../db/schema';
 /**
  * ==========================================================
@@ -1399,9 +1400,21 @@ export class ChiefTraderAgent {
       aiRoutable = null;
     }
 
+    // AI advisory note (2026-10-07, Phase-40 AI value channel): latest in-memory
+    // advisory note for this symbol, if any. Passed as advisory-only input to the
+    // quant policy — recorded on the decision, never consulted by any check, never
+    // gating. Null when absent. Exception-safe: a cache failure must not touch the
+    // decision path.
+    let aiAdvisoryNote: string | null = null;
+    try {
+      aiAdvisoryNote = aiAdvisoryService.getAdvisoryNote(symbol);
+    } catch {
+      aiAdvisoryNote = null;
+    }
+
     let decision: QuantPolicyDecision;
     try {
-      decision = await evaluateQuantExecutionPolicy(idea, authorization);
+      decision = await evaluateQuantExecutionPolicy({ ...idea, aiAdvisoryNote }, authorization);
     } catch (e) {
       // The policy must never throw into the router: fail closed with an explicit reason.
       console.error('[ChiefTrader] QuantExecutionPolicy threw - failing closed', e);
@@ -1477,6 +1490,9 @@ export class ChiefTraderAgent {
         authorizationReason: authorization.reason,
       });
       eventBus.emit(EVENTS.TRADE_LIFECYCLE, { traceId, symbol, state: 'NO_TRADE', reason: decision.reason, decisionPolicy: 'QUANT_EXECUTION' });
+      // Phase-40 AI value channel: decision recorded above (DESK_NO_TRADE). Fire-and-
+      // forget advisory AFTER recording — never awaited, never throws into the router.
+      this.requestQuantCandidateAdvisory(idea, authorization);
       return;
     }
 
@@ -1551,6 +1567,11 @@ export class ChiefTraderAgent {
     });
     eventBus.emit(EVENTS.TRADE_LIFECYCLE, { traceId, symbol, state: 'APPROVED', side: approvedSide, reason: decision.reason, decisionPolicy: 'QUANT_EXECUTION' });
 
+    // Phase-40 AI value channel: decision recorded above (CHIEF_CONSENSUS_COMPLETED).
+    // Fire-and-forget advisory AFTER recording — never awaited, never throws into
+    // the router, and the result can never alter this or any trading decision.
+    this.requestQuantCandidateAdvisory(idea, authorization);
+
     // Non-blocking, optional independent second opinion — same non-gating contract as the
     // consensus path (never awaited, never gates this approval or the RiskEngine call).
     const openAliceTrigger = shouldTriggerOpenAliceVerification({ confidence: approvedConfidence, disagreementCount: 0 });
@@ -1559,6 +1580,28 @@ export class ChiefTraderAgent {
         traceId, symbol, side: approvedSide as 'BUY' | 'SELL', mode: 'TRADE_VERIFICATION',
         argusConfidence: approvedConfidence, argusReasoning: decision.reason,
       });
+    }
+  }
+
+  /**
+   * Phase-40 "AI value" channel (2026-10-07): fire-and-forget request for AI context on an
+   * ALREADY-RECORDED quant policy decision. Called only after the decision's recording
+   * events have been emitted — never before/during. Never awaited; never throws into the
+   * caller; the advisory result can never alter this or any trading decision.
+   */
+  private requestQuantCandidateAdvisory(
+    idea: { traceId: string; symbol: string; side: string },
+    authorization: QuantStrategyAuthorization,
+  ): void {
+    try {
+      aiAdvisoryService.considerQuantCandidateAdvisory(idea.symbol, {
+        strategyId: String(authorization.strategyId ?? 'unknown'),
+        side: idea.side,
+        traceId: idea.traceId,
+      });
+    } catch {
+      // considerQuantCandidateAdvisory is specified never to throw; belt-and-braces so the
+      // router can never be broken by an advisory call.
     }
   }
 

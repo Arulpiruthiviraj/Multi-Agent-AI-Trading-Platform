@@ -8,6 +8,7 @@ import { NewsImpactEngine } from './NewsImpactEngine';
 import { NewsClusterEngine } from './NewsClusterEngine';
 import { NewsScoringEngine, AIAnalysisResult, buildLocalFirstNewsAnalysis } from './NewsScoringEngine';
 import { kickOffJevShadowScoring } from './JevNewsTriage';
+import { aiAdvisoryService } from '../ai/AiAdvisoryService';
 import { isJevEscalationEnabled } from './JevEscalation';
 import { NormalizedArticle } from './NewsNormalizer';
 import { eventBus } from '../core/EventBus';
@@ -179,6 +180,28 @@ export class NewsEngine {
         }
         const { isNewCluster, priorArticleCount } = clusterOutcome;
         analyzedCount += 1;
+
+        // AI advisory (2026-10-07, Phase-40 AI value channel): this article is genuinely
+        // new — past normalize + dedup + cluster persistence, so this fires once per new
+        // article, never for duplicates and never on empty polls. Fire-and-forget
+        // news-catalyst triage via the governor; the service never throws into this loop
+        // and the result can never influence a trading decision. Primary symbol only
+        // (same convention as kickOffJevShadowScoring below).
+        if (finalSymbols.length > 0) {
+          try {
+            const advisoryPublishedMs = Date.parse(normalized.publishedAt);
+            aiAdvisoryService.considerNewsCatalyst({
+              id: normalized.id,
+              symbol: finalSymbols[0],
+              title: normalized.title,
+              summary: (normalized.content || '').slice(0, 2000),
+              publishedAt: Number.isFinite(advisoryPublishedMs) ? advisoryPublishedMs : Date.now(),
+            });
+          } catch {
+            // considerNewsCatalyst is specified never to throw; belt-and-braces so the
+            // NewsAgent loop can never be broken by an advisory call.
+          }
+        }
 
         const traceId = generateTraceId(finalSymbols[0] ?? 'NEWS');
 
