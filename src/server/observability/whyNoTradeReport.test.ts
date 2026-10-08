@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import type { GlobalTradingStateSummary } from './whyNoTradeReport';
 
 describe('whyNoTradeReport', () => {
   let tmpDbPath: string;
@@ -32,6 +33,16 @@ describe('whyNoTradeReport', () => {
     delete process.env.ARGUS_DB_PATH;
   });
 
+  // Hermetic global-state stub: keeps report tests off the live runtime (TradingEngine,
+  // ArgusRuntime, MarketDataWorker are never imported in tests).
+  const stubGlobal = (overrides: Partial<GlobalTradingStateSummary> = {}) => ({
+    readGlobalState: async (): Promise<GlobalTradingStateSummary> => ({
+      ...mod.NULL_GLOBAL_TRADING_STATE,
+      broker: { ...mod.NULL_GLOBAL_TRADING_STATE.broker },
+      ...overrides,
+    }),
+  });
+
   function seedTerminalReasonEvent(overrides: Partial<{
     id: string; ts: number; symbol: string; traceId: string; approved: boolean; decisionTier: string;
     terminalReasonCode: string; rawConfidence: number; finalConfidence: number; independentAgentCount: number;
@@ -55,8 +66,70 @@ describe('whyNoTradeReport', () => {
     });
   }
 
+  /** Seeds a real-shape quant_policy_evaluated structured-log row (what ChiefTraderAgent emits). */
+  function seedQuantPolicyEvent(overrides: Partial<{
+    id: string; ts: number; symbol: string; traceId: string; eventType: string; side: string;
+    reasonCode: string; reason: string; strategyId: string; strategyLifecycle: string;
+    authorization: string; authorizationReason: string; supportSatisfied: number; supportRequired: number;
+    riskRewardRatio: number; strategyConfidence: number;
+    checks: Array<{ id: string; category: string; passed: boolean; detail: string }>;
+  }>) {
+    const symbol = overrides.symbol ?? 'QNVDA';
+    const traceId = overrides.traceId ?? 'trace-quant-1';
+    const eventType = overrides.eventType ?? 'QUANT_POLICY_REJECTED';
+    const payload = {
+      category: 'CONSENSUS', eventType, traceId, symbol, side: 'BUY', decisionPolicy: 'QUANT_EXECUTION',
+      ideaOrigin: 'QUANT_STRATEGY', strategyId: 'MOMENTUM_BREAKOUT', strategyLifecycle: 'CERTIFIED',
+      authorization: 'PAPER_ONLY', authorizationReason: 'strategy certified for paper execution',
+      reasonCode: 'SUPPORT_DIMENSIONS_INSUFFICIENT', reason: 'Only 2 of 3 support dimensions satisfied',
+      supportSatisfied: 2, supportRequired: 3, riskRewardRatio: 1.8, strategyConfidence: 0.62,
+      consensusConfidence: null, aiProvidersRoutable: 0, policyDurationMs: 12,
+      checks: [
+        { id: 'support_dimensions', category: 'SUPPORT', passed: false, detail: '2/3' },
+        { id: 'risk_reward', category: 'ECONOMICS', passed: true, detail: '1.8 >= 1.5' },
+      ],
+      ...overrides,
+    };
+    return db.insert(schema.observabilityEvents).values({
+      id: overrides.id ?? `qevt-${Math.random().toString(36).slice(2)}`,
+      ts: overrides.ts ?? Date.now(),
+      level: 'INFO', category: 'CONSENSUS', eventType,
+      loggerName: 'argus', message: 'quant_policy_evaluated', sessionId: 'sess-1',
+      symbol, traceId,
+      payload: JSON.stringify(payload),
+    });
+  }
+
+  /** Seeds a trade_lifecycle_transitions row whose evidence carries a DESK_NO_TRADE payload with
+   * terminalReasonCode QUANT_NOT_AUTHORIZED (the only place that rejection is persisted). */
+  function seedQuantNotAuthorizedLifecycle(overrides: Partial<{
+    id: string; symbol: string; traceId: string; quantReasonCode: string; authorizationReason: string; strategyId: string; createdAt: string;
+  }>) {
+    const symbol = overrides.symbol ?? 'QNA';
+    const traceId = overrides.traceId ?? 'trace-qna-1';
+    const evidence = {
+      type: 'DESK_NO_TRADE',
+      payload: {
+        traceId, symbol, side: 'BUY', confidence: 0.7,
+        reason: `[Quant Not Eligible] strategy ${overrides.strategyId ?? 'MOMENTUM_BREAKOUT'}: ${overrides.quantReasonCode ?? 'STRATEGY_RETIRED'} (lifecycle RETIRED). No consensus attempted.`,
+        decisionPolicy: 'QUANT_EXECUTION', decisionTier: 'QUANT_EXECUTION',
+        quantReasonCode: overrides.quantReasonCode ?? 'STRATEGY_RETIRED',
+        terminalReasonCode: 'QUANT_NOT_AUTHORIZED',
+        strategyId: overrides.strategyId ?? 'MOMENTUM_BREAKOUT',
+        authorizationReason: overrides.authorizationReason ?? 'strategy lifecycle is RETIRED',
+      },
+    };
+    return db.insert(schema.tradeLifecycleTransitions).values({
+      id: overrides.id ?? `lc-${Math.random().toString(36).slice(2)}`,
+      candidateId: traceId, symbol, state: 'NO_TRADE',
+      reason: evidence.payload.reason, source: 'ChiefTraderAgent',
+      evidenceJson: JSON.stringify(evidence), latencyMs: 3,
+      createdAt: overrides.createdAt ?? new Date().toISOString(),
+    });
+  }
+
   it('reports found:false when no CONSENSUS_TERMINAL_REASON row exists for the symbol', async () => {
-    const report = await mod.buildWhyNoTradeReport('GHOST');
+    const report = await mod.buildWhyNoTradeReport('GHOST', stubGlobal());
     expect(report.found).toBe(false);
     expect(report.symbol).toBe('GHOST');
     expect(report.risk.reached).toBe(false);
@@ -75,7 +148,7 @@ describe('whyNoTradeReport', () => {
       ],
     });
 
-    const report = await mod.buildWhyNoTradeReport('NVDA');
+    const report = await mod.buildWhyNoTradeReport('NVDA', stubGlobal());
     expect(report.found).toBe(true);
     expect(report.traceId).toBe('trace-new');
     expect(report.terminalReasonCode).toBe('CONFIDENCE_BELOW_STRONG');
@@ -92,7 +165,7 @@ describe('whyNoTradeReport', () => {
         payload: null,
       });
     }
-    const report = await mod.buildWhyNoTradeReport('ZZZZ');
+    const report = await mod.buildWhyNoTradeReport('ZZZZ', stubGlobal());
     expect(report.found).toBe(true);
     expect(report.traceId).toBe('trace-real');
   });
@@ -111,7 +184,7 @@ describe('whyNoTradeReport', () => {
       { traceId: 'trace-approved', gateName: 'symbol_concentration', sequence: 2, passed: false, detail: '{"current":0.22,"max":0.20}' },
     ]);
 
-    const report = await mod.buildWhyNoTradeReport('AAPL');
+    const report = await mod.buildWhyNoTradeReport('AAPL', stubGlobal());
     expect(report.approved).toBe(true);
     expect(report.risk.reached).toBe(true);
     expect(report.risk.approved).toBe(false);
@@ -124,7 +197,7 @@ describe('whyNoTradeReport', () => {
     candidateLifecycle.upsertCandidate({ symbol: 'MSFT', state: 'WATCHING', now: Date.now() });
     await seedTerminalReasonEvent({ symbol: 'MSFT', traceId: 'trace-msft' });
 
-    const report = await mod.buildWhyNoTradeReport('MSFT');
+    const report = await mod.buildWhyNoTradeReport('MSFT', stubGlobal());
     expect(report.candidateState).toBe('WATCHING');
   });
 
@@ -143,7 +216,7 @@ describe('whyNoTradeReport', () => {
       { traceId: 'trace-cooldown', gateName: 'same_symbol_cooldown', sequence: 2, passed: false, detail: JSON.stringify({ cooldownMs, lastFillMs, ageMs: 1000 }) },
     ]);
 
-    const report = await mod.buildWhyNoTradeReport('COOL');
+    const report = await mod.buildWhyNoTradeReport('COOL', stubGlobal());
     expect(report.nextEligibleReevaluationAt).toBe(new Date(lastFillMs + cooldownMs).toISOString());
     const text = mod.formatWhyNoTradeReport(report);
     expect(text).toContain('Next eligible reevaluation:');
@@ -161,15 +234,167 @@ describe('whyNoTradeReport', () => {
       { traceId: 'trace-noguess', gateName: 'symbol_concentration', sequence: 1, passed: false, detail: '{"current":0.22,"max":0.20}' },
     ]);
 
-    const report = await mod.buildWhyNoTradeReport('NOGUESS');
+    const report = await mod.buildWhyNoTradeReport('NOGUESS', stubGlobal());
     expect(report.nextEligibleReevaluationAt).toBeNull();
   });
 
   it('formatWhyNoTradeReport renders a readable CLI text block ending in a TRADE/NO_TRADE verdict', async () => {
     await seedTerminalReasonEvent({ symbol: 'TSLA', traceId: 'trace-tsla' });
-    const report = await mod.buildWhyNoTradeReport('TSLA');
+    const report = await mod.buildWhyNoTradeReport('TSLA', stubGlobal());
     const text = mod.formatWhyNoTradeReport(report);
     expect(text).toContain('Symbol: TSLA');
     expect(text).toContain('Final: NO_TRADE');
   });
+
+  it('surfaces the most recent QUANT_POLICY_REJECTED observability row with payload detail and maps it to QUANT_POLICY_REJECTED', async () => {
+    await seedQuantPolicyEvent({ ts: 5000, symbol: 'QNVDA', traceId: 'trace-qnvda', reasonCode: 'SUPPORT_DIMENSIONS_INSUFFICIENT' });
+
+    const report = await mod.buildWhyNoTradeReport('QNVDA', stubGlobal());
+    expect(report.found).toBe(false); // no consensus row - preserved historical meaning
+    expect(report.quant.found).toBe(true);
+    expect(report.quant.eventType).toBe('QUANT_POLICY_REJECTED');
+    expect(report.quant.approved).toBe(false);
+    expect(report.quant.reasonCode).toBe('SUPPORT_DIMENSIONS_INSUFFICIENT');
+    expect(report.quant.strategyId).toBe('MOMENTUM_BREAKOUT');
+    expect(report.quant.supportSatisfied).toBe(2);
+    expect(report.quant.supportRequired).toBe(3);
+    expect(report.quant.checks).toHaveLength(2);
+    expect(report.quant.checks[0]).toMatchObject({ id: 'support_dimensions', passed: false });
+    expect(report.primaryPath).toBe('QUANT_EXECUTION');
+    expect(report.mappedCategory).toBe('QUANT_POLICY_REJECTED');
+
+    const text = mod.formatWhyNoTradeReport(report);
+    expect(text).toContain('QUANT_POLICY_REJECTED');
+    expect(text).toContain('SUPPORT_DIMENSIONS_INSUFFICIENT');
+    expect(text).toContain('Best-fit category: QUANT_POLICY_REJECTED');
+    expect(text).toContain('Final: NO_TRADE');
+  });
+
+  it('ignores noisy non-quant event types when finding the quant-policy outcome (SQL-level eventType filter)', async () => {
+    await seedQuantPolicyEvent({ ts: 1000, symbol: 'QNOISE', traceId: 'trace-qnoise' });
+    for (let i = 0; i < 30; i++) {
+      await db.insert(schema.observabilityEvents).values({
+        id: `qnoise-${i}`, ts: 2000 + i, level: 'INFO', category: 'DISCOVERY', eventType: 'SUBSCRIPTION_PROMOTED',
+        loggerName: 'argus', message: 'subscription_priority_decision', sessionId: 'sess-1', symbol: 'QNOISE',
+        payload: null,
+      });
+    }
+    const report = await mod.buildWhyNoTradeReport('QNOISE', stubGlobal());
+    expect(report.quant.found).toBe(true);
+    expect(report.quant.traceId).toBe('trace-qnoise');
+  });
+
+  it('joins risk_assessments by traceId for a QUANT_POLICY_APPROVED idea (approved quant flows through RiskEngine)', async () => {
+    await seedQuantPolicyEvent({
+      ts: 6000, symbol: 'QAPL', traceId: 'trace-qapl-approved', eventType: 'QUANT_POLICY_APPROVED',
+      reasonCode: 'ALL_CHECKS_PASSED', reason: 'All support dimensions satisfied',
+    });
+    await db.insert(schema.riskAssessments).values({
+      traceId: 'trace-qapl-approved', symbol: 'QAPL', side: 'BUY', approved: false,
+      rejectionGate: 'symbol_concentration', maxQuantity: 0, createdAt: new Date().toISOString(),
+    });
+    await db.insert(schema.riskGateResults).values([
+      { traceId: 'trace-qapl-approved', gateName: 'emergency_stop', sequence: 1, passed: true },
+      { traceId: 'trace-qapl-approved', gateName: 'symbol_concentration', sequence: 2, passed: false, detail: '{"current":0.22,"max":0.20}' },
+    ]);
+
+    const report = await mod.buildWhyNoTradeReport('QAPL', stubGlobal());
+    expect(report.quant.found).toBe(true);
+    expect(report.quant.approved).toBe(true);
+    expect(report.quant.risk.reached).toBe(true);
+    expect(report.quant.risk.approved).toBe(false);
+    expect(report.quant.risk.rejectionGate).toBe('symbol_concentration');
+    // Policy approved but RiskEngine rejected -> RISK_REJECTED wins over the approval.
+    expect(report.mappedCategory).toBe('RISK_REJECTED');
+  });
+
+  it('surfaces QUANT_NOT_AUTHORIZED from trade_lifecycle_transitions DESK_NO_TRADE evidence (no observability emitter exists)', async () => {
+    await seedQuantNotAuthorizedLifecycle({ symbol: 'QNA', traceId: 'trace-qna-1', quantReasonCode: 'STRATEGY_RETIRED' });
+
+    const report = await mod.buildWhyNoTradeReport('QNA', stubGlobal());
+    expect(report.found).toBe(false);
+    expect(report.quant.found).toBe(true);
+    expect(report.quant.eventType).toBe('QUANT_NOT_AUTHORIZED');
+    expect(report.quant.approved).toBeNull(); // policy never evaluated - authorization failed first
+    expect(report.quant.reasonCode).toBe('STRATEGY_RETIRED');
+    expect(report.quant.decisionPolicy).toBe('QUANT_EXECUTION');
+    expect(report.quant.risk.reached).toBe(false);
+    expect(report.mappedCategory).toBe('QUANT_NOT_AUTHORIZED');
+
+    const text = mod.formatWhyNoTradeReport(report);
+    expect(text).toContain('QUANT_NOT_AUTHORIZED');
+    expect(text).toContain('STRATEGY_RETIRED');
+  });
+
+  it('does not mistake other DESK_NO_TRADE rows for QUANT_NOT_AUTHORIZED (evidence filter)', async () => {
+    await db.insert(schema.tradeLifecycleTransitions).values({
+      id: `lc-plain-${Date.now()}`, candidateId: 'trace-plain', symbol: 'QPLAIN', state: 'NO_TRADE',
+      reason: 'plain no trade', source: 'ChiefTraderAgent',
+      evidenceJson: JSON.stringify({ type: 'DESK_NO_TRADE', payload: { traceId: 'trace-plain', symbol: 'QPLAIN', terminalReasonCode: 'CONSENSUS_INSUFFICIENT' } }),
+      latencyMs: 1, createdAt: new Date().toISOString(),
+    });
+    const report = await mod.buildWhyNoTradeReport('QPLAIN', stubGlobal());
+    expect(report.quant.found).toBe(false);
+  });
+
+  it('prefers the newer quant outcome over an older consensus row (primaryPath), and vice versa', async () => {
+    await seedTerminalReasonEvent({ ts: 1000, symbol: 'QBOTH', traceId: 'trace-qboth-consensus', terminalReasonCode: 'CONFIDENCE_BELOW_STRONG' });
+    await seedQuantPolicyEvent({ ts: 2000, symbol: 'QBOTH', traceId: 'trace-qboth-quant' });
+    let report = await mod.buildWhyNoTradeReport('QBOTH', stubGlobal());
+    expect(report.found).toBe(true);
+    expect(report.quant.found).toBe(true);
+    expect(report.primaryPath).toBe('QUANT_EXECUTION');
+    expect(report.mappedCategory).toBe('QUANT_POLICY_REJECTED');
+    let text = mod.formatWhyNoTradeReport(report);
+    expect(text).toContain('Path: QUANT_EXECUTION');
+    expect(text).toContain('Consensus: FAIL (CONFIDENCE_BELOW_STRONG)');
+
+    await seedQuantPolicyEvent({ ts: 500, symbol: 'QBOTH2', traceId: 'trace-qboth2-quant' });
+    await seedTerminalReasonEvent({ ts: 3000, symbol: 'QBOTH2', traceId: 'trace-qboth2-consensus', terminalReasonCode: 'INSUFFICIENT_AGENT_PARTICIPATION' });
+    report = await mod.buildWhyNoTradeReport('QBOTH2', stubGlobal());
+    expect(report.primaryPath).toBe('CONSENSUS');
+    expect(report.mappedCategory).toBe('CONSENSUS_INSUFFICIENT');
+    text = mod.formatWhyNoTradeReport(report);
+    expect(text).toContain('Consensus: FAIL (INSUFFICIENT_AGENT_PARTICIPATION)');
+    expect(text).toContain('Quant path: QUANT_POLICY_REJECTED');
+  });
+
+  it('leads with global state when no terminal evaluation exists at all - TRADING_PAUSED is the category', async () => {
+    const report = await mod.buildWhyNoTradeReport('GHOST2', stubGlobal({
+      tradingState: 'TRADING_PAUSED', autobotEnabled: true, emergencyStopActive: false,
+      broker: { id: 'alpaca-paper', ready: true, detail: 'alpaca-paper: Healthy' },
+      marketData: { allocatedLines: 120, receivingLines: 118, freshLines: 115, staleLines: 3, errorLines: 2, entitlementFailures: 0, contractFailures: 1 },
+    }));
+    expect(report.found).toBe(false);
+    expect(report.quant.found).toBe(false);
+    expect(report.mappedCategory).toBe('TRADING_PAUSED');
+
+    const text = mod.formatWhyNoTradeReport(report);
+    const lines = text.split('\n');
+    const tradingIdx = lines.findIndex((l) => l.startsWith('Trading state:'));
+    const noEvalIdx = lines.findIndex((l) => l.includes('No CONSENSUS_TERMINAL_REASON'));
+    expect(tradingIdx).toBeGreaterThanOrEqual(0);
+    expect(noEvalIdx).toBeGreaterThan(tradingIdx); // global state leads
+    expect(text).toContain('Trading state: TRADING_PAUSED');
+    expect(text).toContain('Broker: alpaca-paper - READY');
+    expect(text).toContain('120 allocated / 118 receiving (115 fresh, 3 stale) / 2 error');
+    expect(text).toContain('argus market-data-diagnostics --symbols=<SYM>');
+    expect(text).toContain('Best-fit category: TRADING_PAUSED');
+  });
+
+  it('maps broker-not-ready to BROKER_UNAVAILABLE even with no terminal evaluation', async () => {
+    const report = await mod.buildWhyNoTradeReport('GHOST3', stubGlobal({
+      tradingState: 'TRADING_ENABLED',
+      broker: { id: 'ibkr_gateway', ready: false, detail: 'ibkr_gateway: OFFLINE' },
+    }));
+    expect(report.mappedCategory).toBe('BROKER_UNAVAILABLE');
+    const text = mod.formatWhyNoTradeReport(report);
+    expect(text).toContain('Broker: ibkr_gateway - NOT READY (ibkr_gateway: OFFLINE)');
+  });
+
+  it('readGlobalTradingState degrades to nulls (never throws) in an environment without the runtime', async () => {
+    const g = await mod.readGlobalTradingState();
+    expect(g).toBeDefined();
+    // In the vitest env the engine/runtime singletons are not booted - the point is it does not throw.
+  }, 15000);
 });
