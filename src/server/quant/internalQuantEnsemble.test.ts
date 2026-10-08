@@ -256,7 +256,7 @@ describe('computeInternalEnsembleQualification - 2026-09-30 Java bridge fan-out 
   it('never has more than quantResearchStrategyFanoutMaxConcurrency fetchResearchStrategy calls in flight at once, while still calling all 10 strategies exactly once', async () => {
     const { quantCoreBridge } = await import('../services/QuantCoreBridge');
     const { tradingSafety } = await import('../config/tradingSafety');
-    const { JAVA_RESEARCH_STRATEGY_IDS } = await import('./strategyFamilies');
+    const { VOTABLE_JAVA_RESEARCH_STRATEGY_IDS } = await import('./strategyFamilies');
 
     let inFlight = 0;
     let peakInFlight = 0;
@@ -276,7 +276,7 @@ describe('computeInternalEnsembleQualification - 2026-09-30 Java bridge fan-out 
 
     await computeInternalEnsembleQualification('AAPL', bars as any, [{ strategy: 'TREND_FOLLOWING', side: 'BUY', confidence: 0.7 } as any], 'BUY');
 
-    expect(calledIds.sort()).toEqual([...JAVA_RESEARCH_STRATEGY_IDS].sort());
+    expect(calledIds.sort()).toEqual([...VOTABLE_JAVA_RESEARCH_STRATEGY_IDS].sort());
     expect(peakInFlight).toBeLessThanOrEqual(tradingSafety.quantResearchStrategyFanoutMaxConcurrency);
     expect(peakInFlight).toBeGreaterThan(1); // still genuinely parallel, not accidentally serialized to 1
   });
