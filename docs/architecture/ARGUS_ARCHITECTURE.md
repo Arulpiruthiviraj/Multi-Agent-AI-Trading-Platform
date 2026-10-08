@@ -1,5 +1,64 @@
 # Argus Architecture
 
+## 2026-10-07: Quant-First Decision Architecture (ChiefTrader becomes a policy router)
+
+**Branch:** `feat/quant-first-decision-architecture` (pending review/merge; base main @ `5fede80`).
+**Design record:** `docs/architecture/ARGUS_QUANT_FIRST_DECISION_ARCHITECTURE.md` — this entry is the
+canonical summary; the design doc carries the full reference. (That split is deliberate and
+documented in the design doc's §0: the mission demanded a named design deliverable, while the
+repo's single-living-architecture-reference rule is honored by keeping the authoritative summary
+here, written in the same change.)
+
+**What changed.** `ChiefTraderAgent.reviewIdea` is now a policy router, not a consensus-only
+evaluator. Ideas carrying a normalized `origin: 'QUANT_STRATEGY'` are sent to the central
+`resolveQuantStrategyAuthorization()` (`src/server/quant/QuantStrategyAuthorization.ts`) *before*
+they can enter the consensus evidence pool — one idea gets exactly one decision by construction:
+
+- `AUTHORIZED_QUANT_POLICY` (conjunctive: quant origin + paper-only env lock +
+  real strategy in the registry + producer agent registered in `config/quantDecisionPolicy.json`
+  + DB lifecycle `VALIDATED`/`CHAMPION`) → deterministic `evaluateQuantExecutionPolicy()`
+  (`src/server/quant/QuantExecutionPolicy.ts`). Approved ideas emit the canonical
+  `CHIEF_APPROVED_IDEA` with `decisionPolicy='QUANT_EXECUTION'`, `consensusConfidence=null`.
+  **No LLM call, no AI consultation, no consensus debate.** Rejections are terminal
+  (`DESK_NO_TRADE`, `terminalReasonCode='QUANT_POLICY_REJECTED'`, precise `QUANT_*` reason
+  code) — never silently re-routed to consensus. A policy throw fails closed
+  (`QUANT_POLICY_ERROR`), never crashes into the consensus path.
+- `NOT_ELIGIBLE` (retired/degraded/unknown strategy) → terminal `DESK_NO_TRADE`
+  (`QUANT_NOT_AUTHORIZED`). Terminal — never tradeable, never re-routed.
+- `REQUIRES_CONSENSUS` (untested/shadow/candidate/rolled-back lifecycle, non-producer
+  agent, non-paper environment, forged/unknown origin) → falls through to the **unchanged**
+  consensus intake.
+
+**Provenance ≠ authorization.** `origin` (`src/server/quant/tradeIdeaProvenance.ts`) is
+descriptive only; unknown/missing/forged values (e.g. a spoofed `QUANT_VALIDATED`) normalize
+to `OTHER` → consensus-required. All 21 real `emitTradeIdea` producer files carry an explicit
+`origin`; advisory Java-side services are tagged `QUANT_STRATEGY` descriptively but are not
+registered producers, so they stay on consensus.
+
+**What did NOT change.** Consensus bar (0.75 / min-2-agents, `config/tradingSafety.json`),
+RiskEngine (26 gates), OMS as sole `.placeOrder(` caller, `LIVE_NO_GO` / `PAPER_TRADING_ONLY`,
+`CHIEF_APPROVED_IDEA` emitter allowlist. Risk exits (`PortfolioManager` + `SELL`) bypass the
+router entirely — protective exits never need strategy authorization or LLMs. The legacy
+`QUANT_INDEPENDENT` consensus tier is kept as an explicit operator override on a **disjoint
+idea set** (it can never see a validated-strategy idea). The promotion ladder stays
+research-informational; no third lifecycle enum. `QuantExecutionPolicy` reuses existing
+canonical functions (`ExpectedValue.riskRewardRatio`, `ConfidenceCalibration`, the
+`StrategyEngine` regime predicate) — no new TS quant math (Java 26 Engine Authority;
+control-plane carve-out). AI contradiction is advisory only; EV gating stays at emission.
+
+**DB:** migration `0096` adds nullable `decision_policy`, `idea_origin`, `strategy_id`,
+`strategy_lifecycle`, `authorization_reason` to `consensus_decisions` (additive; historical
+rows NULL).
+
+**Certification (Phase 17):** `src/server/quant/AiOfflineQuantCertification.test.ts`
+(SYNTHETIC_SEEDED / CERTIFICATION_FIXTURE_ONLY) — all AI providers killed, validated quant
+strategy must complete the full path to fill and organic exit while AI-originated ideas fail
+closed. See the test file's header for the certified assertions.
+
+**Investigation (Phases 9/10/11):** `docs/audits/QUANT_FIRST_PHASE9_10_11_INVESTIGATION_2026-10-07.md`
+— fast lane verified inert (zero live ideas; permanently `REQUIRES_CONSENSUS`), exit semantics
+(agent-tagged, not origin-tagged).
+
 ## 2026-10-07: `DbBackupService` retention defect fix (unbounded backup growth filled the disk)
 
 **Real, live-reproduced defect, not a hypothetical.** The disk hosting `data/argus.db` ran to
