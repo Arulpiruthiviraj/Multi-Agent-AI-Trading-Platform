@@ -1023,6 +1023,8 @@ export const COMMAND_HELP: Record<string, string> = {
   'discovery-lineage': 'Usage: argus discovery-lineage --symbol=<SYM> [--hours=N]\nLineage of a discovered opportunity.',
   'strategy-scorecard': 'Usage: argus strategy-scorecard\nStrategy scorecard.',
   'pipeline-ready': 'Usage: argus pipeline-ready\nPipeline readiness check.',
+  'readiness': 'Usage: argus readiness\nPre-session checklist: per-check PASS/WARN/FAIL with READY / READY_WITH_WARNINGS / NOT_READY verdict. Read-only; AI checks are advisory only.',
+  'session-checkpoint': 'Usage: argus session-checkpoint\nEarly-warning inactivity check: classifies the session HEALTHY_ZERO_TRADE / SUSPICIOUS_ZERO_TRADE (or TRADING). Run at 09:35/10:00/11:00/13:00/15:00 ET during PAPER sessions.',
   'session-report': 'Usage: argus session-report\nSession report.',
   'research': 'Usage: argus research <subcommand> [args]\nResearch intelligence (advisory only, never a trade). Run `argus research --help` for subcommands.',
   'trading-audit': 'Usage: argus trading-audit\nTrading audit trail.',
@@ -2071,6 +2073,32 @@ const commands: Record<string, () => Promise<void>> = {
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
     console.log(text);
   },
+  async readiness() {
+    // Mission Part 56 (2026-10-07): pre-session operator checklist - per-check PASS/WARN/FAIL
+    // with a final READY / READY_WITH_WARNINGS / NOT_READY verdict. Read-only (never arms LIVE,
+    // never changes trading state); AI checks are advisory only (AI down never fails quant
+    // readiness); classification bands live in config/operatorReadiness.json.
+    const res = await fetch(`${BASE}/api/v2/readiness/checklist?format=text`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 30_000)),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
+    console.log(text);
+  },
+  async 'session-checkpoint'() {
+    // Mission Part 57 (2026-10-07): early-warning inactivity detection for PAPER sessions -
+    // classifies the current session HEALTHY_ZERO_TRADE / SUSPICIOUS_ZERO_TRADE (or TRADING)
+    // from already-persisted observability evidence. Reporting only: no threshold, gate, or
+    // trading-state change. Intended for operator/cron runs at 09:35/10:00/11:00/13:00/15:00 ET.
+    const res = await fetch(`${BASE}/api/v2/readiness/session-checkpoint?format=text`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 30_000)),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
+    console.log(text);
+  },
   async 'session-report'() {
     // Pre-market/market-open operator observability (2026-08-24 readiness audit, Part 10) - real
     // counts only, scoped to the current trading day, organic PAPER/LIVE always reported separately
@@ -2731,7 +2759,7 @@ const commands: Record<string, () => Promise<void>> = {
     const groups: Array<[string, string[]]> = [
       ['System / lifecycle', ['status', 'dashboard', 'tui', 'ui', 'health', 'start', 'stop', 'restart', 'wait-ready', 'config']],
       ['Watchdog (detached auto-restart supervisor)', ['watchdog-start', 'watchdog-stop', 'watchdog-restart', 'watchdog-status']],
-      ['Trading state / portfolio', ['resume', 'pause', 'ready', 'positions', 'portfolio', 'brokers', 'set-broker', 'paper-profile']],
+      ['Trading state / portfolio', ['resume', 'pause', 'ready', 'positions', 'portfolio', 'brokers', 'set-broker', 'paper-profile', 'readiness', 'session-checkpoint']],
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'premarket-focus', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],

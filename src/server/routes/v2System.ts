@@ -70,6 +70,8 @@ import { continuousIntelRouter } from './continuousIntelRoutes';
 import { settingsEffectiveRouter } from './settingsEffectiveRoutes';
 import { argusApplication } from '../app/ArgusApplication';
 import { runtimeRouter } from './v2Runtime';
+// Mission Parts 56-57 (2026-10-07): read-only operator readiness extension routes.
+import { readinessExtRouter } from './v2ReadinessExt';
 import { loadEngineOwnershipRegistry } from '../config/modelRegistry';
 import { isQuantJavaCoreEnabled, isJavaQuantVoteEnabled, isQuantIndependentQualificationEnabled } from '../config/tradingSafety';
 import { isLiveIdeaEmissionEnabled } from '../services/QuantCoreBridge';
@@ -77,6 +79,8 @@ import { isLiveIdeaEmissionEnabled } from '../services/QuantCoreBridge';
 export const v2Router = Router();
 
 v2Router.use('/runtime', runtimeRouter);
+// Read-only: pre-session checklist + in-session early-warning checkpoint. Never arms LIVE.
+v2Router.use('/readiness', readinessExtRouter);
 
 /** Stable API aliases (backward compatible with /data/* routes). */
 v2Router.get('/portfolio', async (_req, res) => {
