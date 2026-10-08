@@ -1,0 +1,122 @@
+{
+  "type": "SOAK_RESULT",
+  "soakId": "loopsmoke",
+  "seed": 777,
+  "methodology": "Single long-lived process; back-to-back 180-sim-min sessions (150ms wall-clock/bar) for 180 wall-clock minutes against one isolated DB. SyntheticSessionEngine cannot pace true wall-clock (disclosed in its header).",
+  "wallClockMinutes": 2.161583333333333,
+  "iterationsCompleted": 15,
+  "iterationsFailed": 15,
+  "samples": 2,
+  "memory": {
+    "startRssMb": 260.83203125,
+    "endRssMb": 343.75390625,
+    "maxRssMb": 343.75390625,
+    "rssDeltaMb": 82.921875,
+    "endHeapMb": 95.27149200439453
+  },
+  "eventLoop": {
+    "maxP95Ms": 511,
+    "finalP50Ms": 511,
+    "finalMaxMs": 0
+  },
+  "db": {
+    "startBytes": 1269760,
+    "endBytes": 4317184,
+    "growthBytes": 3047424,
+    "maxWalBytes": 4148872
+  },
+  "aiPosture": "ALL_AI_DOWN_THROUGHOUT (no provider keys in this environment — hardest case for quant-first)",
+  "endOfSoakProof": {
+    "finalIteration": 15,
+    "buysInFinalIteration": 0,
+    "sellsInFinalIteration": 0,
+    "pass": false,
+    "note": "NO round trip closed in the final iteration — investigate terminal reasons; do not treat as pass."
+  },
+  "iterationErrors": [
+    {
+      "iteration": 1,
+      "error": "The \"paths[0]\" argument must be of type string. Received undefined"
+    },
+    {
+      "iteration": 2,
+      "error": "The \"paths[0]\" argument must be of type string. Received undefined"
+    },
+    {
+      "iteration": 3,
+      "error": "The \"paths[0]\" argument must be of type string. Received undefined"
+    },
+    {
+      "iteration": 4,
+      "error": "The \"paths[0]\" argument must be of type string. Received undefined"
+    },
+    {
+      "iteration": 5,
+      "error": "The \"paths[0]\" argument must be of type string. Received undefined"
+    },
+    {
+      "iteration": 6,
+      "error": "The \"paths[0]\" argument must be of type string. Received undefined"
+    },
+    {
+      "iteration": 7,
+      "error": "The \"paths[0]\" argument must be of type string. Received undefined"
+    },
+    {
+      "iteration": 8,
+      "error": "The \"paths[0]\" argument must be of type string. Received undefined"
+    },
+    {
+      "iteration": 9,
+      "error": "The \"paths[0]\" argument must be of type string. Received undefined"
+    },
+    {
+      "iteration": 10,
+      "error": "The \"paths[0]\" argument must be of type string. Received undefined"
+    },
+    {
+      "iteration": 11,
+      "error": "The \"paths[0]\" argument must be of type string. Received undefined"
+    },
+    {
+      "iteration": 12,
+      "error": "The \"paths[0]\" argument must be of type string. Received undefined"
+    },
+    {
+      "iteration": 13,
+      "error": "The \"paths[0]\" argument must be of type string. Received undefined"
+    },
+    {
+      "iteration": 14,
+      "error": "The \"paths[0]\" argument must be of type string. Received undefined"
+    },
+    {
+      "iteration": 15,
+      "error": "The \"paths[0]\" argument must be of type string. Received undefined"
+    }
+  ],
+  "samplesTail": [
+    {
+      "tMin": 0,
+      "iteration": 0,
+      "rssMb": 260.83203125,
+      "heapUsedMb": 63.169898986816406,
+      "eventLoopP50Ms": 511,
+      "eventLoopP95Ms": 511,
+      "eventLoopMaxMs": 0,
+      "dbBytes": 1269760,
+      "walBytes": 4124152
+    },
+    {
+      "tMin": 2.1614166666666668,
+      "iteration": 15,
+      "rssMb": 343.75390625,
+      "heapUsedMb": 95.27149200439453,
+      "eventLoopP50Ms": 511,
+      "eventLoopP95Ms": 511,
+      "eventLoopMaxMs": 0,
+      "dbBytes": 4317184,
+      "walBytes": 4148872
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "type": "SOAK_RESULT",
+  "soakId": "loopsmoke2",
+  "seed": 777,
+  "methodology": "Single long-lived process; back-to-back 180-sim-min sessions (150ms wall-clock/bar) for 180 wall-clock minutes against one isolated DB. SyntheticSessionEngine cannot pace true wall-clock (disclosed in its header).",
+  "wallClockMinutes": 2.0721833333333333,
+  "iterationsCompleted": 2,
+  "iterationsFailed": 0,
+  "samples": 4,
+  "memory": {
+    "startRssMb": 314.38671875,
+    "endRssMb": 416.0390625,
+    "maxRssMb": 416.0390625,
+    "rssDeltaMb": 101.65234375,
+    "endHeapMb": 86.08942413330078
+  },
+  "eventLoop": {
+    "maxP95Ms": 84279295,
+    "finalP50Ms": 20103167,
+    "finalMaxMs": 81264639
+  },
+  "db": {
+    "startBytes": 1269760,
+    "endBytes": 14868480,
+    "growthBytes": 13598720,
+    "maxWalBytes": 4371352
+  },
+  "aiPosture": "ALL_AI_DOWN_THROUGHOUT (no provider keys in this environment — hardest case for quant-first)",
+  "endOfSoakProof": {
+    "finalIteration": 2,
+    "buysInFinalIteration": 0,
+    "sellsInFinalIteration": 0,
+    "pass": false,
+    "note": "NO round trip closed in the final iteration — investigate terminal reasons; do not treat as pass."
+  },
+  "iterationErrors": [],
+  "samplesTail": [
+    {
+      "tMin": 0.000016666666666666667,
+      "iteration": 0,
+      "rssMb": 314.38671875,
+      "heapUsedMb": 135.7955093383789,
+      "eventLoopP50Ms": 511,
+      "eventLoopP95Ms": 511,
+      "eventLoopMaxMs": 0,
+      "dbBytes": 1269760,
+      "walBytes": 4124152
+    },
+    {
+      "tMin": 1.00005,
+      "iteration": 1,
+      "rssMb": 365.2890625,
+      "heapUsedMb": 123.63278198242188,
+      "eventLoopP50Ms": 20119551,
+      "eventLoopP95Ms": 81985535,
+      "eventLoopMaxMs": 375390207,
+      "dbBytes": 7454720,
+      "walBytes": 4293072
+    },
+    {
+      "tMin": 2.00085,
+      "iteration": 2,
+      "rssMb": 416.0390625,
+      "heapUsedMb": 101.5985107421875,
+      "eventLoopP50Ms": 20103167,
+      "eventLoopP95Ms": 84279295,
+      "eventLoopMaxMs": 9185525759,
+      "dbBytes": 14868480,
+      "walBytes": 4371352
+    },
+    {
+      "tMin": 2.0720666666666667,
+      "iteration": 2,
+      "rssMb": 416.0390625,
+      "heapUsedMb": 86.08942413330078,
+      "eventLoopP50Ms": 20103167,
+      "eventLoopP95Ms": 21168127,
+      "eventLoopMaxMs": 81264639,
+      "dbBytes": 14868480,
+      "walBytes": 4371352
+    }
+  ]
+}

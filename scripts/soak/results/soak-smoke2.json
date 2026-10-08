@@ -1,0 +1,61 @@
+{
+  "type": "SOAK_RESULT",
+  "soakId": "smoke2",
+  "seed": 999,
+  "wallClockMinutes": 0.57835,
+  "samples": 2,
+  "memory": {
+    "startRssMb": 313.0234375,
+    "endRssMb": 354.5,
+    "maxRssMb": 354.5,
+    "rssDeltaMb": 41.4765625
+  },
+  "eventLoop": {
+    "maxP95Ms": 21725183,
+    "finalP50Ms": 20103167,
+    "finalMaxMs": 731381759
+  },
+  "db": {
+    "startBytes": 1269760,
+    "endBytes": 1703936,
+    "maxWalBytes": 4140632
+  },
+  "session": {
+    "timelineEvents": 8,
+    "wallClockDurationMs": 34692,
+    "engineEventLoopP50Ms": 20.103167,
+    "engineEventLoopP95Ms": 21.135359,
+    "engineEventLoopMaxMs": 120.193023
+  },
+  "sessionTradesTotal": 0,
+  "aiPosture": "ALL_AI_DOWN_THROUGHOUT (no provider keys in this environment — hardest case for quant-first)",
+  "endOfSoakProof": {
+    "windowMinutes": 15,
+    "buysInWindow": 0,
+    "sellsInWindow": 0,
+    "pass": false,
+    "note": "NO round trip closed in the final window — investigate terminal reasons; do not treat as pass."
+  },
+  "samplesTail": [
+    {
+      "tMin": 0,
+      "rssMb": 313.0234375,
+      "heapUsedMb": 131.18022918701172,
+      "eventLoopP50Ms": 511,
+      "eventLoopP95Ms": 511,
+      "eventLoopMaxMs": 0,
+      "dbBytes": 1269760,
+      "walBytes": 4124152
+    },
+    {
+      "tMin": 0.5782333333333334,
+      "rssMb": 354.5,
+      "heapUsedMb": 86.62828826904297,
+      "eventLoopP50Ms": 20103167,
+      "eventLoopP95Ms": 21725183,
+      "eventLoopMaxMs": 731381759,
+      "dbBytes": 1703936,
+      "walBytes": 4140632
+    }
+  ]
+}
