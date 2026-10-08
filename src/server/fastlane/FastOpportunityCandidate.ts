@@ -86,11 +86,10 @@ export interface FastOpportunityCandidate {
     timeframeMin: number;
   };
 
-  sessionContext: {
-    tradingDateStr: string;
-    minutesSinceOpen: number;
-    isRegularHours: boolean;
-  };
+  // 2026-10-08 (D6): the hardcoded sessionContext placeholder (minutesSinceOpen: 0,
+  // isRegularHours: true, marked TODO since 2026-10-05 and never read by any consumer) was
+  // removed - a field with fabricated values is worse than no field. It will be reintroduced
+  // with real market-calendar values when a consumer actually needs it.
 
   liquidityEvidence: {
     dollarVolume: number | null;

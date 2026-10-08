@@ -12,7 +12,6 @@ function fakeCandidate(overrides: Partial<FastOpportunityCandidate> = {}): FastO
     lastEvidenceAt: now,
     detectionSource: 'NEWS_CATALYST',
     catalyst: 'test catalyst',
-    sessionContext: { tradingDateStr: '2026-10-06', minutesSinceOpen: 0, isRegularHours: true },
     liquidityEvidence: { dollarVolume: null, spreadBps: null, meetsMinLiquidity: false },
     requiredDataTier: 'TIER_1',
     currentDataTier: 'TIER_0',
