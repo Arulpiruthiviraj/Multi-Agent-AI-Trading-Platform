@@ -46,6 +46,7 @@ import { trades, settings, brokerConnections, portfolio, reconciliationEvents, f
 import { eq, and, notInArray, isNotNull, inArray, isNull, gte } from 'drizzle-orm';
 import crypto from 'crypto';
 import { BrokerManager } from '../../brokers/BrokerManager';
+import { BoundedWarnOnce } from '../../brokers/brokerMemory';
 import { BrokerPlugin, Order, brokerSupports } from '../../brokers/BrokerAdapter';
 import { updateTransactionStatus } from '../core/TransactionRegistry';
 import { tradingSafety } from '../config/tradingSafety';
@@ -115,7 +116,11 @@ const CRASH_RECOVERY_LOOKBACK_MS = tradingSafety.crashRecoveryLookbackMs;
 export class OrderManagementService {
   private intervalId: NodeJS.Timeout | null = null;
   private crashRecoveryIntervalId: NodeJS.Timeout | null = null;
-  private followUpWarned = new Set<string>();
+  // 2026-10-08 memory-hunt fix: this was an unbounded Set<string> keyed by order id - one
+  // entry per warned order for process lifetime. BoundedWarnOnce keeps the warn-once
+  // semantics for the working set (FIFO eviction past the cap; flag/env
+  // ARGUS_OMS_WARN_ONCE_MAX, see brokers/brokerMemory.ts).
+  private followUpWarned = new BoundedWarnOnce();
   // Batch 2 timer/reentrancy sweep (2026-09-23): followUpOpenOrders()/reconcileStaleOrders()/
   // reconcileInboundBrokerOrders() already tolerate concurrent execution via row-level CAS updates
   // (see cancelOrder()'s own "CAS guard" comment) rather than serialization - these guards are a
@@ -125,8 +130,8 @@ export class OrderManagementService {
   // tick re-runs the same real check with nothing lost, matching singleFlightInterval.ts's contract.
   private followUpGuard = createSingleFlightGuard((e) => console.error('[OMS] follow-up cycle failed', e));
   private crashRecoveryGuard = createSingleFlightGuard((e) => console.error('[OMS] crash-recovery cycle failed', e));
-  /** Unrecognized-open-broker-order ids already warned/paused-for (2026-09-09 P0 sprint) - avoids re-pausing every CRASH_RECOVERY_INTERVAL_MS cycle for the same still-unresolved order. */
-  private unknownPendingOrderWarned = new Set<string>();
+  /** Unrecognized-open-broker-order ids already warned/paused-for (2026-09-09 P0 sprint) - avoids re-pausing every CRASH_RECOVERY_INTERVAL_MS cycle for the same still-unresolved order. Bounded (2026-10-08 memory hunt) - see followUpWarned. */
+  private unknownPendingOrderWarned = new BoundedWarnOnce();
 
   constructor() {
     eventBus.on('RISK_ASSESSMENT_COMPLETED', async (assessment) => {
@@ -817,9 +822,8 @@ export class OrderManagementService {
         const match = brokerOrders.find(o => o.id === row.brokerOrderId);
 
         if (!match) {
-          if (age > FOLLOWUP_MAX_AGE_MS && !this.followUpWarned.has(row.id)) {
+          if (age > FOLLOWUP_MAX_AGE_MS && this.followUpWarned.warn(row.id)) {
             console.warn(`[OMS] Giving up follow-up for order ${row.id}: broker '${broker.id}' no longer reports order ${row.brokerOrderId}. Last known status stays ${row.status}.`);
-            this.followUpWarned.add(row.id);
           }
           continue;
         }
@@ -858,8 +862,7 @@ export class OrderManagementService {
   }
 
   private async cancelOrphanedOpenOrder(row: any, match: Order, broker: BrokerPlugin): Promise<void> {
-    if (this.followUpWarned.has(row.id)) return;
-    this.followUpWarned.add(row.id);
+    if (!this.followUpWarned.warn(row.id)) return;
     const canCancel = brokerSupports(broker, 'canCancelOrders');
     if (!canCancel) {
       console.error(`[OMS] Orphaned ${row.status} order ${row.id} exceeded follow-up max age and broker cannot cancel — pausing trading.`);
@@ -969,10 +972,9 @@ export class OrderManagementService {
       // case the sprint's "UNKNOWN -> PAUSE -> RECONCILE, never UNKNOWN -> RETRY" invariant is
       // about - never auto-cancelled, never assumed safe, surfaced loudly and trading paused until
       // an operator resolves it. One-time warn per orderId (not every 60s cycle) via the same
-      // in-memory Set pattern followUpWarned already uses.
+      // in-memory warn-once pattern followUpWarned already uses (both now BoundedWarnOnce).
       if (filledQty <= 0 && !isTerminalOrderStatus(o.status)) {
-        if (!unknownPendingWarned.has(o.id)) {
-          unknownPendingWarned.add(o.id);
+        if (unknownPendingWarned.warn(o.id)) {
           console.error(`[OMS] CRITICAL unrecognized open broker order ${o.id} (${o.side} ${o.quantity} ${o.symbol}, status=${o.status}) has no matching local trades row - pausing trading pending operator reconciliation.`);
           await triggerWebhooks({
             type: 'reconciliation_mismatch',
