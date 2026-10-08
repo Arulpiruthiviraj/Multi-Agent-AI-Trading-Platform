@@ -229,9 +229,10 @@ function fmtDollars(v: number): string {
  * there is no pre-market time-of-day expected-volume curve, so a null, zero,
  * or otherwise non-positive relative-volume multiple in a pre-market context
  * must render as PREMARKET_RVOL_UNAVAILABLE — never as "0.00x", which would
- * fabricate a measured zero. The "Relative volume 0.00x (score N/A)" string
- * itself is produced by TradePlanBuilder.buildThesis — not this module's file,
- * do not touch; this module maps it at its own display boundary instead.
+ * fabricate a measured zero. 2026-10-07 (Discovery-D4): TradePlanBuilder.buildThesis now
+ * renders PREMARKET_RVOL_UNAVAILABLE directly for new theses when the relative-volume
+ * component is unavailable; this display boundary still maps the raw value for legacy
+ * persisted rows (and any other raw-multiple source) that predate that fix.
  */
 export function formatPremarketRvol(rawMultiple: number | null | undefined): string {
   if (rawMultiple == null || !Number.isFinite(rawMultiple) || rawMultiple <= 0) {

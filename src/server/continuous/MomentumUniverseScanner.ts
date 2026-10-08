@@ -3,6 +3,15 @@
  * Uses Alpaca multi-symbol snapshots (not WebSocket). Never emits TRADE_IDEA_GENERATED,
  * never imports OMS / RiskEngine / BrokerManager. Hot-swap still goes through
  * WATCHLIST_SUBSCRIBE_REQUESTED → MarketDataWorker under maxActiveSubscriptions.
+ *
+ * 2026-10-07 Discovery-D5: SUPERSEDED DESIGN - the windowed momentum-rotation this file was
+ * built for (rankMomentumUniverse() gated on the 09:25-09:35 ET isMomentumRotationWindow())
+ * is no longer on any live path: the live hot-swap now runs per RTH tick through
+ * SnapshotScanner's ranking cycle + OpportunityDiscovery's planner (blendedHotSwapScore /
+ * priorityScoreOf), not inside this window. rankMomentumUniverse(), getMomentumScanUniverse(),
+ * evaluateMomentumCandidate(), and isMomentumRotationWindow() have zero non-test callers and are
+ * retained only because MomentumUniverseScanner.test.ts pins their pure logic. Do not wire new
+ * live behavior through this file; the per-tick planner is the real rotation mechanism.
  */
 import { continuousIntelligence } from '../config/continuousIntelligence';
 import { networkEndpoints } from '../config/networkEndpoints';
@@ -196,6 +205,10 @@ export function getMomentumScanUniverse(): string[] {
 /**
  * Rank liquid REST universe for hot-swap. Safe to call anytime; `inWindow` reflects whether
  * OpportunityDiscovery should spend hot-swap budget when the stream is already full.
+ *
+ * 2026-10-07 Discovery-D5: superseded - the 09:25-09:35 windowed rotation this served is no
+ * longer on any live path (the per-RTH-tick planner in SnapshotScanner/OpportunityDiscovery
+ * is the real hot-swap mechanism). Retained for unit tests only; zero non-test callers.
  */
 export async function rankMomentumUniverse(now: Date = new Date()): Promise<MomentumRankRow[]> {
   const inWindow = isMomentumRotationWindow(now);

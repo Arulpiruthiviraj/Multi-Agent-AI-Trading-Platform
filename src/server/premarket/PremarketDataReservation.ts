@@ -28,9 +28,14 @@
  * Why cap + early expiry (not priority preemption) protects the 09:20-09:30 emerging movers:
  * the pool is a strict subset of streaming capacity (premarketReservedSlots=4 of
  * maxActiveSubscriptions=12 — at least one slot always stays un-reservable, enforced at config
- * load), and every reservation dies no later than the 09:25 ET handover, which is BEFORE the
- * 09:25-09:35 momentum rotation window (momentumScanWindowStartEt). By the time emerging movers
- * need slots, pre-open reservations have already released — the two mechanisms never overlap.
+ * load), and every reservation dies no later than the 09:25 ET handover. 2026-10-07
+ * (Discovery-D5): this paragraph previously reasoned about the handover as "BEFORE the
+ * 09:25-09:35 momentum rotation window (momentumScanWindowStartEt)" — that windowed rotation
+ * design is superseded by the per-RTH-tick planner (SnapshotScanner ranking cycle +
+ * OpportunityDiscovery hot-swap; see MomentumUniverseScanner.ts's header). The handover
+ * rationale is unchanged in substance: by the time the RTH session's per-tick discovery
+ * rotation needs slots, pre-open reservations have already released — the two mechanisms
+ * never overlap.
  * The session handoff (PREMARKET_PLAN_HANDED_TO_RTH) additionally releases every ACTIVE row.
  * Intraday Fast Lane / discovery subscriptions are never touched here — only this ledger's rows.
  *
@@ -44,7 +49,7 @@
 import { randomUUID } from 'node:crypto';
 import { db } from '../db';
 import { premarketDataReservations } from '../db/schema';
-import { and, count, eq } from 'drizzle-orm';
+import { and, count, eq, inArray, lt } from 'drizzle-orm';
 import { continuousIntelligence } from '../config/continuousIntelligence';
 import { getTradingDateStr, tradingWallTimeToIso } from '../core/TradingCalendar';
 import { looksLikeListedTicker } from '../ai/AIOutputValidator';
@@ -460,4 +465,40 @@ export async function getReservationPoolStatus(): Promise<{
     available: Math.max(0, cap - active),
     maxActiveSubscriptions: continuousIntelligence.maxActiveSubscriptions,
   };
+}
+
+/** 2026-10-07 Discovery-D3: retention bound for terminal reservation-ledger rows, in days.
+ * A code constant (not a config entry): storage hygiene, not a trading parameter. 30 days
+ * comfortably covers every forensic lookback the reservation ledger actually serves (pre-open
+ * pool forensics, denial audits) while bounding a ledger that previously had no DELETE path at
+ * all. Terminal = RELEASED | EXPIRED | DENIED; ACTIVE rows are never touched by retention. */
+export const RESERVATION_LEDGER_RETENTION_DAYS = 30;
+
+/** Terminal reservation statuses - the only rows retention pruning may delete. */
+const TERMINAL_RESERVATION_STATUSES: ReservationStatus[] = ['RELEASED', 'EXPIRED', 'DENIED'];
+
+/**
+ * 2026-10-07 Discovery-D3: retention prune for the premarket_data_reservations ledger. The
+ * ledger previously had no DELETE/prune path at all - ACTIVE -> RELEASED/EXPIRED/DENIED rows
+ * accumulated forever. Deletes terminal rows older than RESERVATION_LEDGER_RETENTION_DAYS
+ * (by createdAt). Code-based, no migration. Called from the operational retention sweep
+ * (src/server/db/operationalRetention.ts), never from any trading decision path. Returns the
+ * number of rows deleted.
+ */
+export async function pruneReservationLedger(nowMs: number = Date.now()): Promise<number> {
+  const cutoffIso = new Date(nowMs - RESERVATION_LEDGER_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    const result = await mcounted(
+      db.delete(premarketDataReservations).where(
+        and(
+          inArray(premarketDataReservations.status, TERMINAL_RESERVATION_STATUSES),
+          lt(premarketDataReservations.createdAt, cutoffIso),
+        ),
+      ),
+    );
+    return (result as unknown as { changes?: number }).changes ?? 0;
+  } catch (e) {
+    console.error('[PremarketDataReservation] Failed to prune reservation ledger', e);
+    return 0;
+  }
 }

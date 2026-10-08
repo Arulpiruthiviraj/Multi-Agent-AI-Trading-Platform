@@ -188,6 +188,17 @@ export interface TradingSafety {
   alpacaCircuitBreakerFailureThreshold: number;
   alpacaCircuitBreakerCooldownMs: number;
   aiProviderTimeoutMs: number;
+  /**
+   * Provider-D4 (2026-10-07, strategy-layer audit): bounded outer wait for QuantSignalAgent's
+   * in-cycle AI contradiction review (analyzeContradictions). LATENCY BOUND, not a trading
+   * threshold: the review is advisory-only (can never change an idea's side/confidence) and
+   * already degrades honestly to available:false when no AI is configured - so a hung provider
+   * must never add its full (worst-case ~aiProviderTimeoutMs x N providers, sequential) latency
+   * to a real idea's decision path. On timeout the emission proceeds with the same honest-
+   * degradation available:false shape. 8000ms keeps the review useful when providers are healthy
+   * while capping the worst-case added decision latency well under one provider timeout.
+   */
+  quantContradictionMaxWaitMs: number;
   aiProviderAuthFailureCooldownMs: number;
   /** Skip 404 / fetch-failed providers this long (in-memory; does not flip DB enabled). */
   aiProviderUnreachableCooldownMs: number;
@@ -710,6 +721,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'alpacaRetryBaseDelayMs',
   'alpacaCircuitBreakerFailureThreshold',
   'aiProviderTimeoutMs',
+  'quantContradictionMaxWaitMs',
   'aiProviderAuthFailureCooldownMs',
   'aiProviderUnreachableCooldownMs',
   'aiProviderTimeoutSkipCooldownMs',

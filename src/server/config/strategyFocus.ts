@@ -184,6 +184,15 @@ export function applyAdaptiveRegimePreference<T extends { strategy: string; setu
  * Confidence for preferred setups is scaled by adaptivePreferredBoost; off-map setups are
  * dropped from the emit path (not zeroed into a parallel sleeve). Falls back to soft-boost
  * of the full set if the preferred subset is empty so Quant never silently dies.
+ *
+ * D2 honest interaction (2026-10-07, comment-only - no behavior change): under the default
+ * ADAPTIVE_MULTI_STRATEGY focus this hard-filters the emit pool to the 2-3 regime-preferred
+ * CORE ids, so an experimental env flag (config/quantExperimentalStrategies.json) buys a
+ * strategy background EVALUATION and telemetry only - never selection, never emission - in
+ * the default configuration. That is working as designed (experiments must earn selection
+ * through the normal lifecycle), but it must be stated plainly: flipping an experimental flag
+ * on does not put that strategy in the running for real ideas under adaptive focus. See
+ * StrategyEngine.ts's experimental section for the same note at the evaluation side.
  */
 export function selectEvaluationsForAdaptiveRegime<T extends { strategy: string; setupScore: number; confidence: number }>(
   evaluations: T[],

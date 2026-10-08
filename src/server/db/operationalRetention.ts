@@ -45,11 +45,45 @@ export async function sweepCandidateRankingsRetention(nowMs = Date.now()): Promi
 
 export function startOperationalRetentionSweep(): void {
   if (retentionTimer) return;
-  retentionTimer = setInterval(() => { void sweepCandidateRankingsRetention(); }, runtimeIntervals.candidateRankingsRetentionSweepMs);
+  retentionTimer = setInterval(() => {
+    void sweepCandidateRankingsRetention();
+    void sweepTradePlanRevalidationRetention();
+    void sweepReservationLedgerRetention();
+  }, runtimeIntervals.candidateRankingsRetentionSweepMs);
   if (typeof retentionTimer === 'object' && retentionTimer && 'unref' in retentionTimer) {
     retentionTimer.unref();
   }
   void sweepCandidateRankingsRetention();
+  void sweepTradePlanRevalidationRetention();
+  void sweepReservationLedgerRetention();
+}
+
+/**
+ * 2026-10-07 Discovery-D2: retention sweep for the trade_plan_revalidations ledger (see
+ * TradePlanBuilder.pruneTradePlanRevalidations). Lazy dynamic import: the continuous module
+ * graph is heavy and must never be pulled into this module's static import set (import-cycle
+ * risk with SystemBootstrap's own startup path).
+ */
+export async function sweepTradePlanRevalidationRetention(nowMs = Date.now()): Promise<number> {
+  try {
+    const { pruneTradePlanRevalidations } = await import('../continuous/TradePlanBuilder');
+    return pruneTradePlanRevalidations(nowMs);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * 2026-10-07 Discovery-D3: retention sweep for the premarket_data_reservations ledger (see
+ * PremarketDataReservation.pruneReservationLedger). Lazy dynamic import, same reason as above.
+ */
+export async function sweepReservationLedgerRetention(nowMs = Date.now()): Promise<number> {
+  try {
+    const { pruneReservationLedger } = await import('../premarket/PremarketDataReservation');
+    return pruneReservationLedger(nowMs);
+  } catch {
+    return 0;
+  }
 }
 
 export function stopOperationalRetentionSweep(): void {

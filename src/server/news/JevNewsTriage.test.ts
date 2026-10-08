@@ -18,6 +18,8 @@ import {
 } from './JevNewsTriage';
 import { JevProvider } from '../ai/providers/JevProvider';
 import { NormalizedArticle } from './NewsNormalizer';
+import { AICallGovernor } from '../ai/AICallGovernor';
+import { aiCallGovernor } from '../config/aiCallGovernor';
 
 const BASE_ARTICLE: NormalizedArticle = {
   id: 'art-1',
