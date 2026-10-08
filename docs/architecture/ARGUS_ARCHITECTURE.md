@@ -1,5 +1,53 @@
 # Argus Architecture
 
+## 2026-10-07: Jev / TypeSafe AI integration — event-driven AICallGovernor (AI-optional, quant-first)
+
+**Branch:** `feat/quant-first-decision-architecture` (pending review/merge; base main @ `5fede80`).
+**Design record:** `docs/architecture/ARGUS_AI_CALL_ARCHITECTURE.md` — this entry is the
+canonical summary; the design doc carries the full reference. (Same deliberate split as the
+quant-first entry above: the mission demanded a named design deliverable; the repo's
+single-living-architecture-reference rule is honored by keeping the authoritative summary
+here, written in the same change.)
+
+**What changed.** Optional AI is now governed, event-driven, and strictly advisory:
+
+- `AICallGovernor` (`src/server/ai/AICallGovernor.ts`) is the single gate for every optional
+  AI call: `AICallGovernor → JevDecisionProvider (STRUCTURED_DECISION) | generative executor
+  (GENERATIVE_ANALYSIS)`. Jev is deliberately NOT forced into a chat-completions abstraction —
+  it is a structured-decision provider beside the generative `AIRouter`, not inside it.
+- Default state is **NO AI CALL**. Ticks, quotes, scans, strategy evaluations, and consensus
+  cycles never directly call AI. Only material events (new catalyst, regime change,
+  high-quality quant candidate, genuine conflict, premarket final set, post-trade research)
+  are *considered*, then filtered through: materiality → cache (fingerprint of material
+  inputs, per-kind TTL) → singleflight → per-symbol cooldown → global/provider/symbol
+  budgets → provider health → circuit breaker (CLOSED/OPEN/HALF_OPEN) → queue limits →
+  decision deadline. Every skip emits a reasoned observability event.
+- `JevDecisionProvider` (`src/server/ai/JevDecisionProvider.ts`) wraps the existing
+  `JevProvider` (System One wire format, typed choice/score/noul answers, multi-question
+  batching) with structured error classification (`NO_API_KEY/AUTH/RATE_LIMIT/OVERLOAD/
+  SERVER/NETWORK/TIMEOUT/VALIDATION/ABORTED`), latency measurement, and defense-in-depth
+  key redaction. `JEV_API_KEY` stays server-side (deployment `.env` only), never logged.
+- **Jev failure is neutral for validated quant.** Timeout/429/5xx/network/circuit-open/no-key
+  yields `AI_CONTEXT_STATUS=UNAVAILABLE`, never `QUANT_REJECTED` — the deterministic quant
+  path is byte-identical with Jev healthy or dead (certified by parity tests). AI-originated
+  ideas still fail closed. There is **no automatic failover** from a failed Jev call to
+  expensive LLMs (cost-storm prevention, tested with 1000 events while down → 5 bounded
+  calls, circuit OPEN, zero fallback).
+- `AiAdvisoryService` (`src/server/ai/AiAdvisoryService.ts`) wires two advisory-only,
+  fire-and-forget trigger points: genuinely-new news articles (one batched 4-question Jev
+  triage per article) and post-decision quant-candidate context. Advisory results are
+  observability + an optional `aiAdvisoryNote` recorded on the quant decision — provably
+  never consulted by any policy check. Protective exits, RiskEngine, reconciliation, and
+  OMS never wait for or require Jev (architecture-tested prohibitions).
+- Config: `config/aiCallGovernor.json` + typed loader `src/server/config/aiCallGovernor.ts`
+  (fail-boot validation). Opt-in smoke test: `argus ai test jev` (manual only; never in
+  automated tests, never at startup; `JEV_REAL_SMOKE_TEST = NOT_RUN` in this environment —
+  no key present).
+
+**What did NOT change.** Consensus bar, RiskEngine gates, OMS sole `.placeOrder(` caller,
+`CHIEF_APPROVED_IDEA` emitter allowlist, `LIVE_NO_GO`. `QuantExecutionPolicy` remains
+AI-free; the AI-offline certification (`AiOfflineQuantCertification.test.ts`) stays green.
+
 ## 2026-10-07: Quant-First Decision Architecture (ChiefTrader becomes a policy router)
 
 **Branch:** `feat/quant-first-decision-architecture` (pending review/merge; base main @ `5fede80`).
