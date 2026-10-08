@@ -185,6 +185,9 @@ export async function evaluateQuantExecutionPolicy(
 ): Promise<QuantPolicyDecision> {
   const startMs = Date.now();
   const checks: QuantPolicyCheckResult[] = [];
+  // Hoisted: early fail() paths run before the RISK_DEFINED check below computes these.
+  let rrRatio: number | null = null;
+  let aiAdvisoryNote: string | null = null;
   const fail = (
     reasonCode: QuantPolicyReasonCode,
     reason: string,
@@ -315,7 +318,7 @@ export async function evaluateQuantExecutionPolicy(
   const rr = isFiniteNumber(stopPrice) && isFiniteNumber(targetPrice)
     ? riskRewardRatio(currentPrice as number, stopPrice, targetPrice)
     : null;
-  const rrRatio = rr?.ratio ?? null;
+  rrRatio = rr?.ratio ?? null;
   const riskOk = rr !== null && rrRatio !== null && Number.isFinite(rrRatio) && rrRatio > 0;
   checks.push(
     req(
@@ -356,7 +359,7 @@ export async function evaluateQuantExecutionPolicy(
 
   // ---- AI advisory: recorded, never gating (veto/advice split) ----
   const aiReview = idea?.quantDetail?.aiContradictionAnalysis;
-  const aiAdvisoryNote =
+  aiAdvisoryNote =
     aiReview && (aiReview as { available?: unknown }).available === true
       ? `AI contradiction review present (agreesWithSide=${String((aiReview as { aiAgreesWithSide?: unknown }).aiAgreesWithSide)}): advisory only, not a veto.`
       : null;
