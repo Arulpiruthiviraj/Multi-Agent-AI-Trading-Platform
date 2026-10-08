@@ -452,6 +452,7 @@ export class NewsEngine {
                        currentPrice: outcome.price,
                        reasoning: `[News Intelligence] ${aiAnalysis.reasoning}`,
                        agent: "NewsAgent",
+                       origin: 'NEWS_EVENT',
                        newsDetails: {
                            used: true,
                            sentiment: (aiAnalysis as any).sentimentScore || 0,

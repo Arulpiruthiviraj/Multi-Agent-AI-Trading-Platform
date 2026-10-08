@@ -787,6 +787,7 @@ export class QuantSignalAgent {
       eventBus.emitTradeIdea({
         traceId, symbol, side: idea.side, confidence: idea.confidence,
         currentPrice, reasoning: idea.reasoning, agent: 'QuantEngine',
+        origin: 'QUANT_STRATEGY', // Phase 3 idea provenance: validated-quant idea path (real strategyId above; producer allowlist + lifecycle decide authority, not this tag)
         // Real strategy identity - survives independent of whether this idea ended up EV-backed
         // or cold-start-bootstrapped (see resolvedStrategyId's own comment above for why the
         // previous quantDetail.strategyEvaluation.strategy path silently dropped this for the

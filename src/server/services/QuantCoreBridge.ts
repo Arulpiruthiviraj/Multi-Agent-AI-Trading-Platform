@@ -1408,6 +1408,8 @@ export class QuantCoreBridgeService {
       confidence,
       currentPrice,
       agent: 'QuantCoreJava',
+      // Phase 3 idea provenance: bridge translating Java StrategySignals (descriptive only - not a registered producer, stays on the consensus path).
+      origin: 'QUANT_STRATEGY',
       reasoning: `QuantCoreJava/${strategyId}: ${reasoning}`,
     });
   }

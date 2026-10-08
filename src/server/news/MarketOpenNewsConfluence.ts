@@ -137,6 +137,7 @@ export class MarketOpenNewsConfluence {
           confidence,
           reasoning: `[News open confluence] Staged overnight catalyst confirmed by opening price action: ${catalyst.headline}`,
           agent: 'NewsAgent',
+          origin: 'NEWS_EVENT',
           currentPrice: live ?? undefined,
           newsDetails: {
             used: true,

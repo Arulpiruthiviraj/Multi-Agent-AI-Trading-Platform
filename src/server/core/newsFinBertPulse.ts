@@ -61,6 +61,7 @@ export async function runNewsFinBertPulse(opts?: {
       confidence,
       reasoning: `[News Intelligence / Test Pulse] FinBERT ${scored.label} (${scored.signedScore.toFixed(2)}): ${headline.slice(0, 180)}`,
       agent: 'NewsAgent',
+      origin: 'NEWS_EVENT',
       newsDetails: {
         used: true,
         sentiment: scored.signedScore,

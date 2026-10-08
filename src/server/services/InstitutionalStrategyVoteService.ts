@@ -263,6 +263,8 @@ class InstitutionalStrategyVoteService {
       currentPrice,
       reasoning: `[${spec.strategyId}] triggerMet; conditions: ${conditionsMet.join('; ') || 'n/a'}`,
       agent: spec.agentName,
+      // Phase 3 idea provenance: Java-evaluated institutional quant strategies (descriptive only - not a registered producer, stays on the consensus path).
+      origin: 'QUANT_STRATEGY',
       strategy: spec.strategyId,
       timeframe: 'daily',
     });

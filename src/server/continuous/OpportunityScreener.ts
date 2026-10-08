@@ -81,6 +81,8 @@ export function considerScreenerTick(
     currentPrice: data.price,
     reasoning: `OpportunityScreener rank: ${maxBars}-tick return ${(ret * 100).toFixed(2)}%. One vote, not consensus.`,
     agent: 'OpportunityScreener',
+    // Phase 3 idea provenance (tradeIdeaProvenance.ts): descriptive origin only - never authoritative.
+    origin: 'EXPERIMENTAL',
     timeframe: 'intraday_ticks',
     strategy: 'OPPORTUNITY_SCREENER_RETURN',
     dataFreshnessMs: 0,

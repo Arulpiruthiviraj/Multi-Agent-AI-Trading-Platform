@@ -247,6 +247,8 @@ export class MacroEconomyAgent {
       confidence: 0,
       reasoning,
       agent: 'MacroAgent',
+      // Phase 3 idea provenance: HOLD or LLM-driven macro analysis - origin is descriptive only.
+      origin: 'MACRO',
       currentPrice: currentPrice ?? undefined,
     });
   }
@@ -405,6 +407,7 @@ export class MacroEconomyAgent {
              currentPrice: currentPrice ?? undefined,
              reasoning: `[Macro AI] ${analysis.reasoning}${finceptNote}`,
              agent: "MacroAgent",
+             origin: 'MACRO',
              aiCallId,
              provider,
              latencyMs,

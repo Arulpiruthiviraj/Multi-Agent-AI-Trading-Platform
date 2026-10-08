@@ -120,6 +120,8 @@ export function emitJavaCoreEnsembleVoteIfEligible(
       + `(${ensemble.agreeingCount}/${ensemble.strategyCount} strategies agree, `
       + `effIndep=${ensemble.effectiveIndependentCount.toFixed(2)}, families=${ensemble.contributingFamilies.join(',')})`,
     agent: 'JavaCoreEnsemble',
+    // Phase 3 idea provenance: quant-backed ensemble vote (descriptive only - not a registered producer, stays on the consensus path).
+    origin: 'QUANT_STRATEGY',
     strategy: 'JAVA_CORE_ENSEMBLE',
     timeframe: 'intraday',
     evidence: {

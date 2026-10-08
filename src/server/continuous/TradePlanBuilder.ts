@@ -393,6 +393,8 @@ export function emitTradePlanIdea(draft: TradePlanDraft, currentPrice: number | 
     currentPrice,
     reasoning: `[TradePlan ${draft.id}, PRIMARY tier, rank #${draft.rankAtCreation}] ${draft.thesis}`,
     agent: 'TradePlanBuilder',
+    // Phase 3 idea provenance: premarket ranking-driven plans (no LLM), one consensus vote - unchanged behavior.
+    origin: 'EXPERIMENTAL',
     strategy: 'PREMARKET_TRADE_PLAN',
     timeframe: 'premarket_daily',
     evidence: { confluenceScore: draft.confluenceScore, evidenceQuality: draft.evidenceQuality, setupType: draft.setupType },

@@ -263,6 +263,7 @@ export class KronosForecastAgent {
       currentPrice: this.priceHistory[prediction.symbol]?.slice(-1)[0],
       reasoning: `Chronos forecasts ${prediction.prediction} (expected move ${prediction.expectedMove} over ${prediction.forecastHorizon} steps, support ${prediction.support}, resistance ${prediction.resistance}).`,
       agent: 'KronosEngine',
+      origin: 'FORECAST',
     });
   }
 }

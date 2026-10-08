@@ -473,6 +473,8 @@ export class PortfolioMonitorWorker {
       currentPrice: args.currentPrice,
       reasoning: args.reasoning,
       agent: agentWeightConfig.riskExitAgent,
+      // Phase 3 idea provenance: risk-exit SELL ideas from emitRiskExit - descriptive only, never authoritative.
+      origin: 'PORTFOLIO_EXIT',
     });
     recordPortfolioDecision({
       symbol: args.symbol,

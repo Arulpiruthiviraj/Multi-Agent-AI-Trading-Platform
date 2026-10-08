@@ -216,6 +216,8 @@ export class FundamentalAnalysisAgent {
       confidence: 0,
       reasoning,
       agent: 'FundamentalAgent',
+      // Phase 3 idea provenance: HOLD or LLM-driven fundamental analysis - origin is descriptive only.
+      origin: 'FUNDAMENTAL',
       currentPrice: currentPrice ?? undefined,
     });
   }
@@ -383,6 +385,7 @@ export class FundamentalAnalysisAgent {
              currentPrice: currentPrice ?? undefined,
              reasoning: `[Fundamental AI] ${analysis.reasoning}`,
              agent: "FundamentalAgent",
+             origin: 'FUNDAMENTAL',
              aiCallId,
              provider,
              latencyMs,

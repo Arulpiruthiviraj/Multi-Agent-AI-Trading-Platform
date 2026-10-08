@@ -261,6 +261,8 @@ export function emitJavaQuantVoteIfEligible(
     currentPrice,
     reasoning: `[Java Factor Composite, regime=${advisory.regime}] ${advisory.reasoning}`,
     agent: 'JavaFactorComposite',
+    // Phase 3 idea provenance: quant-backed factor-composite vote (descriptive only - not a registered producer, stays on the consensus path).
+    origin: 'QUANT_STRATEGY',
     strategy: 'JAVA_FACTOR_COMPOSITE',
     timeframe: 'daily',
     evidence: {
