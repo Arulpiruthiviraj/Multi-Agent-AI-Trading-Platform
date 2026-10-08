@@ -55,6 +55,10 @@ import {
 } from '../config/aiCallGovernor';
 import { structuredLogger, observeSafe } from '../observability/StructuredLogger';
 
+// Re-exported so governor-mediated callers (e.g. JevNewsTriage) can name the decision type
+// without importing JevDecisionProvider directly.
+export type { JevDecisionRequest, JevDecisionResult };
+
 // ---------------------------------------------------------------------------
 // Public contract (other workers code against exactly this surface)
 // ---------------------------------------------------------------------------
@@ -72,7 +76,6 @@ export type GovernorSkipReason =
   | 'PROVIDER_UNHEALTHY'
   | 'DEADLINE_TOO_CLOSE'
   | 'NO_API_KEY'
-  | 'NOT_NEEDED_FOR_QUANT'
   | 'STALE_EVENT'
   | 'QUEUE_FULL'
   | 'CIRCUIT_OPEN';
@@ -177,6 +180,7 @@ const MATERIALITY_RANK: Record<Materiality, number> = { LOW: 0, MEDIUM: 1, HIGH:
  */
 const MIN_MATERIALITY_BY_KIND: Record<string, Materiality> = {
   news_catalyst_triage: 'MEDIUM',
+  jev_news_shadow_scoring: 'LOW',
   regime_change: 'HIGH',
   quant_candidate_advisory: 'MEDIUM',
   premarket_enrichment: 'MEDIUM',

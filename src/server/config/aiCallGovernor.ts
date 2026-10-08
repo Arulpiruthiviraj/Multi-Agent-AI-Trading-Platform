@@ -25,6 +25,8 @@ export interface AiCallGovernorConfig {
   generativeCallsPerMinute: number;
   aiPerSymbolCooldownMs: number;
   aiPerSymbolCallsPerMinute: number;
+  /** Stale-entry backstop for AIRouter.routeTask()'s in-flight dedup map (D3). */
+  aiRouterInflightDedupTtlMs: number;
   aiStateCacheMaxEntries: number;
   aiDecisionDeadlineMinLeadMs: number;
   cacheTtlMsByKind: Record<string, number>;
@@ -83,6 +85,7 @@ function loadAiCallGovernor(): AiCallGovernorConfig {
     generativeCallsPerMinute: reqPositiveNumber(raw, 'generativeCallsPerMinute'),
     aiPerSymbolCooldownMs: reqPositiveNumber(raw, 'aiPerSymbolCooldownMs'),
     aiPerSymbolCallsPerMinute: reqPositiveNumber(raw, 'aiPerSymbolCallsPerMinute'),
+    aiRouterInflightDedupTtlMs: reqPositiveNumber(raw, 'aiRouterInflightDedupTtlMs'),
     aiStateCacheMaxEntries: reqPositiveNumber(raw, 'aiStateCacheMaxEntries'),
     aiDecisionDeadlineMinLeadMs: reqPositiveNumber(raw, 'aiDecisionDeadlineMinLeadMs'),
     cacheTtlMsByKind,

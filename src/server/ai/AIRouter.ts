@@ -63,6 +63,8 @@ import { observeSafe, structuredLogger } from '../observability/StructuredLogger
 import { hashSensitive } from '../observability/hashSensitive';
 import { isAiCostGovernorEnabled, isAiCostGovernorShadowOnly } from '../config/aiCostGovernor';
 import { computeGovernorReorder, recordGovernorShadowComparison } from './AICostGovernor';
+import { createHash } from 'crypto';
+import { aiCallGovernor } from '../config/aiCallGovernor';
 
 // Router timeout (tradingSafety.aiProviderTimeoutMs) plus AbortController so fetch-based
 // providers cancel in-flight HTTP instead of hanging after the caller has already failed over.
@@ -316,6 +318,17 @@ async function logAiCall(input: AiCallLogInput): Promise<string> {
   return id;
 }
 
+/** Shared return shape for routeTask() / its in-flight dedup entries. */
+export type RouteTaskResult = {
+  content: string;
+  provider: string;
+  latency: number;
+  aiCallId?: string;
+  model?: string;
+  tokensIn?: number;
+  tokensOut?: number;
+};
+
 export class AIRouter {
   private static instance: AIRouter;
   private providers: Map<string, AIProvider> = new Map();
@@ -337,6 +350,43 @@ export class AIRouter {
   /** Set once probeProviderAtStartup() has already tried the env fallback for this provider id -
    *  never retry more than once per boot, so a genuinely-down env credential can't loop retries. */
   private envFallbackAttempted: Set<string> = new Set();
+
+  /**
+   * D3 (P2, provider-resilience audit): bounded in-flight request coalescing for routeTask().
+   * 20 components asking about the same article used to fire 20 external requests; now
+   * identical concurrent inputs join a single provider execution (same key -> same promise).
+   * Mirrors AICallGovernor's cache/singleflight pattern: entries are removed on settle, stale
+   * entries are pruned past aiRouterInflightDedupTtlMs, and the map is capped at
+   * aiStateCacheMaxEntries (500) with oldest-first eviction. Identical inputs produce
+   * identical outputs, so no decision-semantics change; no agent is disabled.
+   */
+  private readonly routeTaskInFlight = new Map<string, { promise: Promise<RouteTaskResult>; createdAt: number }>();
+
+  private routeTaskDedupKey(agentType: string, prompt: string, jsonMode: boolean): string {
+    const promptHash = createHash('sha256').update(prompt, 'utf8').digest('hex');
+    return `${agentType}:${jsonMode ? 'json' : 'text'}:${promptHash}`;
+  }
+
+  private pruneStaleRouteTaskInFlight(now: number): void {
+    const ttlMs = aiCallGovernor.aiRouterInflightDedupTtlMs;
+    for (const [key, entry] of this.routeTaskInFlight) {
+      if (now - entry.createdAt > ttlMs) this.routeTaskInFlight.delete(key);
+    }
+  }
+
+  private trackRouteTaskInFlight(key: string, promise: Promise<RouteTaskResult>): void {
+    this.pruneStaleRouteTaskInFlight(Date.now());
+    // Bounded: oldest-first eviction at the same cap the governor uses for its state cache.
+    while (this.routeTaskInFlight.size >= aiCallGovernor.aiStateCacheMaxEntries) {
+      const oldest = this.routeTaskInFlight.keys().next();
+      if (oldest.done) break;
+      this.routeTaskInFlight.delete(oldest.value);
+    }
+    this.routeTaskInFlight.set(key, { promise, createdAt: Date.now() });
+    // Attach a no-op rejection handler so a settled-but-unjoined entry never surfaces as an
+    // unhandled rejection; real callers still observe the rejection through their own await.
+    promise.catch(() => undefined);
+  }
 
   /**
    * Phase 9 (provider health matrix, 2026-08-27) - read-only snapshot of the in-memory routing
@@ -412,6 +462,7 @@ export class AIRouter {
     this.credentialSource.clear();
     this.envFallbackCandidate.clear();
     this.envFallbackAttempted.clear();
+    this.routeTaskInFlight.clear();
   }
 
   /** Test-only — inspect auth circuit state without reaching into private fields elsewhere. */
@@ -810,6 +861,26 @@ export class AIRouter {
 
   
   public async routeConsensus(agentType: string, prompt: string, traceId: string): Promise<any> {
+    // D1 (P1, provider-resilience audit): global per-minute rate cap on consensus debates.
+    // routeTask() consumes a pipeline token per call, but routeConsensus() never did - a burst
+    // of N distinct-symbol ideas fans out to up to 2N paid provider calls with no global
+    // ceiling. One debate consumes exactly one token from the shared 90/min (config:
+    // tradingSafety.maxAiCallsPerMinute) sliding window. On throttle, fail closed exactly like
+    // the no-routable-providers path below (throw): ChiefTrader's existing .catch() already
+    // routes that to pushDebateFailClosed('routeConsensus threw') - excluded from consensus,
+    // never a vote - and the replay engine's routeConsensus call site already try/catches to a
+    // null vote. No provider is contacted when throttled.
+    if (!allowAiCall()) {
+      eventBus.emit(EVENTS.AI_RATE_LIMITED, {
+        reason: 'MAX_AI_CALLS_PER_MINUTE',
+        agentType,
+        traceId,
+        ...getPipelineRateSnapshot(),
+      });
+      this.emitProvidersExhausted({ agentType, providersAttempted: [], lastError: 'AI_RATE_LIMITED', shortCircuit: true, registeredCount: this.providers.size });
+      throw new Error(`[AIRouter] routeConsensus for ${agentType} rate-limited (MAX_AI_CALLS_PER_MINUTE) - fail-closed, no providers called`);
+    }
+
     let availableProviders = Array.from(this.providers.entries());
     const registeredCount = availableProviders.length;
 
@@ -885,6 +956,31 @@ export class AIRouter {
                     cost: callCost,
                     responseStatus: 'success'
                 });
+
+                // D5 (P2, provider-resilience audit): update provider stats on consensus success.
+                // routeTask() already does this; routeConsensus() only wrote aiUsage rows plus an
+                // in-memory skipUntil, so a provider failing only via consensus never decayed below
+                // the 50 'Offline' quarantine. Mirrors routeTask()'s ±(1|5) successRate/health
+                // update exactly (same table, same math, same 'Healthy' on success).
+                const pDb = await db.select().from(schema.aiProviders).where(eq(schema.aiProviders.id, providerId));
+                if (pDb && pDb.length > 0) {
+                    const prevLatency = pDb[0].latency || latency;
+                    const newLatency = (prevLatency * 9 + latency) / 10;
+                    const prevSuccess = pDb[0].successRate || 100;
+                    const newSuccess = Math.min(100, prevSuccess + 1);
+
+                    await db.update(schema.aiProviders).set({
+                       latency: newLatency,
+                       successRate: newSuccess,
+                       health: 'Healthy',
+                       lastSuccess: new Date().toISOString(),
+                       requests: (pDb[0].requests || 0) + 1,
+                       tokens: (pDb[0].tokens || 0) + (res.tokens || 0),
+                       inputTokens: (pDb[0].inputTokens || 0) + (res.inputTokens || 0),
+                       outputTokens: (pDb[0].outputTokens || 0) + (res.outputTokens ?? res.tokens),
+                       cost: (pDb[0].cost || 0) + callCost,
+                    }).where(eq(schema.aiProviders.id, providerId));
+                }
             } catch (e) {}
 
             // Shared with FundamentalAgent.ts/MacroAgent.ts's identical fence-stripping need
@@ -940,6 +1036,22 @@ export class AIRouter {
                     cost: 0,
                     responseStatus: `error: ${e.message}`
                 });
+
+                // D5 (P2, provider-resilience audit): update provider health on consensus failure.
+                // Mirrors routeTask()'s failure branch exactly: successRate decays -5 per failure
+                // and health drops to 'Offline' below 50, so a consensus-only-failing provider
+                // still reaches the known-dead quarantine instead of being retried forever.
+                const pDbFail = await db.select().from(schema.aiProviders).where(eq(schema.aiProviders.id, providerId));
+                if (pDbFail && pDbFail.length > 0) {
+                    const prevSuccess = pDbFail[0].successRate || 100;
+                    const newSuccess = Math.max(0, prevSuccess - 5);
+                    const health = newSuccess < 50 ? 'Offline' : 'Degraded';
+                    await db.update(schema.aiProviders).set({
+                       successRate: newSuccess,
+                       health,
+                       lastFailure: new Date().toISOString()
+                    }).where(eq(schema.aiProviders.id, providerId));
+                }
             } catch (err) {}
             const aiCallId = await logAiCall({
                 traceId, agent: agentType, provider: providerId, model: 'consensus',
@@ -977,7 +1089,19 @@ export class AIRouter {
     };
   }
 
-  public async routeTask(agentType: string, prompt: string, traceId: string, jsonMode: boolean = false): Promise<{content: string, provider: string, latency: number, aiCallId?: string, model?: string, tokensIn?: number, tokensOut?: number}> {
+  public async routeTask(agentType: string, prompt: string, traceId: string, jsonMode: boolean = false): Promise<RouteTaskResult> {
+    // D3 (P2, provider-resilience audit): coalesce identical concurrent requests onto one
+    // provider execution. The lookup and the registration below are synchronous (no awaits
+    // between), so concurrent duplicates can only join the in-flight entry, never start a
+    // second provider call. Joined calls consume no additional pipeline rate-limit tokens.
+    // Throttled calls are not coalesced - they never reach a provider.
+    const dedupKey = this.routeTaskDedupKey(agentType, prompt, jsonMode);
+    this.pruneStaleRouteTaskInFlight(Date.now());
+    const inFlight = this.routeTaskInFlight.get(dedupKey);
+    if (inFlight) {
+      return inFlight.promise;
+    }
+
     if (!allowAiCall()) {
       eventBus.emit(EVENTS.AI_RATE_LIMITED, {
         reason: 'MAX_AI_CALLS_PER_MINUTE',
@@ -991,6 +1115,20 @@ export class AIRouter {
       return { content, provider: 'throttled', latency: 0 };
     }
 
+    const promise = this.executeRouteTask(agentType, prompt, traceId, jsonMode);
+    this.trackRouteTaskInFlight(dedupKey, promise);
+    try {
+      return await promise;
+    } finally {
+      // Remove only our own entry: an entry pruned as stale and re-registered by a later
+      // caller under the same key must not be deleted by this caller's settle.
+      if (this.routeTaskInFlight.get(dedupKey)?.promise === promise) {
+        this.routeTaskInFlight.delete(dedupKey);
+      }
+    }
+  }
+
+  private async executeRouteTask(agentType: string, prompt: string, traceId: string, jsonMode: boolean): Promise<RouteTaskResult> {
     let preferredConfig = this.agentRouting.get(agentType);
     
     // Sort providers by priority (lowest number is highest priority), then success rate, then latency

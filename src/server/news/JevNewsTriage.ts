@@ -24,8 +24,10 @@
  * ==========================================================
  */
 
-import { JevProvider, JevQuestion, JevEvaluationResult } from '../ai/providers/JevProvider';
+import { JevProvider, JevQuestion, JevEvaluationResult, JevAnswer } from '../ai/providers/JevProvider';
 import { looksLikeListedTicker, clampScore } from '../ai/AIOutputValidator';
+import { AICallGovernor, JevDecisionResult } from '../ai/AICallGovernor';
+import { aiCallGovernor } from '../config/aiCallGovernor';
 import { JevNewsScore, mapJevScoreToAnalysisFields } from './JevNewsTypes';
 /** Re-exported from JevNewsTypes (circular-dep refactor, 2026-10-06) — prefer importing from './JevNewsTypes'. */
 export type { JevNewsScore };
@@ -203,23 +205,20 @@ function asScore(answer: unknown): { score: number; confidence: number } {
 }
 
 /**
- * Score one article with Jev. One network request, all questions batched.
- * Throws on transport/validation failure — the caller (shadow ledger) records
- * the failure and moves on; scoring never blocks the news cycle.
+ * D2 (P1-latent, provider-resilience audit): shared Jev-answer -> JevNewsScore mapping.
+ * Both the direct JevProvider path (scoreArticleWithJev below, kept for NewsEngine's
+ * explicit scoring call) and the governor-routed STRUCTURED_DECISION path
+ * (kickOffJevShadowScoring) answer the identical batched question set and produce
+ * identical JevAnswer shapes, so the mapping lives here exactly once instead of
+ * drifting between the two call sites.
  */
-export async function scoreArticleWithJev(
-  provider: JevProvider,
-  state: JevNewsState,
-  options?: { timeoutMs?: number },
-): Promise<JevNewsScore> {
-  const started = Date.now();
-  const result: JevEvaluationResult = await provider.evaluate(
-    state as unknown as Record<string, unknown>,
-    buildJevNewsQuestions(state),
-    { timeoutMs: options?.timeoutMs ?? getJevShadowTimeoutMs() },
-  );
-  const latencyMs = Date.now() - started;
-  const a = result.answers;
+export function mapJevAnswersToNewsScore(
+  answers: Record<string, JevAnswer>,
+  model: string,
+  inputTokens: number,
+  latencyMs: number,
+): JevNewsScore {
+  const a = answers;
 
   const sentimentRaw = asChoice(a.sentiment);
   const sentiment = (['bullish', 'bearish', 'neutral'] as const).includes(sentimentRaw.choice as any)
@@ -250,10 +249,34 @@ export async function scoreArticleWithJev(
     urgencyScore: clampScore(normalizeScore(urgency.score, 5), 0, 10, 0),
     urgencyConf: clampScore(urgency.confidence, 0, 1, 0),
     minConfidence: clampScore(minConfidence, 0, 1, 0),
-    model: result.model,
-    inputTokens: result.inputTokens,
+    model,
+    inputTokens,
     latencyMs,
   };
+}
+
+/**
+ * Score one article with Jev. One network request, all questions batched.
+ * Throws on transport/validation failure — the caller (shadow ledger) records
+ * the failure and moves on; scoring never blocks the news cycle.
+ */
+export async function scoreArticleWithJev(
+  provider: JevProvider,
+  state: JevNewsState,
+  options?: { timeoutMs?: number },
+): Promise<JevNewsScore> {
+  const started = Date.now();
+  const result: JevEvaluationResult = await provider.evaluate(
+    state as unknown as Record<string, unknown>,
+    buildJevNewsQuestions(state),
+    { timeoutMs: options?.timeoutMs ?? getJevShadowTimeoutMs() },
+  );
+  return mapJevAnswersToNewsScore(
+    result.answers,
+    result.model,
+    result.inputTokens,
+    Date.now() - started,
+  );
 }
 
 /**
@@ -293,17 +316,73 @@ export function resetJevShadowProviderCache(): void {
   cachedProvider = undefined;
 }
 
+/** Governor kind for Phase 1 shadow scoring (D2). Write-only ledger: never a decision input. */
+const JEV_SHADOW_SCORING_KIND = 'jev_news_shadow_scoring';
+/** Wire revision of the shadow question set; carried in the governor fingerprint. */
+const JEV_SHADOW_SCHEMA_VERSION = 'jev-news-shadow/v1';
+
 export function kickOffJevShadowScoring(input: ShadowScoringInput): void {
   if (!isJevShadowEnabled()) return;
-  const provider = getShadowProvider();
-  if (!provider) return; // no key configured — shadow scoring silently idle
 
   const state = buildJevNewsState(input.article, input.symbol, input.deterministic);
   if (!state) return; // fail-closed on imperfect data: no request
 
+  // D2 (P1-latent, provider-resilience audit): previously this called
+  // JevProvider.evaluate() directly — no governor budget, no cache, no singleflight,
+  // no circuit breaker, unbounded concurrency (one fire-and-forget promise per article).
+  // Every shadow score now goes through AICallGovernor as STRUCTURED_DECISION, so a news
+  // flood is bounded by the governor's jev budget / concurrency cap / circuit breaker.
+  // Semantics preserved: fire-and-forget, never throws, never blocks the news cycle,
+  // SKIPPED/FAILED outcomes stay neutral (observation dropped), the shadow ledger stays
+  // write-only, and nothing here influences any trading decision. A missing JEV_API_KEY
+  // short-circuits at the governor's NO_API_KEY gate (shadow scoring silently idle).
   void (async () => {
     try {
-      const score = await scoreArticleWithJev(provider, state);
+      const governor = AICallGovernor.getInstance();
+      // Decision deadline: generous by design (shadow scoring is latency-insensitive) —
+      // just past the governor's own call timeout plus its required decision lead, so
+      // the STALE_EVENT / DEADLINE_TOO_CLOSE gates never misfire on a healthy call.
+      const decisionDeadlineMs =
+        Date.now() + aiCallGovernor.jevTimeoutMs + aiCallGovernor.aiDecisionDeadlineMinLeadMs;
+      const outcome = await governor.request<JevDecisionResult>({
+        capability: 'STRUCTURED_DECISION',
+        kind: JEV_SHADOW_SCORING_KIND,
+        material: {
+          symbol: state.symbol,
+          fingerprintParts: { articleFingerprint: input.article.fingerprint },
+          // Shadow scoring is explicitly the lowest materiality: pure observation, never
+          // a decision input. MIN_MATERIALITY_BY_KIND grants LOW only to this kind and
+          // post_trade_research; everything else needs at least MEDIUM.
+          materiality: 'LOW',
+          decisionDeadlineMs,
+          traceId: input.traceId,
+        },
+        jev: {
+          state,
+          questions: buildJevNewsQuestions(state),
+          schemaVersion: JEV_SHADOW_SCHEMA_VERSION,
+        },
+        // STRUCTURED_DECISION never invokes run; required by the request type only.
+        run: () => { throw new Error('STRUCTURED_DECISION ignores run'); },
+      });
+
+      if (outcome.status === 'SKIPPED') {
+        // Governor-denied (budget/cooldown/circuit/disabled/no key): neutral, drop the
+        // observation exactly like a provider failure today.
+        console.warn(`[JevShadow] scoring skipped (observation dropped): ${outcome.reason} - ${outcome.detail}`);
+        return;
+      }
+      if (outcome.status === 'FAILED') {
+        console.warn('[JevShadow] scoring failed (observation dropped):', (outcome.error as Error)?.message || outcome.error);
+        return;
+      }
+      const decided = outcome.result;
+      const score = mapJevAnswersToNewsScore(
+        decided.answers,
+        decided.model,
+        decided.inputTokens,
+        decided.latencyMs,
+      );
       await recordShadowScore({
         articleFingerprint: input.article.fingerprint,
         symbol: state.symbol,
