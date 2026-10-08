@@ -114,6 +114,30 @@ export class JevAnswerValidationError extends Error {
   }
 }
 
+/**
+ * Typed HTTP error for non-2xx responses from the System One endpoint.
+ * Replaces the generic Error('[Jev] API error: ...') so consumers can
+ * classify failures (auth vs. rate limit vs. server) without parsing
+ * message text. The key is never included in the message.
+ */
+export class JevHttpError extends Error {
+  readonly statusCode: number;
+  /** Coarse bucket for routing decisions; JevDecisionProvider refines by status code. */
+  readonly kind: 'AUTH' | 'RATE_LIMIT' | 'OVERLOAD' | 'SERVER';
+
+  constructor(statusCode: number, statusText: string, bodySnippet?: string) {
+    const snippet = (bodySnippet || '').trim();
+    super(`[Jev] API error: ${statusCode}${statusText ? ` ${statusText}` : ''}${snippet ? ` - ${snippet}` : ''}`);
+    this.name = 'JevHttpError';
+    this.statusCode = statusCode;
+    this.kind =
+      statusCode === 401 ? 'AUTH'
+      : statusCode === 429 ? 'RATE_LIMIT'
+      : statusCode === 529 ? 'OVERLOAD'
+      : 'SERVER';
+  }
+}
+
 function isFiniteProbability(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
 }
@@ -268,7 +292,7 @@ export class JevProvider extends BaseAIProvider {
           }
           let snippet = '';
           try { snippet = (await response.text()).slice(0, 300); } catch { /* fall through */ }
-          throw new Error(`[Jev] API error: ${response.status} ${response.statusText}${snippet ? ` - ${snippet}` : ''}`);
+          throw new JevHttpError(response.status, response.statusText, snippet);
         }
         return await response.json();
       } catch (err: any) {

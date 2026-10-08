@@ -5,7 +5,7 @@
  * surface refuses to pretend Jev generates text.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { JevProvider, JevAnswerValidationError, JEV_INPUT_USD_PER_MILLION_TOKENS } from './JevProvider';
+import { JevProvider, JevAnswerValidationError, JevHttpError, JEV_INPUT_USD_PER_MILLION_TOKENS } from './JevProvider';
 
 const SYSTEMONE_URL = 'https://api.typesafe.ai/v1/systemone';
 
@@ -146,13 +146,30 @@ describe('JevProvider (research spike)', () => {
 
   it('does NOT retry on 401 — surfaces the auth failure immediately', async () => {
     const fetchMock = mockFetchOnce({ ok: false, status: 401, statusText: 'Unauthorized', text: 'bad key' });
-    await expect(provider.askYesNo('x', 'y?')).rejects.toThrow('401');
+    const err = await provider.askYesNo('x', 'y?').catch((e) => e);
+    expect(err).toBeInstanceOf(JevHttpError);
+    expect((err as JevHttpError).statusCode).toBe(401);
+    expect((err as JevHttpError).kind).toBe('AUTH');
+    expect((err as Error).message).toContain('401');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws JevHttpError with RATE_LIMIT kind on 429 and OVERLOAD on 529', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValue({ ok: false, status: 529, statusText: 'Overloaded', text: async () => 'busy', json: async () => ({}) });
+    vi.stubGlobal('fetch', fetchMock);
+    const err = await provider.askYesNo('x', 'y?').catch((e) => e);
+    expect(err).toBeInstanceOf(JevHttpError);
+    expect((err as JevHttpError).statusCode).toBe(529);
+    expect((err as JevHttpError).kind).toBe('OVERLOAD');
   });
 
   it('does NOT retry on 422 — a malformed request is our bug, not a transient', async () => {
     const fetchMock = mockFetchOnce({ ok: false, status: 422, statusText: 'Unprocessable Entity', text: 'bad question' });
-    await expect(provider.askYesNo('x', 'y?')).rejects.toThrow('422');
+    const err = await provider.askYesNo('x', 'y?').catch((e) => e);
+    expect(err).toBeInstanceOf(JevHttpError);
+    expect((err as JevHttpError).statusCode).toBe(422);
+    expect((err as Error).message).toContain('422');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
