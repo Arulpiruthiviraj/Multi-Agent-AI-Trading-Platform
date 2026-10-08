@@ -308,6 +308,16 @@ const LLM_PROVIDER_REGISTRY: Record<LLMProviderId, { label: string; envKey: stri
 let activeLLMProvider: string = (process.env.ACTIVE_LLM || "gemini").toLowerCase();
 
 async function startServer() {
+  // P0 single-engine enforcement (2026-10-08): claim the engine pid file BEFORE anything
+  // trading-related boots. server.ts previously called writeEnginePid() unconditionally AFTER
+  // bootCore(), so a second engine started via any non-CLI path (npm run dev, npm start, pm2,
+  // start:headless) silently overwrote the pid file and traded a full 65-75s boot window before
+  // EADDRINUSE killed it - two live engines placing duplicate orders against the same broker
+  // accounts, each with its own in-memory risk counters. claimEnginePid() throws when a live
+  // peer holds the file, so the duplicate dies here, before BrokerManager/TradingEngine exist.
+  const { claimEnginePid } = await import('./src/server/app/enginePid');
+  claimEnginePid(process.pid);
+
   const { argusApplication } = await import('./src/server/app/ArgusApplication');
   const { isWebUiEnabled, isWebSocketAdapterEnabled, isArgusEngineDaemon } = await import('./src/server/app/runtimeConfig');
   await argusApplication.bootCore();
@@ -2022,9 +2032,9 @@ let portfolioState = loadPortfolio();
     }
   });
   const bindHost = resolveListenHost(AUTH_ENABLED);
-  // Write PID before listen so doctor / stop see it even if bind is slow; gracefulShutdown clears it.
-  // argus-engine already claimEnginePid()'s earlier; this keeps server.ts / npm run dev aligned.
-  void import('./src/server/app/enginePid').then((m) => m.writeEnginePid(process.pid)).catch(() => undefined);
+  // 2026-10-08 (P0): the engine pid is now claimed at the top of startServer(), before
+  // bootCore() - the old unconditional writeEnginePid() here is removed. A second engine no
+  // longer gets a full boot window before EADDRINUSE; it dies at the claim instead.
   httpServer.listen(PORT, bindHost, () => {
     if (isArgusEngineDaemon()) {
       console.log(`[Argus Engine] daemon API on ${bindHost}:${PORT} (Vite/React optional and disabled).`);

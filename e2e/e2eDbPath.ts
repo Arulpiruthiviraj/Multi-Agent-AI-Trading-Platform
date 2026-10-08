@@ -10,3 +10,10 @@ import os from 'os';
  * globalSetup would seed a file the server never actually opens.
  */
 export const E2E_DB_PATH = path.join(os.tmpdir(), `argus_e2e_${Date.now()}_${process.pid}.db`);
+
+/**
+ * 2026-10-08 (P0 single-engine fix): server.ts now claims the engine pid file at startup.
+ * The E2E webServer must claim an isolated pid path, not the real data/.argus_engine.pid -
+ * same isolation rationale as the temp DB above.
+ */
+export const E2E_ENGINE_PID_PATH = path.join(os.tmpdir(), `argus_e2e_engine_${Date.now()}_${process.pid}.pid`);

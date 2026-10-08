@@ -63,6 +63,33 @@ describe('enginePid', () => {
     expect(() => claimEnginePid(process.pid + 1)).toThrow(/already running/);
   });
 
+  it('P0: re-claim by the current holder succeeds (no self-EEXIST)', () => {
+    // The CLI writes the child pid, then the child claims it: claimEnginePid must not
+    // treat its own pid file as a lost race.
+    claimEnginePid(process.pid);
+    expect(() => claimEnginePid(process.pid)).not.toThrow();
+    expect(readEnginePid()).toBe(process.pid);
+  });
+
+  it('P0: claim after a stale pid file is cleared succeeds exactly once (atomic wx)', () => {
+    // Two sequential claims where the first won the file: the second must throw rather
+    // than silently overwriting - the check-then-write race this closes.
+    mkdirSync(dirname(resolveEnginePidPath()), { recursive: true });
+    writeFileSync(resolveEnginePidPath(), '99999999', 'utf8'); // stale pid
+    claimEnginePid(process.pid); // stale cleared, atomic wx-create wins
+    expect(readEnginePid()).toBe(process.pid);
+    expect(() => claimEnginePid(process.pid + 1)).toThrow(/already running/);
+  });
+
+  it('P0: claim with no pre-existing file creates it atomically (wx path)', () => {
+    // afterEach cleared the file: this exercises the O_EXCL create branch (not the
+    // re-claim rewrite branch). A true two-process race can only be observed live;
+    // the unit-testable contract is that the file is created with exactly our pid.
+    expect(readEnginePid()).toBeNull();
+    claimEnginePid(process.pid);
+    expect(readEnginePid()).toBe(process.pid);
+  });
+
   describe('isPidLikelyArgusProcess (PID-reuse safety net)', () => {
     it('returns false immediately for a PID that is not alive, without needing any command-line check', async () => {
       // A dead PID is definitely not Argus - isPidAlive() short-circuits before any OS lookup.

@@ -1,5 +1,5 @@
 import { defineConfig } from '@playwright/test';
-import { E2E_DB_PATH } from './e2e/e2eDbPath';
+import { E2E_DB_PATH, E2E_ENGINE_PID_PATH } from './e2e/e2eDbPath';
 
 /**
  * Phase 4B (FINAL_ANALYSIS.md's 4-phase remediation plan) - real browser-driven E2E, the one
@@ -36,6 +36,9 @@ export default defineConfig({
     stderr: 'pipe',
     env: {
       ARGUS_DB_PATH: E2E_DB_PATH,
+      // 2026-10-08 (P0): server.ts claims the engine pid file at startup; keep the E2E
+      // server's claim isolated from any real engine's data/.argus_engine.pid.
+      ARGUS_ENGINE_PID_PATH: E2E_ENGINE_PID_PATH,
       AUTH_USERNAME: 'e2e-admin',
       AUTH_PASSWORD: 'e2e-test-password-not-real',
       AUTH_SESSION_SECRET: 'e2e-test-session-secret-not-real-do-not-use-in-production',

@@ -108,7 +108,29 @@ export function claimEnginePid(pid: number = process.pid): void {
   ) {
     throw new Error(`Argus engine already running (pid ${existing.pid})`);
   }
-  writeEnginePid(pid);
+  ensureDataDir();
+  const path = resolveEnginePidPath();
+  if (existing.pid === pid || existing.pid === process.ppid) {
+    // Re-claim by the current holder (or the CLI-spawned child taking over its own pid
+    // entry): the file already names us, so a plain rewrite is safe - no race to win.
+    writeFileSync(path, String(pid), 'utf8');
+    return;
+  }
+  // 2026-10-08 (P0 single-engine fix): the final write used to be check-then-write - two
+  // simultaneous starters could both pass the live-peer check above and both write, leaving
+  // two engines trading against the same DB/broker. O_EXCL makes the claim atomic: exactly
+  // one winner; the loser sees EEXIST and refuses to start instead of trading as a duplicate.
+  try {
+    writeFileSync(path, String(pid), { flag: 'wx' });
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException)?.code === 'EEXIST') {
+      const winner = reconcileEnginePidFile();
+      throw new Error(
+        `Argus engine already running (pid ${winner.pid ?? 'unknown'}; lost pid-file claim race)`,
+      );
+    }
+    throw e;
+  }
 }
 
 /**
