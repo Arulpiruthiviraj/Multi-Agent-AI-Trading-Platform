@@ -130,4 +130,28 @@ describe('AutoTradeScheduler.tick', () => {
     expect(toggleSpy).toHaveBeenCalledTimes(1);
     expect(toggleSpy).toHaveBeenCalledWith({ enabled: true });
   });
+
+  it('coalesces overlapping ticks: a second tick() while the first cycle is in flight does not run the cycle twice (DEF-8)', async () => {
+    const scheduler: any = autoTradeScheduler;
+    const origCycle = scheduler.tickCycle.bind(scheduler);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    let cycles = 0;
+    scheduler.tickCycle = async () => {
+      cycles++;
+      await gate;
+    };
+    try {
+      const p1 = scheduler.tick();
+      const p2 = scheduler.tick();
+      // Give p1 a chance to enter the guarded cycle before releasing it.
+      await new Promise((r) => setTimeout(r, 10));
+      release();
+      await Promise.all([p1, p2]);
+      expect(cycles).toBe(1);
+      expect(scheduler.tickGuard.getMetrics().totalSkippedInFlight).toBeGreaterThanOrEqual(1);
+    } finally {
+      scheduler.tickCycle = origCycle;
+    }
+  });
 });

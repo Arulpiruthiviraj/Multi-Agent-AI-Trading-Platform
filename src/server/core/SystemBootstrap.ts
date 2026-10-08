@@ -70,6 +70,7 @@ import { alertingService } from '../services/AlertingService';
 import { aiFailureCircuitBreaker } from '../services/AIFailureCircuitBreaker';
 import { startResearchTriggerEngine } from '../services/ResearchTriggerEngine';
 import { startEnabledIdeaAgents, stopAllIdeaAgents } from './pipelineAgentRuntime';
+import { stopAIProviderHealthMonitor } from '../ai/AIProviderHealthCheck';
 
 export class SystemBootstrap {
   private isRunning = false;
@@ -187,6 +188,12 @@ export class SystemBootstrap {
     consensusDebateOutcomeEvaluator.stop();
     missedOpportunityEvaluator.stop();
     postMarketAnalysisWorker.stop();
+    // DEF-3/DEF-4 fix: these interval-driven workers were never stopped on shutdown, so their
+    // ticks kept firing during the graceful-shutdown drain and could land between
+    // sqliteDb.close() and process.exit(), throwing "database connection is not open".
+    chiefTrader.stop();
+    marketRegimeAgent.stop();
+    stopAIProviderHealthMonitor();
     trainingExampleBuilder.stop();
     systemMetricsWorker.stop();
     dbBackupService.stop();

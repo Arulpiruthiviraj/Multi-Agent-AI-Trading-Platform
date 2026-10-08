@@ -680,6 +680,13 @@
       "when": 1791422938700,
       "tag": "0096_quant_first_decision_policy",
       "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "6",
+      "when": 1791428759609,
+      "tag": "0097_risk_assessments_symbol_created_idx",
+      "breakpoints": true
     }
   ]
 }

@@ -37,16 +37,40 @@ import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { AIRouter } from '../ai/AIRouter';
 import { tradingSafety } from '../config/tradingSafety';
+import { createSingleFlightGuard, type SingleFlightGuard } from '../core/singleFlightInterval';
 
 export class MarketRegimeAgent {
   private currentRegime: string = "UNKNOWN";
+  /** DEF-3 fix: constructor timer handle was previously discarded - no stop() existed and the
+   *  module singleton started ticking at import time (leaking into tests). */
+  private intervalId: NodeJS.Timeout | null = null;
+  /** DEF-3 fix: single-flight guard on detectRegime() - the async cycle (a real AI call when
+   *  GEMINI_API_KEY is set) can exceed the 5-minute interval; without coalescing, overlapping
+   *  invocations issue duplicate AI calls per cycle. Uses the shared
+   *  createSingleFlightGuard primitive (src/server/core/singleFlightInterval.ts). */
+  private readonly regimeGuard: SingleFlightGuard = createSingleFlightGuard(
+    (e) => console.error('[MarketRegime] cycle failed', e),
+  );
 
   constructor() {
-    setInterval(() => this.detectRegime(), tradingSafety.marketRegimeIntervalMs);
-    this.detectRegime();
+    this.intervalId = setInterval(() => void this.detectRegime(), tradingSafety.marketRegimeIntervalMs);
+    void this.detectRegime();
   }
 
-  async detectRegime() {
+  /** Stops the periodic regime-detection timer. Wired into SystemBootstrap.stop() (called by the
+   *  graceful-shutdown drain before sqliteDb.close()) and available to tests. */
+  stop(): void {
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
+  }
+
+  async detectRegime(): Promise<void> {
+    await this.regimeGuard.run(() => this.detectRegimeImpl());
+  }
+
+  private async detectRegimeImpl(): Promise<void> {
     try {
       if (!process.env.GEMINI_API_KEY) {
         this.currentRegime = "SIMULATED_BULL_MARKET";

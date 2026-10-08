@@ -84,7 +84,7 @@ to `OTHER` → consensus-required. All 21 real `emitTradeIdea` producer files ca
 registered producers, so they stay on consensus.
 
 **What did NOT change.** Consensus bar (0.75 / min-2-agents, `config/tradingSafety.json`),
-RiskEngine (26 gates), OMS as sole `.placeOrder(` caller, `LIVE_NO_GO` / `PAPER_TRADING_ONLY`,
+RiskEngine (27 gates, incl. the informational always-pass `buying_power_reservation` recorded only when reservedBuyNotional > 0), OMS as sole `.placeOrder(` caller, `LIVE_NO_GO` / `PAPER_TRADING_ONLY`,
 `CHIEF_APPROVED_IDEA` emitter allowlist. Risk exits (`PortfolioManager` + `SELL`) bypass the
 router entirely — protective exits never need strategy authorization or LLMs. The legacy
 `QUANT_INDEPENDENT` consensus tier is kept as an explicit operator override on a **disjoint

@@ -1023,7 +1023,12 @@ export const riskAssessments = sqliteTable('risk_assessments', {
   buyingPower: real('buying_power'),
   reasoning: text('reasoning'),
   createdAt: text('created_at').notNull(),
-});
+}, (table) => ({
+  // DEF-5 fix: the table is append-only (never pruned) and three observability reports
+  // (discoveryLineageReport, MissedOpportunityDetector, consensusPipelineReport) query
+  // it by symbol + createdAt range - without this index those are full table scans.
+  symbolCreatedIdx: index('idx_risk_assessments_symbol_created').on(table.symbol, table.createdAt),
+}));
 
 export const riskGateResults = sqliteTable('risk_gate_results', {
   id: integer('id').primaryKey({ autoIncrement: true }),

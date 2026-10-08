@@ -37,17 +37,25 @@ import { tradingEngine } from '../engines/TradingEngine';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 import { getTimeHHMMInZone, getTradingDateStr, TRADING_TIMEZONE } from '../core/TradingCalendar';
 import { isValidHHMM, isValidTimezone, isWithinScheduledWindow } from '../core/AutoTradeSchedule';
+import { createSingleFlightGuard, type SingleFlightGuard } from '../core/singleFlightInterval';
 
 export class AutoTradeSchedulerWorker {
   private intervalId: NodeJS.Timeout | null = null;
   /** Once per NY session date + tradingState, so a 60s poll does not flood logs. */
   private lastIdempotentLogKey: string | null = null;
+  /** DEF-8 fix: single-flight guard - the 60s interval can fire while a previous tick's
+   *  tradingEngine.toggle() is still in flight; coalescing skips (not queues) the tick.
+   *  tick() is idempotent by design (schedule-already-matched is a no-op), so skipping a
+   *  coalesced tick loses nothing - the next interval re-reads settings fresh. */
+  private readonly tickGuard: SingleFlightGuard = createSingleFlightGuard(
+    (e) => console.error('[AutoTradeScheduler] tick failed', e),
+  );
 
   start() {
     if (this.intervalId) return;
     console.log('[AutoTradeScheduler] Started.');
-    this.intervalId = setInterval(() => this.tick().catch((e) => console.error('[AutoTradeScheduler] tick failed', e)), runtimeIntervals.autoTradeSchedulerMs);
-    this.tick().catch((e) => console.error('[AutoTradeScheduler] initial tick failed', e));
+    this.intervalId = setInterval(() => void this.tick(), runtimeIntervals.autoTradeSchedulerMs);
+    void this.tick();
   }
 
   stop() {
@@ -59,6 +67,10 @@ export class AutoTradeSchedulerWorker {
   }
 
   async tick() {
+    await this.tickGuard.run(() => this.tickCycle());
+  }
+
+  private async tickCycle() {
     const row = (await db.select().from(schema.settings).limit(1))[0];
     if (!row?.autoTradeScheduleEnabled) return; // feature off - no-op, zero behavior change
 

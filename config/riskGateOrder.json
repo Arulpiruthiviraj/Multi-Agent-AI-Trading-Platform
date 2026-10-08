@@ -1,5 +1,5 @@
 {
-  "$comment": "RiskEngine.evaluateRiskSerialized evaluation order for UI catalog only. Pass/fail must come from RISK_GATE_EVALUATED / risk_gate_results — never from this file. sell_position_exists is recorded on SELL only; BUY assessments omit it. close_short_position_exists is recorded only when a BUY carries closePositionIntent=true (the operator-directed short-cover path, PipelineFlatten.ts) — never during normal autonomous BUY evaluation.",
+  "$comment": "RiskEngine.evaluateRiskSerialized evaluation order for UI catalog only. Pass/fail must come from RISK_GATE_EVALUATED / risk_gate_results — never from this file. sell_position_exists is recorded on SELL only; BUY assessments omit it. close_short_position_exists is recorded only when a BUY carries closePositionIntent=true (the operator-directed short-cover path, PipelineFlatten.ts) — never during normal autonomous BUY evaluation. buying_power_reservation is recorded on BUY only when reservedBuyNotional > 0 (informational, always passes — it documents the durable DB-derived reservation subtracted from the broker buying-power snapshot; a BUY with no outstanding reservation records 26 gates, one with a reservation records 27).",
   "gates": [
     "emergency_stop",
     "autobot_enabled",
@@ -8,6 +8,7 @@
     "daily_trade_limit",
     "duplicate_signal",
     "invalid_account_equity",
+    "buying_power_reservation",
     "daily_loss",
     "consecutive_loss",
     "portfolio_drawdown",

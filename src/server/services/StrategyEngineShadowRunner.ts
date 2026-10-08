@@ -26,17 +26,28 @@ import { defaultRegistry } from '../strategiesEngine/index';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { runtimeIntervals } from '../config/runtimeIntervals';
+import { createSingleFlightGuard, type SingleFlightGuard } from '../core/singleFlightInterval';
 
 const REAL_MODES = new Set(['SHADOW', 'ANALYSIS_ONLY']);
 const BARS_LOOKBACK_MS = 400 * 24 * 60 * 60 * 1000; // enough trading days for real SMA200/ADX history
 
 export class StrategyEngineShadowRunner {
   private intervalId: NodeJS.Timeout | null = null;
+  /** DEF-8 fix: single-flight guard - the 300s interval can fire while a previous tick's
+   *  400-day bar fetch + signal inserts are still in flight; coalescing skips (not queues)
+   *  the tick. A coalesced tick returns the feature-off no-op shape, which is honest:
+   *  nothing ran. tick() re-reads settings fresh every cycle, so a skipped tick loses
+   *  nothing - and skipping avoids duplicate strategy_engine_signals rows from two
+   *  overlapping ticks evaluating the same snapshot (no uniqueness constraint on
+   *  (strategyId, symbol, timestamp), so the interleave would double-insert). */
+  private readonly tickGuard: SingleFlightGuard = createSingleFlightGuard(
+    (e) => console.error('[StrategyEngineShadowRunner] tick failed', e),
+  );
 
   start() {
     if (this.intervalId) return;
     console.log('[StrategyEngineShadowRunner] Started at boot (independent of settings; no-op unless settings.strategyEngineEnabled is true and mode is SHADOW/ANALYSIS_ONLY).');
-    this.intervalId = setInterval(() => this.tick().catch(e => console.error('[StrategyEngineShadowRunner] tick failed', e)), runtimeIntervals.strategyEngineShadowMs);
+    this.intervalId = setInterval(() => void this.tick(), runtimeIntervals.strategyEngineShadowMs);
   }
 
   stop() {
@@ -48,6 +59,14 @@ export class StrategyEngineShadowRunner {
   }
 
   async tick(): Promise<{ ran: boolean; signalsRecorded: number }> {
+    let result: { ran: boolean; signalsRecorded: number } = { ran: false, signalsRecorded: 0 };
+    await this.tickGuard.run(async () => {
+      result = await this.tickCycle();
+    });
+    return result;
+  }
+
+  private async tickCycle(): Promise<{ ran: boolean; signalsRecorded: number }> {
     const row = (await db.select().from(schema.settings).limit(1))[0];
     if (!row?.strategyEngineEnabled) return { ran: false, signalsRecorded: 0 }; // feature off - no-op, zero behavior change
     const mode = row.strategyEngineMode;

@@ -179,6 +179,13 @@ function parseLlmJson(content: string | undefined): unknown {
 
 export class ChiefTraderAgent {
     private recentIdeas: any[] = [];
+    /** DEF-3 fix: interval handles for the two constructor timers (idea-TTL sweep + weight
+     *  sync), so stop() can clear them. Previously the setInterval return values were
+     *  discarded and the timers ticked forever - including during the graceful-shutdown
+     *  drain, where a tick landing between sqliteDb.close() and process.exit() threw
+     *  "database connection is not open" noise. Timer cadence and callback logic unchanged. */
+    private ideaTtlSweepTimer: NodeJS.Timeout | null = null;
+    private weightSyncTimer: NodeJS.Timeout | null = null;
     private lastDebateStartedAt: Map<string, number> = new Map();
     private lastConsensusEvalAt: Map<string, number> = new Map();
     private lastConsensusOutcome: LastConsensusOutcome | null = null;
@@ -300,7 +307,7 @@ export class ChiefTraderAgent {
       );
     });
 
-    setInterval(() => {
+    this.ideaTtlSweepTimer = setInterval(() => {
        this.recordUnresolvedAsNoConsensus().catch(e => console.error('[ChiefTrader] Failed to record NO_CONSENSUS transactions', e));
        // Real defect found and fixed (2026-08-31 zero-trade consensus-blocker forensic audit):
        // this used to unconditionally wipe every idea for a symbol with no debate in flight,
@@ -321,8 +328,23 @@ export class ChiefTraderAgent {
     }, runtimeIntervals.chiefTraderIdeaTtlMs);
     
     // Sync dynamic weights from database every 10 seconds
-    setInterval(() => this.syncWeights(), runtimeIntervals.chiefTraderWeightSyncMs);
+    this.weightSyncTimer = setInterval(() => this.syncWeights(), runtimeIntervals.chiefTraderWeightSyncMs);
     this.syncWeights();
+  }
+
+  /** DEF-3 fix: clears the two constructor timers. Called from SystemBootstrap.stop(),
+   *  which the graceful-shutdown drain runs BEFORE sqliteDb.close() - so no tick can
+   *  land between close() and process.exit() and throw "database connection is not
+   *  open". Timer cadence and callback logic are unchanged; this only stops them. */
+  stop(): void {
+    if (this.ideaTtlSweepTimer) {
+      clearInterval(this.ideaTtlSweepTimer);
+      this.ideaTtlSweepTimer = null;
+    }
+    if (this.weightSyncTimer) {
+      clearInterval(this.weightSyncTimer);
+      this.weightSyncTimer = null;
+    }
   }
   
   async syncWeights() {
