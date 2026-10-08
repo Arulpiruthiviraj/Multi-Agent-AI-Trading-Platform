@@ -74,6 +74,16 @@ function makeResult(
  * never touches ChiefTrader/RiskEngine/OMS/BrokerManager. Always transitions the candidate's real
  * lifecycle state so its own history honestly reflects what was tried, even when no vote will
  * ever follow from it in this phase.
+ *
+ * 2026-10-08 (D1): the "never emits" guarantee is now enforced at runtime, not just by module
+ * boundary - evaluateSymbol() is called with { emitIdeas: false }, so even the QuantEngine
+ * emitTradeIdea and the fire-and-forget JavaCoreEnsemble vote inside the reused production
+ * function are suppressed for fast-lane evaluations.
+ *
+ * 2026-10-08 (D4): a hung evaluateSymbol() promise can no longer leak a concurrency slot
+ * forever - the evaluation races a tradingSafety.fastLaneEvaluationTimeoutMs watchdog; on
+ * timeout the candidate is terminally transitioned and the slot released via the normal
+ * finally path in evaluateFastCandidate().
  */
 export async function evaluateFastCandidate(candidateId: string): Promise<FastEvaluationResult> {
   const candidate = fastLaneManager.getCandidate(candidateId);
@@ -127,12 +137,43 @@ async function runEvaluation(candidateId: string, symbol: string): Promise<FastE
   const dataSufficiency: Record<string, DataSufficiencyGrade> = {};
 
   let evaluation: Awaited<ReturnType<typeof quantSignalAgent.evaluateSymbol>> = null;
+  // D4 (2026-10-08): liveness watchdog. evaluateSymbol() is awaited, but a promise that never
+  // settles would skip the finally in evaluateFastCandidate() and permanently leak one of the
+  // bounded concurrency slots. Race it against the configured timeout; on timeout the candidate
+  // is terminally transitioned (NO_SETUP with an honest reason) and the slot is released.
+  // D1 (2026-10-08): { emitIdeas: false } - this is a pure evaluation, never a vote.
+  let timedOut = false;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
-    evaluation = await quantSignalAgent.evaluateSymbol(symbol);
+    const timeoutPromise = new Promise<null>((resolve) => {
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        resolve(null);
+      }, tradingSafety.fastLaneEvaluationTimeoutMs);
+    });
+    evaluation = await Promise.race([
+      quantSignalAgent.evaluateSymbol(symbol, { emitIdeas: false }),
+      timeoutPromise,
+    ]);
   } catch (e) {
     logFastEvaluationFailed(candidateId, symbol, e instanceof Error ? e.name : 'UNKNOWN_ERROR');
     fastLaneManager.transitionState(candidateId, 'NO_SETUP', 'strategy evaluation threw');
     return makeResult(candidate, 'ERROR', ['EVALUATION_THREW'], { dataSufficiency });
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+
+  if (timedOut) {
+    // The underlying promise may still be pending; it holds no slot (the slot is released by the
+    // caller) and its eventual settlement is discarded - it can no longer transition this
+    // terminally-closed candidate because expireStale() deletes terminal records.
+    logFastEvaluationFailed(candidateId, symbol, 'EVALUATION_TIMEOUT');
+    fastLaneManager.transitionState(
+      candidateId,
+      'NO_SETUP',
+      `strategy evaluation exceeded fastLaneEvaluationTimeoutMs (${tradingSafety.fastLaneEvaluationTimeoutMs}ms) - abandoned, slot released`,
+    );
+    return makeResult(candidate, 'ERROR', ['EVALUATION_TIMEOUT'], { dataSufficiency });
   }
 
   if (!evaluation) {

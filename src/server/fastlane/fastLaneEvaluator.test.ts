@@ -158,4 +158,32 @@ describe('fastLaneEvaluator (research/paper only, no execution authority)', () =
       (tradingSafety as any).fastLaneSymbolEvaluationCooldownMs = originalCooldown;
     }
   });
+
+  it('D1: fast-lane evaluations are evaluation-only - evaluateSymbol is always called with emitIdeas:false', async () => {
+    const c = inject('IIIII');
+    const spy = vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockResolvedValue(
+      fakeEvaluation([{ strategy: 'MOMENTUM_BREAKOUT', side: 'BUY', triggerMet: true, confidence: 0.8 }]) as any,
+    );
+    await evaluateFastCandidate(c.id);
+    expect(spy).toHaveBeenCalledWith('IIIII', { emitIdeas: false });
+  });
+
+  it('D4: a hung evaluation hits the watchdog - candidate terminally transitioned, concurrency slot released', async () => {
+    const originalTimeout = tradingSafety.fastLaneEvaluationTimeoutMs;
+    (tradingSafety as any).fastLaneEvaluationTimeoutMs = 50;
+    try {
+      const c = inject('JJJJJ');
+      // A promise that never settles - the pre-fix code leaked its concurrency slot forever.
+      vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockImplementation(() => new Promise(() => {}) as any);
+      const result = await evaluateFastCandidate(c.id);
+      expect(result.status).toBe('ERROR');
+      expect(result.reasonCodes).toContain('EVALUATION_TIMEOUT');
+      expect(fastLaneActiveEvaluationCountForTests()).toBe(0); // slot released, lane not wedged
+      // Candidate terminally transitioned to NO_SETUP with an honest reason (kept until its TTL
+      // elapses per D2's bounded-retention rule, then swept).
+      expect(fastLaneManager.getCandidate(c.id)?.state).toBe('NO_SETUP');
+    } finally {
+      (tradingSafety as any).fastLaneEvaluationTimeoutMs = originalTimeout;
+    }
+  });
 });

@@ -309,7 +309,19 @@ export class QuantSignalAgent {
     }
   }
 
-  async evaluateSymbol(symbol: string): Promise<{ regime: RegimeResult; marketContext: MarketContextResult; strategyEvaluations: StrategyEvaluation[]; groupedScores: { BUY: GroupedScores; SELL: GroupedScores }; aiContradictionAnalysis: ContradictionAnalysisResult | null } | null> {
+  /**
+   * Evaluate one symbol through the real strategy pipeline and, when a qualifying idea is found,
+   * emit it as a QuantEngine trade idea (the normal live path).
+   *
+   * 2026-10-08 (fast-lane D1 fix): `options.emitIdeas === false` makes this a pure EVALUATION -
+   * no QuantEngine emitTradeIdea, no JavaCoreEnsemble vote, no DESK_NO_TRADE held-idea event.
+   * Research consumers (e.g. the Fast Opportunity Lane evaluator, whose phase boundary is
+   * "deliberately NOT wired to emitTradeIdea/ChiefTrader in this phase") use this so reusing
+   * the production evaluation logic can never produce a spine-routed idea one call-frame deeper
+   * than the caller intended. Default (undefined) preserves the existing live behavior exactly.
+   */
+  async evaluateSymbol(symbol: string, options?: { emitIdeas?: boolean }): Promise<{ regime: RegimeResult; marketContext: MarketContextResult; strategyEvaluations: StrategyEvaluation[]; groupedScores: { BUY: GroupedScores; SELL: GroupedScores }; aiContradictionAnalysis: ContradictionAnalysisResult | null } | null> {
+    const emitIdeas = options?.emitIdeas !== false;
     notePipelineAgentTick('QuantEngine');
     const endMs = Date.now();
     const startMs = endMs - LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
@@ -436,11 +448,15 @@ export class QuantSignalAgent {
         // 2026-09-10, explicit operator override (see JavaCoreEnsembleVoteService.ts's own header) -
         // the real independent vote this shadow comparison feeds when eligible. Off by default
         // (ARGUS_JAVA_CORE_ENSEMBLE_VOTE_ENABLED); a no-op call when disabled. Wrapped defensively -
-        // a throw here must never break this cycle's real TS-side evaluation below.
-        try {
-          emitJavaCoreEnsembleVoteIfEligible(symbol, javaEnsemble, currentPrice);
-        } catch {
-          /* real vote path, but a failure here must never propagate into the surrounding evaluation */
+        // a throw here must never break this cycle's real TS-side evaluation below. Suppressed
+        // entirely in evaluation-only mode (emitIdeas === false): a pure evaluation must not cast
+        // a real vote one call-frame deeper than its caller intended (fast-lane D1, 2026-10-08).
+        if (emitIdeas) {
+          try {
+            emitJavaCoreEnsembleVoteIfEligible(symbol, javaEnsemble, currentPrice);
+          } catch {
+            /* real vote path, but a failure here must never propagate into the surrounding evaluation */
+          }
         }
       }).catch(() => {});
     } catch {
@@ -685,7 +701,10 @@ export class QuantSignalAgent {
     }
 
     let emittedTradeIdea = false;
-    if (idea && isLiveIdeaGenerationEnabled() && isPipelineAgentEnabled('QuantEngine')) {
+    // Evaluation-only mode (emitIdeas === false, fast-lane D1 2026-10-08): the strategy
+    // evaluations are returned for the caller to judge, but no idea is ever emitted and no
+    // held-idea DESK_NO_TRADE is recorded - an evaluation is not a gated idea.
+    if (emitIdeas && idea && isLiveIdeaGenerationEnabled() && isPipelineAgentEnabled('QuantEngine')) {
       const dataQuality = assessDataQuality(symbol);
       if (dataQuality.tradeBlocked) {
         // Phase 13 (2026-08-31 strategy-starvation remediation): a real, fully-constructed idea
@@ -866,7 +885,7 @@ export class QuantSignalAgent {
       }).catch((e) => console.error(`[QuantSignalAgent] Forecast build failed for ${symbol}`, e));
       }
       }
-    } else if (idea) {
+    } else if (emitIdeas && idea) {
       // An eligible strategy candidate can be held before consensus. Persist that distinction
       // instead of making it indistinguishable from an EV rejection or an inactive worker.
       const enabled = isPipelineAgentEnabled('QuantEngine');
