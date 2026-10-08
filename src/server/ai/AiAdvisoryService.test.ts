@@ -208,6 +208,29 @@ describe('AiAdvisoryService', () => {
     expect(aiAdvisoryService.getAdvisoryNote('')).toBeNull();
   });
 
+  it('storing a note sweeps expired entries instead of evicting a live one', async () => {
+    const governor = mockGovernor(CALLED_RESULT);
+    aiAdvisoryService.setGovernorForTesting(governor);
+
+    const t0 = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0);
+    for (let i = 0; i < 200; i++) {
+      aiAdvisoryService.considerNewsCatalyst({ ...ARTICLE, id: `sweep-${i}`, symbol: `SWP${i}` });
+    }
+    await aiAdvisoryService.drainPendingAdvisoryWork();
+    expect(aiAdvisoryService.__noteCacheSizeForTests()).toBe(200);
+
+    // Past the 120s TTL every stored note is expired; the next store must
+    // delete them (not merely skip them on read) instead of evicting oldest.
+    nowSpy.mockReturnValue(t0 + 120_001);
+    aiAdvisoryService.considerNewsCatalyst({ ...ARTICLE, id: 'sweep-new', symbol: 'SWPNEW' });
+    await aiAdvisoryService.drainPendingAdvisoryWork();
+    expect(aiAdvisoryService.__noteCacheSizeForTests()).toBe(1);
+    expect(aiAdvisoryService.getAdvisoryNote('SWPNEW')).toBeTruthy();
+    expect(aiAdvisoryService.getAdvisoryNote('SWP0')).toBeNull();
+    nowSpy.mockRestore();
+  });
+
   it('quant candidate advisory requests thesis/risk questions and writes no note', async () => {
     const governor = mockGovernor({
       status: 'CALLED',

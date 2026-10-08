@@ -21,6 +21,7 @@ import {
   checkProviderHealth,
   getAIProviderHealthSnapshot,
   runAIProviderHealthCheckNow,
+  pruneAIProviderHealthTracker,
   resetAIProviderHealthTrackerForTests,
   startAIProviderHealthMonitor,
   stopAIProviderHealthMonitor,
@@ -343,5 +344,32 @@ describe('AIProviderHealthCheck', () => {
     const rec = snapshot.find(r => r.providerId === 'p1')!;
     expect(rec.credentialPresent).toBe(false);
     expect(rec.status).toBe('CONFIG_MISSING');
+  });
+
+  it('pruneAIProviderHealthTracker drops entries for unregistered providers, keeps live ones', async () => {
+    const live = fakeProvider();
+    const dead = fakeProvider({ authenticate: async () => false });
+    AIRouter.getInstance().registerProvider('p1', live);
+    await checkProviderHealth('p1', live);
+    // A provider that was checked but is no longer registered (removed /
+    // reconfigured under a new id) leaves a stale tracker entry behind.
+    await checkProviderHealth('ghost', dead);
+
+    dbRows.current = [dbRow({ id: 'p1' }), dbRow({ id: 'ghost', providerName: 'Ghost' })];
+    const before = await getAIProviderHealthSnapshot();
+    const ghostBefore = before.find((r) => r.providerId === 'ghost')!;
+    expect(ghostBefore.consecutiveFailures).toBe(1);
+    expect(ghostBefore.lastErrorSummary).toBe('authenticate() returned false');
+
+    pruneAIProviderHealthTracker();
+
+    const after = await getAIProviderHealthSnapshot();
+    const ghostAfter = after.find((r) => r.providerId === 'ghost')!;
+    expect(ghostAfter.consecutiveFailures).toBe(0);
+    expect(ghostAfter.lastErrorSummary).toBeNull();
+    // The still-registered provider keeps its tracked health.
+    const liveAfter = after.find((r) => r.providerId === 'p1')!;
+    expect(liveAfter.status).toBe('HEALTHY');
+    expect(liveAfter.latencyMs).not.toBeNull();
   });
 });
