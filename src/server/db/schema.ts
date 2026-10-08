@@ -949,6 +949,14 @@ export const consensusDecisions = sqliteTable('consensus_decisions', {
   debateProviderCount: integer('debate_provider_count'),
   reasoning: text('reasoning'),
   createdAt: text('created_at').notNull(),
+  // Quant-First Decision Architecture (2026-10-07, migration 0096): which decision policy
+  // produced this row. All nullable — historical rows keep NULL (read as the pre-change
+  // consensus path). decision_policy is 'QUANT_EXECUTION' | 'CONSENSUS'.
+  decisionPolicy: text('decision_policy'),
+  ideaOrigin: text('idea_origin'),
+  strategyId: text('strategy_id'),
+  strategyLifecycle: text('strategy_lifecycle'),
+  authorizationReason: text('authorization_reason'),
 });
 
 // Every contributing agent's evidence for a transaction, regardless of which agent's own

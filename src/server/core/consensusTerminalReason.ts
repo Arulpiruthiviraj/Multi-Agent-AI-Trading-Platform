@@ -22,7 +22,13 @@ export type ConsensusTerminalReasonCode =
   | 'MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE'
   | 'MODERATE_REJECT_CALIBRATION'
   | 'MODERATE_REJECT_LOW_CONFIDENCE'
-  | 'MODERATE_TIER_DISABLED';
+  | 'MODERATE_TIER_DISABLED'
+  // Quant-First Decision Architecture (2026-10-07): terminal codes for the deterministic
+  // quant policy path. Kept distinct from consensus codes so operators can tell
+  // QUANT_POLICY_REJECTED apart from CONSENSUS_INSUFFICIENT / CONFIDENCE_BELOW_STRONG.
+  | 'QUANT_POLICY_APPROVED'
+  | 'QUANT_POLICY_REJECTED'
+  | 'QUANT_NOT_AUTHORIZED';
 
 export interface TerminalReasonClassificationInput {
   approved: boolean;

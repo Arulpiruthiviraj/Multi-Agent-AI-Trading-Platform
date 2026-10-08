@@ -11,6 +11,7 @@
  * source today.
  */
 import { validateInstrumentSymbol } from './InstrumentRegistry';
+import { normalizeTradeIdeaOrigin } from './tradeIdeaProvenance';
 
 export type TradeIdeaRejectReason =
   | 'INVALID_SYMBOL'
@@ -71,6 +72,10 @@ export function gateTradeIdea(idea: any): GatedTradeIdea | RejectedTradeIdea {
   }
   return {
     ok: true,
-    idea: { ...idea, symbol: ticker, currentPrice: live },
+    // Quant-First Decision Architecture (2026-10-07): every idea on the bus carries a
+    // canonical, normalized provenance. Missing/unknown origin -> 'OTHER' (never quant
+    // authority). Provenance is descriptive; authority is resolved centrally by
+    // QuantStrategyAuthorization at the ChiefTrader decision boundary.
+    idea: { ...idea, symbol: ticker, currentPrice: live, origin: normalizeTradeIdeaOrigin(idea?.origin) },
   };
 }

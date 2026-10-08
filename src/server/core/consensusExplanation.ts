@@ -18,9 +18,11 @@ export interface LastConsensusOutcome {
   reason: string;
   agentVotes: ConsensusVoteSnapshot[];
   /** Phase 7E/7H MODERATE consensus tier; QUANT_INDEPENDENT added 2026-09-09 (explicit operator
-   *  override - see ChiefTraderAgent.ts's own doc comment). Absent/'STRONG' for every pre-existing
+   *  override - see ChiefTraderAgent.ts's own doc comment). QUANT_EXECUTION added 2026-10-07
+   *  (Quant-First Decision Architecture): the deterministic quant policy's tier, distinct from
+   *  the consensus ladder's QUANT_INDEPENDENT fallback. Absent/'STRONG' for every pre-existing
    *  evaluation path. */
-  decisionTier?: 'STRONG' | 'MODERATE' | 'QUANT_INDEPENDENT';
+  decisionTier?: 'STRONG' | 'MODERATE' | 'QUANT_INDEPENDENT' | 'QUANT_EXECUTION';
   /** Phase 9I "Why No Trade?" diagnostic - one machine-readable code per round, see consensusTerminalReason.ts. */
   terminalReasonCode?: string;
 }

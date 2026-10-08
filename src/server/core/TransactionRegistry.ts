@@ -66,6 +66,13 @@ export interface RecordConsensusParams {
   debateUsed?: boolean;
   debateProviderCount?: number;
   evidence: ConsensusEvidenceInput[];
+  // Quant-First Decision Architecture (2026-10-07): decision-policy provenance. Optional —
+  // consensus-path callers omit them (persisted as NULL, read as the pre-change path).
+  decisionPolicy?: 'QUANT_EXECUTION' | 'CONSENSUS';
+  ideaOrigin?: string;
+  strategyId?: string;
+  strategyLifecycle?: string;
+  authorizationReason?: string;
 }
 
 /**
@@ -109,6 +116,12 @@ export async function recordConsensusTransaction(params: RecordConsensusParams):
       debateProviderCount: params.debateProviderCount,
       reasoning: params.reasoning,
       createdAt: now,
+      // Quant-First Decision Architecture (2026-10-07): null for pre-change/consensus rows.
+      decisionPolicy: params.decisionPolicy ?? null,
+      ideaOrigin: params.ideaOrigin ?? null,
+      strategyId: params.strategyId ?? null,
+      strategyLifecycle: params.strategyLifecycle ?? null,
+      authorizationReason: params.authorizationReason ?? null,
     }).run();
 
     if (params.evidence.length > 0) {
