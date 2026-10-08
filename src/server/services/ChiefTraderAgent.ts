@@ -177,6 +177,21 @@ function parseLlmJson(content: string | undefined): unknown {
   }
 }
 
+/**
+ * Memory-hygiene contract for this file's per-symbol in-memory maps (2026-10-08 leak hunt):
+ * every per-symbol Map in this class must have a production delete/eviction path. A map that
+ * only ever gains one entry per distinct symbol is an unbounded leak against a broad discovery
+ * universe that can touch thousands of tickers in a single session - each entry is tiny, but the
+ * class of bug is what the P1-A heap incident was made of.
+ * - STALE_MAP_ENTRY_EVICTION_ENABLED is the one-line kill switch for the opportunistic sweeps.
+ * - STALE_ENTRY_COOLDOWN_MULTIPLIER is the generous staleness margin (10x the real cooldown,
+ *   mirroring the 2026-09-22 recordDebateStarted precedent). An entry this old can never affect
+ *   its map's live check, so evicting it is behavior-preserving by construction - the sweeps
+ *   never touch consensus logic, thresholds, weights, or decision behavior.
+ */
+const STALE_MAP_ENTRY_EVICTION_ENABLED = true;
+const STALE_ENTRY_COOLDOWN_MULTIPLIER = 10;
+
 export class ChiefTraderAgent {
     private recentIdeas: any[] = [];
     /** DEF-3 fix: interval handles for the two constructor timers (idea-TTL sweep + weight
@@ -230,6 +245,17 @@ export class ChiefTraderAgent {
   registerManualSideExpectation(symbol: string, side: 'BUY' | 'SELL', ttlMs: number): void {
     const sym = String(symbol || '').toUpperCase();
     if (!sym) return;
+    // 2026-10-08 leak hunt: entries whose TTL expired were only deleted lazily inside
+    // consumeManualSideMismatch() - an operator CONFIRM for a symbol that was never evaluated
+    // again pinned its entry past expiry for process lifetime. Expired entries are dead by
+    // definition (consumeManualSideMismatch deletes them on read), so sweeping them here is
+    // behavior-preserving. Never touches the side-match/mismatch decision logic.
+    if (STALE_MAP_ENTRY_EVICTION_ENABLED) {
+      const now = Date.now();
+      for (const [s, lock] of this.manualSideExpectations) {
+        if (now > lock.expiresAt) this.manualSideExpectations.delete(s);
+      }
+    }
     this.manualSideExpectations.set(sym, { side, expiresAt: Date.now() + Math.max(1000, ttlMs) });
   }
 
@@ -252,9 +278,30 @@ export class ChiefTraderAgent {
   private recordDebateStarted(symbol: string): void {
     const now = Date.now();
     this.lastDebateStartedAt.set(symbol, now);
-    const staleBeforeMs = now - tradingSafety.consensusDebateCooldownMs * 10;
+    if (!STALE_MAP_ENTRY_EVICTION_ENABLED) return;
+    const staleBeforeMs = now - tradingSafety.consensusDebateCooldownMs * STALE_ENTRY_COOLDOWN_MULTIPLIER;
     for (const [sym, startedAt] of this.lastDebateStartedAt) {
       if (startedAt < staleBeforeMs) this.lastDebateStartedAt.delete(sym);
+    }
+  }
+
+  /**
+   * 2026-10-08 leak hunt: `lastConsensusEvalAt` was set on every scheduled/serialized evaluation
+   * and only ever deleted when a debate's .finally() ran for that symbol - a symbol whose ideas
+   * never triggered a debate kept its entry for process lifetime (same unbounded-per-symbol-Map
+   * class as the 2026-09-22 lastDebateStartedAt finding, fixed above). The map's only read is the
+   * same-agent-replacement throttle (`now - lastEval < consensusEvalMinIntervalMs`), so an entry
+   * older than STALE_ENTRY_COOLDOWN_MULTIPLIER x that interval can never affect the check - the
+   * opportunistic sweep below is behavior-preserving by construction. Never touches the throttle
+   * itself, the 0.75 threshold, or min-2.
+   */
+  private recordConsensusEval(symbol: string): void {
+    const now = Date.now();
+    this.lastConsensusEvalAt.set(symbol, now);
+    if (!STALE_MAP_ENTRY_EVICTION_ENABLED) return;
+    const staleBeforeMs = now - tradingSafety.consensusEvalMinIntervalMs * STALE_ENTRY_COOLDOWN_MULTIPLIER;
+    for (const [sym, at] of this.lastConsensusEvalAt) {
+      if (at < staleBeforeMs) this.lastConsensusEvalAt.delete(sym);
     }
   }
 
@@ -345,6 +392,17 @@ export class ChiefTraderAgent {
       clearInterval(this.weightSyncTimer);
       this.weightSyncTimer = null;
     }
+    // Memory-leak hunt (2026-10-08, TIMERS/SCHEDULERS): the DEF-3 fix above cleared the two
+    // constructor intervals but left pending per-symbol consensus-aggregation debounce timers
+    // armed. A timer firing after stop() invokes evaluateConsensus() - the same DB access the
+    // graceful-shutdown drain is designed to prevent (a tick landing after sqliteDb.close()
+    // throws "database connection is not open"), and each armed Timeout retains its closure
+    // (symbol/traceId/agent). Cancel every pending debounce and drop the map entries so no
+    // reference is retained. Does not change scheduling behavior while running - only cleanup.
+    for (const timer of this.consensusAggregationTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.consensusAggregationTimers.clear();
   }
   
   async syncWeights() {
@@ -412,7 +470,7 @@ export class ChiefTraderAgent {
     const enoughVotes = independent.length >= MIN_INDEPENDENT_AGREEING_AGENTS;
 
     if (forceImmediate || enoughVotes || windowMs <= 0) {
-      this.lastConsensusEvalAt.set(symbol, Date.now());
+      this.recordConsensusEval(symbol);
       this.evaluateConsensus(symbol, traceId).catch((e) =>
         console.error('[ChiefTrader] evaluateConsensus failed', e),
       );
@@ -421,7 +479,7 @@ export class ChiefTraderAgent {
 
     const timer = setTimeout(() => {
       this.consensusAggregationTimers.delete(symbol);
-      this.lastConsensusEvalAt.set(symbol, Date.now());
+      this.recordConsensusEval(symbol);
       this.evaluateConsensus(symbol, traceId).catch((e) =>
         console.error('[ChiefTrader] evaluateConsensus failed', e),
       );
@@ -917,7 +975,7 @@ export class ChiefTraderAgent {
       return;
     }
 
-    this.lastConsensusEvalAt.set(symbol, Date.now());
+    this.recordConsensusEval(symbol);
     const relevantIdeas = this.recentIdeas.filter(i => i.symbol === symbol && isConsensusIdeaFresh(i.receivedAt));
     // Phase 7E (MODERATE tier): raw, pre-calibration confidence per agent - the calibration-trust
     // bucket lookup must bucket on the SAME raw value calibrateConfidence() itself buckets on.
@@ -1678,7 +1736,17 @@ export class ChiefTraderAgent {
     for (const symbol of symbols) {
       if (this.debatePending(symbol)) continue;
       const relevantIdeas = this.recentIdeas.filter(i => i.symbol === symbol && isConsensusIdeaFresh(i.receivedAt));
-      if (relevantIdeas.length === 0) continue;
+      if (relevantIdeas.length === 0) {
+        // 2026-10-08 leak hunt: this round is dead - no fresh ideas means no consensus_decisions
+        // row will ever be persisted for it, so its interim tally can never be reported by
+        // logAndResetInterimConsensusTally. Leaving it pinned the entry forever (one per symbol
+        // whose ideas went stale between this sweep and the TTL filter) AND would corrupt the
+        // NEXT round's collapse ratio by folding this dead round's count into it. Deleting here
+        // is observability-neutral: logAndResetInterimConsensusTally with a live round is
+        // untouched, and a dead round had no row to attach the count to.
+        this.interimEvaluationsSinceLastPersist.delete(symbol);
+        continue;
+      }
       const evidence: Evidence[] = coalesceEvidenceByAgent(await Promise.all(relevantIdeas.map(async i => ({
         ...i,
         ...(await this.calibrateConfidenceDetailed(i.agent, i.confidence).then(detail => ({ confidence: detail.decisionConfidence, calibrationDetail: detail }))),

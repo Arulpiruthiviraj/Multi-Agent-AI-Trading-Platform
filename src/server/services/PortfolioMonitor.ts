@@ -50,6 +50,7 @@ import { evaluateThesisInvalidation, parseStoredThesis } from '../quant/analysis
 import {
   canEmitPortfolioExitIdea,
   ensureHoldingSubscribed,
+  pruneExitCooldownsForFlatSymbols,
   recordPortfolioDecision,
 } from '../continuous/portfolioIntel';
 import { evaluateExit } from './ExitIntelligenceEngine';
@@ -147,6 +148,15 @@ export async function resolvePositionStopTarget(
   };
 }
 
+/**
+ * 2026-10-08 memory-leak hunt (PORTFOLIO/RECONCILIATION/EXITS): per-symbol exit/monitor
+ * state (campaign Target-1 flags, portfolioIntel exit-idea cooldowns) is only meaningful
+ * while the symbol is held. When true, reviewPortfolio() drops that state for symbols with
+ * no open holding — terminal-state cleanup only. Exit math, reconciliation semantics, and
+ * position accounting are untouched.
+ */
+const PRUNE_FLAT_SYMBOL_EXIT_STATE = true;
+
 export class PortfolioMonitorWorker {
   private intervalId: NodeJS.Timeout | null = null;
   private isReviewing = false;
@@ -185,6 +195,22 @@ export class PortfolioMonitorWorker {
     this.isReviewing = true;
     try {
       const holdings = await db.select().from(portfolio).all();
+      if (PRUNE_FLAT_SYMBOL_EXIT_STATE) {
+        // Terminal-state cleanup: a symbol with no open holding (row gone, or quantity <= 0)
+        // can never emit a monitored exit again, so its campaign Target-1 flag and its
+        // exit-idea cooldown entry are dropped. A still-held symbol keeps both untouched.
+        const heldSymbols = new Set(
+          holdings
+            .filter((h) => (h.quantity ?? 0) > 0)
+            .map((h) => String(h.symbol || '').toUpperCase()),
+        );
+        for (const symbol of [...this.campaignScalpTarget1Hit]) {
+          if (!heldSymbols.has(String(symbol || '').toUpperCase())) {
+            this.campaignScalpTarget1Hit.delete(symbol);
+          }
+        }
+        pruneExitCooldownsForFlatSymbols(heldSymbols);
+      }
       if (holdings.length === 0) return;
       console.log(`[PortfolioWorker] Reviewing ${holdings.length} active positions.`);
 
