@@ -41,13 +41,13 @@ import { bucketFor, isCalibrationSampleSufficient } from '../services/Confidence
 import { tradingSafety } from '../config/tradingSafety';
 import { deskIntelligence } from '../config/deskIntelligence';
 import { minQuantSupportDimensions } from '../config/quantDecisionPolicy';
-import { db } from '../db';
-import { agentConfidenceCalibration } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
 import type { StrategyEvaluation } from './strategies/types';
 import type {
   QuantStrategyAuthorization,
 } from './QuantStrategyAuthorization';
+// NOTE: the database is imported lazily inside defaultCalibrationLookup() — this module must
+// never pay import-time migration cost, and unit tests inject their own calibration lookup.
 
 export interface QuantPolicyIdeaInput {
   traceId?: unknown;
@@ -139,6 +139,9 @@ async function defaultCalibrationLookup(
   confidence: number,
 ): Promise<{ sufficient: boolean; sampleSize: number } | null> {
   try {
+    // Lazy: importing '../db' at module top level would run migrations on import.
+    const { db } = await import('../db');
+    const { agentConfidenceCalibration } = await import('../db/schema');
     const bucket = bucketFor(confidence);
     const rows = await db
       .select()

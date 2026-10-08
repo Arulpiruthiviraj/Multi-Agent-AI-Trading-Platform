@@ -31,7 +31,7 @@ export class RiskValidationAgent {
     });
   }
 
-  assessRisk(approval: { traceId: string, transactionId?: string, symbol: string, side: string, confidence: number, reasoning: string, agentsContext: string, currentPrice?: number, newsDetails?: any, supportingQuantDetail?: any, closePositionIntent?: boolean }) {
+  assessRisk(approval: { traceId: string, transactionId?: string, symbol: string, side: string, confidence: number, reasoning: string, agentsContext: string, currentPrice?: number, newsDetails?: any, supportingQuantDetail?: any, closePositionIntent?: boolean, decisionPolicy?: string }) {
      console.log(`[RiskManager] Validating ${approval.side} on ${approval.symbol}`);
 
      const request: any = {
@@ -61,6 +61,11 @@ export class RiskValidationAgent {
           applicableRegimes: approval.supportingQuantDetail.applicableRegimes ?? [],
           structuralLevel: approval.supportingQuantDetail.structuralLevel ?? null,
         }) : null,
+        // Quant-First Decision Architecture (2026-10-07): which ChiefTrader decision policy
+        // approved this idea ('QUANT_EXECUTION' | 'CONSENSUS', defaulting to the pre-change
+        // consensus path for approvals that predate the field). Observability only — RiskAgent
+        // stays policy-agnostic and its safety behavior is identical either way.
+        decisionPolicy: approval.decisionPolicy ?? 'CONSENSUS',
      };
 
      riskEngine.evaluateRisk(request);
