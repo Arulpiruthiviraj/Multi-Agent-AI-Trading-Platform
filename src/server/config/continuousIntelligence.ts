@@ -103,6 +103,12 @@ export interface ContinuousIntelligenceConfig {
    *  "one more evaluation cycle" of live data for a strategy idea that was otherwise discarded
    *  solely by STALE_MARKET_DATA. Never permanent - auto-released after this many ms. */
   temporaryDataRescueMaxDurationMs: number;
+  /** 2026-10-07 Market-D1 fix: maximum cumulative RENEWAL extensions of one active
+   *  temporary-data-rescue lifetime (see the config JSON's own comment). Each extension adds
+   *  another full temporaryDataRescueMaxDurationMs of eviction immunity; once reached, further
+   *  RENEWAL requests are denied with an honest reason code. Fail-safe: only ever denies
+   *  renewals, never grants more. */
+  temporaryDataRescueMaxExtensions: number;
   /** Bounded exploration: at most this many symbols may hold an active rescue at once, so a burst
    *  of starved-strategy requests cannot dominate the real subscription capacity. */
   maxConcurrentTemporaryDataRescues: number;
@@ -389,6 +395,7 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     minDynamicDwellMs: requireNumber(raw.minDynamicDwellMs, 'minDynamicDwellMs'),
     minDynamicDwellTicks: requireNumber(raw.minDynamicDwellTicks, 'minDynamicDwellTicks'),
     temporaryDataRescueMaxDurationMs: requireNumber(raw.temporaryDataRescueMaxDurationMs, 'temporaryDataRescueMaxDurationMs'),
+    temporaryDataRescueMaxExtensions: requireNumber(raw.temporaryDataRescueMaxExtensions, 'temporaryDataRescueMaxExtensions'),
     maxConcurrentTemporaryDataRescues: requireNumber(raw.maxConcurrentTemporaryDataRescues, 'maxConcurrentTemporaryDataRescues'),
     rescueReservedSlotsForPriorityClasses: requireNumber(raw.rescueReservedSlotsForPriorityClasses, 'rescueReservedSlotsForPriorityClasses'),
     broadUniverseEnabledEnvVar: raw.broadUniverseEnabledEnvVar,

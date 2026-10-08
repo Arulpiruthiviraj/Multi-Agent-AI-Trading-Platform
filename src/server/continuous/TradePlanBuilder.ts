@@ -28,7 +28,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { getTradingDateStr, tradingWallTimeToIso, TRADING_TIMEZONE } from '../core/TradingCalendar';
 import { db } from '../db';
 import { tradePlans, tradePlanRevisions, tradePlanRevalidations } from '../db/schema';
-import { desc, eq } from 'drizzle-orm';
+import { desc, eq, lt } from 'drizzle-orm';
 import type { RankedCandidate, RankingInput, NewsCatalystDetail } from './ComposableRanking';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
@@ -156,7 +156,14 @@ function buildThesis(candidate: RankedCandidate, input: RankingInput, direction:
   const parts: string[] = [`${direction} setup, rank #${candidate.rank}, final score ${candidate.finalScore.toFixed(3)}.`];
   const c = candidate.components;
   parts.push(`Momentum ${input.rawMomentumPct >= 0 ? '+' : ''}${input.rawMomentumPct.toFixed(2)}% (score ${c.momentum.available ? c.momentum.score!.toFixed(2) : 'N/A'}).`);
-  parts.push(`Relative volume ${input.rawRelativeVolume.toFixed(2)}x (score ${c.relativeVolume.available ? c.relativeVolume.score!.toFixed(2) : 'N/A'}).`);
+  // 2026-10-07 Discovery-D4: when relative volume is unavailable, input.rawRelativeVolume is the
+  // documented 0-placeholder - rendering it as "0.00x" fabricates a measured zero in the persisted
+  // thesis. Render the honest unavailable marker instead (the same PREMARKET_RVOL_UNAVAILABLE
+  // marker PremarketFocusReport.formatPremarketRvol() already uses at its display boundary).
+  // Display-only, forward-looking: already-persisted thesis rows are untouched.
+  parts.push(c.relativeVolume.available
+    ? `Relative volume ${input.rawRelativeVolume.toFixed(2)}x (score ${c.relativeVolume.score!.toFixed(2)}).`
+    : `Relative volume PREMARKET_RVOL_UNAVAILABLE (score N/A).`);
   parts.push(c.gap.available ? `Gap score ${c.gap.score!.toFixed(2)}.` : `Gap: ${c.gap.reason}`);
   parts.push(c.liquidity.available ? `Liquidity score ${c.liquidity.score!.toFixed(2)}.` : `Liquidity: ${c.liquidity.reason}`);
   parts.push(c.newsCatalyst.available ? `News catalyst score ${c.newsCatalyst.score!.toFixed(2)}.` : `News catalyst: ${c.newsCatalyst.reason}`);
@@ -493,6 +500,18 @@ export async function persistRevalidation(
   shadowContext?: TradePlanShadowContext,
 ): Promise<void> {
   try {
+    const newStatus: TradePlanStatus = outcome.result === 'REVALIDATED' ? 'VALID'
+      : outcome.result === 'DOWNGRADED' ? 'REVALIDATING'
+        : outcome.result === 'EXPIRED' ? 'EXPIRED' : 'INVALIDATED';
+    // 2026-10-07 Discovery-D2: the REGULAR-session revalidation loop runs every ~30s RTH, and
+    // unconditionally persisting a history row + plan update on every cycle with no decision
+    // change was ~2 writes x ~23 plans per 30s - tens of thousands of rows/day with no pruning.
+    // Skip both writes when the outcome leaves the plan's status unchanged (SnapshotScanner's
+    // loop supplies previousStatus from the plan row it already fetched, so no second DB read).
+    // newStatus is derived from outcome.result, so an unchanged status means an unchanged result
+    // class. When previousStatus is not supplied (other callers), keep the old unconditional
+    // behavior - never silently drop a write.
+    if (previousStatus !== undefined && newStatus === previousStatus) return;
     await db.insert(tradePlanRevalidations).values({
       planId,
       revalidatedAt: now.toISOString(),
@@ -500,9 +519,6 @@ export async function persistRevalidation(
       reason: outcome.reason,
       priceAtRevalidation: outcome.priceAtRevalidation,
     });
-    const newStatus: TradePlanStatus = outcome.result === 'REVALIDATED' ? 'VALID'
-      : outcome.result === 'DOWNGRADED' ? 'REVALIDATING'
-        : outcome.result === 'EXPIRED' ? 'EXPIRED' : 'INVALIDATED';
     await db.update(tradePlans).set({ status: newStatus }).where(eq(tradePlans.id, planId));
 
     if (newStatus === 'VALID' && previousStatus !== 'VALID' && shadowContext) {
@@ -519,6 +535,33 @@ export async function getTradePlansForDate(planDate: string): Promise<Array<type
 
 export async function getRevalidationHistory(planId: string): Promise<Array<typeof tradePlanRevalidations.$inferSelect>> {
   return db.select().from(tradePlanRevalidations).where(eq(tradePlanRevalidations.planId, planId)).orderBy(desc(tradePlanRevalidations.revalidatedAt));
+}
+
+/** 2026-10-07 Discovery-D2: retention bound for the trade_plan_revalidations ledger, in days.
+ * A code constant (not a config entry) by the same convention as CONFLUENCE_AGREEMENT_THRESHOLD
+ * above: this is a storage-hygiene bound, not a trading parameter, and no operator tuning story
+ * exists for it yet. 30 days comfortably covers every forensic lookback the revalidation history
+ * actually serves (intraday revalidation forensics, RTH handoff review) while bounding the
+ * write-amplified ledger this defect found. */
+export const TRADE_PLAN_REVALIDATION_RETENTION_DAYS = 30;
+
+/**
+ * 2026-10-07 Discovery-D2: retention prune for the trade_plan_revalidations ledger. Deletes rows
+ * older than TRADE_PLAN_REVALIDATION_RETENTION_DAYS. Code-based, no migration - the table is
+ * append-only history with no long-term audit-trail requirement beyond the retention window
+ * (unlike trades/fills/risk_assessments, which are never pruned). Called from the operational
+ * retention sweep (src/server/db/operationalRetention.ts), never from any trading decision path.
+ * Returns the number of rows deleted.
+ */
+export async function pruneTradePlanRevalidations(nowMs: number = Date.now()): Promise<number> {
+  const cutoffIso = new Date(nowMs - TRADE_PLAN_REVALIDATION_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    const result = await db.delete(tradePlanRevalidations).where(lt(tradePlanRevalidations.revalidatedAt, cutoffIso));
+    return (result as unknown as { changes?: number }).changes ?? 0;
+  } catch (e) {
+    console.error('[TradePlanBuilder] Failed to prune revalidation history', e);
+    return 0;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

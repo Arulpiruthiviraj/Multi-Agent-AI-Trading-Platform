@@ -65,7 +65,10 @@ export type RescueDeniedReason =
   | 'INVALID_SYMBOL'
   | 'RESCUE_CAPACITY_FULL'
   | 'ROUTINE_CAPACITY_RESERVED_FOR_PRIORITY'
-  | 'AT_CAPACITY_NO_SAFE_EVICTION';
+  | 'AT_CAPACITY_NO_SAFE_EVICTION'
+  // 2026-10-07 Market-D1: RENEWAL denied because the rescue already consumed
+  // temporaryDataRescueMaxExtensions cumulative extensions of eviction immunity.
+  | 'RESCUE_RENEWAL_EXTENSION_CAP';
 
 /**
  * Phase 28 (2026-09-02 P0 discovery fix). Confirmed root cause of the real FRVO incident
@@ -396,6 +399,28 @@ export class MarketDataWorker {
     return typeof v === 'number' && Number.isFinite(v) ? v : null;
   }
 
+  /**
+   * 2026-10-07 Discovery-D1: the planner (OpportunityDiscovery) re-ranks the same eligible set
+   * every cycle by a FRESH priorityScoreOf(), but rankEvictionCandidates() was sorting by
+   * dynamicMomentumScores written only at subscribe() time and never refreshed for active
+   * symbols - a stale premarket incumbent with an inflated subscribe-time score was never
+   * evicted while the planner paid the price on the wrong symbol. The planner pushes its fresh
+   * per-cycle scores back here each cycle; this overwrites the stored score ONLY for symbols
+   * currently in activeStreams (protected/core symbols are skipped - the eviction ranking
+   * ignores them anyway), and ignores non-finite inputs. Ranking-correctness only: no cap,
+   * threshold, dwell, rescue, or protection change.
+   */
+  refreshDynamicScores(scores: Map<string, number>): void {
+    const protectedSet = protectedStreamingSet();
+    for (const [rawSymbol, score] of scores) {
+      if (typeof score !== 'number' || !Number.isFinite(score)) continue;
+      const ticker = quoteKey(rawSymbol);
+      if (!ticker || protectedSet.has(ticker)) continue;
+      if (!this.activeStreams.has(ticker)) continue;
+      this.dynamicMomentumScores.set(ticker, score);
+    }
+  }
+
   getTickCount(symbol: string): number {
     return this.tickCounts.get(quoteKey(symbol)) ?? 0;
   }
@@ -519,6 +544,19 @@ export class MarketDataWorker {
     // bounded by that pre-existing, unchanged cap. Do NOT increase maxConcurrentTemporaryDataRescues
     // to solve this - that would still let renewal-only traffic starve acquisition, just with a
     // larger shared pool. The correct fix is accounting separation, not more capacity.
+    // 2026-10-07 Market-D1: RENEWAL extensions are bounded per active rescue lifetime. Each
+    // extension below adds another full temporaryDataRescueMaxDurationMs of eviction immunity,
+    // so a permanently-dark symbol re-requesting every cycle previously accumulated indefinite
+    // immunity and pinned one dynamic slot forever. Once the cumulative extension count reaches
+    // temporaryDataRescueMaxExtensions the RENEWAL is denied with an honest reason code - this
+    // only ever reduces immunity (fail-safe), never grants more, and changes no capacity,
+    // threshold, or other admission rule. A later request after this entry lapses starts a
+    // fresh, separately-bounded rescue lifetime.
+    if (alreadyRescued && intent === 'RENEWAL'
+      && (existing?.extensionCount ?? 0) >= continuousIntelligence.temporaryDataRescueMaxExtensions) {
+      this.logRescueDenial(ticker, reason, requestClass, traceId, 'RESCUE_RENEWAL_EXTENSION_CAP', intent);
+      return { granted: false, symbol: ticker, alreadySubscribed, evictedSymbol: null, deniedReason: 'RESCUE_RENEWAL_EXTENSION_CAP' };
+    }
     if (!alreadyRescued && intent === 'NEW_DATA_ACQUISITION') {
       const activeEntries = Array.from(this.temporaryRescues.entries())
         .filter(([s]) => this.hasActiveRescue(s))
@@ -890,6 +928,12 @@ export class MarketDataWorker {
   cacheObservedQuote(symbol: string, price: number, observedAtMs: number = Date.now()): void {
     const sym = quoteKey(symbol);
     if (!sym || !Number.isFinite(price) || price <= 0) return;
+    // 2026-10-07 Market-D2: monotonicity guard - an older observation arriving after a newer one
+    // must not move the cache backward, or getLatestPrice() (~20 callers, no age check) could
+    // serve the older price. Freshness ages then only ever grow (fail-safe: only ever ignores a
+    // write, never invents one).
+    const existingAtMs = this.latestPriceTimestamps.get(sym);
+    if (existingAtMs !== undefined && observedAtMs < existingAtMs) return;
     this.latestPrices.set(sym, price);
     this.latestPriceTimestamps.set(sym, observedAtMs);
   }
@@ -1307,6 +1351,18 @@ export class MarketDataWorker {
     for (const key of this.lastRejectLogMs.keys()) {
       if (key.startsWith(rejectPrefix)) this.lastRejectLogMs.delete(key);
     }
+    // 2026-10-07 Market-D3: purge the quote caches too, matching setBrokerQuoteContext()'s
+    // backend-switch purge (and recordMarketDataSubscription()'s reissue purge) - an unsubscribed
+    // symbol must not keep serving a stale price to getLatestPrice()/getLatestAsk()/
+    // getLatestSpreadBps() display/diagnostic consumers. Every trade-authorizing path re-checks
+    // age and fails closed, so the only observable change is "no quote" instead of a stale one
+    // after unsubscribe. All six maps are keyed by quoteKey(symbol) === ticker here.
+    this.latestPrices.delete(ticker);
+    this.latestPriceTimestamps.delete(ticker);
+    this.latestAskPrices.delete(ticker);
+    this.latestAskTimestamps.delete(ticker);
+    this.latestBidEvidence.delete(ticker);
+    this.lastTick.delete(ticker);
     if (this.quoteBackend === 'ibkr_gateway' && this.ibkrBridge) {
       try { this.ibkrBridge.unsubscribe(ticker); } catch { /* ignore */ }
       return;

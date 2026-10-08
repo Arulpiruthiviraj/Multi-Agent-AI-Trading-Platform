@@ -969,6 +969,18 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
       }
     }
 
+    // 2026-10-07 Discovery-D1: push this cycle's FRESH priorityScoreOf() back into the worker's
+    // real eviction-priority store for still-active dynamic symbols. The executor
+    // (MarketDataWorker.rankEvictionCandidates) previously sorted by subscribe-time scores that
+    // were never refreshed, so a stale premarket incumbent with an inflated subscribe-time score
+    // could never be evicted while the planner ranked by fresh scores - planning and execution
+    // disagreed on who the weakest incumbent was. Planner and executor now rank the same
+    // eligible set on the same numbers. Ranking-correctness only: no cap/threshold/protection
+    // change; refreshDynamicScores() itself skips protected symbols and non-active names.
+    const incumbentScoreRefresh = new Map<string, number>();
+    for (const symbol of active) incumbentScoreRefresh.set(symbol, priorityScoreOf(symbol));
+    marketDataWorker.refreshDynamicScores(incumbentScoreRefresh);
+
     for (const symbol of toRequest) {
       // 2026-09-29 correction: prefer the real score that actually decided this cycle's selection
       // (candidatePriorityScores, populated above for every hot-swap/topUp candidate) over
