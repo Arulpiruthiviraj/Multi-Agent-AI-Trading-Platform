@@ -143,7 +143,7 @@
 - `test:certification`: (run post-soak)
 - `test:certification:unit`: (run post-soak)
 - Oct-7 scenario: 2/2 pass (1 skipped — capability covered by anchor)
-- OKTA regression: (run post-soak)
+- OKTA regression: **4/4 PASS** (closePositionIntent short-cover path)
 
 ### 3-Hour Soak (Part 51)
 - **Status:** RUNNING (background, ~17m elapsed at report time)
