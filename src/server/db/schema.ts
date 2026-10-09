@@ -1337,6 +1337,73 @@ export const pitDecisionLedger = sqliteTable('pit_decision_ledger', {
   symbolIdx: index('idx_pit_decision_ledger_symbol').on(table.symbol),
 }));
 
+/**
+ * 2026-10-09 (certification mission item 1 — OCT9_PIT_PROVENANCE_ESCAPE): per-Quant-decision
+ * point-in-time replay provenance. Before this table, exact PIT replay was impossible —
+ * input bar IDs, observed/available-at timestamps, quote timestamps, and StrategyContext
+ * inputs were not retained, so a past decision could not be replayed identically and its
+ * inputs could not be audited.
+ *
+ * One row per Quant assessment decision (decision_id = the quant_assessments row id /
+ * evaluation traceId; a small per-decision row cap is enforced in
+ * src/server/replay/provenance/decisionProvenance.ts because a traceId should appear once).
+ * The row stores the DECISION INPUTS (bar evidence + available-at timestamps, quote/bid/ask
+ * + observation timestamps, the bounded+redacted StrategyContext, regime, strategy versions,
+ * config version, build SHA, lifecycle states at decision time) AND the DECISION OUTPUT
+ * (the strategyEvaluations array as produced, plus its sha256 fingerprint).
+ *
+ * Replay: src/server/replay/provenance/decisionProvenance.ts's replayQuantDecision() loads
+ * the row, enforces no-lookahead (data_available_at <= decision_time — a row claiming data
+ * available AFTER the decision is REJECTED), rebuilds the StrategyContext, and runs the
+ * REAL evaluateAll() strategy path (never a reimplementation). Production == replay iff the
+ * full evaluation arrays match AND the build/config versions match.
+ *
+ * Boundedness: every JSON column is byte-capped in code (truncate/redact, never unbounded);
+ * per-decision row cap; pruned by the registered retention sweeper
+ * (sweepDecisionProvenanceRetention, RETENTION_SWEEPERS — decisionProvenanceRetentionDays).
+ * This table is the per-decision sibling of quant_assessments (which keeps the assessment
+ * record); it exists so the decision can be REPLAYED, not just read.
+ */
+export const decisionProvenance = sqliteTable('decision_provenance', {
+  id: text('id').primaryKey(), // `${decision_id}` — one row per decision, enforced by per-decision row cap in code
+  decisionId: text('decision_id').notNull(), // the quant_assessments row id / evaluation traceId
+  symbol: text('symbol').notNull(),
+  timeframe: text('timeframe').notNull(),
+  decisionTimeMs: integer('decision_time_ms').notNull(), // epoch ms when the decision was produced
+  // JSON array of { barId, barTimestamp, availableAtMs } — the exact input bars plus the
+  // moment each became observable (no-lookahead audit). Bounded in code.
+  barEvidenceJson: text('bar_evidence_json'),
+  // JSON { price, observedAtMs, source } — the quote used (observed, never invented).
+  quoteJson: text('quote_json'),
+  // JSON { bid: {price, observedAtMs}, ask: {price, observedAtMs} } — nulls when unavailable.
+  bidAskJson: text('bid_ask_json'),
+  currentPrice: real('current_price'),
+  priceObservedAtMs: integer('price_observed_at_ms'),
+  // The StrategyContext the real evaluateAll() consumed — bounded + redacted in code
+  // (long strings truncated, byte cap enforced; NULL + context_truncated=1 when it still
+  // exceeds the cap, in which case replay fails closed rather than fabricating inputs).
+  strategyContextJson: text('strategy_context_json'),
+  contextTruncated: integer('context_truncated', { mode: 'boolean' }).notNull().default(false),
+  regime: text('regime'), // regime label at decision time (denormalized for queries)
+  // JSON { strategyId: strategyVersion } — from freezeStrategyVersion(); the build SHA is
+  // the strategy code version (strategies ship with the build).
+  strategyVersionsJson: text('strategy_versions_json'),
+  configVersion: text('config_version'), // sha256 of the strategy-spec + execution-model payload
+  buildSha: text('build_sha'), // git HEAD (or ARGUS_BUILD_SHA) — the code that computed the decision
+  // JSON { strategyId: lifecycleStatus } — read-only lookup at decision time
+  // (getStrategyLifecycleStatus; never creates rows). 'LOOKUP_FAILED' on transient error.
+  lifecycleStatesJson: text('lifecycle_states_json'),
+  strategyId: text('strategy_id'), // the decision's subject strategy (resolved best-strategy pick), nullable
+  // JSON — the strategyEvaluations array exactly as evaluateAll() produced it, bounded in code.
+  evaluationsJson: text('evaluations_json'),
+  evaluationFingerprint: text('evaluation_fingerprint'), // sha256 of canonical evaluations JSON
+  dataSource: text('data_source'), // e.g. 'QUANT_ENGINE' — which producer path wrote this row
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  decisionIdx: index('idx_decision_provenance_decision').on(table.decisionId),
+  symbolIdx: index('idx_decision_provenance_symbol').on(table.symbol, table.decisionTimeMs),
+}));
+
 /** Research WFO inbox. Script may only write RESEARCH_PARAM_CANDIDATE (legacy PAPER_TESTING readable). Not live enablement. */
 export const strategyConfigurations = sqliteTable('strategy_configurations', {
   id: text('id').primaryKey(),

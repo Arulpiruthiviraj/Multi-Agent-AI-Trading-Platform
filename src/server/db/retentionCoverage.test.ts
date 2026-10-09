@@ -40,6 +40,9 @@ const REQUIRED_RETENTION_TABLES = [
   'transaction_traces',
   'session_lifecycle_snapshots',
   'trade_lifecycle_transitions',
+  // 2026-10-09 (certification mission item 1 - OCT9_PIT_PROVENANCE_ESCAPE): per-Quant-decision
+  // PIT replay provenance.
+  'decision_provenance',
 ];
 
 describe('retention coverage', () => {

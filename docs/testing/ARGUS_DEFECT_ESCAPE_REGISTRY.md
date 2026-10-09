@@ -118,6 +118,15 @@ on it. This is a testing-mission Phase 1 document; it records history, it does n
 - **NEW_RELEASE_INVARIANT:** `PIT_REPLAY` — provenance retained and replay-verified for the
   exact build under certification.
 - **Responsible layer:** LAYER 3 (production state retains provenance) + LAYER 5 checklist.
+- **IMPLEMENTED 2026-10-09 (certification mission item 1):** `decision_provenance` table
+  (drizzle 0099) + `src/server/replay/provenance/decisionProvenance.ts` — emission on the real
+  QuantSignalAgent decision path (never blocking, never a gate), no-lookahead enforced at
+  write AND replay time (future-dated provenance is REJECTED), replay through the REAL
+  `evaluateAll()` path with byte-for-byte evaluation equality gated on identical build SHA +
+  strategy-spec config versions, byte caps + per-decision row cap + registered retention
+  sweeper (90d, in RETENTION_SWEEPERS / retentionCoverage.test.ts). Regression:
+  `decisionProvenance.test.ts` (POINT_IN_TIME_REPLAY) and
+  `decisionProvenanceRetention.test.ts`.
 
 ### OCT9_ZERO_AUTHORIZED_STRATEGIES_ESCAPE
 

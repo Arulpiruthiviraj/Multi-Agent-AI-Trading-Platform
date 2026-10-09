@@ -355,6 +355,25 @@ export async function sweepStagedNewsCatalystsTerminalRetention(nowMs = Date.now
   }
 }
 
+/**
+ * 2026-10-09 (certification mission item 1 - OCT9_PIT_PROVENANCE_ESCAPE): retention sweep
+ * for the decision_provenance table (per-Quant-decision PIT replay provenance). Lazy
+ * dynamic import: the provenance module pulls in StrategyEngine (the real evaluation path
+ * replay uses), which must never be in this module's static import set — same import-cycle
+ * discipline as the two sweepers above (the 2026-10-09 defect hunt fixed a TDZ crash from
+ * exactly this class of static import). The SQL itself is trivial; only the module load is
+ * deferred, and it is the leaf provenance module, not the agent that emits the rows.
+ */
+export async function sweepDecisionProvenanceRetention(nowMs = Date.now()): Promise<number> {
+  try {
+    const { sweepDecisionProvenanceRetention: sweep } = await import('../replay/provenance/decisionProvenance');
+    return sweep(nowMs);
+  } catch (e) {
+    console.error('[operationalRetention] sweepDecisionProvenanceRetention failed:', e instanceof Error ? e.message : String(e));
+    return 0;
+  }
+}
+
 export const RETENTION_SWEEPERS: RetentionSweeper[] = [
   { table: 'candidate_rankings', sweep: sweepCandidateRankingsRetention },
   { table: 'trade_plan_revalidations', sweep: sweepTradePlanRevalidationRetention },
@@ -379,4 +398,7 @@ export const RETENTION_SWEEPERS: RetentionSweeper[] = [
   { table: 'transaction_traces', sweep: sweepTransactionTracesRetention },
   { table: 'session_lifecycle_snapshots', sweep: sweepSessionLifecycleSnapshotsRetention },
   { table: 'trade_lifecycle_transitions', sweep: sweepTradeLifecycleTransitionsRetention },
+  // 2026-10-09 (certification mission item 1 - OCT9_PIT_PROVENANCE_ESCAPE): per-Quant-decision
+  // PIT replay provenance. Same coverage-test guarantee as every table above.
+  { table: 'decision_provenance', sweep: sweepDecisionProvenanceRetention },
 ];

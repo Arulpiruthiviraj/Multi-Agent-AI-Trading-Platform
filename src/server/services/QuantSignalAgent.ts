@@ -72,6 +72,10 @@ import { createSingleFlightGuard } from '../core/singleFlightInterval';
 import { isExperimentalStrategyLive } from '../config/quantExperimentalStrategies';
 import { getTradingDateStr, tradingWallTimeToIso, TRADING_TIMEZONE } from '../core/TradingCalendar';
 import { replaySafety } from '../replay/replaySafety';
+// 2026-10-09 (certification mission item 1 - OCT9_PIT_PROVENANCE_ESCAPE): per-decision
+// point-in-time replay provenance emission on the real decision path. The wrapper is
+// synchronous, never throws, and never awaits — provenance is telemetry, never a gate.
+import { recordDecisionProvenance, buildBarEvidence } from '../replay/provenance/decisionProvenance';
 
 const DEFAULT_CYCLE_INTERVAL_MS = tradingSafety.quantCycleIntervalMs;
 const LOOKBACK_DAYS = tradingSafety.quantLookbackDays;
@@ -1123,6 +1127,50 @@ export class QuantSignalAgent {
       quote: marketDataWorker.getObservedQuoteEvidence(symbol),
       emittedTradeIdea,
     }));
+
+    // 2026-10-09 (certification mission item 1 - OCT9_PIT_PROVENANCE_ESCAPE): per-decision
+    // point-in-time replay provenance, on the REAL decision path. recordDecisionProvenance()
+    // is synchronous, never throws, and never awaits — it adds negligible latency and can
+    // never block or fail this decision (provenance is telemetry, never a gate). The row
+    // records exactly what the decision consumed (bar IDs + available-at timestamps, the
+    // observed quote + timestamps, the bounded+redacted StrategyContext, regime, strategy
+    // versions, config version, build SHA, lifecycle states) plus what it produced
+    // (strategyEvaluations + fingerprint), so replayQuantDecision() can later reproduce the
+    // decision through the real evaluateAll() path. Gated in the same try/catch as the
+    // assessment persist: an emission failure is logged, never propagated.
+    try {
+      const quoteEvidence = marketDataWorker.getObservedQuoteEvidence(symbol);
+      const lastBar = bars[bars.length - 1];
+      recordDecisionProvenance({
+        decisionId: traceId,
+        symbol,
+        timeframe: TIMEFRAME,
+        decisionTimeMs: Date.now(),
+        bars: buildBarEvidence(symbol, TIMEFRAME, bars, endMs, 24 * 60 * 60 * 1000),
+        quote: {
+          price: quoteEvidence.observedPrice ?? null,
+          observedAtMs: quoteEvidence.capturedAtMs != null && quoteEvidence.priceAgeMs != null
+            ? quoteEvidence.capturedAtMs - quoteEvidence.priceAgeMs
+            : null,
+          source: quoteEvidence.source ?? null,
+        },
+        bid: { price: quoteEvidence.bid ?? null, observedAtMs: quoteEvidence.bidObservedAtMs ?? null },
+        ask: { price: quoteEvidence.ask ?? null, observedAtMs: quoteEvidence.askObservedAtMs ?? null },
+        currentPrice,
+        // The resolved price came from the live quote when the last bar's day had not closed
+        // yet (resolveQuantCurrentPrice), otherwise from the bar close observed at fetch time.
+        priceObservedAtMs: !isDailyBarFinal(lastBar.timestamp, endMs, TRADING_TIMEZONE) &&
+          quoteEvidence.capturedAtMs != null && quoteEvidence.priceAgeMs != null
+          ? quoteEvidence.capturedAtMs - quoteEvidence.priceAgeMs
+          : endMs,
+        strategyContext,
+        strategyEvaluations,
+        strategyId: resolvedStrategyId,
+        dataSource: 'QUANT_ENGINE',
+      });
+    } catch (e: any) {
+      console.error(`[QuantSignalAgent] Failed to record decision provenance for ${symbol}`, e.message);
+    }
 
     try {
       await db.insert(schema.quantAssessments).values({

@@ -4606,3 +4606,50 @@ QuantSignalAgent retains the same strategy, authorization and execution path. Ad
 Optional `quantInputEvidenceEnabled` in `config/observability.json` is OFF by default. It emits a manifest and bounded base64 chunks of redacted actual StrategyContext and bars through the existing bounded observability queue/retention, not a new database or order path. Limits are 128KiB total serialized evidence and 3KiB raw chunks; oversized input is labeled SIZE_LIMIT, never truncated as complete. Reconstruction requires all ordered chunks and a matching SHA-256 digest. Queue drops, log-level filtering or interrupted writes can leave incomplete evidence; a manifest alone is not a certificate. Capture size limits bound durable output, not the pre-serialization allocation; upstream historical inputs remain the existing bounded fetch window. Enabled resource overhead and soak remain unverified.
 
 Replay scope is CONTEXT_REPLAY_ONLY: this preserves existing calculation inputs but does not independently certify feature derivation or point-in-time provider availability. `quoteAfterContext` explicitly labels a later diagnostic observation, not the quote used for currentPrice. Upstream benchmark bars, config/build version and historical availability times are not captured. No promotion, strategy calculation, consensus/Risk/OMS change, default runtime flag activation or organic readiness claim accompanies this extension. The research promotion ladder remains distinct from runtime `learning_versions` strategyEligibility records; missing records never grant authorization.
+### October 9 — PIT replay provenance: `decision_provenance` + replay equality (certification mission item 1)
+
+Closes OCT9_PIT_PROVENANCE_ESCAPE: before this, exact point-in-time replay of a Quant
+decision was impossible — input bar IDs, observed/available-at timestamps, quote timestamps,
+and StrategyContext inputs were not retained, so a past decision could not be replayed
+identically and its inputs could not be audited.
+
+`src/server/replay/provenance/decisionProvenance.ts` is the new subsystem (persistence +
+replay scaffolding only — no strategy formula or indicator changes; new quant math still
+belongs in `quant-core-java/`, never here). One row per Quant assessment decision in the new
+`decision_provenance` table (drizzle 0099): input bar IDs + bar timestamps + per-bar
+available-at timestamps, the quote used + its observation timestamp, bid/ask + their
+observation timestamps, the resolved currentPrice + its observation time, the bounded +
+redacted StrategyContext (long strings truncated; numbers never altered — replay equality
+depends on numeric fidelity), regime, per-strategy versions via the existing
+freezeStrategyVersion mechanism, strategy-spec config hash, build SHA (git HEAD or
+ARGUS_BUILD_SHA), lifecycle states at decision time (read-only
+getStrategyLifecycleStatus — a missing row is recorded as-is, never seeded), and the
+produced strategyEvaluations + its sha256 fingerprint.
+
+Emission is wired on the real decision path (QuantSignalAgent.evaluateSymbolInternal, next
+to the quant_assessments persist). recordDecisionProvenance() is synchronous, never throws,
+and never awaits — a single-row INSERT fire-and-forget — so it adds negligible latency and
+can never block or fail a trading decision. Provenance is telemetry, never a gate.
+
+No-lookahead is enforced twice: emission REFUSES to persist a row whose evidence claims
+data available after the decision time (fail closed, logged loudly), and
+replayQuantDecision() re-validates on load, throwing ProvenanceLookaheadViolation for any
+hand-inserted future-dated row. Replay reconstructs the StrategyContext solely from the
+persisted row (real SQLite read + JSON.parse, never the in-memory object) and runs the
+REAL StrategyEngine.evaluateAll() — the same modules and call path production uses, never
+a reimplementation. equal=true iff the full evaluation arrays match under canonical JSON
+and the sha256 fingerprints agree. Equality is only claimable on the identical build SHA
+and identical strategy-spec config versions; a different build raises
+ProvenanceVersionMismatch (the comparison is invalid, not silently passed), a truncated
+context raises ProvenanceContextTruncated (honest "cannot replay", never fabricated
+inputs), and a missing row raises ProvenanceNotFound.
+
+Boundedness: per-payload byte caps enforced in code (strategy context 64KB, evaluations
+32KB, whole row 256KB — measured real sizes are ~7KB/~5KB), per-decision row cap (8),
+and a registered retention sweeper (sweepDecisionProvenanceRetention, 90 days aligned with
+pitDecisionLedgerRetentionDays, in RETENTION_SWEEPERS — retentionCoverage.test.ts covers the
+table). POINT_IN_TIME_REPLAY regression: decisionProvenance.test.ts (replay equality
+through the real path on seeded real-indicator contexts, deliberate future-data injection
+rejected at both write and replay time, byte-cap redaction, row cap, version mismatch) and
+decisionProvenanceRetention.test.ts (cutoff, idempotency, event-loop heartbeat, never-throws).
+This changes no thresholds, no lifecycle state, no LIVE paths; PAPER/telemetry only.

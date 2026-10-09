@@ -138,6 +138,11 @@ export interface RuntimeIntervals {
   transactionTracesRetentionDays: number;
   sessionLifecycleSnapshotsRetentionDays: number;
   tradeLifecycleTransitionsRetentionDays: number;
+  /** 2026-10-09 (certification mission item 1 - OCT9_PIT_PROVENANCE_ESCAPE): retention for
+   *  the decision_provenance table (per-Quant-decision PIT replay provenance). 90 days,
+   *  aligned with pitDecisionLedgerRetentionDays — both are decision-audit records; the
+   *  provenance row is what lets a past decision be replayed identically. */
+  decisionProvenanceRetentionDays: number;
   /** 2026-10-08 (defect A1): how long an aiProviders.health='Offline' quarantine must age
    *  (measured from the row's last_failure) before AIProviderHealthCheck's real re-probe may
    *  restore the provider to 'Degraded' on success. A failed re-probe keeps it Offline. */
@@ -171,6 +176,7 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'quantAssessmentsRetentionDays', 'pitDecisionLedgerRetentionDays',
   'agentReasoningLogsRetentionDays', 'transactionTracesRetentionDays',
   'sessionLifecycleSnapshotsRetentionDays', 'tradeLifecycleTransitionsRetentionDays',
+  'decisionProvenanceRetentionDays',
   'aiProviderQuarantineCooldownMs',
 ];
 

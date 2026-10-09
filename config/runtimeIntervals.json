@@ -89,5 +89,7 @@
   "transactionTracesRetentionDays": 90,
   "sessionLifecycleSnapshotsRetentionDays": 90,
   "tradeLifecycleTransitionsRetentionDays": 90,
+  "_decisionProvenanceRetentionComment": "2026-10-09 (certification mission item 1 - OCT9_PIT_PROVENANCE_ESCAPE): per-Quant-decision PIT replay provenance. 90 days, aligned with pitDecisionLedgerRetentionDays - both are decision-audit records; the provenance row is what lets a past decision be replayed identically from retained inputs.",
+  "decisionProvenanceRetentionDays": 90,
   "secEdgarForm4Ms": 21600000
 }
