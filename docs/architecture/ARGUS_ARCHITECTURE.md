@@ -1,5 +1,74 @@
 # Argus Architecture
 
+## 2026-10-08: Code-only defect repair — lifecycle authorization semantics, worker-thread backups, watchdog hardening, premarket event, quant-readiness diagnostics
+
+Code-only follow-through on the 2026-10-08 live PAPER session's 13 defects. No database
+was repaired and no strategy was promoted: the code now makes bad production state SAFE
+(fail-closed) and VISIBLE (explicit verdicts + diagnostics), and missing state cannot gain
+privilege. Full record: `docs/audits/ARGUS_OCT8_CODE_ONLY_DEFECT_REPAIR.md`.
+
+**What changed.**
+
+- **Lifecycle authorization semantics** (`src/server/quant/QuantStrategyAuthorization.ts`,
+  `src/server/quant/strategies/StrategyEmissionEligibility.ts`). Two named concepts, two
+  distinct predicates, documented in both module headers so they can never be confused:
+  1. *Emission eligibility* — "may emit an idea" (`mayEmitStrategyIdea()` → the real-selection
+     pool). Only an explicit RETIRED/DEGRADED decision removes a strategy here. ACTIVE_EXPLORATION
+     is *emission eligibility only*: the code proves it was designed as "bounded, monitored real
+     exposure via the normal, unchanged consensus intake" — never AI-independent execution.
+     ACTIVE_EXPLORATION + PAPER ⇒ REQUIRES_CONSENSUS; ACTIVE_EXPLORATION + LIVE ⇒ NOT_ELIGIBLE
+     (the paper-only lock fails first — no LIVE authority exists in this module under any status).
+  2. *Execution authority* — "may execute via QuantExecutionPolicy" (`resolveQuantStrategyAuthorization()`).
+     New authority `NOT_AUTHORIZED` + reason `NO_LIFECYCLE_RECORD` for a genuinely absent lifecycle
+     record (checked via `hasStrategyLifecycleRecord()` *before* `getStrategyLifecycleStatus()`,
+     whose `'UNTESTED'` default previously let missing state silently inherit UNTESTED semantics).
+     ChiefTrader drops NOT_AUTHORIZED ideas terminally (`DESK_NO_TRADE`, `QUANT_NOT_AUTHORIZED`,
+     never re-routed to consensus); a *transient lookup failure* stays REQUIRES_CONSENSUS +
+     `STRATEGY_LIFECYCLE_LOOKUP_FAILED` so a DB outage cannot wedge the desk. No idempotent
+     initializer was added: the code does not prove one is supposed to exist, and auto-promotion
+     is forbidden — RETIRED stays RETIRED.
+- **Backup off the event loop** (`src/server/services/DbBackupService.ts`,
+  `src/server/services/dbBackupWorkerSource.ts`). The SQLite online copy, integrity check,
+  sha256, and atomic publish now run in a `worker_thread` (source stored as an eval'd plain-JS
+  string so it survives the esbuild-bundled production build). The main thread only orchestrates.
+  Temp names carry `.<pid>.<nonce>`; orphaned `.partial` artifacts are swept on startup past a
+  grace window; disk-space preflight skips the backup with a loud diagnostic below threshold;
+  state machine `IDLE/RUNNING/SUCCEEDED/FAILED/SKIPPED_DISK` is queryable (`isMaintenanceInProgress()`,
+  `getBackupStatus()`) — the watchdog's "maintenance in progress" contract.
+- **Watchdog hardening** (`scripts/argusWatchdog.ts`, `scripts/lib/argusWatchdog*.ts`,
+  `src/server/core/maintenanceState.ts`). Startup-grace window, maintenance-aware frozen
+  detection (a fresh maintenance claim defers judgment up to a bounded budget — killing
+  mid-backup is what caused the restart storm), cooldown + exponential backoff, max restarts
+  per sliding window, then persisted STORM_LOCKOUT (`data/.argus_watchdog_state.json`, survives
+  watchdog restarts; lifted only by explicit `argus watchdog-clear-lockout`). Restarts never
+  auto-enable trading: the restart spec is asserted at runtime to contain no trading-resume flag,
+  and TRADING_PAUSED survives watchdog restarts. Never starts a second engine while the atomic
+  startup claim is held.
+- **Premarket event + readiness split** (`src/server/continuous/TradePlanBuilder.ts`,
+  `src/server/premarket/premarketFocusEvents.ts`, `src/server/premarket/premarketReadiness.ts`).
+  `TradePlanBuilder` now emits `PREMARKET_REFRESH_COMPLETED` at the end of every completed refresh
+  cycle (initial build = version 1; cycle version = max plan refreshVersion, so redelivery is
+  idempotent); the focus-report subscriber regenerates defensively with an upsert on
+  `(plan_date, refresh_version)` (unique index, matching migration 0091). Readiness reports two
+  independent checks — `tradePlanPipelineHealthy` (evidence: the trade_plans ledger) and
+  `premarketFocusReportHealthy` (evidence: focus-report rows vs latest completed refresh) — a
+  missing report can no longer masquerade as a dead pipeline or vice versa. Empty history is an
+  explicit "no refresh completed yet", never false-healthy/false-dead.
+- **AI resilience + diagnostics** (`src/server/ai/`, `src/server/routes/v2Diagnostics.ts`,
+  `scripts/argus-cli.ts`). HTTP 402 is now a first-class `BILLING` error kind end to end
+  (JevProvider classification → JevDecisionProvider mapping → governor circuit): never retried,
+  bounded cooldown with automatic probe recovery. Circuit state carries `lastErrorKind` /
+  `lastFailureAtMs` observability. New `GET /api/v2/diagnostics/quant-readiness` (read-only:
+  SELECTs + the real production resolver, never writes) and `argus quant-readiness [--json]`
+  print per-strategy lifecycle status and the authorization verdict each strategy would receive
+  against the live runtime DB — the defect #1 production state is now one command away from
+  visible.
+
+**What did NOT change.** Consensus bar (0.75 / min-2-agents), RiskEngine gates, OMS sole
+`.placeOrder(` caller, `LIVE_NO_GO` / `PAPER_TRADING_ONLY`, `CHIEF_APPROVED_IDEA` emitter
+allowlist, AI-advisory-never-in-decision-path. No strategy lifecycle was promoted; no
+threshold was lowered; no second order path was created.
+
 ## 2026-10-07: Jev / TypeSafe AI integration — event-driven AICallGovernor (AI-optional, quant-first)
 
 **Branch:** `feat/quant-first-decision-architecture` (pending review/merge; base main @ `5fede80`).
