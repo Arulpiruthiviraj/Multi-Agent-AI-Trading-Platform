@@ -28,7 +28,11 @@ export type ConsensusTerminalReasonCode =
   // QUANT_POLICY_REJECTED apart from CONSENSUS_INSUFFICIENT / CONFIDENCE_BELOW_STRONG.
   | 'QUANT_POLICY_APPROVED'
   | 'QUANT_POLICY_REJECTED'
-  | 'QUANT_NOT_AUTHORIZED';
+  | 'QUANT_NOT_AUTHORIZED'
+  // 2026-10-08 defect hunt: an operator CONFIRM side-lock withheld an approval.
+  // Kept distinct from AGENT_HOLD so the why-no-trade taxonomy does not misattribute
+  // an operator veto as a consensus failure. Pure relabeling - no decision change.
+  | 'MANUAL_SIDE_MISMATCH';
 
 export interface TerminalReasonClassificationInput {
   approved: boolean;

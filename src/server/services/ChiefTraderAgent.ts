@@ -1160,7 +1160,7 @@ export class ChiefTraderAgent {
     if (approved && sideMismatch) {
       approved = false;
       reason = sideMismatch;
-      terminalReasonCode = 'AGENT_HOLD';
+      terminalReasonCode = 'MANUAL_SIDE_MISMATCH';
       eventBus.emit(EVENTS.TRADE_REJECTED_CONSENSUS, {
         traceId,
         symbol,
@@ -1589,6 +1589,35 @@ export class ChiefTraderAgent {
     const sideMismatch = this.consumeManualSideMismatch(symbol, approvedSide);
     if (sideMismatch) {
       console.log(`[ChiefTrader] QUANT POLICY approval withheld on ${symbol}: ${sideMismatch}`);
+      // 2026-10-08 defect hunt: lastConsensusOutcome was written above with
+      // approved=true; correct it - the approval was withheld, never granted.
+      this.lastConsensusOutcome = {
+        at: new Date().toISOString(),
+        symbol,
+        approved: false,
+        side: 'HOLD',
+        independentAgreeingAgents: 0,
+        requiredAgents: 0,
+        confidence: decision.strategyConfidence ?? 0,
+        threshold: 0,
+        reason: sideMismatch,
+        agentVotes: [{ agent: idea.agent, side: idea.side, confidence: idea.confidence }],
+        decisionTier: 'QUANT_EXECUTION',
+        terminalReasonCode: 'MANUAL_SIDE_MISMATCH',
+      };
+      eventBus.emit(EVENTS.DESK_NO_TRADE, {
+        traceId, symbol, side: approvedSide, confidence: decision.strategyConfidence, reason: sideMismatch,
+        decisionPolicy: 'QUANT_EXECUTION',
+        decisionTier: 'QUANT_EXECUTION',
+        terminalReasonCode: 'MANUAL_SIDE_MISMATCH',
+        strategyId: authorization.strategyId,
+        authorizationReason: authorization.reason,
+      });
+      eventBus.emit(EVENTS.CHIEF_CONSENSUS_COMPLETED, {
+        traceId, symbol, approved: false, confidence: decision.strategyConfidence ?? 0, side: approvedSide,
+        threshold: 0, reason: sideMismatch, decisionPolicy: 'QUANT_EXECUTION',
+        decisionTier: 'QUANT_EXECUTION', terminalReasonCode: 'MANUAL_SIDE_MISMATCH',
+      });
       eventBus.emit(EVENTS.TRADE_REJECTED_CONSENSUS, {
         traceId, symbol, side: approvedSide, confidence: decision.strategyConfidence, reason: sideMismatch,
         decisionPolicy: 'QUANT_EXECUTION',

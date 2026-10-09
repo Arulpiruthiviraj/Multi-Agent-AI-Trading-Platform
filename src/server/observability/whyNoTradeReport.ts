@@ -34,6 +34,8 @@
  *   CONSENSUS_INSUFFICIENT <- CONSENSUS_TERMINAL_REASON codes that all mean "consensus said no":
  *                           AGENT_HOLD, AGENT_DATA_UNAVAILABLE, CONFIDENCE_BELOW_STRONG,
  *                           INSUFFICIENT_AGENT_PARTICIPATION, HARD_VETO, MODERATE_REJECT_*.
+ *   OPERATOR_SIDE_LOCK_VETO <- terminalReasonCode MANUAL_SIDE_MISMATCH (operator CONFIRM
+ *                           side-lock withheld an approval - not a consensus failure).
  *   RISK_REJECTED        <- risk_assessments.rejectionGate for the trace (existing join).
  *   BROKER_UNAVAILABLE   <- argusRuntime.brokerReadiness().ready === false.
  *   SUBSCRIPTION_STARVED / DATA_NOT_READY <- market-data line summary COUNTS only in the global
@@ -429,6 +431,9 @@ export function deriveMappedCategory(args: {
     if (args.riskReached && args.riskApproved === false) return 'RISK_REJECTED';
   } else if (args.primaryPath === 'CONSENSUS') {
     if (args.riskReached && args.riskApproved === false) return 'RISK_REJECTED';
+    // 2026-10-08 defect hunt: an operator side-lock veto is not a consensus failure -
+    // keep it out of the CONSENSUS_INSUFFICIENT bucket so operators can see their own veto.
+    if (args.consensusFound && args.terminalReasonCode === 'MANUAL_SIDE_MISMATCH') return 'OPERATOR_SIDE_LOCK_VETO';
     if (args.consensusFound && args.terminalReasonCode && args.terminalReasonCode !== 'CONSENSUS_APPROVED') return 'CONSENSUS_INSUFFICIENT';
     // A stale quant rejection does not shadow the newer consensus path; fall through.
   } else {
@@ -436,6 +441,7 @@ export function deriveMappedCategory(args: {
     if (args.quant.found && args.quant.eventType === 'QUANT_NOT_AUTHORIZED') return 'QUANT_NOT_AUTHORIZED';
     if (args.quant.found && args.quant.eventType === 'QUANT_POLICY_REJECTED') return 'QUANT_POLICY_REJECTED';
     if (args.riskReached && args.riskApproved === false) return 'RISK_REJECTED';
+    if (args.consensusFound && args.terminalReasonCode === 'MANUAL_SIDE_MISMATCH') return 'OPERATOR_SIDE_LOCK_VETO';
     if (args.consensusFound && args.terminalReasonCode && args.terminalReasonCode !== 'CONSENSUS_APPROVED') return 'CONSENSUS_INSUFFICIENT';
   }
   return null;
