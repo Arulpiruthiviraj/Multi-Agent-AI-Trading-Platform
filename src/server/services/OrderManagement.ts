@@ -43,7 +43,7 @@ import { isTelemetryPulsePayload } from '../core/telemetryPulse';
 import { createSingleFlightGuard } from '../core/singleFlightInterval';
 import { db } from '../db';
 import { trades, settings, brokerConnections, portfolio, reconciliationEvents, fills } from '../db/schema';
-import { eq, and, notInArray, isNotNull, inArray, isNull, gte } from 'drizzle-orm';
+import { eq, and, or, notInArray, isNotNull, inArray, isNull, gte, lt } from 'drizzle-orm';
 import crypto from 'crypto';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { BoundedWarnOnce } from '../../brokers/brokerMemory';
@@ -1049,6 +1049,57 @@ export class OrderManagementService {
       console.error('[OMS] crash-recovery: failed to query candidate trades', e);
       return;
     }
+
+    // 2026-10-08 defect hunt (D7): PENDING rows OLDER than the lookback (or with NULL
+    // submitted_at) silently fell out of recovery forever - neither reconciled nor surfaced.
+    // Surface them as RECONCILIATION_REQUIRED (never REJECTED - absence was never confirmed)
+    // with a reconciliation_events row each, through the same operator-visible mechanism the
+    // fill-ledger rejection path uses. The guarded UPDATE is idempotent: already-surfaced rows
+    // no longer match status='PENDING', so this cannot re-fire or clobber a concurrent
+    // resolution. Capped at 500 rows per cycle; a larger backlog is itself a loud signal.
+    try {
+      const cutoff = new Date(Date.now() - CRASH_RECOVERY_LOOKBACK_MS).toISOString();
+      const agedOut = await db.select().from(trades).where(and(
+        eq(trades.status, 'PENDING'),
+        isNull(trades.brokerOrderId),
+        or(lt(trades.submittedAt, cutoff), isNull(trades.submittedAt)),
+      )).limit(500);
+      for (const row of agedOut) {
+        try {
+          // Guarded UPDATE: a concurrent path may have resolved the row between our SELECT and
+          // this write - only rows still PENDING transition. Idempotent across cycles.
+          await db.update(trades)
+            .set({ status: 'RECONCILIATION_REQUIRED' })
+            .where(and(eq(trades.id, row.id), eq(trades.status, 'PENDING')));
+          const [after] = await db.select().from(trades).where(eq(trades.id, row.id));
+          if (!after || after.status !== 'RECONCILIATION_REQUIRED') continue; // resolved concurrently
+          await db.insert(reconciliationEvents).values({
+            checkedAt: new Date().toISOString(),
+            broker: (row as any).brokerId || 'unknown',
+            matches: false,
+            mismatches: JSON.stringify([{
+              type: 'CRASH_RECOVERY_LOOKBACK_EXCEEDED',
+              orderId: row.id,
+              symbol: (row as any).symbol,
+              side: (row as any).side,
+              submittedAt: (row as any).submittedAt,
+              error: `PENDING order aged past the ${CRASH_RECOVERY_LOOKBACK_MS}ms crash-recovery lookback with no brokerOrderId - true state unknown, needs operator reconciliation.`,
+            }]),
+            worstImpactDollars: null,
+            actionTaken: 'RECONCILIATION_REQUIRED',
+          });
+          console.warn(`[OMS] crash-recovery: order ${row.id} aged past the recovery lookback with no brokerOrderId - marked RECONCILIATION_REQUIRED (state unknown, not rejected).`);
+        } catch (rowErr) {
+          console.error(`[OMS] crash-recovery: failed to surface aged-out order ${row.id} as RECONCILIATION_REQUIRED`, rowErr);
+        }
+      }
+      if (agedOut.length >= 500) {
+        console.error('[OMS] crash-recovery: 500+ PENDING orders aged past the recovery lookback - backlog needs operator attention beyond this cycle.');
+      }
+    } catch (e) {
+      console.error('[OMS] crash-recovery: failed to surface aged-out PENDING orders', e);
+    }
+
     if (candidates.length === 0) return;
 
     let activeBroker: BrokerPlugin;

@@ -322,4 +322,62 @@ describe('OrderManagementService.reconcileStaleOrders - crash recovery (Phase 1)
       expect(rowB.brokerOrderId).toBe('real-broker-b-order-id-2');
     });
   });
+
+  // 2026-10-08 defect hunt (D7): PENDING rows older than the crash-recovery lookback (48h)
+  // silently fell out of recovery forever - neither reconciled nor surfaced. They are now
+  // marked RECONCILIATION_REQUIRED (never REJECTED - absence was never confirmed) with a
+  // reconciliation_events row, through the same operator-visible mechanism as fill-ledger
+  // rejections. NULL submitted_at (unknown age) is surfaced too - fail closed, not skipped.
+  describe('D7: aged-out PENDING rows are surfaced, never silently dropped', () => {
+    async function seedAgedRow(id: string, submittedAt: string | null) {
+      await db.insert(schema.trades).values({
+        id, symbol: 'AAPL', side: 'BUY', quantity: 10, price: 0, status: 'PENDING',
+        positionQuantityBefore: 0, positionAveragePriceBefore: 0,
+        brokerId: 'crash-recovery-stub', executionEnvironment: 'UNKNOWN',
+        timestamp: new Date().toISOString(),
+        reasoning: 'test', traceId: `trace-${id}`, requestId: id,
+        submittedAt, brokerOrderId: null,
+      });
+    }
+
+    it('a PENDING row older than the 48h lookback becomes RECONCILIATION_REQUIRED with an event row', async () => {
+      await seedAgedRow('aged-1', new Date(Date.now() - 49 * 3600 * 1000).toISOString());
+      await seedAgedRow('fresh-1', new Date().toISOString()); // control: stays in normal recovery
+
+      await oms.reconcileStaleOrders();
+
+      const [aged] = await db.select().from(schema.trades).where(eq(schema.trades.id, 'aged-1'));
+      expect(aged.status).toBe('RECONCILIATION_REQUIRED');
+      const events = await db.select().from(schema.reconciliationEvents);
+      const surfaced = events.filter((e: any) => JSON.stringify(e.mismatches).includes('aged-1'));
+      expect(surfaced.length).toBe(1);
+      expect(JSON.stringify(surfaced[0].mismatches)).toContain('CRASH_RECOVERY_LOOKBACK_EXCEEDED');
+
+      // The fresh row still goes through normal broker lookup, not the aged-out path.
+      const [fresh] = await db.select().from(schema.trades).where(eq(schema.trades.id, 'fresh-1'));
+      expect(lookupSpy).toHaveBeenCalledWith('fresh-1');
+      expect(lookupSpy).not.toHaveBeenCalledWith('aged-1');
+      expect(fresh.status).not.toBe('RECONCILIATION_REQUIRED');
+    });
+
+    it('a PENDING row with NULL submitted_at (unknown age) is surfaced, not skipped', async () => {
+      await seedAgedRow('aged-null-ts', null);
+
+      await oms.reconcileStaleOrders();
+
+      const [row] = await db.select().from(schema.trades).where(eq(schema.trades.id, 'aged-null-ts'));
+      expect(row.status).toBe('RECONCILIATION_REQUIRED');
+    });
+
+    it('surfacing is idempotent: a second run does not duplicate event rows', async () => {
+      await seedAgedRow('aged-idem', new Date(Date.now() - 49 * 3600 * 1000).toISOString());
+
+      await oms.reconcileStaleOrders();
+      await oms.reconcileStaleOrders();
+
+      const events = await db.select().from(schema.reconciliationEvents);
+      const surfaced = events.filter((e: any) => JSON.stringify(e.mismatches).includes('aged-idem'));
+      expect(surfaced.length).toBe(1);
+    });
+  });
 });
