@@ -137,4 +137,69 @@ describe('NewsClusterEngine (Phase F2 real clustering, real DB)', () => {
     const secondResult = await engine.createOrUpdateCluster(a, 'Product', impact, 0.9, ['AAPL']);
     expect(secondResult).toBeNull();
   });
+
+  /**
+   * N-D5 regression: the article insert used to commit BEFORE the cluster insert. If the
+   * cluster insert then threw, the news_articles row stayed behind with no cluster - an
+   * orphaned row, inert but unbounded over time (and re-processed by the next run). The fix
+   * wraps article + cluster writes in a single DB transaction: a failing cluster write rolls
+   * back the article insert too.
+   *
+   * Fault injection: a TEMP SQLite trigger that raises a real DB error on news_clusters
+   * INSERT - exactly the failure class (DB error after the article insert) the fix must
+   * survive. A TEMP trigger rides the same single connection the engine's drizzle `db` uses,
+   * so it fires inside the engine's own transaction.
+   */
+  it('rolls back the article row when the cluster insert fails (no orphan article row)', async () => {
+    sqliteDb.exec(
+      `CREATE TEMP TRIGGER nd5_fail_cluster_insert BEFORE INSERT ON news_clusters
+       BEGIN SELECT RAISE(ABORT, 'INJECTED_CLUSTER_INSERT_FAILURE'); END;`
+    );
+    try {
+      const outcome = await engine.createOrUpdateCluster(article({}), 'Product', impact, 0.9, ['AAPL']);
+      expect(outcome).toBeNull(); // fail-closed, no half-persisted state
+      const articleRows = await db.select().from(schema.newsArticles);
+      expect(articleRows).toHaveLength(0); // no orphan article row
+      const clusterRows = await db.select().from(schema.newsClusters);
+      expect(clusterRows).toHaveLength(0);
+    } finally {
+      sqliteDb.exec('DROP TRIGGER IF EXISTS nd5_fail_cluster_insert');
+    }
+  });
+
+  it('rolls back the article row when a cluster MERGE update fails', async () => {
+    // Seed one real cluster first so the second article takes the merge path.
+    const first = article({
+      title: 'Apple announces new AI partnership',
+      source: 'Yahoo Finance',
+      publishedAt: nearNowIso(-60_000),
+    });
+    const firstOutcome = await engine.createOrUpdateCluster(first, 'Product', impact, 0.9, ['AAPL']);
+    expect(firstOutcome).toBeTruthy();
+
+    // Fault injection: real DB error on news_clusters UPDATE, after the article insert
+    // already succeeded inside the same transaction.
+    sqliteDb.exec(
+      `CREATE TEMP TRIGGER nd5_fail_cluster_update BEFORE UPDATE ON news_clusters
+       BEGIN SELECT RAISE(ABORT, 'INJECTED_CLUSTER_UPDATE_FAILURE'); END;`
+    );
+    try {
+      const second = article({
+        title: 'Apple enters major AI partnership',
+        source: 'CNBC',
+        publishedAt: nearNowIso(-30_000),
+      });
+      const outcome = await engine.createOrUpdateCluster(second, 'Product', impact, 0.85, ['AAPL']);
+      expect(outcome).toBeNull();
+      // Only the first article row survives; the failed second article is rolled back, and the
+      // cluster row is unchanged (still articleCount=1).
+      const articleRows = await db.select().from(schema.newsArticles);
+      expect(articleRows.map((a: any) => a.id)).toEqual([first.id]);
+      const clusterRows = await db.select().from(schema.newsClusters);
+      expect(clusterRows).toHaveLength(1);
+      expect(clusterRows[0].articleCount).toBe(1);
+    } finally {
+      sqliteDb.exec('DROP TRIGGER IF EXISTS nd5_fail_cluster_update');
+    }
+  });
 });
