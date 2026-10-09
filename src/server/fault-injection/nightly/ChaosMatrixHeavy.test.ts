@@ -116,15 +116,19 @@ describe('fault-injection chaos matrix HEAVY (FAULT_INJECTION, NIGHTLY)', () => 
     const hb = inj.startHeartbeat();
     for (let i = 0; i < N; i++) eventBus.emit(EVENT, { i });
 
-    let failed = 0;
+    const outcomes: Array<{ status: string; reason?: string }> = [];
     for (let i = 0; i < 15; i++) {
       const res: any = await governor.request(govReq(i, 'H1'));
-      if (res.status === 'FAILED') failed++;
+      outcomes.push({ status: res.status, reason: res.reason });
     }
     const summary = hb.stop();
 
     expect(delivered).toBe(N);
-    expect(failed).toBe(15);
+    // Fail-closed throughout: FAILED while the fault is live, SKIPPED once
+    // the breaker engages — never a success, never a throw.
+    expect(outcomes.every((o) => o.status === 'FAILED' || o.status === 'SKIPPED')).toBe(true);
+    expect(outcomes.filter((o) => o.status === 'FAILED').length).toBeGreaterThan(0);
+    expect(outcomes.some((o) => o.status === 'SKIPPED' && o.reason === 'CIRCUIT_OPEN')).toBe(true);
     expect(provider.invocations).toBeLessThan(15);
     expect(failoverCalls).toBe(0);
     hbMod.assertHeartbeatHealthy(summary, 'H1 ai-down+200k', { maxHeapDeltaBytes: 300 * 1024 * 1024 });

@@ -129,16 +129,21 @@ describe('fault-injection chaos matrix (FAULT_INJECTION, PRE-MARKET)', () => {
     for (let i = 0; i < N; i++) eventBus.emit(EVENT, { i, price: 100 + (i % 50) });
 
     // AI requests fail closed DURING the burst.
-    let failed = 0;
+    const outcomes: Array<{ status: string; reason?: string; kind?: string }> = [];
     for (let i = 0; i < 12; i++) {
       const res: any = await governor.request(govReq(i, 'C1'));
-      if (res.status === 'FAILED') failed++;
+      outcomes.push({ status: res.status, reason: res.reason, kind: res.kind });
     }
     const summary = hb.stop();
     const heapAfter = process.memoryUsage().heapUsed;
 
     expect(delivered).toBe(N); // (a) no event lost, no backlog left behind
-    expect(failed).toBe(12); // (e) every AI call failed closed, none threw
+    // (e) every AI call failed closed — FAILED while the fault was live, then
+    // SKIPPED once the breaker engaged. Never a success, never a throw.
+    expect(outcomes.every((o) => o.status === 'FAILED' || o.status === 'SKIPPED')).toBe(true);
+    expect(outcomes.filter((o) => o.status === 'FAILED').length).toBeGreaterThan(0);
+    // (b) the breaker engaged: at least one skip names the open circuit.
+    expect(outcomes.some((o) => o.status === 'SKIPPED' && o.reason === 'CIRCUIT_OPEN')).toBe(true);
     expect(provider.invocations).toBeLessThan(12); // (b) circuit containment
     expect(failoverCalls).toBe(0); // (e) no generative failover, ever
     hbMod.assertHeartbeatHealthy(summary, 'C1 ai-down+burst');
@@ -249,10 +254,10 @@ describe('fault-injection chaos matrix (FAULT_INJECTION, PRE-MARKET)', () => {
     const hb = inj.startHeartbeat();
     const backupPromise = service.runBackup();
     // AI timeout storm DURING the backup.
-    let aiFailed = 0;
+    const outcomes: Array<{ status: string; reason?: string }> = [];
     for (let i = 0; i < 6; i++) {
       const res: any = await governor.request(govReq(i, 'C3'));
-      if (res.status === 'FAILED') aiFailed++;
+      outcomes.push({ status: res.status, reason: res.reason });
     }
     const outcome = await backupPromise;
     const summary = hb.stop();
@@ -264,9 +269,11 @@ describe('fault-injection chaos matrix (FAULT_INJECTION, PRE-MARKET)', () => {
     expect(outcome.outcome).toBe('completed');
     expect(service.getBackupStatus().state).toBe('SUCCEEDED');
     expect(service.isMaintenanceInProgress()).toBe(false);
-    // (b) AI timeouts bounded, failed closed, no failover.
-    expect(aiFailed).toBe(6);
-    expect(provider.invocations).toBeLessThanOrEqual(6 * 2);
+    // (b) AI timeouts failed closed and the breaker engaged (5 consecutive
+    // TIMEOUTs trip it; the 6th is SKIPPED/CIRCUIT_OPEN by design).
+    expect(outcomes.every((o) => o.status === 'FAILED' || o.status === 'SKIPPED')).toBe(true);
+    expect(outcomes.filter((o) => o.status === 'FAILED').length).toBeGreaterThan(0);
+    expect(provider.invocations).toBeLessThanOrEqual(6);
     expect(failoverCalls).toBe(0);
     // (c) quant path unaffected by the timeout storm.
     const quant = await authz.resolveQuantStrategyAuthorization(quantIdea());
