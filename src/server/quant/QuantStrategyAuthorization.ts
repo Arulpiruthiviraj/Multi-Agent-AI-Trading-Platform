@@ -15,10 +15,27 @@
  *      by setting origin/strategyId metadata)
  *   5. the strategy's DB-backed lifecycle (StrategyEmissionEligibility, learning_versions —
  *      the runtime-authoritative lifecycle; promotionEngine's ladder stays research-side)
- *      must be VALIDATED or CHAMPION. UNTESTED/SHADOW/CANDIDATE/ACTIVE_EXPLORATION/
+ *      must be VALIDATED, CHAMPION, or ACTIVE_EXPLORATION. UNTESTED/SHADOW/CANDIDATE/
  *      ROLLED_BACK keep today's consensus path (no behavior change); DEGRADED/RETIRED are
  *      terminally NOT_ELIGIBLE (their exposure was explicitly removed by evidence-backed
  *      operator decision).
+ *
+ *      ACTIVE_EXPLORATION fix (2026-10-08): StrategyEmissionEligibility.ts's own docstring
+ *      defines ACTIVE_EXPLORATION as "bounded, monitored real exposure while evidence
+ *      accumulates" — i.e. exactly a controlled-PAPER-testing tier, distinct from VALIDATED's
+ *      "passed OOS/walk-forward validation." Originally this resolver required VALIDATED/
+ *      CHAMPION only, which created a real chicken-and-egg defect: nothing could ever reach
+ *      VALIDATED without first accumulating quant-independent execution evidence, and nothing
+ *      could accumulate that evidence without already being VALIDATED (confirmed live
+ *      2026-10-08: 10,000+ consensus rounds, 0 CHIEF_APPROVED_IDEA, AI degraded, and the only
+ *      strategy with any lifecycle row at all was PULLBACK_CONTINUATION=RETIRED). This does
+ *      NOT weaken anything: the paper-only environment check above already runs before this
+ *      lifecycle switch, so ACTIVE_EXPLORATION can only ever authorize in PAPER, never LIVE —
+ *      identical fail-closed behavior to VALIDATED/CHAMPION for the LIVE case. Granting this
+ *      also does not, by itself, authorize any specific strategy: it only takes effect once a
+ *      strategy has an explicit ACTIVE_EXPLORATION row via recordStrategyLifecycleTransition()
+ *      (the canonical mechanism) — a strategy with no row still defaults to UNTESTED and stays
+ *      on the unchanged consensus path.
  *
  * Only AUTHORIZED_QUANT_POLICY ideas may enter QuantExecutionPolicy. Everything else keeps
  * exactly the behavior it had before this change.
@@ -78,7 +95,6 @@ const CONSENSUS_LIFECYCLE_REASONS: Record<string, QuantAuthorizationReason> = {
   UNTESTED: 'STRATEGY_UNTESTED',
   SHADOW: 'STRATEGY_SHADOW',
   CANDIDATE: 'STRATEGY_CANDIDATE',
-  ACTIVE_EXPLORATION: 'STRATEGY_ACTIVE_EXPLORATION',
   ROLLED_BACK: 'STRATEGY_ROLLED_BACK',
 };
 
@@ -152,16 +168,24 @@ export async function resolveQuantStrategyAuthorization(
   if (lifecycleStatus === 'RETIRED') {
     return { ...withLifecycle, authority: 'NOT_ELIGIBLE', reason: 'STRATEGY_RETIRED' };
   }
-  // Positive authorization: only an explicit VALIDATED/CHAMPION lifecycle decision grants
-  // AI-independent execution. This is the narrow new privilege this whole change exists for.
+  // Positive authorization: an explicit VALIDATED/CHAMPION/ACTIVE_EXPLORATION lifecycle
+  // decision grants AI-independent execution. This is the narrow new privilege this whole
+  // change exists for. ACTIVE_EXPLORATION is deliberately included here (not just
+  // VALIDATED/CHAMPION) - see this file's header comment: it is StrategyEmissionEligibility's
+  // own "bounded, monitored real exposure while evidence accumulates" tier, i.e. the
+  // controlled-PAPER-testing state, and the paper-only check above already makes this
+  // PAPER-only regardless of lifecycle status.
   if (lifecycleStatus === 'VALIDATED') {
     return { ...withLifecycle, authority: 'AUTHORIZED_QUANT_POLICY', reason: 'STRATEGY_VALIDATED' };
   }
   if (lifecycleStatus === 'CHAMPION') {
     return { ...withLifecycle, authority: 'AUTHORIZED_QUANT_POLICY', reason: 'STRATEGY_CHAMPION' };
   }
-  // Every other lifecycle (UNTESTED default, SHADOW, CANDIDATE, ACTIVE_EXPLORATION,
-  // ROLLED_BACK): today's behavior, unchanged - the consensus path.
+  if (lifecycleStatus === 'ACTIVE_EXPLORATION') {
+    return { ...withLifecycle, authority: 'AUTHORIZED_QUANT_POLICY', reason: 'STRATEGY_ACTIVE_EXPLORATION' };
+  }
+  // Every other lifecycle (UNTESTED default, SHADOW, CANDIDATE, ROLLED_BACK):
+  // today's behavior, unchanged - the consensus path.
   const reason = CONSENSUS_LIFECYCLE_REASONS[lifecycleStatus] ?? 'STRATEGY_UNTESTED';
   return { ...withLifecycle, authority: 'REQUIRES_CONSENSUS', reason };
 }
