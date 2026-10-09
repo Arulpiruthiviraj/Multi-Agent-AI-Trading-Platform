@@ -29,7 +29,7 @@ import {
   getStrategyLifecycleStatus,
   hasStrategyLifecycleRecord,
 } from '../quant/strategies/StrategyEmissionEligibility';
-import { ALL_STRATEGIES } from '../quant/strategies/StrategyEngine';
+import { resolveStrategiesForLiveEvaluation } from '../quant/strategies/StrategyEngine';
 import { isPaperTradingOnlyEnforced } from '../core/tradingModeEnv';
 import { isQuantPolicyEnabled } from '../config/quantDecisionPolicy';
 
@@ -73,7 +73,7 @@ export async function buildQuantReadinessReport(): Promise<QuantReadinessReport>
   const quantPolicyEnabled = isQuantPolicyEnabled();
   const strategies: QuantReadinessStrategyRow[] = [];
 
-  for (const def of ALL_STRATEGIES) {
+  for (const def of resolveStrategiesForLiveEvaluation()) {
     const strategyId = def.id;
     let lifecycleRecordExists = false;
     let lifecycleStatus: string | null = null;

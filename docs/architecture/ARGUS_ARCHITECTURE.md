@@ -4487,3 +4487,70 @@ engine was not restarted, resumed or armed. Existing historical outcome/calibrat
 were not rewritten. The protected ChiefTrader aggregate-provider lookup proposal remains
 not implemented; earned calibration quality, runtime backlog progress, subscription coverage,
 multi-hour soak and strategy profitability still require independent evidence.
+
+### October 9 — production lifecycle authority in operator readiness
+
+The strategyAuthorization checklist check now awaits the canonical buildQuantReadinessReport
+and reports FAIL/QUANT_FIRST_OPERATIONALLY_INACTIVE when PAPER quant policy is enabled but
+no registry strategy receives AUTHORIZED_QUANT_POLICY. Enabled configuration and a PAPER lock
+alone no longer produce PASS. A positive result names the actual authorized IDs and explicitly
+leaves signal, data, calibration and risk checks separate. This is read-only operator evidence,
+not a new execution gate, promotion, trading-state transition or change to strategy authority.
+The quant-readiness CLI no longer incorrectly claims all ideas take consensus when some are
+terminally rejected for missing lifecycle or ineligibility. Regression coverage uses the actual
+resolver and isolated DB, checks zero-authority and authorized-record cases, and verifies no
+lifecycle writes. Synthetic lifecycle fixtures certify diagnostic mechanics only.
+
+The diagnostic now enumerates resolveStrategiesForLiveEvaluation() rather than only the five
+CORE defaults. Enabled experimental strategies are included; disabled ones are excluded.
+This reflects evaluation membership, not a claim that every evaluated strategy can win selection.
+
+scripts/certifyQuantProductionState.ts adds an engine-independent release check. The parent
+reads only actual strategy lifecycle records and config_overrides from the source DB under
+one read-only transaction. A child copies them verbatim into an isolated temporary DB,
+hydrates the canonical runtime-override cache and uses the current registry/config and the
+existing authorization resolver. It never seeds earned lifecycle state, opens a broker or
+emits an idea. Temporary migrations are not production migrations. It exits 2 when no
+strategy has authority; exit 0 means authority present only, not signal/execution readiness.
+The snapshot covers these policy inputs, not the entire production ledger or running state.
+
+The AI-offline round-trip regression now controls only price data for the exit. It calls the
+real PortfolioMonitor.triggerNow(), observes its actual target-triggered SELL idea and lets
+the real EventBus/ChiefTrader/Risk/OMS/paper broker close the position. It uses the canonical
+ChiefTrader singleton, avoiding the extra listener registered by a second instance, and
+asserts one exit approval. Market fixture ticks update the canonical observed-price cache.
+The positive entry still uses a real strategy evaluation with labeled synthetic earned-state
+fixtures; it is mechanism certification, not production qualification or complete discovery
+coverage. Optional post-fill ExplainabilityAgent attempts are distinguished from decision AI.
+No production decision mathematics, strategy thresholds or safety gates changed.
+
+### October 9 — backup admission spans preflight, all processes and worker teardown
+
+DbBackupService claims RUNNING before its first await, so two same-turn direct calls cannot
+both enter preflight. Every copy acquires BEGIN EXCLUSIVE on a small dedicated
+.backup-lease.sqlite in the canonical backup directory, with zero busy timeout. SQLite's OS
+file locks serialize separate operator/engine processes and release on owner process death;
+this is not a lock on the production trading DB, a new retry scheduler or a PID-age lease.
+The lease spans cleanup, preflight, worker completion/termination and retention. A rejected
+contender neither sweeps another owner's files nor overwrites its maintenance failure state.
+Worker completion/error/timeout waits for terminate() before settling the copy operation;
+normal worker shutdown therefore precedes admission release. Regression starts an isolated
+child lock holder, confirms no worker can start while it owns the lease, kills only that
+owned child and confirms a real backup succeeds without manual lock-file recovery. Another
+test covers same-turn preflight admission. The lease DB is persistent tiny coordination
+metadata, excluded from published-backup retention; it is not a copied production backup.
+Production-scale stress and deployment remain separate certification requirements.
+
+If worker termination rejects, backup status reports failure and retains lease ownership; a later successful stop or owner process death releases it. Failure injection tests verify continued exclusion and recovery. No uncertainty is treated as completed teardown.
+
+Startup orphan cleanup also takes the same lease and completes before any initial backup.
+An old-looking partial file can still belong to a running backup: the configured worker
+deadline exceeds the orphan age. A lease contender therefore skips startup cleanup and
+initial backup. A separate-process regression preserves that partial while its owner lives,
+then verifies cleanup and a real backup after owner death. Shutdown retains the worker handle
+until termination succeeds, allowing a failed termination to be retried safely.
+
+The provider-resilience suite additionally submits 1,000 distinct requests to the real router
+with an unavailable synthetic provider. It verifies bounded provider calls, explicit throttled
+responses or failures, no routable provider afterward and an empty in-flight map. This tests
+router admission under outage; it does not certify real provider quotas or network recovery.

@@ -87,6 +87,25 @@ describe('AIRouter provider-resilience fixes (D1/D3/D5)', () => {
   });
 
   describe('D1: routeConsensus global per-minute rate cap', () => {
+    it('bounds a 1,000-request outage burst without successful AI responses', async () => {
+      const provider = failingProvider('HTTP 503 service unavailable');
+      aiRouter.registerProvider('outage-burst-provider', provider);
+      const requests = Array.from({ length: 1000 }, (_, i) =>
+        aiRouter.routeTask('TestAgent', `distinct outage request ${i}`, `outage-${i}`));
+      const results = await Promise.allSettled(requests);
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          // Admission throttling is an explicit unavailable response, not a
+          // successful provider response or an actionable trading decision.
+          expect(result.value.provider).toBe('throttled');
+          expect(result.value.content).toBe('AI_RATE_LIMITED');
+        }
+      }
+      expect(registeredChatCalls(provider)).toBeGreaterThan(0);
+      expect(registeredChatCalls(provider)).toBeLessThanOrEqual(tradingSafety.maxAiCallsPerMinute);
+      expect(await aiRouter.hasAnyRoutableProvider()).toBe(false);
+      expect(aiRouter.__routeTaskInFlightSizeForTests()).toBe(0);
+    });
     it('throttles debates at maxAiCallsPerMinute: throttled debates fail closed with no provider calls beyond the cap', async () => {
       const cap: number = tradingSafety.maxAiCallsPerMinute;
       const provider = fastProvider();
@@ -333,6 +352,11 @@ describe('AIRouter provider-resilience fixes (D1/D3/D5)', () => {
       ).toBe(true);
 
       // Remove the row and re-initialize: the stale bookkeeping must be gone.
+      // Keep another credentialless row so initialize does not seed and probe real endpoints.
+      await db.insert(schema.aiProviders).values({
+        id: `${rowId}-remaining`, providerName: 'ZzxRemainingProvider',
+        apiEndpoint: null, priority: 0, enabled: true,
+      });
       await db.delete(schema.aiProviders).where(eq(schema.aiProviders.id, rowId));
       await aiRouter.initialize();
       expect(

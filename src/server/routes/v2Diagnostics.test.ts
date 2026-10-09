@@ -70,6 +70,11 @@ describe('GET /api/v2/diagnostics/quant-readiness', () => {
     }
     expect(res.body.summary.notAuthorizedMissingLifecycle).toBe(res.body.summary.total);
     expect(res.body.summary.authorizedQuantPolicy).toBe(0);
+    const { checkStrategyAuthorization } = await import('./v2ReadinessExt');
+    const check = await checkStrategyAuthorization();
+    expect(check.status).toBe('FAIL');
+    expect(check.detail).toContain('QUANT_FIRST_OPERATIONALLY_INACTIVE');
+    expect(learningVersionCount()).toBe(0);
   });
 
   it('reflects recorded lifecycle decisions and never writes any itself', async () => {
@@ -101,6 +106,10 @@ describe('GET /api/v2/diagnostics/quant-readiness', () => {
     expect(res.body.summary.authorizedQuantPolicy).toBe(1);
     expect(res.body.summary.notEligible).toBe(1);
     expect(res.body.summary.quantPolicyEligibleIds).toEqual([validatedId]);
+    const { checkStrategyAuthorization } = await import('./v2ReadinessExt');
+    const check = await checkStrategyAuthorization();
+    expect(check.status).toBe('PASS');
+    expect(check.detail).toContain(validatedId);
 
     // Read-only proof: the diagnostic created no lifecycle rows of its own.
     expect(learningVersionCount()).toBe(rowsBefore);
@@ -115,5 +124,23 @@ describe('GET /api/v2/diagnostics/quant-readiness', () => {
       s.authorizedQuantPolicy + s.requiresConsensus + s.notEligible + s.notAuthorizedMissingLifecycle,
     ).toBe(s.total);
     expect(s.quantPolicyEligibleIds.length).toBe(s.authorizedQuantPolicy);
+  });
+
+  it('includes an enabled experimental strategy and excludes it when disabled', async () => {
+    const { quantExperimentalStrategies } = await import('../config/quantExperimentalStrategies');
+    const candidate = quantExperimentalStrategies.strategies[0];
+    const prior = process.env[candidate.enabledEnvVar];
+    try {
+      process.env[candidate.enabledEnvVar] = 'true';
+      const enabled = await request(app).get('/api/v2/diagnostics/quant-readiness');
+      const row = enabled.body.strategies.find((s: any) => s.strategyId === candidate.id);
+      expect(row).toMatchObject({ authority: 'NOT_AUTHORIZED', reason: 'NO_LIFECYCLE_RECORD' });
+      process.env[candidate.enabledEnvVar] = 'false';
+      const disabled = await request(app).get('/api/v2/diagnostics/quant-readiness');
+      expect(disabled.body.strategies.some((s: any) => s.strategyId === candidate.id)).toBe(false);
+    } finally {
+      if (prior === undefined) delete process.env[candidate.enabledEnvVar];
+      else process.env[candidate.enabledEnvVar] = prior;
+    }
   });
 });

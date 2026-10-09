@@ -34,6 +34,7 @@
 import fs from 'fs/promises';
 import { randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
+import Database from 'better-sqlite3';
 import { existsSync, mkdirSync } from 'fs';
 import path from 'path';
 import { dbPath } from '../db';
@@ -137,6 +138,8 @@ export class DbBackupService {
    *  never touches it - defense against deleting a live worker's output. */
   private currentTempBasename: string | null = null;
   private activeWorker: BackupWorkerLike | null = null;
+  private retainedLease: InstanceType<typeof Database> | null = null;
+  private workerTerminationUncertain = false;
   private lastProgressLogAt = 0;
   private lastProgressPhase: string | null = null;
 
@@ -163,13 +166,14 @@ export class DbBackupService {
     }
     // 2026-10-08: sweep orphans on startup (defect #4 - a restart is exactly when a previous
     // run's .partial is guaranteed abandoned), in addition to the sweep before each backup.
-    void this.sweepOrphanArtifacts('startup');
     // 2026-10-07 defect fix: start() previously ran an unconditional immediate backup on every
     // call, independent of INTERVAL_MS - confirmed live, 5 process restarts in one day produced 5
     // immediate multi-GB backup attempts clustered within hours, far more often than the intended
     // daily cadence. Skip the immediate run if a published backup already exists younger than the
     // interval; the setInterval timer below still fires on schedule either way.
-    void this.maybeRunInitialBackup();
+    void this.sweepStartupOrphansUnderLease().then(canStart => {
+      if (canStart && this.intervalId !== null) return this.maybeRunInitialBackup();
+    }).catch(error => console.error('[DbBackupService] Startup cleanup failed; initial backup skipped.', error));
     this.intervalId = setInterval(() => { void this.backupGuard.run(async () => { await this.runBackup(); }); }, INTERVAL_MS);
     console.log("[DbBackupService] Daily DB backup scheduled (worker-thread execution).");
   }
@@ -203,16 +207,22 @@ export class DbBackupService {
     // will be swept as an orphan on the next startup.
     if (this.activeWorker) {
       const worker = this.activeWorker;
-      this.activeWorker = null;
-      void worker.terminate().catch(() => {});
-      console.log('[DbBackupService] Terminated in-flight backup worker during shutdown.');
+      void worker.terminate().then(() => {
+        if (this.activeWorker === worker) this.activeWorker = null;
+        this.retainedLease?.close();
+        this.retainedLease = null;
+        this.workerTerminationUncertain = false;
+        console.log('[DbBackupService] Terminated in-flight backup worker during shutdown.');
+      }, error => {
+        console.error('[DbBackupService] Worker shutdown failed; backup admission remains held.', error);
+      });
     }
     // 2026-10-08 defect hunt (P2-B1): stop() left currentTempBasename set, so the next
     // startup/pre-backup orphan sweep skipped the stop-killed run's .partial (the guard
     // assumed a live worker still owned it). A stopped service owns no temp file. Also
     // mark the status terminal - a stopped service is not RUNNING maintenance.
     this.currentTempBasename = null;
-    if (this.status.state === 'RUNNING') {
+    if (this.status.state === 'RUNNING' || this.retainedLease || this.workerTerminationUncertain) {
       this.status = { ...this.status, state: 'FAILED', finishedAtIso: new Date().toISOString(), lastError: 'Backup service stopped mid-run.' };
     }
   }
@@ -223,14 +233,17 @@ export class DbBackupService {
    * single-flight guard for coalescing instead).
    */
   async runBackup(): Promise<DbBackupOutcome> {
-    if (this.status.state === 'RUNNING') {
+    if (this.status.state === 'RUNNING' || this.retainedLease || this.workerTerminationUncertain) {
       throw new BackupAlreadyRunningError();
     }
     const runId = randomUUID();
     const startedAt = Date.now();
 
-    // 2026-10-08 (defect #4): sweep before every backup as well as on startup.
-    await this.sweepOrphanArtifacts('pre-backup');
+    // Claim in-process admission before the first await, including preflight/cleanup.
+    this.status = { ...this.status, state: 'RUNNING', runId,
+      startedAtIso: new Date(startedAt).toISOString(), finishedAtIso: null,
+      lastDurationMs: null, lastError: null, skipReason: null };
+    let lease: InstanceType<typeof Database> | null = null;
 
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const dest = path.join(BACKUP_DIR, `argus_${stamp}_${randomUUID()}.db`);
@@ -244,6 +257,11 @@ export class DbBackupService {
         throw new Error('No database file to back up');
       }
       await fs.mkdir(BACKUP_DIR, { recursive: true });
+      // Small, dedicated lease DB: SQLite's OS locks serialize all backup processes and
+      // release automatically on process death. Never locks or writes the trading DB.
+      lease = this.acquireBackupLease();
+      // Never sweep or prune another process's active backup.
+      await this.sweepOrphanArtifacts('pre-backup');
 
       // 2026-10-07 defect fix, 2026-10-08 rework: previously nothing checked free disk space
       // before starting a multi-GB copy - confirmed live, the disk ran to exactly 0 bytes free
@@ -328,19 +346,52 @@ export class DbBackupService {
       };
       // Best-effort removal of THIS run's temp only (never another run's): a crashed worker's
       // leftovers are handled by the orphan sweep (grace window), not here.
-      await fs.unlink(temporary).catch(() => {});
+      if (!this.workerTerminationUncertain) await fs.unlink(temporary).catch(() => {});
       console.error("[DbBackupService] Backup failed:", e);
-      try {
-        publishMaintenanceState({ backup: { state: 'FAILED' } });
-      } catch { /* best-effort only */ }
+      if (lease) {
+        try {
+          publishMaintenanceState({ backup: { state: 'FAILED' } });
+        } catch { /* best-effort only */ }
+      }
       throw e;
     } finally {
-      this.currentTempBasename = null;
+      if (!this.workerTerminationUncertain) this.currentTempBasename = null;
       // 2026-10-07 defect fix: previously only ran after a successful backup, so a run of failed
       // days never pruned anything. Always runs, success or failure, and never throws past this
       // method.
-      await this.pruneOldBackups();
+      if (lease && this.workerTerminationUncertain) {
+        this.retainedLease = lease; // cannot prove the worker stopped; retain exclusion
+      } else if (lease) {
+        try { await this.pruneOldBackups(); }
+        finally { lease.close(); } // closing rolls back the lease and releases its OS lock
+      }
     }
+  }
+
+  private acquireBackupLease(): InstanceType<typeof Database> {
+    const lease = new Database(path.join(BACKUP_DIR, '.backup-lease.sqlite'));
+    try {
+      lease.pragma('busy_timeout = 0');
+      lease.exec('BEGIN EXCLUSIVE');
+      return lease;
+    } catch (e: any) {
+      lease.close();
+      if (e?.code === 'SQLITE_BUSY' || e?.code === 'SQLITE_LOCKED') throw new BackupAlreadyRunningError();
+      throw e;
+    }
+  }
+
+  private async sweepStartupOrphansUnderLease(): Promise<boolean> {
+    let lease: InstanceType<typeof Database>;
+    try { lease = this.acquireBackupLease(); }
+    catch (error) {
+      if (!(error instanceof BackupAlreadyRunningError)) throw error;
+      console.log('[DbBackupService] Another process owns backup maintenance; startup sweep/backup skipped.');
+      return false;
+    }
+    try { await this.sweepOrphanArtifacts('startup'); }
+    finally { lease.close(); }
+    return true;
   }
 
   /** Spawns the worker and resolves when it reports completion. The main thread does no I/O
@@ -360,12 +411,18 @@ export class DbBackupService {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
-        this.activeWorker = null;
-        fn();
+        // Retain admission and the cross-process lease until worker shutdown completes.
+        // Otherwise a timeout/error could admit a new copy while the old thread still writes.
+        void worker.terminate().then(() => {
+          this.activeWorker = null;
+          fn();
+        }, error => {
+          this.workerTerminationUncertain = true;
+          reject(new Error(`Backup worker termination failed; admission retained until successful stop or process shutdown: ${String(error)}`));
+        });
       };
       const timeout = setTimeout(() => {
         finish(() => {
-          void worker.terminate().catch(() => {});
           reject(new Error(`Backup worker timed out after ${WORKER_TIMEOUT_MS}ms without completing`));
         });
       }, WORKER_TIMEOUT_MS);

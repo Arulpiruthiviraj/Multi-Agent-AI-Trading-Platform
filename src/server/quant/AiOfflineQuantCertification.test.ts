@@ -170,7 +170,7 @@ describe('Phase 17 — AI-offline quant certification (Quant-First Decision Arch
     ({ eventBus } = await import('../core/EventBus'));
     EVENTS = (await import('../core/eventNames')).EVENTS;
     ({ AIRouter } = await import('../ai/AIRouter'));
-    const { ChiefTraderAgent } = await import('../services/ChiefTraderAgent');
+    const { chiefTrader: canonicalChiefTrader } = await import('../services/ChiefTraderAgent');
     await import('../services/RiskAgent'); // module singleton subscribes to CHIEF_APPROVED_IDEA — import exactly once
     await import('../services/OrderManagement'); // module singleton subscribes to RISK_ASSESSMENT_COMPLETED — import exactly once
     ({ BrokerManager } = await import('../../brokers/BrokerManager'));
@@ -342,7 +342,7 @@ describe('Phase 17 — AI-offline quant certification (Quant-First Decision Arch
 
     for (const s of ['AAPL', 'NVDA', 'AMD', 'META']) marketDataWorker.cacheObservedQuote(s, positiveCurrentPrice);
 
-    chiefTrader = new ChiefTraderAgent();
+    chiefTrader = canonicalChiefTrader;
 
     // ---- 6. Kill ALL AI providers; assert the outage before the run ----
     AIRouter.getInstance().clearProviders();
@@ -419,6 +419,7 @@ describe('Phase 17 — AI-offline quant certification (Quant-First Decision Arch
     if (ticker) return;
     ticker = setInterval(() => {
       for (const [sym, price] of Object.entries(tickPriceBySymbol)) {
+        marketDataWorker.cacheObservedQuote(sym, price);
         BrokerManager.getInstance().tick({ [sym]: price });
         eventBus.emit('MARKET_DATA', { symbol: sym, price, volume: 1000, timestamp: new Date().toISOString() });
       }
@@ -495,30 +496,31 @@ describe('Phase 17 — AI-offline quant certification (Quant-First Decision Arch
   }, 90000);
 
   it('AI-offline round trip: organic PortfolioManager SELL exit closes the position flat with realized P&L', async () => {
-    const { generateTraceId } = (globalThis as any).__cert;
-    // Exit above the entry so the realized P&L is positive and unambiguous.
-    const exitPrice = positiveCurrentPrice * 1.03;
+    const { portfolioMonitor } = await import('../services/PortfolioMonitor');
+    const { marketDataWorker } = await import('../services/MarketDataWorker');
+    const [opening] = await db.select().from(schema.trades).where(eq(schema.trades.symbol, 'AAPL'));
+    const { takeProfitPrice } = await import('../services/PortfolioMonitor').then(m =>
+      m.resolvePositionStopTarget('AAPL', opening.price));
+    // Control the market, never inject an exit idea: the real monitor must detect its target.
+    const exitPrice = Math.max(takeProfitPrice + 1, positiveCurrentPrice * 1.03);
     tickPriceBySymbol = { AAPL: exitPrice };
-    const traceId = generateTraceId('AAPL');
-    const exitIdea = {
-      traceId,
-      symbol: 'AAPL',
-      side: 'SELL',
-      confidence: 0.85,
-      currentPrice: exitPrice,
-      reasoning:
-        'CERTIFICATION_FIXTURE_ONLY (SYNTHETIC_SEEDED, NON_ORGANIC): organic exit — take profit at the strategy target. ' +
-        `QuantEngine/${positiveStrategyId} thesis complete.`,
-      agent: 'PortfolioManager',
-      origin: 'PORTFOLIO_EXIT',
+    await waitFor(() => marketDataWorker.getLatestPrice('AAPL') === exitPrice, 15000, 'fresh exit quote');
+    const exits: any[] = [];
+    const onIdea = (idea: any) => {
+      if (idea.symbol === 'AAPL' && idea.side === 'SELL' && idea.agent === 'PortfolioManager') exits.push(idea);
     };
-
-    await chiefTrader.reviewIdea(exitIdea);
+    eventBus.on(EVENTS.TRADE_IDEA_GENERATED, onIdea);
+    try { await portfolioMonitor.triggerNow(); }
+    finally { eventBus.off(EVENTS.TRADE_IDEA_GENERATED, onIdea); }
+    expect(exits).toHaveLength(1);
+    expect(exits[0].reasoning).toContain('EXIT_CODE=TARGET_REACHED');
+    const traceId = exits[0].traceId;
 
     // Risk-exit path: approved without debate or a second agent, through the real consensus evaluator.
     await waitFor(() => approvals.some((a) => a.traceId === traceId), 15000, 'exit CHIEF_APPROVED_IDEA');
     const approval = approvals.find((a) => a.traceId === traceId);
     expect(approval.side).toBe('SELL');
+    expect(approvals.filter((a) => a.traceId === traceId)).toHaveLength(1);
 
     await waitFor(async () => {
       const rows = await db.select().from(schema.trades).where(eq(schema.trades.traceId, traceId));
@@ -561,7 +563,8 @@ describe('Phase 17 — AI-offline quant certification (Quant-First Decision Arch
     expect(completed.approved).toBe(false);
     // Fails closed WITHOUT consulting AI: no debate, no task route.
     expect(routeConsensusSpy).not.toHaveBeenCalled();
-    expect(routeTaskSpy).not.toHaveBeenCalled();
+    // Optional post-fill explanations from the preceding round trip are not decisions.
+    expect(routeTaskSpy.mock.calls.filter((call: any[]) => call[0] !== 'ExplainabilityAgent')).toHaveLength(0);
     expect(await AIRouter.getInstance().hasAnyRoutableProvider()).toBe(false);
   }, 30000);
 
@@ -583,7 +586,8 @@ describe('Phase 17 — AI-offline quant certification (Quant-First Decision Arch
     // REQUIRES_CONSENSUS: entered the consensus evidence pool like any ordinary idea — never the quant policy.
     expect((chiefTrader as any).recentIdeas.some((i: any) => i.traceId === traceId)).toBe(true);
     expect(routeConsensusSpy).not.toHaveBeenCalled();
-    expect(routeTaskSpy).not.toHaveBeenCalled();
+    // Optional post-fill explanations from the preceding round trip are not decisions.
+    expect(routeTaskSpy.mock.calls.filter((call: any[]) => call[0] !== 'ExplainabilityAgent')).toHaveLength(0);
   }, 30000);
 
   it('negative control (c): triggerMet=false idea is terminally rejected by the policy — QUANT_TRIGGER_NOT_FIRED', async () => {
@@ -608,6 +612,7 @@ describe('Phase 17 — AI-offline quant certification (Quant-First Decision Arch
     // Terminal policy rejection: never silently re-routed into the consensus pool.
     expect((chiefTrader as any).recentIdeas.some((i: any) => i.traceId === traceId)).toBe(false);
     expect(routeConsensusSpy).not.toHaveBeenCalled();
-    expect(routeTaskSpy).not.toHaveBeenCalled();
+    // Optional post-fill explanations from the preceding round trip are not decisions.
+    expect(routeTaskSpy.mock.calls.filter((call: any[]) => call[0] !== 'ExplainabilityAgent')).toHaveLength(0);
   }, 30000);
 });

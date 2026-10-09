@@ -2198,7 +2198,8 @@ const commands: Record<string, () => Promise<void>> = {
     if (s.quantPolicyEligibleIds && s.quantPolicyEligibleIds.length > 0) {
       console.log(`quant-policy eligible now: ${s.quantPolicyEligibleIds.join(', ')}`);
     } else {
-      console.log('quant-policy eligible now: none — the quant-first path is dormant (all ideas take the consensus path).');
+      console.log('QUANT_FIRST_OPERATIONALLY_INACTIVE: no strategy currently has quant-policy authority.');
+      console.log('Missing lifecycle and ineligible strategies are rejected; consensus-only strategies retain consensus routing.');
     }
   },
   async 'session-report'() {

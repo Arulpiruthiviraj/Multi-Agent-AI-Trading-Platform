@@ -39,6 +39,7 @@ import { classifyRss } from '../observability/processTelemetry';
 import { observabilityQueueLengthForTests } from '../observability/ObservabilityStore';
 import { observabilityConfig } from '../config/observability';
 import { isQuantPolicyEnabled } from '../config/quantDecisionPolicy';
+import { buildQuantReadinessReport } from './v2Diagnostics';
 import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
 import { latestCycleIsMatch } from '../services/reconciliationOperatorSnapshot';
 import { argusApplication } from '../app/ArgusApplication';
@@ -291,12 +292,20 @@ async function checkPositionsOrders(): Promise<ReadinessCheck> {
   );
 }
 
-function checkStrategyAuthorization(): ReadinessCheck {
+export async function checkStrategyAuthorization(): Promise<ReadinessCheck> {
   try {
     const policyOn = isQuantPolicyEnabled();
     const paperOnly = isPaperTradingOnlyEnforced();
-    if (policyOn && paperOnly) return pass('strategyAuthorization', 'Strategy authorization', 'quant execution policy enabled, paper-only lock enforced');
     if (!policyOn) return warn('strategyAuthorization', 'Strategy authorization', 'quant execution policy disabled — consensus path only (quant-first degraded)');
+    if (paperOnly) {
+      const report = await buildQuantReadinessReport();
+      if (report.summary.authorizedQuantPolicy === 0) {
+        return fail('strategyAuthorization', 'Strategy authorization',
+          `QUANT_FIRST_OPERATIONALLY_INACTIVE: no strategy has quant-policy authority; missing lifecycle=${report.summary.notAuthorizedMissingLifecycle}, ineligible=${report.summary.notEligible}, consensus-only=${report.summary.requiresConsensus}`);
+      }
+      return pass('strategyAuthorization', 'Strategy authorization',
+        `quant-policy authority present: ${report.summary.quantPolicyEligibleIds.join(', ')}; signal, data, calibration and risk eligibility require separate checks`);
+    }
     return warn('strategyAuthorization', 'Strategy authorization', 'paper-only lock NOT enforced — quant authorization will fail closed');
   } catch (e: unknown) {
     return warn('strategyAuthorization', 'Strategy authorization', `authorization config unreadable: ${errMsg(e)}`);
@@ -542,7 +551,7 @@ export async function buildReadinessChecklist(): Promise<ReadinessChecklist> {
   }
   checks.push(await checkReconciliation());
   checks.push(await checkPositionsOrders());
-  checks.push(checkStrategyAuthorization());
+  checks.push(await checkStrategyAuthorization());
   checks.push(await checkQuantPolicy());
   checks.push(await checkAiOptionality());
   checks.push(await checkJevHealth());

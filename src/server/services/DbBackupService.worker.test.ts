@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import Database from 'better-sqlite3';
+import { spawn } from 'node:child_process';
 
 /**
  * 2026-10-08 (defects #2 and #4): backup work moved off the Node main event loop into a
@@ -23,10 +24,11 @@ describe('DbBackupService worker-thread execution (2026-10-08)', () => {
   let BackupAlreadyRunningError: any;
 
   const buildSyntheticDb = (sizeMb: number) => {
-    if (fs.existsSync(liveDbPath)) fs.unlinkSync(liveDbPath);
     const filler = new Database(liveDbPath);
     try {
-      filler.exec('CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB)');
+      // The production DB module keeps its connection open; Windows forbids unlinking it.
+      // Replace only this test's filler rows while retaining the actual service connection.
+      filler.exec('CREATE TABLE IF NOT EXISTS blobs (id INTEGER PRIMARY KEY, data BLOB); DELETE FROM blobs');
       const insert = filler.prepare('INSERT INTO blobs (data) VALUES (?)');
       const oneMb = crypto.randomBytes(1024 * 1024);
       const txn = filler.transaction(() => {
@@ -239,4 +241,72 @@ describe('DbBackupService worker-thread execution (2026-10-08)', () => {
     await expect(service.runBackup()).rejects.toThrow(/integrity.*Backup integrity check failed/);
     expect(service.getBackupStatus().state).toBe('FAILED');
   });
+
+  it('excludes another process and recovers its lease automatically after process death', async () => {
+    buildSyntheticDb(1);
+    const holder = spawn(process.execPath, ['-e', `
+      const db = new (require('better-sqlite3'))(process.argv[1]);
+      db.exec('BEGIN EXCLUSIVE');
+      process.send('held');
+      setInterval(() => {}, 1000);
+    `, path.join(backupDir, '.backup-lease.sqlite')], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+    const exited = new Promise<void>(resolve => holder.once('exit', () => resolve()));
+    try {
+      await new Promise<void>((resolve, reject) => {
+        holder.once('message', () => resolve());
+        holder.once('error', reject);
+        holder.once('exit', code => reject(new Error(`Lease holder exited early: ${code}`)));
+      });
+      const factory = vi.fn();
+      const blocked = new DbBackupService({ createWorker: factory });
+      await expect(blocked.runBackup()).rejects.toBeInstanceOf(BackupAlreadyRunningError);
+      expect(factory).not.toHaveBeenCalled();
+      const { runtimeIntervals } = await import('../config/runtimeIntervals');
+      const activePartial = path.join(backupDir, `argus_active.db.partial.${holder.pid}.abcdefab`);
+      fs.writeFileSync(activePartial, 'active owner output');
+      const old = new Date(Date.now() - runtimeIntervals.dbBackupOrphanCleanupAgeMs - 1000);
+      fs.utimesSync(activePartial, old, old);
+      const startup = new DbBackupService();
+      const sweep = vi.spyOn(startup as any, 'sweepOrphanArtifacts');
+      startup.start();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      startup.stop();
+      expect(sweep).not.toHaveBeenCalled();
+      expect(fs.existsSync(activePartial)).toBe(true);
+      // Kill only the isolated child created above, never any engine or external process.
+      holder.kill();
+      await exited;
+      const recovered = new DbBackupService();
+      await expect(recovered.runBackup()).resolves.toMatchObject({ outcome: 'completed' });
+      expect(recovered.getBackupStatus().state).toBe('SUCCEEDED');
+      expect(fs.existsSync(activePartial)).toBe(false);
+    } finally {
+      if (holder.exitCode === null && holder.signalCode === null) holder.kill();
+      await exited;
+    }
+  }, 30000);
+
+  it('refuses a same-turn direct call while preflight is still pending', async () => {
+    const service = new DbBackupService();
+    const first = service.runBackup();
+    await expect(service.runBackup()).rejects.toBeInstanceOf(BackupAlreadyRunningError);
+    await first;
+  }, 30000);
+
+  it('retains exclusion when worker termination fails and releases only after successful stop', async () => {
+    const terminate = vi.fn().mockRejectedValueOnce(new Error('injected termination failure')).mockResolvedValue(0);
+    const failed = new DbBackupService({ createWorker: () => {
+      const handlers: Record<string, (...args: any[]) => void> = {};
+      setImmediate(() => handlers.message({ type: 'error', phase: 'copy', message: 'injected copy failure' }));
+      return { on(event: string, callback: (...args: any[]) => void) { handlers[event] = callback; return this; }, terminate };
+    } });
+    await expect(failed.runBackup()).rejects.toThrow('admission retained');
+    expect(failed.getBackupStatus().state).toBe('FAILED');
+    await expect(failed.runBackup()).rejects.toBeInstanceOf(BackupAlreadyRunningError);
+    const other = new DbBackupService();
+    await expect(other.runBackup()).rejects.toBeInstanceOf(BackupAlreadyRunningError);
+    failed.stop();
+    await Promise.resolve();
+    await expect(other.runBackup()).resolves.toMatchObject({ outcome: 'completed' });
+  }, 30000);
 });

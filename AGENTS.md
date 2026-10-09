@@ -814,3 +814,9 @@ Do not duplicate this file. Pointers only:
 ## Default notional honesty
 
 `FIXED_DOLLAR` `maxTradeSize` (default `$3,000`) often binds before the 20% symbol cap on large accounts. `PERCENT_OF_EQUITY` is opt-in.
+
+**2026-10-09 backup admission contract:** RUNNING admission covers preflight as well as worker
+execution. A dedicated small SQLite lease in the backup directory serializes backup jobs
+across processes and is released by OS locks on process death. Worker termination precedes
+admission release. This never locks the trading DB or resumes trading; isolated cross-process
+and recovery tests are engineering evidence, not production-load certification.
