@@ -65,5 +65,10 @@
   "_candidateRankingsRetentionBatchComment": "2026-10-01 defect verification pass: sweepCandidateRankingsRetention() previously ran one single unbatched DELETE, same class of defect as observability_events's sweep (see config/observability.json's own comment for the first live reproduction). Live-reproduced a second time against this table: with trading freshly enabled and real ranking cycles running, the engine's event loop (including /health) went unresponsive again shortly after boot, CPU pegged near 100% continuously - this file's own 2026-09-22 comment already documented the table had grown to 1.38M+ rows with no retention at all before that date, so a real backlog beyond the 14-day cutoff was plausible. Same batching + yielding fix as ObservabilityStore.ts.",
   "candidateRankingsRetentionSweepBatchSize": 5000,
   "candidateRankingsRetentionSweepMaxBatchesPerCall": 50,
+  "_newsRetentionComment": "2026-10-08 memory-leak follow-up: news_articles and news_clusters grew on disk with no prune path anywhere in the codebase (the same defect class as candidate_rankings on 2026-09-22). news_articles rows are bulky (content/summary text) and lose trading value fast - the RiskEngine news veto only reads clusters from the last 4h and catalysts expire intraday - so 30 days is generous. news_clusters are the durable news record of truth (PredictionOutcomeEvaluator links news_predictions to cluster ids) and are small metadata rows, so they get a longer 90-day window. Both sweeps are batched + yielding like sweepCandidateRankingsRetention so a large backlog can never block the event loop.",
+  "newsArticlesRetentionDays": 30,
+  "newsClustersRetentionDays": 90,
+  "newsRetentionSweepBatchSize": 5000,
+  "newsRetentionSweepMaxBatchesPerCall": 50,
   "secEdgarForm4Ms": 21600000
 }

@@ -46,16 +46,12 @@ export async function sweepCandidateRankingsRetention(nowMs = Date.now()): Promi
 export function startOperationalRetentionSweep(): void {
   if (retentionTimer) return;
   retentionTimer = setInterval(() => {
-    void sweepCandidateRankingsRetention();
-    void sweepTradePlanRevalidationRetention();
-    void sweepReservationLedgerRetention();
+    for (const { sweep } of RETENTION_SWEEPERS) void sweep();
   }, runtimeIntervals.candidateRankingsRetentionSweepMs);
   if (typeof retentionTimer === 'object' && retentionTimer && 'unref' in retentionTimer) {
     retentionTimer.unref();
   }
-  void sweepCandidateRankingsRetention();
-  void sweepTradePlanRevalidationRetention();
-  void sweepReservationLedgerRetention();
+  for (const { sweep } of RETENTION_SWEEPERS) void sweep();
 }
 
 /**
@@ -92,3 +88,84 @@ export function stopOperationalRetentionSweep(): void {
     retentionTimer = null;
   }
 }
+
+/**
+ * 2026-10-08 memory-leak follow-up: news_articles grew on disk with no prune path anywhere in
+ * the codebase - the same defect class as candidate_rankings (2026-09-22, 1.38M+ rows, zero
+ * retention). Article rows are bulky (content/summary text) and their trading value decays
+ * within hours (RiskEngine's news veto reads only the last 4h of clusters; catalysts expire
+ * intraday), so anything older than newsArticlesRetentionDays is dead weight. Batched +
+ * yielding like sweepCandidateRankingsRetention: a large backlog must never block the event
+ * loop. Cutoff compares ISO-8601 text, which orders chronologically.
+ */
+export async function sweepNewsArticlesRetention(nowMs = Date.now()): Promise<number> {
+  const cutoffIso = new Date(nowMs - runtimeIntervals.newsArticlesRetentionDays * 24 * 60 * 60 * 1000).toISOString();
+  const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
+  const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
+  const deleteBatch = sqliteDb.prepare(
+    'DELETE FROM news_articles WHERE id IN (SELECT id FROM news_articles WHERE published_at < ? LIMIT ?)'
+  );
+  let totalDeleted = 0;
+  try {
+    for (let i = 0; i < maxBatches; i++) {
+      const result = deleteBatch.run(cutoffIso, batchSize);
+      totalDeleted += result.changes;
+      if (result.changes < batchSize) break;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    return totalDeleted;
+  } catch {
+    return totalDeleted;
+  }
+}
+
+/**
+ * 2026-10-08 memory-leak follow-up: news_clusters had no retention either. Clusters are the
+ * durable news record of truth (small metadata rows; news_predictions reference cluster ids,
+ * and PredictionOutcomeEvaluator joins predictions - never clusters - so pruning a cluster
+ * cannot break prediction evaluation), hence the longer newsClustersRetentionDays window.
+ * Pruned by updated_at: an active, still-updating story keeps its cluster alive.
+ */
+export async function sweepNewsClustersRetention(nowMs = Date.now()): Promise<number> {
+  const cutoffIso = new Date(nowMs - runtimeIntervals.newsClustersRetentionDays * 24 * 60 * 60 * 1000).toISOString();
+  const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
+  const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
+  const deleteBatch = sqliteDb.prepare(
+    'DELETE FROM news_clusters WHERE id IN (SELECT id FROM news_clusters WHERE updated_at < ? LIMIT ?)'
+  );
+  let totalDeleted = 0;
+  try {
+    for (let i = 0; i < maxBatches; i++) {
+      const result = deleteBatch.run(cutoffIso, batchSize);
+      totalDeleted += result.changes;
+      if (result.changes < batchSize) break;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    return totalDeleted;
+  } catch {
+    return totalDeleted;
+  }
+}
+
+/**
+ * 2026-10-08 "perfect testing" hardening: the central registry of every operational retention
+ * sweep. startOperationalRetentionSweep() iterates this - nothing is wired by hand anymore -
+ * and retentionCoverage.test.ts asserts every known append-only operational table appears here.
+ * Adding a new append-only table without a sweeper entry fails that test by design: that is
+ * how the news_articles/news_clusters gap (and the candidate_rankings gap before it) gets
+ * caught at test time instead of on a live disk-forensics pass.
+ */
+export interface RetentionSweeper {
+  /** Physical table name the sweeper prunes. */
+  table: string;
+  /** The sweep function; resolves to rows deleted. Never throws (returns partial count). */
+  sweep: (nowMs?: number) => Promise<number>;
+}
+
+export const RETENTION_SWEEPERS: RetentionSweeper[] = [
+  { table: 'candidate_rankings', sweep: sweepCandidateRankingsRetention },
+  { table: 'trade_plan_revalidations', sweep: sweepTradePlanRevalidationRetention },
+  { table: 'premarket_data_reservations', sweep: sweepReservationLedgerRetention },
+  { table: 'news_articles', sweep: sweepNewsArticlesRetention },
+  { table: 'news_clusters', sweep: sweepNewsClustersRetention },
+];

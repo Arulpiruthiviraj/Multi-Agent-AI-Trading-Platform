@@ -103,6 +103,17 @@ export interface RuntimeIntervals {
    *  retentionSweepBatchSize/retentionSweepMaxBatchesPerCall bound ObservabilityStore.ts's sweep. */
   candidateRankingsRetentionSweepBatchSize: number;
   candidateRankingsRetentionSweepMaxBatchesPerCall: number;
+  /** 2026-10-08 memory-leak follow-up: news_articles had no retention policy anywhere in the
+   *  codebase (same defect class as candidate_rankings 2026-09-22). Article rows are bulky and
+   *  lose trading value within hours - 30 days is generous. */
+  newsArticlesRetentionDays: number;
+  /** news_clusters are the durable news record of truth (small metadata rows; news_predictions
+   *  link to cluster ids) - longer 90-day window. */
+  newsClustersRetentionDays: number;
+  /** Batching bounds for the news sweeps - same batching + yielding discipline as the
+   *  candidate_rankings sweep so a large backlog can never block the event loop. */
+  newsRetentionSweepBatchSize: number;
+  newsRetentionSweepMaxBatchesPerCall: number;
 }
 
 const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
@@ -123,6 +134,8 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'heartbeatWatchdogCheckMs', 'cryptoMarketDataIngestionMs',
   'candidateRankingsRetentionDays', 'candidateRankingsRetentionSweepMs',
   'candidateRankingsRetentionSweepBatchSize', 'candidateRankingsRetentionSweepMaxBatchesPerCall',
+  'newsArticlesRetentionDays', 'newsClustersRetentionDays',
+  'newsRetentionSweepBatchSize', 'newsRetentionSweepMaxBatchesPerCall',
 ];
 
 function loadRuntimeIntervals(): RuntimeIntervals {
