@@ -33,6 +33,7 @@
  * ==========================================================
  */
 
+import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from "react";
 import AwaitingSignal from "./components/shared/AwaitingSignal";
 import { SafeResponsiveContainer } from "./components/shared/SafeResponsiveContainer";
 import tradingSafetyConfig from "../config/tradingSafety.json";
@@ -103,8 +104,6 @@ const AutonomousMissionControl = lazy(() => import("./components/AutonomousMissi
 const PositionsDataView = lazy(() => import("./components/responsive/PositionsDataView").then(m => ({ default: m.PositionsDataView })));
 const TradeHistoryDataView = lazy(() => import("./components/responsive/TradeHistoryDataView").then(m => ({ default: m.TradeHistoryDataView })));
 const AutonomousLaunchDialog = lazy(() => import("./components/AutonomousLaunchDialog").then(m => ({ default: m.AutonomousLaunchDialog })));
-
-import React, { useState, useEffect, useRef, useMemo , lazy, Suspense} from "react";
 
 import LiveMarketNewsTicker from "./components/LiveMarketNewsTicker";
 
