@@ -41,6 +41,7 @@ export type BackupMaintenanceState = 'IDLE' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
 export interface MaintenanceStateFile {
   updatedAt?: string;
   backup?: { state?: BackupMaintenanceState; startedAt?: string };
+  heapSnapshot?: { state?: 'RUNNING' | 'SUCCEEDED' | 'FAILED'; startedAt?: string };
   startupInProgress?: boolean;
   shutdownInProgress?: boolean;
 }
@@ -86,6 +87,10 @@ export function evaluateMaintenanceSignal(
   } else if (backupState !== undefined) {
     // Unknown state string from a newer publisher - ignore the field, do not invent meaning.
   }
+  // 2026-10-08 defect hunt (P1-W1): a V8 heap snapshot blocks the event loop for minutes;
+  // without this the watchdog reads it as a frozen process and force-kills mid-snapshot.
+  const heapState = file.heapSnapshot?.state;
+  if (heapState === 'RUNNING') kinds.push('heapSnapshot:RUNNING');
   if (file.startupInProgress === true) kinds.push('startup');
   if (file.shutdownInProgress === true) kinds.push('shutdown');
 

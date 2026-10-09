@@ -93,6 +93,43 @@ describe('heapSnapshotCapture (P1 memory-leak investigation, 2026-09-14)', () =>
         spy.mockRestore();
       }
     });
+
+    it('publishes a RUNNING maintenance claim around the synchronous walk (P1-W1: watchdog must defer)', async () => {
+      // node:fs is mocked above but spreads the real module, so writeFileSync/renameSync/
+      // readFileSync are real - point the maintenance file at a real temp path and read
+      // back what captureHeapSnapshot published.
+      const { mkdtempSync, readFileSync, rmSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const { setMaintenanceStatePathForTests, resetMaintenanceStateForTests } =
+        await import('../core/maintenanceState');
+      const dir = mkdtempSync(join(tmpdir(), 'argus-maint-'));
+      const maintPath = join(dir, '.argus_maintenance_state.json');
+      const seen: string[] = [];
+      const origWrite = writeHeapSnapshotMock.getMockImplementation();
+      writeHeapSnapshotMock.mockImplementationOnce((path?: string) => {
+        // While the (mocked) synchronous walk is "in flight", the file must already
+        // carry the RUNNING claim - that is the whole point of P1-W1.
+        try {
+          const raw = JSON.parse(readFileSync(maintPath, 'utf8'));
+          seen.push(raw.heapSnapshot?.state);
+        } catch {
+          seen.push('MISSING');
+        }
+        return origWrite ? origWrite(path) : path;
+      });
+      try {
+        setMaintenanceStatePathForTests(maintPath);
+        const result = await captureHeapSnapshot('p1w1-test');
+        expect(result.ok).toBe(true);
+        expect(seen).toEqual(['RUNNING']);
+        const final = JSON.parse(readFileSync(maintPath, 'utf8'));
+        expect(final.heapSnapshot?.state).toBe('SUCCEEDED');
+      } finally {
+        resetMaintenanceStateForTests();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('maybeCaptureHeapSnapshotForMemoryLevel() - state machine', () => {

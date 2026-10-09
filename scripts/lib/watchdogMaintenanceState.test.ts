@@ -34,6 +34,28 @@ describe('evaluateMaintenanceSignal', () => {
     expect(sig?.kind).toBe('shutdown');
   });
 
+  it('returns a signal for a fresh heapSnapshot:RUNNING claim (P1-W1: the synchronous V8 walk looks like a freeze)', () => {
+    const sig = evaluateMaintenanceSignal(
+      {
+        updatedAt: new Date(NOW - 10_000).toISOString(),
+        heapSnapshot: { state: 'RUNNING', startedAt: new Date(NOW - 60_000).toISOString() },
+      },
+      NOW,
+      FRESHNESS,
+    );
+    expect(sig).not.toBeNull();
+    expect(sig!.kind).toBe('heapSnapshot:RUNNING');
+  });
+
+  it('returns null for a terminal heapSnapshot state (SUCCEEDED/FAILED) - no deferral after the walk', () => {
+    const sig = evaluateMaintenanceSignal(
+      { updatedAt: new Date(NOW - 1_000).toISOString(), heapSnapshot: { state: 'SUCCEEDED' } },
+      NOW,
+      FRESHNESS,
+    );
+    expect(sig).toBeNull();
+  });
+
   it('returns null when no maintenance is active (backup IDLE, flags false)', () => {
     const sig = evaluateMaintenanceSignal(
       { updatedAt: new Date(NOW - 1_000).toISOString(), backup: { state: 'IDLE' }, startupInProgress: false },

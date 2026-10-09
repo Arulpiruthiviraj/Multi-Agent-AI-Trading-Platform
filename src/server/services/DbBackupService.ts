@@ -44,6 +44,7 @@ import {
   DbBackupWorkerJob,
   DbBackupWorkerMessage,
 } from './dbBackupWorkerSource';
+import { publishMaintenanceState } from '../core/maintenanceState';
 
 const BACKUP_DIR = path.join(path.dirname(dbPath), 'backups');
 const INTERVAL_MS = runtimeIntervals.dbBackupIntervalMs;
@@ -206,6 +207,14 @@ export class DbBackupService {
       void worker.terminate().catch(() => {});
       console.log('[DbBackupService] Terminated in-flight backup worker during shutdown.');
     }
+    // 2026-10-08 defect hunt (P2-B1): stop() left currentTempBasename set, so the next
+    // startup/pre-backup orphan sweep skipped the stop-killed run's .partial (the guard
+    // assumed a live worker still owned it). A stopped service owns no temp file. Also
+    // mark the status terminal - a stopped service is not RUNNING maintenance.
+    this.currentTempBasename = null;
+    if (this.status.state === 'RUNNING') {
+      this.status = { ...this.status, state: 'FAILED', finishedAtIso: new Date().toISOString(), lastError: 'Backup service stopped mid-run.' };
+    }
   }
 
   /**
@@ -260,6 +269,9 @@ export class DbBackupService {
         };
         console.error(`[DbBackupService] BACKUP SKIPPED - LOW DISK SPACE: ${reason}`);
         console.error('[DbBackupService] BACKUP SKIPPED - LOW DISK SPACE: free space or reduce retention before the next scheduled run.');
+        try {
+          publishMaintenanceState({ backup: { state: 'SKIPPED_DISK' } });
+        } catch { /* best-effort only */ }
         return { outcome: 'skipped_disk', reason };
       }
 
@@ -276,6 +288,11 @@ export class DbBackupService {
       this.lastProgressLogAt = 0;
       this.lastProgressPhase = null;
       console.log(`[DbBackupService] Starting backup in worker thread (run ${runId}).`);
+      // 2026-10-08 defect hunt (P1-W1): publish the RUNNING claim so the external watchdog's
+      // maintenance deferral can see the backup. Best-effort: never blocks the backup itself.
+      try {
+        publishMaintenanceState({ backup: { state: 'RUNNING', startedAt: new Date(startedAt).toISOString() } });
+      } catch { /* best-effort only */ }
 
       const job: DbBackupWorkerJob = { dbPath, tempPath: temporary, finalPath: dest };
       const result = await this.runBackupWorker(job);
@@ -290,6 +307,9 @@ export class DbBackupService {
         bytesCopied: result.bytesCopied,
       };
       console.log(`[DbBackupService] Backed up database to ${dest} (${(result.bytesCopied / 1e9).toFixed(2)}GB, sha256 ${result.sha256.slice(0, 16)}..., worker ${result.durationMs}ms)`);
+      try {
+        publishMaintenanceState({ backup: { state: 'SUCCEEDED' } });
+      } catch { /* best-effort only */ }
       return {
         outcome: 'completed',
         destination: dest,
@@ -310,6 +330,9 @@ export class DbBackupService {
       // leftovers are handled by the orphan sweep (grace window), not here.
       await fs.unlink(temporary).catch(() => {});
       console.error("[DbBackupService] Backup failed:", e);
+      try {
+        publishMaintenanceState({ backup: { state: 'FAILED' } });
+      } catch { /* best-effort only */ }
       throw e;
     } finally {
       this.currentTempBasename = null;

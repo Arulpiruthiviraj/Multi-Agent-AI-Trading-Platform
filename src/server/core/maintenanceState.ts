@@ -23,6 +23,10 @@ import { assertNotProductionRuntimePath } from './productionRuntimePathGuard';
 
 export interface MaintenanceStatePatch {
   backup?: { state: 'IDLE' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'SKIPPED_DISK'; startedAt?: string };
+  // 2026-10-08 defect hunt (P1-W1): v8.writeHeapSnapshot() is a synchronous, event-loop-blocking
+  // V8 heap walk; a multi-minute snapshot looks exactly like a frozen process to the watchdog.
+  // captureHeapSnapshot() publishes RUNNING around the walk so the watchdog defers judgment.
+  heapSnapshot?: { state: 'RUNNING' | 'SUCCEEDED' | 'FAILED'; startedAt?: string };
   startupInProgress?: boolean;
   shutdownInProgress?: boolean;
 }
