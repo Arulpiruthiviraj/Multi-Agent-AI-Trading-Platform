@@ -67,13 +67,12 @@ import {
 } from '../premarket/premarketRefreshEvents';
 import { emitPremarketRefreshCompleted } from '../premarket/premarketFocusEvents';
 
-// 2026-10-09 defect hunt: this constant MUST stay at the top of the module, before any other
-// top-level executable code. pruneTradePlanRevalidations() can be re-entered during this
-// module's own evaluation via an import cycle (operationalRetention's lazy dynamic import
-// resolving a partially-evaluated namespace) - a const declared lower (it was at line ~547)
-// throws "Cannot access before initialization" (TDZ) on that path. Top-level placement
-// guarantees initialization before any re-entrant call is possible.
-export const TRADE_PLAN_REVALIDATION_RETENTION_DAYS = 30;
+// 2026-10-09 defect hunt: TRADE_PLAN_REVALIDATION_RETENTION_DAYS and
+// pruneTradePlanRevalidations() live in ./tradePlanRevalidationRetention (re-exported below).
+// They were moved out of this module because the retention sweep's lazy dynamic import can
+// resolve while this module is still mid-evaluation (import cycle), which threw a TDZ
+// "Cannot access before initialization" on the const. The leaf module cannot cycle.
+export { TRADE_PLAN_REVALIDATION_RETENTION_DAYS, pruneTradePlanRevalidations } from './tradePlanRevalidationRetention';
 
 export type SetupType = 'PRIMARY' | 'BACKUP' | 'WATCHLIST';
 export type TradePlanStatus = 'DRAFT' | 'READY' | 'REVALIDATING' | 'VALID' | 'INVALIDATED' | 'EXPIRED' | 'EXECUTED' | 'CLOSED';
@@ -544,25 +543,6 @@ export async function getTradePlansForDate(planDate: string): Promise<Array<type
 
 export async function getRevalidationHistory(planId: string): Promise<Array<typeof tradePlanRevalidations.$inferSelect>> {
   return db.select().from(tradePlanRevalidations).where(eq(tradePlanRevalidations.planId, planId)).orderBy(desc(tradePlanRevalidations.revalidatedAt));
-}
-
-/** 2026-10-07 Discovery-D2: retention prune for the trade_plan_revalidations ledger. Deletes rows
- * older than TRADE_PLAN_REVALIDATION_RETENTION_DAYS (declared at the top of this module - see
- * the TDZ comment there). Code-based, no migration - the table is
- * append-only history with no long-term audit-trail requirement beyond the retention window
- * (unlike trades/fills/risk_assessments, which are never pruned). Called from the operational
- * retention sweep (src/server/db/operationalRetention.ts), never from any trading decision path.
- * Returns the number of rows deleted.
- */
-export async function pruneTradePlanRevalidations(nowMs: number = Date.now()): Promise<number> {
-  const cutoffIso = new Date(nowMs - TRADE_PLAN_REVALIDATION_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  try {
-    const result = await db.delete(tradePlanRevalidations).where(lt(tradePlanRevalidations.revalidatedAt, cutoffIso));
-    return (result as unknown as { changes?: number }).changes ?? 0;
-  } catch (e) {
-    console.error('[TradePlanBuilder] Failed to prune revalidation history', e);
-    return 0;
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

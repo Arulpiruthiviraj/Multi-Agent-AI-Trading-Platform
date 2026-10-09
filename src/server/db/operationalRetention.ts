@@ -58,13 +58,16 @@ export function startOperationalRetentionSweep(): void {
 
 /**
  * 2026-10-07 Discovery-D2: retention sweep for the trade_plan_revalidations ledger (see
- * TradePlanBuilder.pruneTradePlanRevalidations). Lazy dynamic import: the continuous module
- * graph is heavy and must never be pulled into this module's static import set (import-cycle
- * risk with SystemBootstrap's own startup path).
+ * ../continuous/tradePlanRevalidationRetention.pruneTradePlanRevalidations). Lazy dynamic
+ * import: the continuous module graph is heavy and must never be pulled into this module's
+ * static import set (import-cycle risk with SystemBootstrap's own startup path). Imports the
+ * leaf module directly (not TradePlanBuilder) - the leaf cannot participate in the cycle
+ * that caused a TDZ "Cannot access before initialization" on the retention-days const
+ * (2026-10-09 defect hunt).
  */
 export async function sweepTradePlanRevalidationRetention(nowMs = Date.now()): Promise<number> {
   try {
-    const { pruneTradePlanRevalidations } = await import('../continuous/TradePlanBuilder');
+    const { pruneTradePlanRevalidations } = await import('../continuous/tradePlanRevalidationRetention');
     return pruneTradePlanRevalidations(nowMs);
   } catch {
     return 0;
