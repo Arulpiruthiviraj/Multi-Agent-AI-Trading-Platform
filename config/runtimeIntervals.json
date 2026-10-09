@@ -32,6 +32,8 @@
   "openAliceRequestTimeoutMs": 86400000,
   "openAliceMcpDefaultTimeoutMs": 10000,
   "modelRuntimeProbeTimeoutMs": 2000,
+  "_modelRuntimeMaxChildrenComment": "2026-10-08 defect A2: ModelRuntimeManager spawned Ollama/Chronos children into a push-only array with no cap and no reaping. Children are now tracked in a bounded set reaped on exit; spawns past this cap are refused (excess child SIGKILLed, not leaked). Production never needs more than 2 (ollama + chronos); 4 leaves headroom for a retry overlap.",
+  "modelRuntimeMaxChildren": 4,
   "ollamaCompletionProbeTimeoutMs": 8000,
   "fundamentalsCacheMaxAgeMs": 86400000,
   "macroCacheMaxAgeMs": 86400000,

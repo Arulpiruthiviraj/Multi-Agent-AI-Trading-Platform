@@ -35,6 +35,9 @@ export interface RuntimeIntervals {
   openAliceRequestTimeoutMs: number;
   openAliceMcpDefaultTimeoutMs: number;
   modelRuntimeProbeTimeoutMs: number;
+  /** 2026-10-08 (defect A2): max concurrently tracked model-runtime children (Ollama/Chronos
+   *  companions). Spawns past the cap are refused and the excess child is killed, not leaked. */
+  modelRuntimeMaxChildren: number;
   /** Bounded timeout for a real, cheap Ollama completion capability check (not just /api/tags
    *  reachability) — a loaded/OOM/misconfigured local model can be slower than the plain
    *  reachability probe above without being genuinely unavailable. */
@@ -148,7 +151,7 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'chiefTraderWeightSyncMs', 'chiefTraderIdeaTtlMs', 'systemMetricsMs', 'portfolioReconciliationMs',
   'reconciliationBootWarmupMs', 'marketDataReconnectMs', 'networkReconnectBackoffMs', 'marketDataCrossCheckMs', 'kronosRecheckMs', 'kronosPredictionCooldownMs',
   'kronosHttpTimeoutMs', 'kronosForecastMaxConcurrent', 'openAlicePollMs', 'openAliceRequestTimeoutMs', 'openAliceMcpDefaultTimeoutMs',
-  'modelRuntimeProbeTimeoutMs', 'ollamaCompletionProbeTimeoutMs', 'fundamentalsCacheMaxAgeMs', 'macroCacheMaxAgeMs',
+  'modelRuntimeProbeTimeoutMs', 'modelRuntimeMaxChildren', 'ollamaCompletionProbeTimeoutMs', 'fundamentalsCacheMaxAgeMs', 'macroCacheMaxAgeMs',
   'externalDataRateLimitCooldownMs', 'dbBackupIntervalMs', 'dbBackupRetentionDays',
   'dbBackupMaxCount', 'dbBackupOrphanCleanupAgeMs', 'dbBackupMinFreeSpaceMultiplier',
   'dbBackupWorkerTimeoutMs',

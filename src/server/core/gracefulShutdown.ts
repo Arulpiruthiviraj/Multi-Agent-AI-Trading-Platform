@@ -211,6 +211,15 @@ async function performDrain(handles: ShutdownHandles): Promise<void> {
     failed('[gracefulShutdown] Failed to stop OpenAliceVerificationService', e);
   }
   try {
+    // A2 (2026-10-08): kill any Ollama/Chronos companions this process spawned. They run
+    // detached+unref'd and previously had no stop path at all, so they survived engine
+    // shutdown as orphans. Best-effort: a kill failure must never block the drain.
+    const { modelRuntimeManager } = await import('../ai/ModelRuntimeManager');
+    modelRuntimeManager.stop();
+  } catch (e) {
+    failed('[gracefulShutdown] Failed to stop ModelRuntimeManager', e);
+  }
+  try {
     // R2 remediation (2026-09-06) - added after DEF-27's own lesson: stop every interval-driven
     // worker before sqliteDb.close() below, not after.
     const { stopHeartbeatWatchdog } = await import('./heartbeatWatchdog');
