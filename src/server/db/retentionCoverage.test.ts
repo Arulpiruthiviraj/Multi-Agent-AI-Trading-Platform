@@ -23,6 +23,13 @@ const REQUIRED_RETENTION_TABLES = [
   'premarket_data_reservations',
   'news_articles',
   'news_clusters',
+  // 2026-10-08 defect hunt (news D2 / infra P2-R1/P2-R3): the coverage test failed by
+  // design to catch these - it does now.
+  'escalation_decisions',
+  'jev_shadow_scores',
+  'news_predictions',
+  'staged_news_catalysts',
+  'ai_calls',
 ];
 
 describe('retention coverage', () => {

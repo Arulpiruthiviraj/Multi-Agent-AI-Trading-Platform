@@ -70,5 +70,11 @@
   "newsClustersRetentionDays": 90,
   "newsRetentionSweepBatchSize": 5000,
   "newsRetentionSweepMaxBatchesPerCall": 50,
+  "_newsAdjacentRetentionComment": "2026-10-08 defect hunt (news D2 / infra P2-R1/P2-R3): four more append-only tables with no prune path. escalation_decisions (one row per analyzed article) and staged_news_catalysts terminal rows (CONSUMED/EXPIRED; the live queue is size-pruned separately in NewsCatalystStore) lose value within days. jev_shadow_scores and ai_calls (bulky prompt/response text; all ai_calls readers are windowed) get 30 days. news_predictions aligns to news_clusters (90d) since predictions reference cluster ids.",
+  "escalationDecisionsRetentionDays": 7,
+  "jevShadowScoresRetentionDays": 30,
+  "newsPredictionsRetentionDays": 90,
+  "stagedNewsCatalystsTerminalRetentionDays": 7,
+  "aiCallsRetentionDays": 30,
   "secEdgarForm4Ms": 21600000
 }

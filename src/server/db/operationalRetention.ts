@@ -190,10 +190,91 @@ export interface RetentionSweeper {
   sweep: (nowMs?: number) => Promise<number>;
 }
 
+/**
+ * 2026-10-08 defect hunt (news D2 / infra P2-R1/P2-R3): four more append-only tables plus
+ * ai_calls, all growing unbounded with no prune path. Same batched + yielding discipline as
+ * the news sweeps; failures log loudly (P2-R4), never swallowed.
+ */
+async function sweepIsoTextTable(
+  table: string,
+  column: string,
+  retentionDays: number,
+  nowMs: number,
+): Promise<number> {
+  const cutoffIso = new Date(nowMs - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+  const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
+  const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
+  const deleteBatch = sqliteDb.prepare(
+    `DELETE FROM ${table} WHERE id IN (SELECT id FROM ${table} WHERE ${column} < ? LIMIT ?)`
+  );
+  let totalDeleted = 0;
+  try {
+    for (let i = 0; i < maxBatches; i++) {
+      const result = deleteBatch.run(cutoffIso, batchSize);
+      totalDeleted += result.changes;
+      if (result.changes < batchSize) break;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    return totalDeleted;
+  } catch (e) {
+    console.error(`[operationalRetention] sweep ${table} failed:`, e instanceof Error ? e.message : String(e));
+    return totalDeleted;
+  }
+}
+
+export async function sweepEscalationDecisionsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('escalation_decisions', 'timestamp', runtimeIntervals.escalationDecisionsRetentionDays, nowMs);
+}
+
+export async function sweepJevShadowScoresRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('jev_shadow_scores', 'scored_at', runtimeIntervals.jevShadowScoresRetentionDays, nowMs);
+}
+
+export async function sweepNewsPredictionsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('news_predictions', 'created_at', runtimeIntervals.newsPredictionsRetentionDays, nowMs);
+}
+
+export async function sweepAiCallsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('ai_calls', 'created_at', runtimeIntervals.aiCallsRetentionDays, nowMs);
+}
+
+/** Terminal staged catalysts (CONSUMED/EXPIRED) are never deleted by the live-queue size
+ *  prune - one permanent row per staged catalyst, forever. Prune terminal rows older than
+ *  the retention window by updated_at_ms (integer ms, set at write time). */
+export async function sweepStagedNewsCatalystsTerminalRetention(nowMs = Date.now()): Promise<number> {
+  const cutoffMs = nowMs - runtimeIntervals.stagedNewsCatalystsTerminalRetentionDays * 24 * 60 * 60 * 1000;
+  const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
+  const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
+  const deleteBatch = sqliteDb.prepare(
+    `DELETE FROM staged_news_catalysts WHERE trace_id IN (SELECT trace_id FROM staged_news_catalysts WHERE status IN ('CONSUMED','EXPIRED') AND updated_at_ms < ? LIMIT ?)`
+  );
+  let totalDeleted = 0;
+  try {
+    for (let i = 0; i < maxBatches; i++) {
+      const result = deleteBatch.run(cutoffMs, batchSize);
+      totalDeleted += result.changes;
+      if (result.changes < batchSize) break;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    return totalDeleted;
+  } catch (e) {
+    console.error('[operationalRetention] sweep staged_news_catalysts failed:', e instanceof Error ? e.message : String(e));
+    return totalDeleted;
+  }
+}
+
 export const RETENTION_SWEEPERS: RetentionSweeper[] = [
   { table: 'candidate_rankings', sweep: sweepCandidateRankingsRetention },
   { table: 'trade_plan_revalidations', sweep: sweepTradePlanRevalidationRetention },
   { table: 'premarket_data_reservations', sweep: sweepReservationLedgerRetention },
   { table: 'news_articles', sweep: sweepNewsArticlesRetention },
   { table: 'news_clusters', sweep: sweepNewsClustersRetention },
+  // 2026-10-08 defect hunt (news D2 / infra P2-R1/P2-R3): the coverage test fails by
+  // design if any append-only table lacks a sweeper - these four (plus ai_calls) were
+  // growing unbounded with no prune path.
+  { table: 'escalation_decisions', sweep: sweepEscalationDecisionsRetention },
+  { table: 'jev_shadow_scores', sweep: sweepJevShadowScoresRetention },
+  { table: 'news_predictions', sweep: sweepNewsPredictionsRetention },
+  { table: 'staged_news_catalysts', sweep: sweepStagedNewsCatalystsTerminalRetention },
+  { table: 'ai_calls', sweep: sweepAiCallsRetention },
 ];

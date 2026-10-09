@@ -114,6 +114,15 @@ export interface RuntimeIntervals {
    *  candidate_rankings sweep so a large backlog can never block the event loop. */
   newsRetentionSweepBatchSize: number;
   newsRetentionSweepMaxBatchesPerCall: number;
+  /** 2026-10-08 defect hunt (news D2 / infra P2-R1/R3): four more append-only news/AI
+   *  tables with no prune path. escalation_decisions (one row per analyzed article) and
+   *  staged terminal catalyst rows lose value within days; jev_shadow_scores and ai_calls
+   *  (bulky prompt/response text) get 30 days; news_predictions aligns to news_clusters (90d). */
+  escalationDecisionsRetentionDays: number;
+  jevShadowScoresRetentionDays: number;
+  newsPredictionsRetentionDays: number;
+  stagedNewsCatalystsTerminalRetentionDays: number;
+  aiCallsRetentionDays: number;
 }
 
 const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
@@ -136,6 +145,9 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'candidateRankingsRetentionSweepBatchSize', 'candidateRankingsRetentionSweepMaxBatchesPerCall',
   'newsArticlesRetentionDays', 'newsClustersRetentionDays',
   'newsRetentionSweepBatchSize', 'newsRetentionSweepMaxBatchesPerCall',
+  'escalationDecisionsRetentionDays', 'jevShadowScoresRetentionDays',
+  'newsPredictionsRetentionDays', 'stagedNewsCatalystsTerminalRetentionDays',
+  'aiCallsRetentionDays',
 ];
 
 function loadRuntimeIntervals(): RuntimeIntervals {
