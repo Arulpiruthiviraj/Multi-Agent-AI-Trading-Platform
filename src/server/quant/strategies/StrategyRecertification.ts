@@ -24,7 +24,7 @@
  */
 import { db } from '../../db';
 import { learningVersions } from '../../db/schema';
-import { like, desc } from 'drizzle-orm';
+import { like, eq, desc, sql } from 'drizzle-orm';
 import { buildAgentEdgeReport, type AgentEdgeRow } from '../../research/agentEdgeAnalytics';
 import { strategyEligibilityVersionType, type StrategyLifecycleStatus } from './StrategyEmissionEligibility';
 import { structuredLogger, observeSafe } from '../../observability/StructuredLogger';
@@ -55,7 +55,7 @@ export interface RecertificationReviewRow {
 export async function listQuarantinedStrategyIds(): Promise<string[]> {
   const rows = await db.select().from(learningVersions)
     .where(like(learningVersions.versionType, `${VERSION_TYPE_PREFIX}%`))
-    .orderBy(desc(learningVersions.createdAt));
+    .orderBy(desc(learningVersions.createdAt), desc(sql`"learning_versions"."rowid"`));
 
   const latestByStrategy = new Map<string, typeof rows[number]>();
   for (const r of rows) {
@@ -103,8 +103,8 @@ export async function buildRecertificationReview(): Promise<RecertificationRevie
   const reviews: RecertificationReviewRow[] = [];
   for (const strategyId of quarantinedIds) {
     const history = await db.select().from(learningVersions)
-      .where(like(learningVersions.versionType, `${strategyEligibilityVersionType(strategyId)}`))
-      .orderBy(desc(learningVersions.createdAt))
+      .where(eq(learningVersions.versionType, strategyEligibilityVersionType(strategyId)))
+      .orderBy(desc(learningVersions.createdAt), desc(sql`"learning_versions"."rowid"`))
       .limit(1);
     const latest = history[0];
     if (!latest) continue;

@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { snapshotMetrics, listObservabilityHealth, isAnyObservabilityTagDegraded } from '../observability/ObservabilityMetrics';
+import { snapshotMetrics, listObservabilityHealth, isAnyObservabilityTagDegraded, getProcessTelemetrySnapshot } from '../observability/ObservabilityMetrics';
+import { getObservabilityQueueSnapshot } from '../observability/ObservabilityStore';
 import { getSessionId } from '../observability/ObservabilityContext';
 import { observabilityConfig } from '../config/observability';
 import { getDecisionTrace, getOrderTrace, exportDecisionTraceJson } from '../observability/queryTraces';
@@ -44,6 +45,12 @@ import { buildDailyAttributionReport, summarizeDailyAttribution, formatDailyAttr
 import { buildMarketDataDiagnosticsReport, formatMarketDataDiagnosticsReport } from '../observability/marketDataDiagnosticsReport';
 
 export const observabilityRouter = Router();
+
+// Bounded in-memory diagnostics stay usable without large historical report scans.
+observabilityRouter.get('/process-resources', (_req, res) => {
+  res.json({ ok: true, sessionId: getSessionId(), live: 'NO-GO',
+    process: getProcessTelemetrySnapshot(), observabilityQueue: getObservabilityQueueSnapshot() });
+});
 
 observabilityRouter.get('/metrics', (_req, res) => {
   res.json({

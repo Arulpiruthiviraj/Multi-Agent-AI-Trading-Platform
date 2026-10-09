@@ -6,6 +6,8 @@ import {
   setObservabilityEnqueueBlockedForTests,
   setObservabilityPersistForTests,
   flushObservabilityStore,
+  enqueueObservabilityEvent,
+  getObservabilityQueueSnapshot,
 } from './ObservabilityStore';
 import { resetMetricsForTests, getMetric } from './ObservabilityMetrics';
 
@@ -47,5 +49,22 @@ describe('observability persist isolation from trading', () => {
     expect(statuses).not.toContain('FILLED');
     await flushObservabilityStore();
     expect(getMetric('orders_unknown')).toBeGreaterThan(0);
+  });
+  it('distinguishes a pending queue from an active flush without mutating either', async () => {
+    let finish!: () => void;
+    setObservabilityPersistForTests(() => new Promise<void>(resolve => { finish = resolve; }));
+    enqueueObservabilityEvent({ id: 'queue-snapshot', ts: 123, level: 'INFO', category: 'SYSTEM',
+      eventType: null, loggerName: 'test', message: 'test', sessionId: 'test',
+      correlationId: null, decisionId: null, traceId: null, orderId: null,
+      symbol: null, component: null, payload: null });
+    expect(getObservabilityQueueSnapshot().pending).toBe(1);
+    expect(getObservabilityQueueSnapshot().firstPendingEventTs).toBe(123);
+    const flushing = flushObservabilityStore();
+    expect(getObservabilityQueueSnapshot().pending).toBe(0);
+    expect(getObservabilityQueueSnapshot().flushing).toBe(true);
+    expect(getObservabilityQueueSnapshot().inFlightBatchSize).toBeNull();
+    finish();
+    await flushing;
+    expect(getObservabilityQueueSnapshot().flushing).toBe(false);
   });
 });

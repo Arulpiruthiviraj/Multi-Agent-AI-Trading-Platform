@@ -1,6 +1,36 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { redactSecrets, logErrorSafely, redactSecretsDeep } from './SecretRedaction';
 
+describe('quant diagnostics and Jev credentials', () => {
+  it('preserves only recognized public authorization enums, including nested payloads', () => {
+    expect(redactSecretsDeep({ payload: {
+      authorization: 'NOT_AUTHORIZED', authorizationReason: 'NO_LIFECYCLE_RECORD',
+    } })).toEqual({ payload: {
+      authorization: 'NOT_AUTHORIZED', authorizationReason: 'NO_LIFECYCLE_RECORD',
+    } });
+  });
+  it('still redacts bearer credentials, arbitrary codes, objects and similarly named keys', () => {
+    expect(redactSecretsDeep({ authorization: 'Bearer real-credential',
+      authorizationReason: 'ARBITRARY_SECRET_VALUE', Authorization: 'NOT_AUTHORIZED',
+      authorizationHeader: 'NOT_AUTHORIZED', nested: { authorization: { token: 'secret' } },
+    })).toEqual({ authorization: '[REDACTED]', authorizationReason: '[REDACTED]',
+      Authorization: '[REDACTED]', authorizationHeader: '[REDACTED]',
+      nested: { authorization: '[REDACTED]' } });
+  });
+  it.each(['JEV_API_KEY', 'TYPESAFE_API_KEY'])('redacts %s in unstructured errors', name => {
+    const previous = process.env[name];
+    process.env[name] = 'jev-fixture-secret-123';
+    try { expect(redactSecrets('fetch failed jev-fixture-secret-123')).toBe('fetch failed [REDACTED]'); }
+    finally { if (previous === undefined) delete process.env[name]; else process.env[name] = previous; }
+  });
+  it('does not expose a configured secret even if its value matches a public enum', () => {
+    const previous = process.env.JEV_API_KEY;
+    process.env.JEV_API_KEY = 'NOT_AUTHORIZED';
+    try { expect(redactSecretsDeep({ authorization: 'NOT_AUTHORIZED' })).toEqual({ authorization: '[REDACTED]' }); }
+    finally { if (previous === undefined) delete process.env.JEV_API_KEY; else process.env.JEV_API_KEY = previous; }
+  });
+});
+
 describe('redactSecrets', () => {
   const ORIGINAL_ENV = { ...process.env };
 

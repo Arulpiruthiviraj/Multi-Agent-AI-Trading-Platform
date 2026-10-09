@@ -16,6 +16,7 @@ describe('FastLaneManager', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     delete process.env.FAST_OPPORTUNITY_LANE_ENABLED;
     fastLaneManager.resetForTests();
   });
@@ -60,6 +61,16 @@ describe('FastLaneManager', () => {
     expect(second).toBeNull(); // duplicate blocked
     expect(fastLaneManager.countForTests()).toBe(1);
   });
+  it('deduplicates repeated lowercase and mixed-case arrivals against stored canonical symbols', () => {
+    process.env.FAST_OPPORTUNITY_LANE_ENABLED = 'true';
+    const input = { symbol: 'mxl', detectionSource: 'NEWS_CATALYST' as const,
+      liquidityEvidence: { dollarVolume: 1_000_000, spreadBps: 20, meetsMinLiquidity: true } };
+    expect(fastLaneManager.injectCandidate(input)).not.toBeNull();
+    for (let i = 0; i < 100; i++) {
+      expect(fastLaneManager.injectCandidate({ ...input, symbol: i % 2 ? 'mxl' : 'MxL' })).toBeNull();
+    }
+    expect(fastLaneManager.countForTests()).toBe(1);
+  });
 
   it('expires candidates past TTL', () => {
     process.env.FAST_OPPORTUNITY_LANE_ENABLED = 'true';
@@ -100,14 +111,14 @@ describe('FastLaneManager', () => {
     process.env.FAST_OPPORTUNITY_LANE_ENABLED = 'true';
     // Canonical env var is ARGUS_TRADING_MODE (tradingModeEnv.resolveEnvTradingMode);
     // bare TRADING_MODE is legacy and no longer consulted.
-    process.env.ARGUS_TRADING_MODE = 'LIVE';
+    vi.stubEnv('ARGUS_TRADING_MODE', 'LIVE');
+    vi.stubEnv('PAPER_TRADING_ONLY', 'false'); // exercise actual LIVE, not hard-demoted PAPER
     const result = fastLaneManager.injectCandidate({
       symbol: 'MXL',
       detectionSource: 'PRICE_ACCELERATION',
       liquidityEvidence: { dollarVolume: 1_000_000, spreadBps: 20, meetsMinLiquidity: true },
     });
     expect(result).toBeNull();
-    delete process.env.ARGUS_TRADING_MODE;
   });
 
   it('D2: terminal candidates are removed, not accumulated - the candidate map stays bounded', () => {

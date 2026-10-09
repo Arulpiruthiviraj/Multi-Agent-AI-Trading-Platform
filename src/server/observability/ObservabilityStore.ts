@@ -37,6 +37,19 @@ let retentionTimer: ReturnType<typeof setInterval> | null = null;
 let persistImpl: (batch: ObservabilityEventRow[]) => Promise<void> = defaultPersist;
 let enqueueBlocked = false;
 
+/** Current canonical queue only. An empty pending queue does not mean a flush is idle. */
+export function getObservabilityQueueSnapshot() {
+  return {
+    pending: queue.length,
+    capacity: observabilityConfig.maxQueueSize,
+    flushing,
+    firstPendingEventTs: queue[0]?.ts ?? null,
+    dropPolicy: observabilityConfig.dropPolicy,
+    flushIntervalMs: observabilityConfig.batchFlushMs,
+    inFlightBatchSize: null, // not tracked; never fabricate zero during an active flush
+  };
+}
+
 async function defaultPersist(batch: ObservabilityEventRow[]): Promise<void> {
   await db.insert(observabilityEvents).values(batch);
 }

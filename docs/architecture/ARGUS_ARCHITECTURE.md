@@ -4567,3 +4567,33 @@ Existing environment variables retain precedence over the optional local env fil
 This change does not restart an existing engine, alter broker settings, promote strategy
 lifecycle records, or establish readiness/alpha. A real Jev CLI probe passed after the fix;
 its deployment to the already-running engine requires a separately scheduled restart.
+
+### October 9 — isolated session checkpoint and authorization diagnostics
+
+Session checkpoint reporting now composes the canonical Quant readiness resolver with
+observed QUANT_POLICY_APPROVED/REJECTED counts over a half-open UTC window. Replay traces
+are excluded. Enabled policy, flowing assessments, zero authorized PAPER strategies and
+zero policy outcomes produce QUANT_PATH_UNREACHABLE; authorized strategies abstaining
+on merit do not. Failed reads stay UNKNOWN rather than zero. An observed reconciliation
+mismatch is surfaced independently of trading state. These are diagnostic blockers, never
+order gates or automatic pause/resume actions. The pure classifier is extracted for isolated
+regression tests, with its existing exports retained for compatibility.
+
+SecretRedaction preserves only exact public Quant authority/reason enum values under
+the exact authorization/authorizationReason keys. Unknown values, credentials, headers and
+objects remain redacted; configured secret values are still redacted even if enum-shaped.
+JEV_API_KEY and TYPESAFE_API_KEY join unstructured-error value redaction. This fixes real
+authorization telemetry observed as [REDACTED], without exposing arbitrary authorization data.
+All changes here are in the session repair worktree; no deployment during the live session.
+
+Checkpoint verdict evidence: TRADING requires an observed fill; approvals or submissions without fills report PIPELINE_PROGRESS_NO_FILL. An enabled Quant policy with unavailable authority/activity evidence reports INCONCLUSIVE_ZERO_TRADE. These diagnostic labels never activate trading or certify readiness.
+
+### October 9 isolated repair follow-up: reflection reads and resource diagnostics
+
+ReflectionEngine now materializes only agent/Kronos prediction rows with an existing outcome in the matching source ledger. SQL EXISTS uses the existing prediction/source index; Kronos IDs are matched as text to preserve the former String(id) Map semantics. Pending predictions remain durable and available for outcome grading. Calibration, outcome counting, independence clustering, and learned-weight calculations are unchanged. This removes unnecessary pending-row payload allocations; it does not bound the complete graded history or certify that the running process has no memory leak.
+
+StrategyRecertification diagnostic reads now use the same (createdAt DESC, rowid DESC) latest-transition order as StrategyEmissionEligibility. Individual strategy records use exact equality rather than LIKE wildcard matching. Review remains read-only with respect to lifecycle state; no automatic promotion/reinstatement is added.
+
+GET /api/v2/observability/process-resources reads the existing bounded process telemetry ring and canonical observability queue only. It performs no historical DB scans, provider probes, GC, or heap snapshots and adds no timer. Missing samples/percentiles and untracked in-flight batch size remain null; pending and active flush are distinct. Sample age is exposed without inventing a freshness threshold. Production authentication remains inherited from the existing route mount.
+
+FastLaneManager now canonicalizes the stored uppercase symbol before its duplicate check, so case variations cannot create duplicate active candidates. Existing PAPER-only flag, TTL cleanup, consensus intake and lack of broker/order authority are unchanged. The LIVE-refusal fixture explicitly tests resolved LIVE without PAPER-only demotion, then restores its process environment.

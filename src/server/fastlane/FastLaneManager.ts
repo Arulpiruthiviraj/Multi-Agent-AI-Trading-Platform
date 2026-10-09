@@ -70,6 +70,7 @@ class FastLaneManager {
    */
   injectCandidate(input: FastCandidateInput): FastOpportunityCandidate | null {
     if (!isFastLaneEnabled()) return null;
+    const symbol = input.symbol.toUpperCase();
 
     // 2026-10-08 (D3): expiry was previously enforced only opportunistically inside
     // getActiveCandidates(), which has no production callers - a never-evaluated,
@@ -80,7 +81,7 @@ class FastLaneManager {
 
     // Deduplicate: one active candidate per symbol at a time.
     for (const c of this.candidates.values()) {
-      if (c.symbol === input.symbol && c.state !== 'EXPIRED' && c.state !== 'NO_SETUP') {
+      if (c.symbol === symbol && c.state !== 'EXPIRED' && c.state !== 'NO_SETUP') {
         return null;
       }
     }
@@ -89,7 +90,7 @@ class FastLaneManager {
     const ttl = input.ttlMs ?? DEFAULT_TTL_MS[input.detectionSource];
     const candidate: FastOpportunityCandidate = {
       id: randomUUID(),
-      symbol: input.symbol.toUpperCase(),
+      symbol,
       detectedAt: now,
       expiresAt: now + ttl,
       lastEvidenceAt: now,

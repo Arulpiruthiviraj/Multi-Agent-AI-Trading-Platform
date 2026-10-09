@@ -191,6 +191,20 @@ export function getProcessTelemetrySamples(): readonly ProcessTelemetrySample[] 
   return processSamples;
 }
 
+/** Cheap diagnostic snapshot of the existing sampler; no DB, probes, GC or new timer. */
+export function getProcessTelemetrySnapshot(nowMs = Date.now()) {
+  const latest = processSamples.at(-1);
+  return {
+    sampleCount: processSamples.length,
+    capacity: observabilityConfig.processTelemetryRingSize,
+    latest: latest ? { ...latest } : null,
+    sampleAgeMs: latest ? Math.max(0, nowMs - latest.ts) : null,
+    memoryUnit: 'bytes' as const,
+    delayUnit: 'milliseconds' as const,
+    leakClassification: 'NOT_PROVEN' as const,
+  };
+}
+
 /**
  * P1-A follow-up (2026-09-23): runtime PROOF, not just inference, that ReflectionEngine.ts's
  * already-committed `inFlight` re-entrancy guard is doing real work, plus visibility into per-cycle

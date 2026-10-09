@@ -1,3 +1,5 @@
+import { classifySessionCheckpoint, SESSION_CHECKPOINT_SLOTS_ET, type SessionCheckpointInput, type SessionCheckpointClassification } from './sessionCheckpointClassification';
+export { classifySessionCheckpoint, SESSION_CHECKPOINT_SLOTS_ET, type SessionCheckpointInput, type SessionCheckpointClassification, type SessionCheckpointVerdict } from './sessionCheckpointClassification';
 /**
  * Session checkpoint classifier (Mission Part 57, 2026-10-07).
  *
@@ -39,55 +41,10 @@ import { getMetric } from './ObservabilityMetrics';
 import { observabilityQueueLengthForTests } from './ObservabilityStore';
 import { db } from '../db';
 import * as schema from '../db/schema';
-import { desc } from 'drizzle-orm';
-
-export type SessionCheckpointVerdict = 'HEALTHY_ZERO_TRADE' | 'SUSPICIOUS_ZERO_TRADE' | 'TRADING';
-
-/** Operator checkpoint slots (America/New_York) for early inactivity detection. */
-export const SESSION_CHECKPOINT_SLOTS_ET = ['09:35', '10:00', '11:00', '13:00', '15:00'] as const;
-
-export interface SessionCheckpointInput {
-  /** e.g. TRADING_ENABLED | TRADING_PAUSED | UNKNOWN */
-  tradingState: string;
-  autobotEnabled: boolean;
-  brokerDown: boolean;
-  /** Market session label from tradingSessionReport (PRE_MARKET | RTH | AFTER_HOURS | CLOSED | UNKNOWN). */
-  marketSession: string;
-  marketDataReady: boolean;
-  symbolsDiscovered: number;
-  subscriptionsActive: number;
-  subscriptionsFresh: number;
-  /** QUANT_EVIDENCE_PRODUCED rows in window (quant assessments flowing). */
-  quantAssessments: number;
-  quantValidationFailed: number;
-  /** Agent evaluations (strategy triggers) from the consensus pipeline. */
-  strategyTriggers: number;
-  quantIdeas: number;
-  consensusRoundsStarted: number;
-  consensusRejected: number;
-  quantApprovals: number;
-  riskEvaluations: number;
-  riskApproved: number;
-  ordersSubmitted: number;
-  fills: number;
-  topTerminalReasons: Array<{ code: string; count: number }>;
-  aiAvailability: string;
-  aiHealthyProviders: number;
-  aiTotalProviders: number;
-  quantAvailability: string;
-  observabilityQueuePending: number;
-  observabilityQueueDropped: number;
-  /** Latest reconciliation cycle: true = match, false = mismatch, null = no cycles recorded. */
-  reconciliationMatch: boolean | null;
-}
-
-export interface SessionCheckpointClassification {
-  verdict: SessionCheckpointVerdict;
-  upstreamActivity: number;
-  terminalOutcomes: number;
-  blockers: string[];
-  reasons: string[];
-}
+import { desc, and, eq, gte, lt, count, sql } from 'drizzle-orm';
+import { replaySafety } from '../replay/replaySafety';
+import { buildQuantReadinessReport } from '../routes/v2Diagnostics';
+import { isQuantPolicyEnabled } from '../config/quantDecisionPolicy';
 
 export interface SessionCheckpointReport {
   generatedAt: string;
@@ -132,77 +89,6 @@ export function etDayStartIso(nowMs: number): string {
  * Pure classification. Reporting only — the numbers in must already exist; this function
  * invents no data, changes no threshold, and touches no trading state.
  */
-export function classifySessionCheckpoint(input: SessionCheckpointInput): SessionCheckpointClassification {
-  const upstreamActivity =
-    input.symbolsDiscovered +
-    input.subscriptionsActive +
-    input.quantAssessments +
-    input.strategyTriggers +
-    input.quantIdeas +
-    input.consensusRoundsStarted +
-    input.riskEvaluations;
-  const terminalOutcomes =
-    input.quantApprovals + input.riskApproved + input.ordersSubmitted + input.fills;
-
-  const blockers: string[] = [];
-  if (input.tradingState === 'TRADING_PAUSED') blockers.push('TRADING_PAUSED');
-  if (input.brokerDown) blockers.push('BROKER_DOWN');
-  // Subscription starvation with zero promotions: no usable subscriptions at all.
-  if (input.subscriptionsActive === 0 || !input.marketDataReady) blockers.push('SUBSCRIPTION_STARVATION');
-  // NOTE: all-AI-down is deliberately NOT a blocker. Quant-first: AI is optional and a
-  // healthy quant pipeline flows with AI down. Never flag AI-down as the cause.
-
-  const reasons: string[] = [];
-  if (terminalOutcomes > 0) {
-    reasons.push(
-      `${terminalOutcomes} terminal outcome(s) this session ` +
-        `(approvals ${input.quantApprovals}, risk approvals ${input.riskApproved}, ` +
-        `orders ${input.ordersSubmitted}, fills ${input.fills}) — the pipeline is producing, not stalled.`,
-    );
-    return { verdict: 'TRADING', upstreamActivity, terminalOutcomes, blockers, reasons };
-  }
-  if (upstreamActivity > 0 && blockers.length > 0) {
-    reasons.push(
-      `Upstream activity is flowing (${upstreamActivity} discoveries/subscriptions/assessments/` +
-        `ideas/rounds/evaluations) but produced ZERO terminal outcomes, and a fixable global ` +
-        `blocker exists: ${blockers.join(', ')}.`,
-    );
-    if (input.topTerminalReasons.length > 0) {
-      reasons.push(
-        'Top terminal reasons: ' +
-          input.topTerminalReasons.slice(0, 5).map((t) => `${t.code}×${t.count}`).join(', ') + '.',
-      );
-    }
-    return { verdict: 'SUSPICIOUS_ZERO_TRADE', upstreamActivity, terminalOutcomes, blockers, reasons };
-  }
-  if (upstreamActivity === 0) {
-    reasons.push(
-      'No upstream pipeline activity yet this session ' +
-        `(state ${input.tradingState}, market session ${input.marketSession}) — ` +
-        'zero trades is the expected outcome, not a stall.',
-    );
-  } else {
-    reasons.push(
-      `Upstream activity is flowing (${upstreamActivity}) with zero terminal outcomes, but no ` +
-        'fixable global blocker is present — the pipeline is rejecting on merit ' +
-        '(see top terminal reasons), which is healthy quant-first behavior.',
-    );
-    if (input.topTerminalReasons.length > 0) {
-      reasons.push(
-        'Top terminal reasons: ' +
-          input.topTerminalReasons.slice(0, 5).map((t) => `${t.code}×${t.count}`).join(', ') + '.',
-      );
-    }
-  }
-  if (input.aiAvailability === 'AI_UNAVAILABLE') {
-    reasons.push(
-      'AI is fully down — advisory only, not a blocker: quant-first means AI absence must ' +
-        'never stall the quant pipeline.',
-    );
-  }
-  return { verdict: 'HEALTHY_ZERO_TRADE', upstreamActivity, terminalOutcomes, blockers, reasons };
-}
-
 /**
  * Compose the checkpoint input from existing read-only reports. Every number below comes
  * from an already-real, already-tested source — no new counters, no new data paths.
@@ -282,7 +168,17 @@ export async function buildSessionCheckpoint(): Promise<SessionCheckpointReport>
     observabilityQueuePending,
     observabilityQueueDropped,
     reconciliationMatch,
+    quantPolicyEnabled: isQuantPolicyEnabled(),
   };
+
+  // Canonical authorization and observed policy outcomes are separate evidence.
+  // A read failure remains unknown; it must never become fabricated zero activity.
+  if (input.quantPolicyEnabled) {
+    try {
+      input.authorizedPaperQuantStrategies = (await buildQuantReadinessReport()).summary.authorizedQuantPolicy;
+      input.quantPolicyEvaluations = await readObservedQuantPolicyEvaluations(Date.parse(sinceIso), nowMs);
+    } catch { /* unknown evidence is explicitly disclosed by classification */ }
+  }
 
   return {
     generatedAt: new Date(nowMs).toISOString(),
@@ -314,6 +210,7 @@ export function formatSessionCheckpointText(r: SessionCheckpointReport): string 
     `Market session:           ${i.marketSession} | market data ready: ${i.marketDataReady}`,
     `Symbols discovered:       ${i.symbolsDiscovered} | subscriptions active/fresh: ${i.subscriptionsActive}/${i.subscriptionsFresh}`,
     `Quant assessments:        ${i.quantAssessments} (validation failed: ${i.quantValidationFailed})`,
+    `Quant policy:             ${i.quantPolicyEnabled === true ? 'enabled' : 'disabled'} | authorized strategies ${i.authorizedPaperQuantStrategies ?? 'UNKNOWN'} | evaluations ${i.quantPolicyEvaluations ?? 'UNKNOWN'}`,
     `Strategy triggers (evals): ${i.strategyTriggers}`,
     `Trade ideas:              ${i.quantIdeas} | consensus rounds: ${i.consensusRoundsStarted} (rejected pre-consensus: ${i.consensusRejected})`,
     `Chief approvals:          ${i.quantApprovals} | risk evals: ${i.riskEvaluations} (approved: ${i.riskApproved})`,
@@ -329,4 +226,20 @@ export function formatSessionCheckpointText(r: SessionCheckpointReport): string 
       'Run at 09:35 / 10:00 / 11:00 / 13:00 / 15:00 ET during PAPER sessions.',
   ];
   return lines.join('\n');
+}
+
+/** Read-only observed policy outcomes, half-open UTC window; replay is excluded. */
+export async function readObservedQuantPolicyEvaluations(sinceMs: number, untilMs: number): Promise<number> {
+  if (!Number.isFinite(sinceMs) || !Number.isFinite(untilMs) || untilMs <= sinceMs) throw new Error("Invalid policy activity window");
+  let policyEvaluations = 0;
+  for (const eventType of ['QUANT_POLICY_APPROVED', 'QUANT_POLICY_REJECTED']) {
+    const [row] = await db.select({ total: count() }).from(schema.observabilityEvents).where(and(
+      eq(schema.observabilityEvents.eventType, eventType),
+      gte(schema.observabilityEvents.ts, sinceMs),
+      lt(schema.observabilityEvents.ts, untilMs),
+      sql`(${schema.observabilityEvents.traceId} IS NULL OR substr(${schema.observabilityEvents.traceId}, 1, ${replaySafety.replayTracePrefix.length}) <> ${replaySafety.replayTracePrefix})`,
+    ));
+    policyEvaluations += row.total;
+  }
+  return policyEvaluations;
 }

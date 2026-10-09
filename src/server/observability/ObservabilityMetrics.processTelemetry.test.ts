@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import {
   recordProcessTelemetrySample,
   getProcessTelemetrySamples,
+  getProcessTelemetrySnapshot,
   resetMetricsForTests,
 } from './ObservabilityMetrics';
 import { observabilityConfig } from '../config/observability';
@@ -9,6 +10,22 @@ import { observabilityConfig } from '../config/observability';
 describe('process telemetry collector (reuses ObservabilityMetrics ring, not a second system)', () => {
   afterEach(() => {
     resetMetricsForTests();
+  });
+
+  it('reports unavailable samples honestly and returns detached snapshots', () => {
+    expect(getProcessTelemetrySnapshot().latest).toBeNull();
+    expect(getProcessTelemetrySnapshot().sampleAgeMs).toBeNull();
+    recordProcessTelemetrySample({ ts: 100, rss: 1, heapUsed: 2, heapTotal: 3,
+      external: 4, arrayBuffers: 5, eventLoopDelayMs: null,
+      eventLoopDelayP50Ms: null, eventLoopDelayP95Ms: null,
+      eventLoopDelayP99Ms: null, eventLoopDelayMaxMs: null });
+    const snapshot = getProcessTelemetrySnapshot(150);
+    expect(snapshot.sampleAgeMs).toBe(50);
+    expect(snapshot.latest?.eventLoopDelayP99Ms).toBeNull();
+    expect(snapshot.leakClassification).toBe('NOT_PROVEN');
+    snapshot.latest!.rss = 999;
+    expect(getProcessTelemetrySnapshot().latest?.rss).toBe(1);
+    expect(getProcessTelemetrySamples()).toHaveLength(1);
   });
 
   it('records a heap/RSS/event-loop sample into the bounded ring', () => {

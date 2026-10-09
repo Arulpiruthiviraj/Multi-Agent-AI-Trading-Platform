@@ -4,7 +4,7 @@
  * Thin wiring checks: the route exists, validates the date param, resolves
  * "latest", and delegates assembly to the service (which owns all DB reads).
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -54,5 +54,17 @@ describe('GET /api/v2/observability/daily-reflection/:date', () => {
     const res = await request(app).get('/api/v2/observability/daily-reflection/not-a-date');
     expect(res.status).toBe(400);
     expect(res.body.ok).toBe(false);
+  });
+  it('serves resource diagnostics without querying historical tables', async () => {
+    const { db } = await import('../db');
+    const spy = vi.spyOn(db, 'select').mockImplementation(() => { throw new Error('DB unavailable'); });
+    try {
+      const res = await request(app).get('/api/v2/observability/process-resources');
+      expect(res.status).toBe(200);
+      expect(res.body.process.leakClassification).toBe('NOT_PROVEN');
+      expect(res.body.process.memoryUnit).toBe('bytes');
+      expect(res.body.observabilityQueue.inFlightBatchSize).toBeNull();
+      expect(spy).not.toHaveBeenCalled();
+    } finally { spy.mockRestore(); }
   });
 });

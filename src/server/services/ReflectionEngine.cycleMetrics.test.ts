@@ -86,4 +86,41 @@ describe('ReflectionEngine cycle metrics instrumentation (P1-A follow-up)', () =
     expect(last.tradesRowsScanned).toBe(0);
     expect(last.cycleDurationMs).toBeGreaterThanOrEqual(0);
   });
+
+  it('does not materialize ungraded predictions while preserving graded calibration', async () => {
+    const schema = await import('../db/schema');
+    const { eq } = await import('drizzle-orm');
+    const timestamp = new Date().toISOString();
+    for (let i = 0; i < 100; i++) {
+      await db.insert(schema.agentPredictions).values({
+        id: `pending-${i}`, agentName: 'PendingAllocationTest', symbol: 'AAPL',
+        prediction: 'BUY', confidence: 0.85, reasoning: 'allocation fixture', timestamp,
+      });
+      await db.insert(schema.kronosPredictions).values({
+        symbol: 'AAPL', timeframe: '1Min', prediction: 'BUY', confidence: 0.85,
+        forecastHorizon: 5, expectedMove: 0.01, volatility: 'NORMAL',
+        support: 95, resistance: 115, model: 'allocation-fixture', predictedOhlc: '[]',
+        marketStructure: 'Unknown', momentum: 'Unknown', timestamp,
+      });
+    }
+    await db.insert(schema.predictionOutcomes).values({
+      predictionId: 'pending-0', sourceTable: 'agent_predictions', symbol: 'AAPL',
+      outcome: 'WIN', evaluatedAt: timestamp,
+    });
+    const kronos = await db.select().from(schema.kronosPredictions).limit(1);
+    await db.insert(schema.predictionOutcomes).values({
+      predictionId: String(kronos[0].id), sourceTable: 'kronos_predictions', symbol: 'AAPL',
+      outcome: 'LOSS', evaluatedAt: timestamp,
+    });
+    await reflectionEngine.evaluateAgents();
+    const last = observabilityMetrics.getReflectionEngineCycleSamples().at(-1);
+    expect(last.agentPredictionsRowsScanned).toBe(1);
+    expect(last.kronosPredictionsRowsScanned).toBe(1);
+    const calibration = await db.select().from(schema.agentConfidenceCalibration)
+      .where(eq(schema.agentConfidenceCalibration.agentName, 'PendingAllocationTest'));
+    expect(calibration[0].wins).toBe(1);
+    expect(calibration[0].losses).toBe(0);
+    const pending = await db.select().from(schema.agentPredictions);
+    expect(pending).toHaveLength(100); // read filtering never deletes pending work
+  });
 });

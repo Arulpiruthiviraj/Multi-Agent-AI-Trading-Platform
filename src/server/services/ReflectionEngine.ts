@@ -9,7 +9,7 @@
  */
 import { db } from '../db';
 import { agentPredictions, agentPerformanceStats, agentConfidenceCalibration, trades, learnedRules, predictionOutcomes, kronosPredictions } from '../db/schema';
-import { eq, desc, or, isNull, notInArray, not, like, sql } from 'drizzle-orm';
+import { eq, desc, or, and, exists, isNull, notInArray, not, like, sql } from 'drizzle-orm';
 import { eventBus } from '../core/EventBus';
 import { AIRouter } from '../ai/AIRouter';
 import { bucketFor, calibratedConfidenceForBucket } from './ConfidenceCalibration';
@@ -281,12 +281,19 @@ export class ReflectionEngine {
       // ran in JS AFTER materializing the entire agent_predictions table into V8. Pushed into
       // SQL - row-for-row identical (NULL traceIds stay included via the IS NULL branch,
       // matching the old `!p.traceId ||` JS semantics), so excluded rows never allocate.
-      const rawPredictionRows = await db.select().from(agentPredictions).where(
+      // Read eligibility only: pending predictions cannot contribute to the outcome loop.
+      // EXISTS uses the existing (prediction_id, source_table) index and avoids loading
+      // their payloads into V8. Calibration math and all graded outcomes remain unchanged.
+      const rawPredictionRows = await db.select().from(agentPredictions).where(and(
         or(
           isNull(agentPredictions.traceId),
           not(like(agentPredictions.traceId, `${TELEMETRY_PULSE_TRACE_PREFIX}%`)),
         ),
-      ).all();
+        exists(db.select({ id: predictionOutcomes.id }).from(predictionOutcomes).where(and(
+          eq(predictionOutcomes.predictionId, agentPredictions.id),
+          eq(predictionOutcomes.sourceTable, 'agent_predictions'),
+        ))),
+      )).all();
       agentPredictionsQueryDurationMs = Date.now() - predictionsQueryStartedAt;
       agentPredictionsRowsScanned = rawPredictionRows.length;
       const predictions = rawPredictionRows;
@@ -307,7 +314,13 @@ export class ReflectionEngine {
       // duplication) - source its stats/calibration from there directly instead of the
       // agent_predictions copies (ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md finding M1).
       const kronosQueryStartedAt = Date.now();
-      const kronosRows = await db.select().from(kronosPredictions).all();
+      const kronosRows = await db.select().from(kronosPredictions).where(
+        exists(db.select({ id: predictionOutcomes.id }).from(predictionOutcomes).where(and(
+          // Match the old Map's String(id) exactly; do not coerce '01' into id 1.
+          eq(predictionOutcomes.predictionId, sql<string>`cast(${kronosPredictions.id} as text)`),
+          eq(predictionOutcomes.sourceTable, 'kronos_predictions'),
+        ))),
+      ).all();
       kronosPredictionsQueryDurationMs = Date.now() - kronosQueryStartedAt;
       kronosPredictionsRowsScanned = kronosRows.length;
       const kronosById = new Map(kronosRows.map(k => [String(k.id), k]));

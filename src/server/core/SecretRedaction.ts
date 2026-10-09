@@ -19,6 +19,8 @@
  * ==========================================================
  */
 
+import type { QuantAuthority, QuantAuthorizationReason } from '../quant/QuantStrategyAuthorization';
+
 // Every env var that can plausibly hold a real credential, so a future new call site logging a
 // raw error still gets the same protection without having to remember to extend a list.
 const SECRET_ENV_VARS = [
@@ -30,7 +32,21 @@ const SECRET_ENV_VARS = [
   'IBKR_GATEWAY_URL', 'QUESTRADE_REFRESH_TOKEN', 'QUESTRADE_ACCESS_TOKEN',
   'COINBASE_API_KEY', 'COINBASE_API_SECRET', 'COINBASE_PRIVATE_KEY',
   'LIVE_ARM_TOKEN', 'WEBHOOK_SECRET',
+  'JEV_API_KEY', 'TYPESAFE_API_KEY',
 ];
+
+// Only these exact public enum values are diagnostics, never HTTP credentials.
+// Unknown values under either key still take the sensitive-key redaction path.
+const QUANT_AUTHORITY_VALUES = new Set<string>([
+  'AUTHORIZED_QUANT_POLICY', 'REQUIRES_CONSENSUS', 'NOT_ELIGIBLE', 'NOT_AUTHORIZED',
+] satisfies QuantAuthority[]);
+const QUANT_AUTH_REASON_VALUES = new Set<string>([
+  'POLICY_DISABLED', 'ORIGIN_NOT_QUANT', 'ENVIRONMENT_NOT_AUTHORIZED', 'NO_STRATEGY_ID',
+  'UNKNOWN_STRATEGY', 'PRODUCER_NOT_QUANT', 'STRATEGY_LIFECYCLE_LOOKUP_FAILED',
+  'NO_LIFECYCLE_RECORD', 'STRATEGY_UNTESTED', 'STRATEGY_SHADOW', 'STRATEGY_CANDIDATE',
+  'STRATEGY_ACTIVE_EXPLORATION', 'STRATEGY_ROLLED_BACK', 'STRATEGY_DEGRADED',
+  'STRATEGY_RETIRED', 'STRATEGY_VALIDATED', 'STRATEGY_CHAMPION',
+] satisfies QuantAuthorizationReason[]);
 
 // Real bug found and fixed this pass: this was previously anchored (`^(...)$`), an EXACT match
 // only - so a field literally named "secret" or "token" was caught, but the camelCase compound
@@ -83,7 +99,12 @@ export function redactSecretsDeep(value: unknown, depth = 0): unknown {
     const obj = value as Record<string, unknown>;
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(obj)) {
-      if (SENSITIVE_KEY.test(k)) {
+      const publicQuantEnum = typeof v === 'string' && (
+        (k === 'authorization' && QUANT_AUTHORITY_VALUES.has(v)) ||
+        (k === 'authorizationReason' && QUANT_AUTH_REASON_VALUES.has(v)));
+      if (publicQuantEnum) {
+        out[k] = redactSecrets(v as string);
+      } else if (SENSITIVE_KEY.test(k)) {
         out[k] = '[REDACTED]';
       } else {
         out[k] = redactSecretsDeep(v, depth + 1);

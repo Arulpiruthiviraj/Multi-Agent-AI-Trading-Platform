@@ -1033,7 +1033,7 @@ export const COMMAND_HELP: Record<string, string> = {
   'pipeline-ready': 'Usage: argus pipeline-ready\nPipeline readiness check.',
   'readiness': 'Usage: argus readiness\nPre-session checklist: per-check PASS/WARN/FAIL with READY / READY_WITH_WARNINGS / NOT_READY verdict. Read-only; AI checks are advisory only.',
   'quant-readiness': 'Usage: argus quant-readiness [--json]\nProduction-state diagnostic: per-strategy authorization verdicts (AUTHORIZED_QUANT_POLICY / REQUIRES_CONSENSUS / NOT_ELIGIBLE / NOT_AUTHORIZED) computed by the real resolver against the live runtime DB. Read-only; requires the engine API.',
-  'session-checkpoint': 'Usage: argus session-checkpoint\nEarly-warning inactivity check: classifies the session HEALTHY_ZERO_TRADE / SUSPICIOUS_ZERO_TRADE (or TRADING). Run at 09:35/10:00/11:00/13:00/15:00 ET during PAPER sessions.',
+  'session-checkpoint': 'Usage: argus session-checkpoint\nEarly-warning inactivity check: distinguishes healthy/suspicious/inconclusive zero-trade sessions, pipeline progress without fills, and observed fills. Run at 09:35/10:00/11:00/13:00/15:00 ET during PAPER sessions.',
   'session-report': 'Usage: argus session-report\nSession report.',
   'research': 'Usage: argus research <subcommand> [args]\nResearch intelligence (advisory only, never a trade). Run `argus research --help` for subcommands.',
   'trading-audit': 'Usage: argus trading-audit\nTrading audit trail.',

@@ -144,4 +144,17 @@ describe('StrategyRecertification', () => {
     expect(() => mod.formatRecertificationReview([])).not.toThrow();
     expect(mod.formatRecertificationReview([])).toContain('No quarantined');
   });
+  it('agrees with emission eligibility for same-millisecond transitions and exact strategy ids', async () => {
+    const timestamp = new Date('2026-10-09T13:00:00.000Z');
+    await eligibility.recordStrategyLifecycleTransition('TIE_RECERT', 'RETIRED', 'old', null, 1, timestamp);
+    await eligibility.recordStrategyLifecycleTransition('TIE_RECERT', 'ROLLED_BACK', 'new', null, 1, timestamp);
+    expect(await eligibility.getStrategyLifecycleStatus('TIE_RECERT')).toBe('ROLLED_BACK');
+    expect(await mod.listQuarantinedStrategyIds()).not.toContain('TIE_RECERT');
+    await eligibility.recordStrategyLifecycleTransition('EXACT_RECERT', 'RETIRED', 'exact', null, 1, timestamp);
+    await eligibility.recordStrategyLifecycleTransition('EXACTXRECERT', 'DEGRADED', 'different', null, 1,
+      new Date(timestamp.getTime() + 1000));
+    const row = (await mod.buildRecertificationReview()).find(r => r.strategyId === 'EXACT_RECERT');
+    expect(row?.status).toBe('RETIRED');
+    expect(row?.originalHypothesis).toBe('exact');
+  });
 });
