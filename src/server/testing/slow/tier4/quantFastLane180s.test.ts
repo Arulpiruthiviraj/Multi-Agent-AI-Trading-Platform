@@ -33,6 +33,9 @@
  *
  * Labels: COMPONENT (real runCycle, real evaluateSymbol, real SQLite, stubbed
  * universe + slowed provider); EXPECTED_FAIL / QUANT_RESEARCH_REQUIRED.
+ * Tier: SLOW / NIGHTLY — lives under src/server/testing/slow/tier4 so the
+ * tier1 exclusion for testing/slow paths keeps this ~4-minute test out of
+ * the fast pre-market gate.
  * ==========================================================
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -108,14 +111,14 @@ beforeAll(async () => {
   process.env.ARGUS_QUANT_INDEPENDENT_QUALIFICATION_ENABLED = 'false';
   process.env.ARGUS_STRATEGY_SELECTION_CONFLUENCE_GUARD_ENABLED = 'false';
 
-  ({ db } = await import('../db'));
-  schema = await import('../db/schema');
-  ({ marketDataWorker } = await import('../services/MarketDataWorker'));
-  ({ quantSignalAgent } = await import('../services/QuantSignalAgent'));
-  ({ historicalDataGateway } = await import('../engines/backtest/HistoricalDataGateway'));
-  ({ structuredLogger } = await import('../observability/StructuredLogger'));
-  ({ flushObservabilityStore } = await import('../observability/ObservabilityStore'));
-  ({ tradingSafety } = await import('../config/tradingSafety'));
+  ({ db } = await import('../../../db'));
+  schema = await import('../../../db/schema');
+  ({ marketDataWorker } = await import('../../../services/MarketDataWorker'));
+  ({ quantSignalAgent } = await import('../../../services/QuantSignalAgent'));
+  ({ historicalDataGateway } = await import('../../../engines/backtest/HistoricalDataGateway'));
+  ({ structuredLogger } = await import('../../../observability/StructuredLogger'));
+  ({ flushObservabilityStore } = await import('../../../observability/ObservabilityStore'));
+  ({ tradingSafety } = await import('../../../config/tradingSafety'));
 
   for (const sym of BENCHMARK_SYMBOLS) await seedDailyBars(sym, 400, 100);
 }, 180_000);

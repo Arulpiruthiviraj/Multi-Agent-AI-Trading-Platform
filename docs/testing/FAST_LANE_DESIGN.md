@@ -3,7 +3,7 @@
 **Date:** 2026-10-09 · **Status:** DEFERRED — assessed, not built (see §8 for the exact
 blockers) · **Mission item:** ARGUS MISSION ITEM 3 (P2) · **Disposition:** QUANT_RESEARCH_REQUIRED
 
-**Companion:** `src/server/certification/quantFastLane180s.test.ts` — the FAILING SLA test
+**Companion:** `src/server/testing/slow/tier4/quantFastLane180s.test.ts` — the FAILING SLA test
 (`it.fails`) that pins the 180s target. It is expected-fail until this design (or an
 equivalent) is implemented and proven; if it ever passes, vitest reports it as a failure,
 which is the tripwire to convert it to a normal test.
@@ -187,7 +187,7 @@ In order, each independently verifiable in tests:
 
 ## 9. Verification plan (when built)
 
-- `src/server/certification/quantFastLane180s.test.ts`: convert `it.fails` → `it`;
+- `src/server/testing/slow/tier4/quantFastLane180s.test.ts`: convert `it.fails` → `it`;
   HOT_MOVER_X admitted mid-cycle begins assessment ≤ 180s under the 100-symbol / slow-
   provider / churn scenario; normal lane still meets its cycle SLA in the same run;
   completeness invariant holds for the cycle snapshot; every lane item has exactly one
