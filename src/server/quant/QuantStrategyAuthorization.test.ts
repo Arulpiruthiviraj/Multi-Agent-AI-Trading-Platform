@@ -1,3 +1,4 @@
+// LABEL: UNIT - proves the authorization rule (only VALIDATED/CHAMPION lifecycle authorizes; emitters cannot self-grant) against a temp DB. Tests the logic itself; seeded rows ARE the test subject, not production authority.
 /**
  * QuantStrategyAuthorization tests (Quant-First Decision Architecture, Phase 16).
  *

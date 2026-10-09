@@ -1,3 +1,4 @@
+// LABEL: MECHANISM_E2E - starts from an INJECTED CHIEF_APPROVED_IDEA; proves only the downstream RiskAgent -> RiskEngine -> OMS -> InternalPaperBroker fill chain. The consensus decision ladder is NOT exercised - this is not full-pipeline coverage despite the file's 'E2E' wording.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
@@ -5,7 +6,7 @@ import os from 'os';
 import { eq } from 'drizzle-orm';
 
 /**
- * PAPER spine E2E (isolated temp SQLite — never data/argus.db):
+ * PAPER downstream-spine mechanism test (isolated temp SQLite — never data/argus.db):
  *   CHIEF_APPROVED_IDEA → RiskAgent → RiskEngine → OMS → InternalPaperBroker.placeOrder
  *   → MARKET_DATA / BrokerManager.tick fill → trades + fills persistence
  *

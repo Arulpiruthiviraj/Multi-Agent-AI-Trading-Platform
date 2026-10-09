@@ -1,3 +1,4 @@
+// LABEL: UNIT - proves determinism/reproducibility of the synthetic bar generator itself. Environment control only, not a decision proof.
 import { describe, it, expect } from 'vitest';
 import { SyntheticRandom } from './SyntheticRandom';
 import { SyntheticMarketDataEngine, defaultSyntheticUniverse } from './SyntheticMarketDataEngine';

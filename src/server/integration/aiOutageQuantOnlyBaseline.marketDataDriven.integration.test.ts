@@ -1,3 +1,4 @@
+// LABEL: MECHANISM_E2E - market-data-driven variant of the AI-outage baseline: the TechnicalAgent idea is GENUINELY computed (real analyzeTick over a verified price series, captured from the real EventBus, never constructed by the test - verified in file). The QuantEngine second vote is still a hand-placed idea, explicitly labeled in-file as a known gap. Proves the real reviewIdea->consensus->Risk->OMS->InternalPaperBroker chain CAN fire with AI down; does NOT prove organic QuantEngine emission.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';

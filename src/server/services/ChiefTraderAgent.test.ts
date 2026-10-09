@@ -1,3 +1,4 @@
+// LABEL: UNIT - proves ChiefTrader consensus math with db/EventBus/AIRouter/AI all mocked. Routing/decision logic only; not production wiring.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { mockDb } = vi.hoisted(() => {

@@ -1,10 +1,11 @@
+// LABEL: COMPONENT - proves the seeder + the REAL calibration computation converge on synthetic fixtures in an isolated DB. Corrects this file's 'Real end-to-end proof' wording: it is NOT an end-to-end trading proof (no scheduler, no consensus, no OMS, no broker). Fixtures are SYNTHETIC_SEEDED, never organic evidence.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
 /**
- * Real end-to-end proof for CalibrationHistorySeeder.ts (2026-09-14, explicit operator
+ * Component-level proof for CalibrationHistorySeeder.ts (2026-09-14, explicit operator
  * authorization - see that file's own header for the full disclosure this represents). Uses the
  * SAME isolated-tmp-DB pattern CalibrationCandidateBuilder.test.ts already uses - never the real
  * production database. Proves the seeder's own claim: it seeds evidence, then the REAL

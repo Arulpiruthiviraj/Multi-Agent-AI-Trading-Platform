@@ -1,3 +1,4 @@
+// LABEL: FAULT_INJECTION - injects Oct-8 defect classes through real production modules on a temp DB; proves each reaches a safe state with a loud diagnosis. Does NOT prove production reachability, scheduler timing, or real data behavior.
 /**
  * SYNTHESIS DEFECT SWEEP (2026-10-08).
  *

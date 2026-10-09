@@ -1,3 +1,4 @@
+// LABEL: ARCHITECTURE_INVARIANT - locks router ordering, the call-time nature of the paper-only lock, and quant-approval code shapes. Static/invariant guarantee, not a trading outcome.
 /**
  * Part-31 architecture invariant tests for the quant-first decision path
  * (Workstream F, 2026-10-08).

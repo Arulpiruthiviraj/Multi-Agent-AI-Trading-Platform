@@ -1,3 +1,4 @@
+// LABEL: MECHANISM_E2E - proves the OMS side (order submit, partial-fill aggregation, follow-up job, exit, reconciliation) against the REAL HistoricalReplayBroker. Corrects the header's 'Real end-to-end integration test': orders are submitted by direct oms.executeOrder() calls, NOT by the ChiefTrader/Risk decision ladder - downstream mechanism only.
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
@@ -5,7 +6,8 @@ import os from 'os';
 import { eq } from 'drizzle-orm';
 
 /**
- * Real end-to-end integration test (isolated temp SQLite DB, real OMS, real BrokerManager, the REAL
+ * Real downstream integration test (OMS + broker; orders injected via oms.executeOrder, not via the ChiefTrader/Risk ladder)
+ * (isolated temp SQLite DB, real OMS, real BrokerManager, the real
  * HistoricalReplayBroker) for the exact sequence the certification report named as its last open
  * item (2026-09-16 follow-up): BUY -> broker ACK -> partial fill -> remaining quantity -> a SECOND
  * fill completing the SAME order -> final position -> exit -> reconciliation, all through the real

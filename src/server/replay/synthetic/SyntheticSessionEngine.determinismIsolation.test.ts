@@ -1,3 +1,4 @@
+// LABEL: UNIT - proves prepareIsolatedEnvironment forces the news-engine env isolation flag. Environment-shape assertion only.
 import { describe, it, expect, afterEach } from 'vitest';
 import { SyntheticSessionEngine } from './SyntheticSessionEngine';
 
