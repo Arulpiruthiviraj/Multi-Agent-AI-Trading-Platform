@@ -20,7 +20,7 @@ export class FMPNewsProvider implements NewsProviderPlugin {
 
     try {
       const res = await fetch(`${networkEndpoints.marketData.fmpBaseUrl}/fmp/articles?page=0&size=10&apikey=${process.env.FMP_API_KEY}`);
-      if (!res.ok) return [];
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
       const data = await res.json();
       
       return data.content.map((item: any) => ({
@@ -37,7 +37,9 @@ export class FMPNewsProvider implements NewsProviderPlugin {
       // FMP's API only supports key-in-query-string auth (no header alternative) - see
       // AlphaVantageNewsProvider.ts's identical comment / SecretRedaction.ts.
       logErrorSafely('[FMPNewsProvider] Error fetching news', e);
-      return [];
+      // 2026-10-08 defect hunt (news D4): rethrow so the manager records the failure
+      // instead of reporting a dead feed as "Healthy" with 0 articles.
+      throw e;
     }
   }
 }

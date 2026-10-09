@@ -26,7 +26,7 @@ export class PolygonNewsProvider implements NewsProviderPlugin {
       const res = await fetch(`${networkEndpoints.marketData.polygonBaseUrl}/reference/news?limit=10`, {
         headers: { Authorization: `Bearer ${process.env.POLYGON_API_KEY}` },
       });
-      if (!res.ok) return [];
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
       const data = await res.json();
       
       if (!data.results) return [];
@@ -45,7 +45,9 @@ export class PolygonNewsProvider implements NewsProviderPlugin {
       // Defense-in-depth even though the key is no longer in the URL - consistent with every
       // other provider's error logging, see SecretRedaction.ts.
       logErrorSafely('[PolygonNewsProvider] Error fetching news', e);
-      return [];
+      // 2026-10-08 defect hunt (news D4): rethrow so the manager records the failure
+      // instead of reporting a dead feed as "Healthy" with 0 articles.
+      throw e;
     }
   }
 }
