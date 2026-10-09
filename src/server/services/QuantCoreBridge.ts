@@ -1429,6 +1429,18 @@ export class QuantCoreBridgeService {
   }
 
   /**
+   * 2026-10-08 C-F5 (documented, no behavior change): DORMANT / RESERVED. Verified by grep -
+   * this method has ZERO callers anywhere in src/, scripts/, or quant-core-java/ (the only
+   * other "onSignal" hits in the repo are unrelated SIGTERM/SIGINT handlers and Java test
+   * field names). It was built as the translation layer a future Java strategy's live vote
+   * would use to emit TRADE_IDEA_GENERATED (agent 'QuantCoreJava'), but no Java engine calls
+   * it today - Java strategies are all RESEARCH-status, reached only via fetchResearchStrategy()
+   * (a separate request/response-only path this function does not gate). If a future Java
+   * engine is ever wired to call this, it must go through the same explicit operator
+   * enablement + ChiefTrader consensus gates every other vote clears (see the flag check at
+   * the top of this method); wiring it is a deliberate, separately-reviewed decision, not an
+   * implied one.
+   *
    * Phase 3: translate a Java StrategySignal into the same TRADE_IDEA_GENERATED shape every
    * other agent produces. Fails closed (drops the idea, never throws) on any malformed field.
    * No-op entirely unless isLiveIdeaEmissionEnabled() (both flags on).
