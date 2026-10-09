@@ -203,17 +203,23 @@ function persistStatus(
 
 /**
  * Purges raw rows for every VERIFIED (tradingDate, sourceType) older than retentionDays, one day at
- * a time, each in its own short, bounded, atomic transaction (§11/§9) - delete-then-mark-PURGED in
- * the SAME transaction, so a crash at any point either fully completes or fully rolls back (never a
- * day left VERIFIED-but-partially-purged in a way the next sweep can't safely retry). A day that is
- * NOT VERIFIED (PENDING/COMPACTING/COMPACTED/FAILED) is never purged, however old it is - the
- * mandate's explicit "never fall back to blind delete" rule.
+ * a time. Two-phase protocol (2026-10-08 I-E1):
+ *   1. Batched, yielding deletes via source.purgeWindow() - idempotent, each batch its own
+ *      short statement, event-loop yields between batches, so a multi-million-row day can never
+ *      block the event loop in one synchronous slice. A crash mid-phase leaves the day VERIFIED
+ *      with some rows already deleted - the next sweep resumes safely (deletes are idempotent).
+ *   2. Only after the window is FULLY purged (not truncated by the batch budget), a short atomic
+ *      transaction marks the day PURGED.
+ * A day that is NOT VERIFIED (PENDING/COMPACTING/COMPACTED/FAILED) is never purged, however old
+ * it is - the mandate's explicit "never fall back to blind delete" rule. A day whose purge hit
+ * the per-call batch budget stays VERIFIED (never silently marked PURGED) and drains
+ * progressively across sweeps.
  */
-export function purgeVerifiedDays(
+export async function purgeVerifiedDays(
   source: DailyCompactionSource,
   retentionDays: number,
   nowMs: number = Date.now(),
-): { purgedDays: number; totalRowsPurged: number; blockedDays: string[] } {
+): Promise<{ purgedDays: number; totalRowsPurged: number; blockedDays: string[] }> {
   const cutoffMs = nowMs - retentionDays * 24 * 60 * 60 * 1000;
   const eligible = db.select().from(dailyLearningArchive)
     .where(and(
@@ -227,26 +233,37 @@ export function purgeVerifiedDays(
   let totalRowsPurged = 0;
   for (const row of eligible) {
     logEvent('RETENTION_PURGE_STARTED', { tradingDate: row.tradingDate, sourceType: source.sourceType });
-    // Each day isolated in its own try/catch: a failure on one day rolls back ONLY that day's
-    // transaction (still VERIFIED, raw data untouched - safe to retry next sweep) and must not
-    // abort the rest of this sweep's otherwise-healthy days (a real "partial purge" scenario).
+    // Each day isolated in its own try/catch: a failure on one day must not abort the rest of
+    // this sweep's otherwise-healthy days (a real "partial purge" scenario). A failed day stays
+    // VERIFIED with raw data untouched (or partially deleted - idempotent, safe to retry next
+    // sweep) and is never flipped to PURGED.
     try {
-      const rowsPurged = db.transaction(() => {
-        const deleted = source.purgeWindow(row.windowStartMs, row.windowEndMs);
+      const { deleted, truncated } = await source.purgeWindow(row.windowStartMs, row.windowEndMs);
+      if (truncated) {
+        // Batch budget hit before the window drained: keep the day VERIFIED - the next sweep
+        // resumes the remaining rows. Marking PURGED now would lie about raw data still present.
+        logEvent('RETENTION_PURGE_TRUNCATED', {
+          tradingDate: row.tradingDate, sourceType: source.sourceType, rowsPurged: deleted,
+        });
+        continue;
+      }
+      // Short mark-PURGED transaction, AFTER the batched deletes fully completed - only a fully
+      // purged window may be marked. (The old single-transaction delete-then-mark was atomic but
+      // required one unbatched DELETE; batching can't yield inside a better-sqlite3 tx callback.)
+      db.transaction(() => {
         db.update(dailyLearningArchive)
           .set({ compactionStatus: 'PURGED', rawPurgedAt: nowMs })
           .where(eq(dailyLearningArchive.id, row.id))
           .run();
-        return deleted;
       });
       purgedDays += 1;
-      totalRowsPurged += rowsPurged;
-      logEvent('RETENTION_PURGE_COMPLETED', { tradingDate: row.tradingDate, sourceType: source.sourceType, rowsPurged });
+      totalRowsPurged += deleted;
+      logEvent('RETENTION_PURGE_COMPLETED', { tradingDate: row.tradingDate, sourceType: source.sourceType, rowsPurged: deleted });
     } catch (e) {
       const reason = `PURGE_FAILED: ${e instanceof Error ? e.message : String(e)}`;
       logEvent('DAILY_COMPACTION_FAILED', { tradingDate: row.tradingDate, sourceType: source.sourceType, reason });
-      // Row status is untouched by the rolled-back transaction - still VERIFIED, eligible for retry
-      // on the next sweep. Continue with the remaining eligible days in this sweep.
+      // Row status is untouched - still VERIFIED, eligible for retry on the next sweep.
+      // Continue with the remaining eligible days in this sweep.
     }
   }
 

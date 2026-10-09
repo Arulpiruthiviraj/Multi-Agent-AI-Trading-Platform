@@ -78,7 +78,7 @@ describe('Daily Learning Compaction performance (§17)', () => {
     const rawSizeEstimateBytes = rowCount * 200; // rough: ~200 bytes/row for this schema shape
 
     const purgeStart = performance.now();
-    const purgeResult = orchestrator.purgeVerifiedDays(source, 0, windowEndMs + 2000);
+    const purgeResult = await orchestrator.purgeVerifiedDays(source, 0, windowEndMs + 2000);
     const purgeMs = performance.now() - purgeStart;
     expect(purgeResult.totalRowsPurged).toBe(rowCount);
 

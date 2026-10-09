@@ -16,7 +16,8 @@
  * Phase 1 report).
  */
 import { sqliteDb } from '../index';
-import type { DailyCompactionSource, DailyCompactionSummary, SourceCompactionResult } from './types';
+import { observabilityConfig } from '../../config/observability';
+import type { DailyCompactionSource, DailyCompactionSummary, PurgeWindowResult, SourceCompactionResult } from './types';
 
 export const OBSERVABILITY_EVENTS_SCHEMA_VERSION = 1;
 export const OBSERVABILITY_EVENTS_SOURCE_TYPE = 'OBSERVABILITY_EVENTS';
@@ -161,10 +162,30 @@ export const observabilityEventsSource: DailyCompactionSource = {
     return { sourceRowCount, summary };
   },
 
-  purgeWindow(windowStartMs: number, windowEndMs: number): number {
-    const result = sqliteDb
-      .prepare('DELETE FROM observability_events WHERE ts >= ? AND ts < ?')
-      .run(windowStartMs, windowEndMs);
-    return result.changes;
+  purgeWindow: async (windowStartMs: number, windowEndMs: number): Promise<PurgeWindowResult> => {
+    // 2026-10-08 I-E1: this was ONE single unbatched DELETE over the whole day window. A full
+    // trading day of observability_events can be millions of rows (the 2026-10-01 retention
+    // postmortem measured a 9.8M-row backlog blocking the single-threaded event loop - including
+    // /health - for 8+ minutes on one DELETE) - the same defect class, not yet fixed here.
+    // Batched + yielding now, the same discipline as the news/operational retention sweeps:
+    // id-subquery deletes bounded by config (observabilityConfig keys are required - missing
+    // keys fail boot), setImmediate yields between batches so any single synchronous slice
+    // stays small no matter how large the window is. Fixed BEFORE any enablement:
+    // dailyCompactionEnabled is still false, and the flag could be flipped later.
+    const batchSize = observabilityConfig.retentionSweepBatchSize;
+    const maxBatches = observabilityConfig.retentionSweepMaxBatchesPerCall;
+    const deleteBatch = sqliteDb.prepare(
+      'DELETE FROM observability_events WHERE id IN (SELECT id FROM observability_events WHERE ts >= ? AND ts < ? LIMIT ?)'
+    );
+    let deleted = 0;
+    for (let batch = 0; batch < maxBatches; batch++) {
+      const result = deleteBatch.run(windowStartMs, windowEndMs, batchSize);
+      deleted += result.changes;
+      if (result.changes < batchSize) return { deleted, truncated: false };
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    // Batch budget hit before the window drained - the caller keeps the day VERIFIED and the
+    // next sweep resumes. Rows already deleted stay deleted; the deletes are idempotent.
+    return { deleted, truncated: true };
   },
 };

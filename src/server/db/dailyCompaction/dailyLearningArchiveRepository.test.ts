@@ -43,7 +43,7 @@ describe('dailyLearningArchiveRepository (§14 read-only query API)', () => {
           },
         };
       },
-      purgeWindow: () => 0,
+      purgeWindow: async () => ({ deleted: 0, truncated: false }),
     };
   }
 
