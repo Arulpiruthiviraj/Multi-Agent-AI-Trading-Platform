@@ -429,8 +429,23 @@ export class ChiefTraderAgent {
     }
 }
 
-  private isRiskExit(idea: { agent: string, side: string }): boolean {
+  // 2026-10-08 defect hunt (core F3): the fast path must not key on a self-reported
+  // agent string alone. PortfolioMonitor's emitRiskExit stamps BOTH the agent name and
+  // origin='PORTFOLIO_EXIT'; require both so a spoofed agent name alone cannot skip
+  // the debate. Does not weaken the legitimate exit path (still flows RiskEngine+OMS).
+  //
+  // isExitShaped vs isRiskExit: an exit-shaped idea (risk-exit agent SELL, any origin)
+  // is NEVER routed to the quant policy and always proceeds when Autobot is off -
+  // protective exits are not strategy decisions. But only a genuine risk exit
+  // (exit-shaped AND origin=PORTFOLIO_EXIT) inherits the debate skip; a mis-tagged
+  // or spoofed exit falls through to normal consensus intake instead.
+  private isExitShaped(idea: { agent: string, side: string }): boolean {
     return idea.agent === RISK_EXIT_AGENT && idea.side === 'SELL';
+  }
+
+  private isRiskExit(idea: { agent: string, side: string, origin?: unknown }): boolean {
+    return this.isExitShaped(idea)
+      && normalizeTradeIdeaOrigin(idea.origin) === 'PORTFOLIO_EXIT';
   }
 
   private beginDebate(symbol: string): void {
@@ -606,7 +621,7 @@ export class ChiefTraderAgent {
   async reviewIdea(idea: { traceId: string, symbol: string, side: string, confidence: number, reasoning: string, agent: string, currentPrice?: number, newsDetails?: any, origin?: unknown, strategyId?: unknown }) {
     // Autobot-off: do not debate stray entry ideas (no LLM, no CHIEF_APPROVED_IDEA).
     // PortfolioMonitor risk-exit SELLs still proceed — capital preservation is not an entry vote.
-    if (!isLiveIdeaGenerationEnabled() && !this.isRiskExit(idea)) {
+    if (!isLiveIdeaGenerationEnabled() && !this.isExitShaped(idea)) {
       console.log(`[ChiefTrader] Ignoring ${idea.agent} ${idea.side} ${idea.symbol} — Autobot off or trading not TRADING_ENABLED`);
       return;
     }
@@ -619,7 +634,7 @@ export class ChiefTraderAgent {
     // at the idea gate; authority is resolved centrally by QuantStrategyAuthorization — never
     // self-granted by the emitter. Risk exits are excluded: protective exits never require
     // strategy authorization and never depend on LLM availability.
-    if (!this.isRiskExit(idea) && normalizeTradeIdeaOrigin(idea.origin) === 'QUANT_STRATEGY') {
+    if (!this.isExitShaped(idea) && normalizeTradeIdeaOrigin(idea.origin) === 'QUANT_STRATEGY') {
       const authorization = await resolveQuantStrategyAuthorization(idea);
       observeSafe(() => {
         structuredLogger.info('chief_decision_policy_selected', {

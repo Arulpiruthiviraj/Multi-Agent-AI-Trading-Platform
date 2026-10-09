@@ -332,7 +332,7 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
 
   it('approves a PortfolioManager SELL immediately as a risk exit without a second confirming agent', async () => {
     agent.recentIdeas = [
-      { traceId: 'exit-1', symbol: 'AAPL', side: 'SELL', confidence: fixtures.splitConfidence, agent: agentWeightConfig.riskExitAgent, reasoning: 'Hard stop hit.', currentPrice: 90 },
+      { traceId: 'exit-1', symbol: 'AAPL', side: 'SELL', confidence: fixtures.splitConfidence, agent: agentWeightConfig.riskExitAgent, origin: 'PORTFOLIO_EXIT', reasoning: 'Hard stop hit.', currentPrice: 90 },
     ];
 
     await agent.evaluateConsensus('AAPL', 'exit-1');
@@ -351,6 +351,7 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
       side: 'SELL',
       confidence: 0.9,
       agent: agentWeightConfig.riskExitAgent,
+      origin: 'PORTFOLIO_EXIT',
       reasoning: 'Hard stop hit.',
       currentPrice: 90,
     });
@@ -573,7 +574,7 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     ideaGenEnabled.value = false;
     await agent.reviewIdea({
       traceId: 't-exit', symbol: 'AAPL', side: 'SELL', confidence: 0.9,
-      agent: agentWeightConfig.riskExitAgent, reasoning: 'EXIT_CODE=stop',
+      agent: agentWeightConfig.riskExitAgent, origin: 'PORTFOLIO_EXIT', reasoning: 'EXIT_CODE=stop',
     });
     expect(agent.recentIdeas.length).toBeGreaterThan(0);
   });

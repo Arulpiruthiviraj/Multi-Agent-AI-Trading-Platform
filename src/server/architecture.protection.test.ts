@@ -278,6 +278,27 @@ describe('Architecture protection: CHIEF_APPROVED_IDEA has exactly one authorize
   });
 });
 
+describe('Architecture protection: risk-exit fast path cannot be spoofed', () => {
+  it('only PortfolioMonitor stamps origin PORTFOLIO_EXIT (ChiefTrader fast path requires agent name + origin)', () => {
+    // 2026-10-08 defect hunt (core F3): ChiefTraderAgent.isRiskExit skips the debate for
+    // risk-exit ideas. The fast path now requires BOTH the risk-exit agent name AND
+    // origin='PORTFOLIO_EXIT'; this test pins the writer side - any future module that
+    // stamps PORTFOLIO_EXIT on its own ideas would silently inherit the debate skip.
+    const hits: string[] = [];
+    for (const f of SERVER_TS_FILES) {
+      const path = rel(f);
+      if (path.endsWith('.test.ts')) continue;
+      const text = readFileSync(f, 'utf8');
+      if (/origin:\s*['"]PORTFOLIO_EXIT['"]/.test(text) && path !== 'src/server/services/PortfolioMonitor.ts') {
+        hits.push(path);
+      }
+    }
+    expect(hits).toEqual([]);
+    const monitor = readFileSync(join(ROOT, 'src/server/services/PortfolioMonitor.ts'), 'utf8');
+    expect(monitor).toMatch(/origin:\s*['"]PORTFOLIO_EXIT['"]/);
+  });
+});
+
 describe('Architecture protection: trading_state is written from exactly one place', () => {
   it('only TradingEngine.ts writes settings.tradingState', () => {
     const hits: string[] = [];
