@@ -1,6 +1,12 @@
 {
   "schemaVersion": 1,
-  "restartTimestamps": [],
-  "stormLockout": false,
-  "updatedAt": "2026-10-09T15:41:07.019Z"
+  "restartTimestamps": [
+    1791582581999,
+    1791583328695,
+    1791583976590
+  ],
+  "stormLockout": true,
+  "stormLockoutReason": "STORM LOCKOUT: 3 restarts within 60min (max 3) - auto-restart halted, engine left in its last state; requires explicit operator action (`argus watchdog-clear-lockout`) after investigation",
+  "stormLockoutAt": "2026-10-09T22:56:36.305Z",
+  "updatedAt": "2026-10-09T22:56:36.305Z"
 }
