@@ -116,6 +116,12 @@ function baseFakeJevProvider(
       if (req.signal?.aborted) rec.abortedSignals++;
       else
         req.signal?.addEventListener('abort', () => rec.abortedSignals++, { once: true });
+      // Model the I/O boundary every real provider call crosses: a real Jev
+      // HTTP call always yields to the macrotask queue (socket I/O). Without
+      // this, a fake that resolves purely in microtasks would let a test hold
+      // the loop forever without the heartbeat ever observing it — the test
+      // would be lying about loop liveness.
+      await new Promise<void>((r) => setImmediate(r));
       return behavior(req, rec);
     },
   };

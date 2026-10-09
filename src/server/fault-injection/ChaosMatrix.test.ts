@@ -113,6 +113,26 @@ describe('fault-injection chaos matrix (FAULT_INJECTION, PRE-MARKET)', () => {
 
   const quantIdea = () => ({ origin: 'QUANT_STRATEGY', strategyId: CORE_STRATEGIES[0].id, agent: 'QuantEngine' });
 
+  /**
+   * Emit n events in chunks, yielding to the loop between chunks. A real
+   * market-data burst arrives packetized over the socket as separate
+   * macrotasks — never as one giant synchronous loop that holds the event
+   * loop hostage. Chunking models that faithfully and lets the heartbeat
+   * observe loop liveness *during* the burst (which is the property under test).
+   */
+  const emitBurst = async (
+    bus: { emit: (event: string, payload: unknown) => boolean },
+    event: string,
+    n: number,
+    chunk = 2000,
+  ) => {
+    for (let base = 0; base < n; base += chunk) {
+      const end = Math.min(base + chunk, n);
+      for (let i = base; i < end; i++) bus.emit(event, { i, price: 100 + (i % 50) });
+      await new Promise<void>((r) => setImmediate(r));
+    }
+  };
+
   it('C1: AI down + market-volume burst — burst fully delivered, AI fails closed, quant unaffected', async () => {
     const provider = inj.armAiUnavailable(governor, scope);
     const { eventBus } = await import('../core/EventBus');
@@ -126,7 +146,7 @@ describe('fault-injection chaos matrix (FAULT_INJECTION, PRE-MARKET)', () => {
 
     const hb = inj.startHeartbeat();
     const heapBefore = process.memoryUsage().heapUsed;
-    for (let i = 0; i < N; i++) eventBus.emit(EVENT, { i, price: 100 + (i % 50) });
+    await emitBurst(eventBus, EVENT, N);
 
     // AI requests fail closed DURING the burst.
     const outcomes: Array<{ status: string; reason?: string; kind?: string }> = [];
@@ -396,6 +416,9 @@ describe('fault-injection chaos matrix (FAULT_INJECTION, PRE-MARKET)', () => {
       const age = worker.getLatestPriceAgeMs(s);
       const g = evaluateQuoteFreshness({ priceAgeMs: age });
       grades.set(s, g.grade);
+      // Yield per symbol: the evaluation cycle is I/O-interleaved in
+      // production (each symbol's work crosses async boundaries).
+      await new Promise<void>((r) => setImmediate(r));
     }
     // Stale-generation duplicate sneaking past the socket: the worker's own
     // monotonicity guard still ignores the backward write.
@@ -426,7 +449,7 @@ describe('fault-injection chaos matrix (FAULT_INJECTION, PRE-MARKET)', () => {
 
     const hb = inj.startHeartbeat();
     const heapBefore = process.memoryUsage().heapUsed;
-    for (let i = 0; i < N; i++) eventBus.emit(EVENT, { i });
+    await emitBurst(eventBus, EVENT, N);
     const heapAfter = process.memoryUsage().heapUsed;
     const summary = hb.stop();
 

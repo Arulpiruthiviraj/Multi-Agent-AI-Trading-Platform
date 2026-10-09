@@ -82,6 +82,20 @@ describe('fault-injection chaos matrix HEAVY (FAULT_INJECTION, NIGHTLY)', () => 
   let failoverCalls = 0;
   beforeEach(() => { failoverCalls = 0; });
 
+  /** Chunked, loop-yielding burst — see ChaosMatrix.test.ts emitBurst. */
+  const emitBurst = async (
+    bus: { emit: (event: string, payload: unknown) => boolean },
+    event: string,
+    n: number,
+    chunk = 5000,
+  ) => {
+    for (let base = 0; base < n; base += chunk) {
+      const end = Math.min(base + chunk, n);
+      for (let i = base; i < end; i++) bus.emit(event, { i });
+      await new Promise<void>((r) => setImmediate(r));
+    }
+  };
+
   const govReq = (i: number, tag: string) => ({
     capability: 'STRUCTURED_DECISION' as const,
     kind: 'news_catalyst_triage',
@@ -114,7 +128,7 @@ describe('fault-injection chaos matrix HEAVY (FAULT_INJECTION, NIGHTLY)', () => 
     scope.onDisarm(() => eventBus.unsubscribe(EVENT, listener));
 
     const hb = inj.startHeartbeat();
-    for (let i = 0; i < N; i++) eventBus.emit(EVENT, { i });
+    await emitBurst(eventBus, EVENT, N);
 
     const outcomes: Array<{ status: string; reason?: string }> = [];
     for (let i = 0; i < 15; i++) {
