@@ -185,7 +185,9 @@ export class HistoricalReplayBroker implements BrokerPlugin {
     }
     const qtyReq = orderData.quantity || 0;
     const requestedQty = this.fractional ? qtyReq : Math.floor(qtyReq);
-    if (!(requestedQty > 0)) {
+    // 2026-10-08 defect hunt (D5): also reject non-finite quantities (Infinity passed the
+    // old > 0 check). Matches the Coinbase-style finite > 0 discipline of the real adapters.
+    if (!Number.isFinite(requestedQty) || !(requestedQty > 0)) {
       return {
         id: crypto.randomUUID(),
         symbol: orderData.symbol!,

@@ -123,6 +123,18 @@ export interface RuntimeIntervals {
   newsPredictionsRetentionDays: number;
   stagedNewsCatalystsTerminalRetentionDays: number;
   aiCallsRetentionDays: number;
+  /** 2026-10-08 synthetic session guard: a 6-minute synthetic session wrote rows
+   *  to 8 tables with no retention path. Conservative bounds: ohlcv_bars keeps a
+   *  full year for backtests/audits; predictions are graded within hours
+   *  (evaluationHorizonMs=1h) so 30d is generous; ledgers/traces keep 90d. */
+  ohlcvBarsRetentionDays: number;
+  agentPredictionsRetentionDays: number;
+  quantAssessmentsRetentionDays: number;
+  pitDecisionLedgerRetentionDays: number;
+  agentReasoningLogsRetentionDays: number;
+  transactionTracesRetentionDays: number;
+  sessionLifecycleSnapshotsRetentionDays: number;
+  tradeLifecycleTransitionsRetentionDays: number;
 }
 
 const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
@@ -148,6 +160,10 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'escalationDecisionsRetentionDays', 'jevShadowScoresRetentionDays',
   'newsPredictionsRetentionDays', 'stagedNewsCatalystsTerminalRetentionDays',
   'aiCallsRetentionDays',
+  'ohlcvBarsRetentionDays', 'agentPredictionsRetentionDays',
+  'quantAssessmentsRetentionDays', 'pitDecisionLedgerRetentionDays',
+  'agentReasoningLogsRetentionDays', 'transactionTracesRetentionDays',
+  'sessionLifecycleSnapshotsRetentionDays', 'tradeLifecycleTransitionsRetentionDays',
 ];
 
 function loadRuntimeIntervals(): RuntimeIntervals {

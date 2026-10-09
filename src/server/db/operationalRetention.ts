@@ -238,6 +238,95 @@ export async function sweepAiCallsRetention(nowMs = Date.now()): Promise<number>
   return sweepIsoTextTable('ai_calls', 'created_at', runtimeIntervals.aiCallsRetentionDays, nowMs);
 }
 
+/**
+ * 2026-10-08 synthetic session guard: a 6-minute synthetic session wrote rows to
+ * 8 tables with no retention path anywhere in the codebase — the same defect
+ * class as news_articles. Epoch-ms variant of the sweeper for integer-ms time
+ * columns; keyColumn covers tables whose primary key is not `id`.
+ */
+async function sweepEpochMsTable(
+  table: string,
+  keyColumn: string,
+  timeColumn: string,
+  retentionDays: number,
+  nowMs: number,
+): Promise<number> {
+  const cutoffMs = nowMs - retentionDays * 24 * 60 * 60 * 1000;
+  const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
+  const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
+  const deleteBatch = sqliteDb.prepare(
+    `DELETE FROM ${table} WHERE ${keyColumn} IN (SELECT ${keyColumn} FROM ${table} WHERE ${timeColumn} < ? LIMIT ?)`
+  );
+  let totalDeleted = 0;
+  try {
+    for (let i = 0; i < maxBatches; i++) {
+      const result = deleteBatch.run(cutoffMs, batchSize);
+      totalDeleted += result.changes;
+      if (result.changes < batchSize) break;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    return totalDeleted;
+  } catch (e) {
+    console.error(`[operationalRetention] sweep ${table} failed:`, e instanceof Error ? e.message : String(e));
+    return totalDeleted;
+  }
+}
+
+/** Market-data bars: 801 rows in a 6-minute synthetic session (3 symbols). A full
+ *  year is kept for backtests and outcome audits; anything older is dead weight. */
+export async function sweepOhlcvBarsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepEpochMsTable('ohlcv_bars', 'id', 'timestamp', runtimeIntervals.ohlcvBarsRetentionDays, nowMs);
+}
+
+/** Predictions are graded within hours (evaluationHorizonMs=1h); 30d is generous. */
+export async function sweepAgentPredictionsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('agent_predictions', 'timestamp', runtimeIntervals.agentPredictionsRetentionDays, nowMs);
+}
+
+export async function sweepQuantAssessmentsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('quant_assessments', 'created_at', runtimeIntervals.quantAssessmentsRetentionDays, nowMs);
+}
+
+export async function sweepPitDecisionLedgerRetention(nowMs = Date.now()): Promise<number> {
+  return sweepEpochMsTable('pit_decision_ledger', 'id', 'published_at_ms', runtimeIntervals.pitDecisionLedgerRetentionDays, nowMs);
+}
+
+export async function sweepAgentReasoningLogsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('agent_reasoning_logs', 'timestamp', runtimeIntervals.agentReasoningLogsRetentionDays, nowMs);
+}
+
+export async function sweepTransactionTracesRetention(nowMs = Date.now()): Promise<number> {
+  // trace_id is the primary key here, not id.
+  const cutoffIso = new Date(nowMs - runtimeIntervals.transactionTracesRetentionDays * 24 * 60 * 60 * 1000).toISOString();
+  const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
+  const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
+  const deleteBatch = sqliteDb.prepare(
+    `DELETE FROM transaction_traces WHERE trace_id IN (SELECT trace_id FROM transaction_traces WHERE created_at < ? LIMIT ?)`
+  );
+  let totalDeleted = 0;
+  try {
+    for (let i = 0; i < maxBatches; i++) {
+      const result = deleteBatch.run(cutoffIso, batchSize);
+      totalDeleted += result.changes;
+      if (result.changes < batchSize) break;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    return totalDeleted;
+  } catch (e) {
+    console.error('[operationalRetention] sweep transaction_traces failed:', e instanceof Error ? e.message : String(e));
+    return totalDeleted;
+  }
+}
+
+/** One row per session; 90d of session history is plenty. */
+export async function sweepSessionLifecycleSnapshotsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('session_lifecycle_snapshots', 'created_at', runtimeIntervals.sessionLifecycleSnapshotsRetentionDays, nowMs);
+}
+
+export async function sweepTradeLifecycleTransitionsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('trade_lifecycle_transitions', 'created_at', runtimeIntervals.tradeLifecycleTransitionsRetentionDays, nowMs);
+}
+
 /** Terminal staged catalysts (CONSUMED/EXPIRED) are never deleted by the live-queue size
  *  prune - one permanent row per staged catalyst, forever. Prune terminal rows older than
  *  the retention window by updated_at_ms (integer ms, set at write time). */
@@ -277,4 +366,14 @@ export const RETENTION_SWEEPERS: RetentionSweeper[] = [
   { table: 'news_predictions', sweep: sweepNewsPredictionsRetention },
   { table: 'staged_news_catalysts', sweep: sweepStagedNewsCatalystsTerminalRetention },
   { table: 'ai_calls', sweep: sweepAiCallsRetention },
+  // 2026-10-08 synthetic session guard: a 6-minute synthetic session wrote rows to
+  // these 8 tables, none of which had a prune path. Same coverage-test guarantee.
+  { table: 'ohlcv_bars', sweep: sweepOhlcvBarsRetention },
+  { table: 'agent_predictions', sweep: sweepAgentPredictionsRetention },
+  { table: 'quant_assessments', sweep: sweepQuantAssessmentsRetention },
+  { table: 'pit_decision_ledger', sweep: sweepPitDecisionLedgerRetention },
+  { table: 'agent_reasoning_logs', sweep: sweepAgentReasoningLogsRetention },
+  { table: 'transaction_traces', sweep: sweepTransactionTracesRetention },
+  { table: 'session_lifecycle_snapshots', sweep: sweepSessionLifecycleSnapshotsRetention },
+  { table: 'trade_lifecycle_transitions', sweep: sweepTradeLifecycleTransitionsRetention },
 ];

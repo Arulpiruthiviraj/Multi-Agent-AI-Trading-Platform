@@ -30,6 +30,16 @@ const REQUIRED_RETENTION_TABLES = [
   'news_predictions',
   'staged_news_catalysts',
   'ai_calls',
+  // 2026-10-08 synthetic session guard: a 6-minute session wrote to these 8
+  // tables with no prune path; the session guard test caught them.
+  'ohlcv_bars',
+  'agent_predictions',
+  'quant_assessments',
+  'pit_decision_ledger',
+  'agent_reasoning_logs',
+  'transaction_traces',
+  'session_lifecycle_snapshots',
+  'trade_lifecycle_transitions',
 ];
 
 describe('retention coverage', () => {

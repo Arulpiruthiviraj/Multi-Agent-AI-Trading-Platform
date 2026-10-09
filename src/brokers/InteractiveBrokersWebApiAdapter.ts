@@ -389,8 +389,10 @@ export class InteractiveBrokersWebApiAdapter implements BrokerPlugin {
     if (!this.isAuthenticated) {
       throw new Error('IBKR Client Portal Gateway session is not authenticated. A human must log in (with 2FA) at the Gateway URL before orders can be placed.');
     }
-    if (!order.symbol || !order.side || !order.quantity) {
-      throw new Error('placeOrder requires symbol, side, and quantity.');
+    // 2026-10-08 defect hunt (D5): the old falsy check (!order.quantity) rejected 0/NaN but
+    // let Infinity and negative quantities through to the CP API. Coinbase-style finite > 0 check.
+    if (!order.symbol || !order.side || !Number.isFinite(order.quantity) || (order.quantity as number) <= 0) {
+      throw new Error('placeOrder requires symbol, side, and a finite quantity > 0.');
     }
 
     const accountId = await this.getAccountId();

@@ -76,5 +76,14 @@
   "newsPredictionsRetentionDays": 90,
   "stagedNewsCatalystsTerminalRetentionDays": 7,
   "aiCallsRetentionDays": 30,
+  "_sessionGuardRetentionComment": "2026-10-08 synthetic session guard (SynthesisDefectSweep follow-up): a 6-minute synthetic session wrote rows to 8 tables with no retention path anywhere in the codebase - the same defect class as news_articles. Retentions are conservative: ohlcv_bars keeps a full year for backtests/audits; predictions are graded within hours (evaluationHorizonMs=1h) so 30d is generous; ledgers/traces keep 90d.",
+  "ohlcvBarsRetentionDays": 365,
+  "agentPredictionsRetentionDays": 30,
+  "quantAssessmentsRetentionDays": 30,
+  "pitDecisionLedgerRetentionDays": 90,
+  "agentReasoningLogsRetentionDays": 30,
+  "transactionTracesRetentionDays": 90,
+  "sessionLifecycleSnapshotsRetentionDays": 90,
+  "tradeLifecycleTransitionsRetentionDays": 90,
   "secEdgarForm4Ms": 21600000
 }
