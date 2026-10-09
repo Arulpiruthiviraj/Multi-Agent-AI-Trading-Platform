@@ -30,6 +30,10 @@ data/.argus_engine.pid
 data/.argus_watchdog.pid
 data/.argus_dev.pid
 data/.argus_runtime_session.json
+# Root-level dev-engine runtime state (regenerated on every local launch; the
+# data/ variants above are the deployment-host paths). Never track these.
+.argus_dev.pid
+.argus_dev_launch_ts
 /models/
 sqlite.db
 quant-core-java/target/
