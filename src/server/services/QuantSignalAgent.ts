@@ -348,12 +348,6 @@ export class QuantSignalAgent {
     const resumeAt = this.nextCycleSymbol ? Math.max(0, ordered.indexOf(this.nextCycleSymbol)) : 0;
     const symbols = [...ordered.slice(resumeAt), ...ordered.slice(0, resumeAt)];
     const cycleStarted = Date.now();
-    const cycleId = generateTraceId('QUANT_CYCLE');
-    observeSafe(() => structuredLogger.info('quant_cycle_started', {
-      category: 'DISCOVERY', eventType: 'QUANT_CYCLE_STARTED', cycleId,
-      scheduledSymbols: symbols, resumeSymbol: this.nextCycleSymbol,
-      providerId: getRegisteredHistoricalBarProvider()?.id ?? null,
-    }));
 
     if (symbols.length === 0) {
       console.log('[QuantSignalAgent] No actively-tracked symbols yet (MarketDataWorker has no subscriptions) - nothing to evaluate this cycle.');
@@ -367,6 +361,8 @@ export class QuantSignalAgent {
     observeSafe(() => structuredLogger.info('quant_cycle_started', {
       category: 'DISCOVERY', eventType: 'QUANT_CYCLE_STARTED',
       cycleId, scheduledAtMs, universeSize: symbols.length, concurrency,
+      scheduledSymbols: symbols, resumeSymbol: this.nextCycleSymbol,
+      providerId: getRegisteredHistoricalBarProvider()?.id ?? null,
     }));
     let nextIndex = 0;
     let abortRateLimit = false;
@@ -389,7 +385,6 @@ export class QuantSignalAgent {
           // per-symbol STARTED/FINISHED events can be joined back to this cycle. No behavior
           // change - evaluateSymbol treats cycleCtx as opaque correlation metadata.
           const result = await this.evaluateSymbol(symbol, { cycleCtx: { cycleId, scheduledIndex: i } });
-          const result = await this.evaluateSymbol(symbol);
           outcome = result ? 'ASSESSED' : 'NO_ASSESSMENT';
           if (result) { anySuccess = true; completedSymbols.push(symbol); }
         } catch (e: any) {
@@ -482,7 +477,6 @@ export class QuantSignalAgent {
     traceId: string,
   ): Promise<QuantSymbolEvaluation> {
     const emitIdeas = options?.emitIdeas !== false;
-    const traceId = generateTraceId(symbol);
     notePipelineAgentTick('QuantEngine');
     const endMs = Date.now();
     const startMs = endMs - LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
