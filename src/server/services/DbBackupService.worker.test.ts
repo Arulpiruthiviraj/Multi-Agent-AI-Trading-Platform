@@ -28,7 +28,10 @@ describe('DbBackupService worker-thread execution (2026-10-08)', () => {
     try {
       // The production DB module keeps its connection open; Windows forbids unlinking it.
       // Replace only this test's filler rows while retaining the actual service connection.
-      filler.exec('CREATE TABLE IF NOT EXISTS blobs (id INTEGER PRIMARY KEY, data BLOB); DELETE FROM blobs');
+      // DELETE alone does not shrink the file (SQLite keeps the pages), so VACUUM reclaims
+      // the space - without it, /tmp-backed CI disks exhaust across tests and the (correct)
+      // disk preflight starts refusing backups (2026-10-09: 5 false failures).
+      filler.exec('CREATE TABLE IF NOT EXISTS blobs (id INTEGER PRIMARY KEY, data BLOB); DELETE FROM blobs; VACUUM');
       const insert = filler.prepare('INSERT INTO blobs (data) VALUES (?)');
       const oneMb = crypto.randomBytes(1024 * 1024);
       const txn = filler.transaction(() => {
