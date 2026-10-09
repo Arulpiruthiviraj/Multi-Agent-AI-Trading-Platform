@@ -4,7 +4,7 @@ import { getTradingDateStr } from '../core/TradingCalendar';
 import { tradingSafety } from '../config/tradingSafety';
 import { resetExtendedHoursLiquidityCacheForTests, setCachedAvgDailyVolumeSharesForTests } from '../risk/ExtendedHoursLiquidityCache';
 // Gate policy unit tests; durable ledger behavior has real-DB integration coverage.
-vi.mock('../services/positionFillEvidence', () => ({ checkPositionFillEvidence: () => null }));
+vi.mock('../services/positionFillEvidence', () => ({ checkPositionFillEvidence: vi.fn(() => null) }));
 
 // db.select().from(table)...limit()/where()/orderBy() all resolve to whatever rows were
 // registered for that specific table via setTableRows(). Mirrors drizzle's own thenable
@@ -1092,6 +1092,55 @@ describe('RiskEngine.evaluateRisk', () => {
     const assessment = lastAssessment();
     expect(assessment.reasoning).not.toMatch(/AUTOBOT_DISABLED/);
     mockTradingEngine.state.enabled = true;
+  });
+
+  it('real defect (D4): gate 22 scopes fill-evidence by the position originating broker, not the active broker', async () => {
+    // Documented 2026-09-22 scenario: the position was opened on ibkr_gateway but the
+    // active broker is now alpaca. OMS routes the SELL to ibkr_gateway (resolveOrderBroker
+    // reads portfolio.broker_source); gate 22 used to look up fill evidence under the
+    // ACTIVE broker id, finding no rows and passing vacuously. It must use the same
+    // originating-broker scope OMS uses.
+    const { checkPositionFillEvidence } = await import('../services/positionFillEvidence');
+    let capturedBrokerId: string | null = null;
+    vi.mocked(checkPositionFillEvidence).mockImplementation(((args: any) => {
+      capturedBrokerId = args.brokerId;
+      return null;
+    }) as any);
+    try {
+      mockBrokerHolder.broker = {
+        ...makeBroker(basePortfolio({ positions: [{ symbol: 'AAPL', quantity: 10, averagePrice: 100 }] })),
+        id: 'alpaca',
+      };
+      // portfolio.broker_source is what OMS's resolveOrderBroker reads for SELL routing.
+      setTableRows(schema.portfolio, [{ symbol: 'AAPL', quantity: 10, averagePrice: 100, brokerSource: 'ibkr_gateway' }]);
+      await riskEngine.evaluateRisk({ traceId: 'd4-scope', symbol: 'AAPL', side: 'SELL', currentPrice: 100 });
+      expect(capturedBrokerId).toBe('ibkr_gateway');
+    } finally {
+      vi.mocked(checkPositionFillEvidence).mockReset();
+      vi.mocked(checkPositionFillEvidence).mockReturnValue(null);
+    }
+  });
+
+  it('real defect (D4): gate 22 falls back to the active broker when no brokerSource is recorded', async () => {
+    const { checkPositionFillEvidence } = await import('../services/positionFillEvidence');
+    let capturedBrokerId: string | null = null;
+    vi.mocked(checkPositionFillEvidence).mockImplementation(((args: any) => {
+      capturedBrokerId = args.brokerId;
+      return null;
+    }) as any);
+    try {
+      mockBrokerHolder.broker = {
+        ...makeBroker(basePortfolio({ positions: [{ symbol: 'AAPL', quantity: 10, averagePrice: 100 }] })),
+        id: 'alpaca',
+      };
+      // Legacy row: no broker_source recorded -> active broker fallback (fail-closed to old behavior).
+      setTableRows(schema.portfolio, [{ symbol: 'AAPL', quantity: 10, averagePrice: 100, brokerSource: null }]);
+      await riskEngine.evaluateRisk({ traceId: 'd4-fallback', symbol: 'AAPL', side: 'SELL', currentPrice: 100 });
+      expect(capturedBrokerId).toBe('alpaca');
+    } finally {
+      vi.mocked(checkPositionFillEvidence).mockReset();
+      vi.mocked(checkPositionFillEvidence).mockReturnValue(null);
+    }
   });
 
   it('does not emit RISK_ASSESSMENT_COMPLETED when persistence fails (fail closed for OMS)', async () => {

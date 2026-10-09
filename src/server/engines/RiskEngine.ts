@@ -820,13 +820,33 @@ export class RiskEngine {
                 // If we are selling, make sure we have the shares
                 if (proposal.side === 'SELL') {
                     const existingPosition = portfolio.positions.find((p: any) => p.symbol === proposal.symbol);
+                    // 2026-10-08 defect hunt (D4): OMS routes SELLs to the position's ORIGINATING
+                    // broker (resolveOrderBroker reads portfolio.broker_source), not necessarily the
+                    // active broker. Scope the fill-evidence check to that same broker so the gate
+                    // cannot pass vacuously on an empty evidence scope. Falls back to the active
+                    // broker for legacy rows with no recorded brokerSource; the scope used is
+                    // recorded in the gate detail so a fallback pass stays visible in forensics.
+                    let evidenceBrokerId = broker.id;
+                    let evidenceScope: 'originating_broker' | 'active_broker_fallback' = 'active_broker_fallback';
+                    try {
+                        const scopeRows = await db.select({ brokerSource: schema.portfolio.brokerSource })
+                            .from(schema.portfolio).where(eq(schema.portfolio.symbol, proposal.symbol)).limit(1);
+                        const originBrokerId = scopeRows[0]?.brokerSource;
+                        if (originBrokerId && originBrokerId !== broker.id) {
+                            evidenceBrokerId = originBrokerId;
+                            evidenceScope = 'originating_broker';
+                        }
+                    } catch (e) {
+                        console.warn(`[RiskEngine] Failed to resolve originating broker for SELL ${proposal.symbol} fill-evidence scope - using active broker '${broker.id}'`, e);
+                    }
                     const positionEvidenceReason = checkPositionFillEvidence({ symbol: proposal.symbol,
-                        brokerId: broker.id, environment: replay ? 'REPLAY' : resolveOmsExecutionEnvironment({
-                            brokerId: broker.id, tradingMode: settings[0]?.tradingMode ?? 'Paper',
+                        brokerId: evidenceBrokerId, environment: replay ? 'REPLAY' : resolveOmsExecutionEnvironment({
+                            brokerId: evidenceBrokerId, tradingMode: settings[0]?.tradingMode ?? 'Paper',
                         }) }, existingPosition?.quantity ?? 0);
                     sellPositionPassed = !!existingPosition && existingPosition.quantity > 0 && !positionEvidenceReason;
                     recordGate('sell_position_exists', sellPositionPassed, {
                         existingQuantity: existingPosition?.quantity ?? 0, positionEvidenceReason,
+                        evidenceBrokerId, evidenceScope,
                     });
                     if (sellPositionPassed) {
                         maxQuantity = Math.min(maxQuantity, existingPosition.quantity);
