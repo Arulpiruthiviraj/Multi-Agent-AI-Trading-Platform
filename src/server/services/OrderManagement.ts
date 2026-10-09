@@ -1084,7 +1084,8 @@ export class OrderManagementService {
     for (const { broker, rows } of candidatesByBroker.values()) {
       if (typeof broker.getOrderByClientOrderId !== 'function') {
         // Honest degradation - not every broker adapter supports lookup-by-client-order-id.
-        // AlpacaBroker and IBGatewaySocketAdapter (DEF-30, 2026-09-09) both implement it; a future
+        // AlpacaBroker, IBGatewaySocketAdapter (DEF-30, 2026-09-09) and
+        // InteractiveBrokersWebApiAdapter (D1, 2026-10-08) implement it; a future
         // adapter that doesn't is the only case this branch still exists for. Never fabricates a
         // reconciliation result it can't actually check. Skips only this broker's rows - a different
         // broker group in the same cycle may still be checkable.
