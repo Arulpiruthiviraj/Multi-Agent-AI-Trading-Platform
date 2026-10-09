@@ -29,6 +29,26 @@ describe('StrategyEmissionEligibility', () => {
     expect(await mod.isStrategyQuarantinedForEmission('NEVER_TOUCHED_STRATEGY')).toBe(false);
   });
 
+  it('hasStrategyLifecycleRecord distinguishes "no decision ever recorded" from a recorded UNTESTED row — and is read-only', async () => {
+    // Defect #1 (2026-10-08): the authorization layer needs this distinction because
+    // getStrategyLifecycleStatus() returns 'UNTESTED' for both cases.
+    expect(await mod.hasStrategyLifecycleRecord('ABSENT_STRATEGY_XYZ')).toBe(false);
+    await mod.recordStrategyLifecycleTransition('ABSENT_STRATEGY_XYZ', 'UNTESTED', 'explicit baseline', null, 0);
+    expect(await mod.hasStrategyLifecycleRecord('ABSENT_STRATEGY_XYZ')).toBe(true);
+    const countBefore = (await mod.getStrategyLifecycleHistory('ABSENT_STRATEGY_XYZ')).length;
+    // Read-only: repeated existence checks never append rows.
+    await mod.hasStrategyLifecycleRecord('ABSENT_STRATEGY_XYZ');
+    await mod.hasStrategyLifecycleRecord('ABSENT_STRATEGY_XYZ');
+    expect((await mod.getStrategyLifecycleHistory('ABSENT_STRATEGY_XYZ')).length).toBe(countBefore);
+  });
+
+  it('hasStrategyLifecycleRecord never promotes or alters a RETIRED strategy', async () => {
+    await mod.quarantineStrategyForEmission('STICKY_RETIRED_STRATEGY', 'negative evidence', {}, 10);
+    expect(await mod.hasStrategyLifecycleRecord('STICKY_RETIRED_STRATEGY')).toBe(true);
+    expect(await mod.getStrategyLifecycleStatus('STICKY_RETIRED_STRATEGY')).toBe('RETIRED');
+    expect(await mod.isStrategyQuarantinedForEmission('STICKY_RETIRED_STRATEGY')).toBe(true);
+  });
+
   it('quarantineStrategyForEmission marks a strategy RETIRED for emission without deleting anything', async () => {
     await mod.quarantineStrategyForEmission(
       'PULLBACK_CONTINUATION',

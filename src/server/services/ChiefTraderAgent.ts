@@ -651,7 +651,13 @@ export class ChiefTraderAgent {
         await this.evaluateQuantPolicy(idea, authorization);
         return;
       }
-      if (authorization.authority === 'NOT_ELIGIBLE') {
+      if (authorization.authority === 'NOT_ELIGIBLE' || authorization.authority === 'NOT_AUTHORIZED') {
+        // NOT_ELIGIBLE: explicit operator decision removed exposure (DEGRADED/RETIRED) or the
+        // paper-only lock failed (LIVE). NOT_AUTHORIZED: no lifecycle record exists for the
+        // strategy (NO_LIFECYCLE_RECORD) — missing state, never silently defaulted. Both are
+        // terminal: the idea is dropped (DESK_NO_TRADE, terminalReasonCode 'QUANT_NOT_AUTHORIZED'),
+        // never re-routed to consensus. See QuantStrategyAuthorization's NOT_AUTHORIZED routing
+        // contract for the rationale.
         this.emitQuantStrategyNotEligible(idea, authorization);
         return;
       }

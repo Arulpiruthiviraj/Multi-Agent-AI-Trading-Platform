@@ -30,6 +30,18 @@
  *   RETIRED            exposure REMOVED for negative evidence - background evaluation continues.
  *   ROLLED_BACK        a prior RETIRED/DEGRADED decision was explicitly reversed - eligible again.
  *
+ * EMISSION ELIGIBILITY ≠ EXECUTION AUTHORITY (2026-10-08, defect #1). This module decides
+ * only EMISSION ELIGIBILITY - which strategies may have their evaluated ideas emitted into
+ * ChiefTrader intake (the "real selection" pool bestStrategyIdea() picks from). Every
+ * "Eligible" label above means exactly that and nothing more. In particular,
+ * ACTIVE_EXPLORATION's "bounded, monitored real exposure while evidence accumulates" is
+ * exposure via the normal, unchanged consensus intake - the strategy's ideas still face
+ * debate, the 0.75 consensus bar, and every downstream gate; it is NOT AI-independent
+ * execution authority. EXECUTION AUTHORITY ("may skip consensus via QuantExecutionPolicy")
+ * is decided solely by QuantStrategyAuthorization.resolveQuantStrategyAuthorization(),
+ * which requires an explicit VALIDATED/CHAMPION lifecycle decision AND a real lifecycle
+ * record in this table. Never read "Eligible" here as quant-policy authorization.
+ *
  * Only RETIRED and DEGRADED remove real-selection exposure. Every other status (including the
  * UNTESTED default when no row exists at all) leaves a strategy exactly as eligible as it always
  * was - this module can only ever REMOVE exposure via an explicit, evidence-backed decision, never
@@ -110,6 +122,23 @@ export async function getStrategyLifecycleStatus(strategyId: string): Promise<St
     .orderBy(desc(learningVersions.createdAt))
     .limit(1);
   return (rows[0]?.status as StrategyLifecycleStatus | undefined) ?? 'UNTESTED';
+}
+
+/**
+ * Read-only existence check: true when at least one lifecycle decision row exists for this
+ * strategy in learning_versions. NEVER creates a row. This is the distinction the
+ * authorization layer needs between "an explicit decision was recorded" (even UNTESTED)
+ * and "no decision was ever recorded": getStrategyLifecycleStatus() cannot make that
+ * distinction - it returns 'UNTESTED' for both, which would let missing state silently
+ * inherit the UNTESTED default's semantics. A genuinely absent record is missing state,
+ * and missing state must never gain privilege (see QuantStrategyAuthorization's
+ * NOT_AUTHORIZED / NO_LIFECYCLE_RECORD contract).
+ */
+export async function hasStrategyLifecycleRecord(strategyId: string): Promise<boolean> {
+  const rows = await db.select({ id: learningVersions.id }).from(learningVersions)
+    .where(eq(learningVersions.versionType, strategyEligibilityVersionType(strategyId)))
+    .limit(1);
+  return rows.length > 0;
 }
 
 /** Full, timestamped, auditable history of lifecycle decisions for this strategy - never mutated, never overwritten. */

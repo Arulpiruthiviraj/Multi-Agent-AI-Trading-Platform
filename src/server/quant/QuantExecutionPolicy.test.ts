@@ -105,6 +105,15 @@ describe('QuantExecutionPolicy', () => {
     expect(d.reasonCode).toBe('QUANT_AUTHORITY_INVALID');
   });
 
+  it('a NOT_AUTHORIZED (missing lifecycle record) authorization never enters the quant policy', async () => {
+    // Defect #1 (2026-10-08): a strategy with no lifecycle record must fail closed at the
+    // authorization layer AND at this policy layer — missing state gains no execution path.
+    const auth = { ...authorized(), authority: 'NOT_AUTHORIZED' as const, reason: 'NO_LIFECYCLE_RECORD' as const, lifecycleStatus: null };
+    const d = await evaluateQuantExecutionPolicy(validIdea(), auth, { calibrationLookup: sufficientCalibration });
+    expect(d.approved).toBe(false);
+    expect(d.reasonCode).toBe('QUANT_AUTHORITY_INVALID');
+  });
+
   it.each([['HOLD'], [''], [null], [undefined]])('rejects invalid side %p', async (side) => {
     const d = await evaluateQuantExecutionPolicy(validIdea({ side }), authorized(), { calibrationLookup: sufficientCalibration });
     expect(d.approved).toBe(false);
