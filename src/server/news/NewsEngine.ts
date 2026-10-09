@@ -17,6 +17,7 @@ import { tradingSafety } from '../config/tradingSafety';
 import { decideEscalation } from '../ai/EscalationPolicy';
 import { db } from '../db';
 import * as schema from '../db/schema';
+import { eq } from 'drizzle-orm';
 import { looksLikeListedTicker } from '../ai/AIOutputValidator';
 import { generateTraceId } from '../core/traceId';
 import { randomUUID } from 'node:crypto';
@@ -164,6 +165,19 @@ export class NewsEngine {
         let finalSymbols = this.symbolExtractor.extract(normalized)
           .map(s => looksLikeListedTicker(s))
           .filter((s): s is string => !!s);
+        // 2026-10-08 defect hunt (news D1): the in-memory dedup cache is bounded (LRU
+        // eviction), so an evicted-but-already-persisted article would re-run the full local
+        // path - including the sequential FinBERT HTTP call - before the DB-level
+        // onConflictDoNothing backstop skips it. This cheap indexed existence check skips
+        // known-persisted articles before any heavy work. Never blocks genuinely new articles.
+        const alreadyPersisted = await db.select({ id: schema.newsArticles.id })
+          .from(schema.newsArticles)
+          .where(eq(schema.newsArticles.id, normalized.id))
+          .limit(1);
+        if (alreadyPersisted.length > 0) {
+          continue;
+        }
+
         const impact = await this.impactEngine.assess(normalized, category);
         
         const clusterOutcome = await this.clusterEngine.createOrUpdateCluster(
