@@ -26,6 +26,7 @@ describe('buildEngineSpawnArgs', () => {
     const { args } = buildEngineSpawnArgs(false, root);
     expect(args).toEqual([
       '--require', 'tsx/preflight',
+      '--use-system-ca',
       '--import', 'tsx',
       join(root, 'scripts', 'argus-engine.ts'),
     ]);
@@ -34,7 +35,7 @@ describe('buildEngineSpawnArgs', () => {
   it('prod mode launches the compiled prod entry directly, unaffected by the dev-mode fix', () => {
     const root = 'C:\\fake-root';
     const { args } = buildEngineSpawnArgs(true, root);
-    expect(args).toEqual([join(root, 'scripts', 'argus-engine-prod.mjs')]);
+    expect(args).toEqual(['--use-system-ca', join(root, 'scripts', 'argus-engine-prod.mjs')]);
   });
 
   it('is a pure function - identical inputs always produce identical, deterministic output', () => {
@@ -63,6 +64,7 @@ describe('buildWatchdogSpawnArgs', () => {
     const { args } = buildWatchdogSpawnArgs(root);
     expect(args).toEqual([
       '--require', 'tsx/preflight',
+      '--use-system-ca',
       '--import', 'tsx',
       join(root, 'scripts', 'argusWatchdog.ts'),
     ]);

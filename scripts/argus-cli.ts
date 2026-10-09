@@ -559,11 +559,12 @@ async function runJavaReplay(args: Record<string, string>): Promise<void> {
  */
 export function buildEngineSpawnArgs(useProd: boolean, root: string): { args: string[] } {
   if (useProd) {
-    return { args: [join(root, 'scripts', 'argus-engine-prod.mjs')] };
+    return { args: ['--use-system-ca', join(root, 'scripts', 'argus-engine-prod.mjs')] };
   }
   return {
     args: [
       '--require', 'tsx/preflight',
+      '--use-system-ca',
       '--import', 'tsx',
       join(root, 'scripts', 'argus-engine.ts'),
     ],
@@ -769,6 +770,7 @@ export function buildWatchdogSpawnArgs(root: string): { args: string[] } {
   return {
     args: [
       '--require', 'tsx/preflight',
+      '--use-system-ca',
       '--import', 'tsx',
       join(root, 'scripts', 'argusWatchdog.ts'),
     ],

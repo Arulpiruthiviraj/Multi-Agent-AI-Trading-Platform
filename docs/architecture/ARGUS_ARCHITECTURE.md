@@ -4554,3 +4554,16 @@ The provider-resilience suite additionally submits 1,000 distinct requests to th
 with an unavailable synthetic provider. It verifies bounded provider calls, explicit throttled
 responses or failures, no routable provider afterward and an empty in-flight map. This tests
 router admission under outage; it does not certify real provider quotas or network recovery.
+
+### October 9 — operator and detached-process certificate trust
+
+The canonical npm argus-cli entry uses Node's direct tsx loader, --use-system-ca and
+--env-file-if-exists=.env. The tsx CLI wrapper previously lost the launching Node's
+certificate option in its child; the resulting Jev smoke test reported fetch failed
+while a direct loader invocation returned HTTP 200 and a schema-valid evaluation.
+Engine and watchdog spawn arguments now explicitly include --use-system-ca for future
+launches, including the production engine entry. TLS verification stays enabled.
+Existing environment variables retain precedence over the optional local env file.
+This change does not restart an existing engine, alter broker settings, promote strategy
+lifecycle records, or establish readiness/alpha. A real Jev CLI probe passed after the fix;
+its deployment to the already-running engine requires a separately scheduled restart.

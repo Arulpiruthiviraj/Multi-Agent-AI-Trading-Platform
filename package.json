@@ -17,7 +17,7 @@
     "dev:headless": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/start-headless.ts",
     "start:engine": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/argus-engine.ts",
     "start:engine:prod": "node scripts/argus-engine-prod.mjs",
-    "argus-cli": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/argus-cli.ts",
+    "argus-cli": "node --env-file-if-exists=.env --use-system-ca --import tsx scripts/argus-cli.ts",
     "argus:watchdog": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/argusWatchdog.ts",
     "sim:market-open": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/sim/marketOpen.ts",
     "argus": "bash ./argus",
