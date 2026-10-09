@@ -41,6 +41,7 @@
   "dbBackupMaxCount": 5,
   "dbBackupOrphanCleanupAgeMs": 3600000,
   "dbBackupMinFreeSpaceMultiplier": 2,
+  "dbBackupWorkerTimeoutMs": 21600000,
   "eventStoreMaxRecentEvents": 200,
   "eventStoreMaxTraces": 500,
   "eventStoreSchemaVersion": 1,

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -53,7 +53,10 @@ describe('DbBackupService - real backup/restore drill (Phase 23)', () => {
 
     // Event-loop-safety fix (2026-09-14): runBackup() is now async (real fs.promises I/O,
     // no longer a synchronous multi-GB blocking copy on the live process) - must be awaited.
-    const backupFile = await service.runBackup(); // verified snapshot
+    // 2026-10-08: runBackup() runs the copy in a worker thread and returns an outcome object.
+    const result = await service.runBackup(); // verified snapshot
+    expect(result.outcome).toBe('completed');
+    const backupFile = result.destination;
 
     expect(fs.existsSync(oldFile)).toBe(false); // pruned
     const stamp = new Date().toISOString().slice(0, 10);
@@ -95,7 +98,9 @@ describe('DbBackupService - real backup/restore drill (Phase 23)', () => {
       seeded.push(f);
     }
 
-    const newest = await service.runBackup(); // newest published backup in the directory
+    const result = await service.runBackup();
+    expect(result.outcome).toBe('completed');
+    const newest = result.destination; // newest published backup in the directory
 
     const totalPublished = fs.readdirSync(backupDir).filter(isPublishedName);
     expect(totalPublished.length).toBeLessThanOrEqual(5); // MAX_COUNT, regardless of how many pre-existed
@@ -107,16 +112,30 @@ describe('DbBackupService - real backup/restore drill (Phase 23)', () => {
     const service = new DbBackupService();
     const first = await service.runBackup();
     const second = await service.runBackup();
-    expect(first).not.toBe(second);
-    expect(fs.existsSync(first)).toBe(true);
-    expect(fs.existsSync(second)).toBe(true);
+    expect(first.outcome).toBe('completed');
+    expect(second.outcome).toBe('completed');
+    if (first.outcome !== 'completed' || second.outcome !== 'completed') throw new Error('test setup failed');
+    expect(first.destination).not.toBe(second.destination);
+    expect(fs.existsSync(first.destination)).toBe(true);
+    expect(fs.existsSync(second.destination)).toBe(true);
     const before = fs.readdirSync(backupDir).sort();
-    const { sqliteDb } = await import('../db');
-    const fail = vi.spyOn(sqliteDb, 'backup').mockRejectedValueOnce(new Error('injected backup failure'));
-    try {
-      await expect(service.runBackup()).rejects.toThrow('injected backup failure');
-      expect(fs.readdirSync(backupDir).sort()).toEqual(before);
-    } finally { fail.mockRestore(); }
+    // 2026-10-08: the copy no longer goes through the main thread's sqliteDb.backup() - the
+    // worker opens its own connection. Inject the failure at the worker boundary instead: a
+    // worker that reports an error must propagate the failure and publish nothing.
+    const failing = new DbBackupService({
+      createWorker: () => {
+        const listeners: Record<string, Array<(...a: any[]) => void>> = { message: [], error: [], exit: [] };
+        setImmediate(() => {
+          for (const cb of listeners.message) cb({ type: 'error', phase: 'copy', message: 'injected backup failure' });
+        });
+        return {
+          on(event: 'message' | 'error' | 'exit', cb: (...a: any[]) => void) { listeners[event].push(cb); return this; },
+          terminate: async () => 0,
+        };
+      },
+    });
+    await expect(failing.runBackup()).rejects.toThrow('injected backup failure');
+    expect(fs.readdirSync(backupDir).sort()).toEqual(before);
   });
 
   it('backs up real data, survives real deletion of the "live" file, and restores it byte-for-byte-verifiable', async () => {
@@ -128,7 +147,10 @@ describe('DbBackupService - real backup/restore drill (Phase 23)', () => {
 
     const service = new DbBackupService();
     const start = Date.now();
-    const backupFile = await service.runBackup();
+    const result = await service.runBackup();
+    expect(result.outcome).toBe('completed');
+    if (result.outcome !== 'completed') throw new Error('test setup failed');
+    const backupFile = result.destination;
     const backupDurationMs = Date.now() - start;
 
     const stamp = new Date().toISOString().slice(0, 10);

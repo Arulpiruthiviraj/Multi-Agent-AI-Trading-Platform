@@ -57,6 +57,11 @@ export interface RuntimeIntervals {
    *  live DB's current size times this multiplier, rather than starting a multi-GB copy that can
    *  run the disk to zero mid-write. */
   dbBackupMinFreeSpaceMultiplier: number;
+  /** 2026-10-08: backup work runs in a worker_thread; this bounds how long the main thread waits
+   *  for it before terminating the worker and marking the run FAILED. Generous on purpose - a
+   *  16GB copy + integrity check on a slow disk takes tens of minutes, and a premature timeout
+   *  would strand a .partial orphan (swept later, but still wasted I/O). */
+  dbBackupWorkerTimeoutMs: number;
   eventStoreMaxRecentEvents: number;
   eventStoreMaxTraces: number;
   eventStoreSchemaVersion: number;
@@ -110,6 +115,7 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'modelRuntimeProbeTimeoutMs', 'ollamaCompletionProbeTimeoutMs', 'fundamentalsCacheMaxAgeMs', 'macroCacheMaxAgeMs',
   'externalDataRateLimitCooldownMs', 'dbBackupIntervalMs', 'dbBackupRetentionDays',
   'dbBackupMaxCount', 'dbBackupOrphanCleanupAgeMs', 'dbBackupMinFreeSpaceMultiplier',
+  'dbBackupWorkerTimeoutMs',
   'eventStoreMaxRecentEvents', 'eventStoreMaxTraces', 'eventStoreSchemaVersion',
   'agentActivityWindowMs', 'opportunityWindowHours', 'omsFollowUpMinAgeMs', 'omsFollowUpIntervalMs',
   'omsPollForFillTimeoutMs', 'omsPollForFillIntervalMs', 'autoTradeSchedulerMs', 'strategyEngineShadowMs',
