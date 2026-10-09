@@ -165,9 +165,10 @@ describe('QuantCoreBridgeService - local parity-comparison history window (Quant
       eventBus.emit('MARKET_DATA', { symbol: 'AAPL', price: 100 + i * 0.1, volume: 10, timestamp: new Date().toISOString() });
       await new Promise((r) => setTimeout(r, 1));
     }
-    bridge.stop();
-
+    // Assert BEFORE stop(): stop() now releases per-symbol state by design
+    // (2026-10-08 defect hunt P1) — these tests verify the history window, not stop().
     expect(bridge.getLocalHistoryLengthForTests('AAPL')).toBe(60);
+    bridge.stop();
   });
 
   it('caps local history at tradingSafety.quantJavaCoreLocalHistoryCap once exceeded', async () => {
@@ -180,9 +181,10 @@ describe('QuantCoreBridgeService - local parity-comparison history window (Quant
       eventBus.emit('MARKET_DATA', { symbol: 'AAPL', price: 100 + i * 0.1, volume: 10, timestamp: new Date().toISOString() });
       await new Promise((r) => setTimeout(r, 1));
     }
-    bridge.stop();
-
+    // Assert BEFORE stop(): stop() now releases per-symbol state by design
+    // (2026-10-08 defect hunt P1) — this test verifies the history cap, not stop().
     expect(bridge.getLocalHistoryLengthForTests('AAPL')).toBe(200);
+    bridge.stop();
   });
 });
 
@@ -1130,11 +1132,45 @@ describe('QuantCoreBridgeService - malformed-response validation (Batch 4, 2026-
     expect(result2).toBeNull();
   });
 
-  it('does not affect the existing circuit-breaker/timeout/non-2xx failure paths (regression check)', async () => {
-    fetchSpy = vi.spyOn(global, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+  it('2026-10-08 defect hunt (P1): evicts per-symbol state for symbols idle beyond 24h', () => {
+    vi.useFakeTimers();
+    try {
+      process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+      fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({ ok: true }), { status: 200 }),
+      );
+      const bridge = new QuantCoreBridgeService();
+      bridge.start();
+
+      // t=0: STALE ticks once.
+      eventBus.emit('MARKET_DATA', { symbol: 'STALE', price: 100, volume: 10, timestamp: new Date().toISOString() });
+      expect(bridge.getLocalHistoryLengthForTests('STALE')).toBe(1);
+
+      // t=25h: FRESH ticks — the opportunistic sweep (throttled to 1/min) runs and
+      // drops STALE (idle 25h > 24h bound) from every per-symbol map.
+      vi.setSystemTime(Date.now() + 25 * 60 * 60 * 1000);
+      eventBus.emit('MARKET_DATA', { symbol: 'FRESH', price: 200, volume: 10, timestamp: new Date().toISOString() });
+      expect(bridge.getLocalHistoryLengthForTests('FRESH')).toBe(1);
+      expect(bridge.getLocalHistoryLengthForTests('STALE')).toBe(0);
+
+      bridge.stop();
+    } finally {
+      vi.useRealTimers();
+      delete process.env.QUANT_JAVA_CORE_ENABLED;
+    }
+  });
+
+  it('2026-10-08 defect hunt (P1): stop() releases all per-symbol state', () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
     const bridge = new QuantCoreBridgeService();
-    await expect(bridge.fetchInstitutionalVolatility('AAPL', bars)).resolves.toBeNull();
-    await expect(bridge.fetchCoreEnsembleDecision('AAPL', bars)).resolves.toBeNull();
-    await expect(bridge.fetchInstitutionalAdvisory([{ modelId: 'x', family: 'f', side: 'BUY', confidence: 0.7 }], 'BULL_TRENDING', 0.01)).resolves.toBeNull();
+    bridge.start();
+    eventBus.emit('MARKET_DATA', { symbol: 'GONE', price: 100, volume: 10, timestamp: new Date().toISOString() });
+    expect(bridge.getLocalHistoryLengthForTests('GONE')).toBe(1);
+    bridge.stop();
+    expect(bridge.getLocalHistoryLengthForTests('GONE')).toBe(0);
+    delete process.env.QUANT_JAVA_CORE_ENABLED;
   });
 });

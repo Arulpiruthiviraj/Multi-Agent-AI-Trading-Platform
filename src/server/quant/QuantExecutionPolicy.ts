@@ -364,12 +364,20 @@ export async function evaluateQuantExecutionPolicy(
   if (dataBlocked) return fail('QUANT_DATA_BLOCKED', `Canonical data-quality snapshot blocks trading: ${(dq as { blockReason?: unknown }).blockReason ?? 'stale/unavailable data'}.`);
 
   // ---- REQUIRED: explicit signal expiry respected ----
+  // 2026-10-08 defect hunt (P2): malformed expiresAt is fail-CLOSED. Previously
+  // new Date(malformed).getTime() yielded NaN, and NaN <= Date.now() is false,
+  // so a garbage expiry string was treated as "not expired" — fail-open. An
+  // idea that claims an expiry must carry a parseable one; otherwise it is
+  // rejected as expired. (The documented quantPolicySignalMaxAgeMs bound remains
+  // defense-in-depth for a future async path: ideas are evaluated synchronously
+  // at receipt today, so no emission timestamp exists to bound against.)
   const expiresAt = idea?.expiresAt;
-  const expired = expiresAt != null && expiresAt !== '' && new Date(String(expiresAt)).getTime() <= Date.now();
+  const expiresAtMs = expiresAt != null && expiresAt !== '' ? new Date(String(expiresAt)).getTime() : NaN;
+  const expired = expiresAt != null && expiresAt !== '' && (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now());
   checks.push(
     req('NOT_EXPIRED', !expired, expired ? `signal expired at ${String(expiresAt)}` : 'signal not expired'),
   );
-  if (expired) return fail('QUANT_SIGNAL_EXPIRED', 'Signal is past its explicit expiry; no longer actionable.');
+  if (expired) return fail('QUANT_SIGNAL_EXPIRED', 'Signal is past its explicit expiry (or carries an unparseable expiry); no longer actionable.');
 
   // ---- AI advisory: recorded, never gating (veto/advice split) ----
   // The AiAdvisoryService note (2026-10-07) arrives as an optional idea input; it is

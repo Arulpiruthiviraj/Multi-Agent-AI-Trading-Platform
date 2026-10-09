@@ -50,7 +50,7 @@
  */
 import { db } from '../../db';
 import { learningVersions } from '../../db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, sql } from 'drizzle-orm';
 
 export type StrategyLifecycleStatus =
   | 'UNTESTED'
@@ -115,11 +115,16 @@ export async function recordStrategyLifecycleTransition(
   return id;
 }
 
-/** Most recent decision for this strategy - 'UNTESTED' when no row exists yet (today's baseline). */
+/** Most recent decision for this strategy - 'UNTESTED' when no row exists yet (today's baseline).
+ * 2026-10-08 defect hunt (P2): tie-break is (createdAt DESC, rowid DESC). createdAt is
+ * millisecond ISO text — two transitions recorded in the same millisecond would otherwise
+ * leave the .limit(1) winner to SQLite's whim. rowid is monotonic for append-only inserts,
+ * so the later-written row wins deterministically. History is append-only; nothing is
+ * rewritten, so rowid order == insertion order. */
 export async function getStrategyLifecycleStatus(strategyId: string): Promise<StrategyLifecycleStatus> {
   const rows = await db.select().from(learningVersions)
     .where(eq(learningVersions.versionType, strategyEligibilityVersionType(strategyId)))
-    .orderBy(desc(learningVersions.createdAt))
+    .orderBy(desc(learningVersions.createdAt), desc(sql`"learning_versions"."rowid"`))
     .limit(1);
   return (rows[0]?.status as StrategyLifecycleStatus | undefined) ?? 'UNTESTED';
 }
@@ -141,11 +146,13 @@ export async function hasStrategyLifecycleRecord(strategyId: string): Promise<bo
   return rows.length > 0;
 }
 
-/** Full, timestamped, auditable history of lifecycle decisions for this strategy - never mutated, never overwritten. */
+/** Full, timestamped, auditable history of lifecycle decisions for this strategy - never mutated, never overwritten.
+ * Same (createdAt DESC, rowid DESC) tie-break as getStrategyLifecycleStatus: same-millisecond
+ * transitions keep a deterministic newest-first order. */
 export async function getStrategyLifecycleHistory(strategyId: string): Promise<StrategyLifecycleTransition[]> {
   const rows = await db.select().from(learningVersions)
     .where(eq(learningVersions.versionType, strategyEligibilityVersionType(strategyId)))
-    .orderBy(desc(learningVersions.createdAt));
+    .orderBy(desc(learningVersions.createdAt), desc(sql`"learning_versions"."rowid"`));
   return rows.map((r) => ({
     id: r.id,
     strategyId,

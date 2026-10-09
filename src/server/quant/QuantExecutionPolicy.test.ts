@@ -189,6 +189,17 @@ describe('QuantExecutionPolicy', () => {
     expect(d.reasonCode).toBe('QUANT_SIGNAL_EXPIRED');
   });
 
+  it('2026-10-08 defect hunt (P2): malformed expiresAt fails closed (never treated as not-expired)', async () => {
+    // Previously new Date(malformed).getTime() = NaN, and NaN <= Date.now() is
+    // false — a garbage expiry string slipped past as "not expired" (fail-open).
+    for (const bad of ['not-a-date', 'undefined', '{}', '--']) {
+      const idea = validIdea({ expiresAt: bad });
+      const d = await evaluateQuantExecutionPolicy(idea, authorized(), { calibrationLookup: sufficientCalibration });
+      expect(d.approved).toBe(false);
+      expect(d.reasonCode).toBe('QUANT_SIGNAL_EXPIRED');
+    }
+  });
+
   it('rejects when too few independent support dimensions hold (no fake independence)', async () => {
     // Only RISK_REWARD_ADEQUATE holds: regime mismatched, ensemble disagreeing,
     // calibration insufficient. RSI+MACD-style correlated conditions inside the strategy

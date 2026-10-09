@@ -130,4 +130,16 @@ describe('StrategyEmissionEligibility', () => {
     // Every transition is preserved - nothing was overwritten by the later ones.
     expect(history[2].hypothesis).toBe('first showed promise');
   });
+
+  it('2026-10-08 defect hunt (P2): same-millisecond transitions resolve deterministically to the later-written row', async () => {
+    // createdAt is millisecond ISO text: two transitions in the same millisecond
+    // used to leave the .limit(1) winner to SQLite's whim. The (createdAt, rowid)
+    // tie-break makes the later-written row win deterministically.
+    const t = new Date('2026-10-01T12:00:00.000Z');
+    await mod.recordStrategyLifecycleTransition('TIE_STRATEGY', 'CANDIDATE', 'first', null, 1, t);
+    await mod.recordStrategyLifecycleTransition('TIE_STRATEGY', 'RETIRED', 'second', null, 2, t);
+    expect(await mod.getStrategyLifecycleStatus('TIE_STRATEGY')).toBe('RETIRED');
+    const history = await mod.getStrategyLifecycleHistory('TIE_STRATEGY');
+    expect(history.map((h) => h.status)).toEqual(['RETIRED', 'CANDIDATE']);
+  });
 });
