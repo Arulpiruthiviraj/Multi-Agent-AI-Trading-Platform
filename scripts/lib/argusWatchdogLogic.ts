@@ -141,27 +141,60 @@ export interface WatchdogConfig {
   restartCooldownMaxMs: number;
 }
 
-function num(key: keyof WatchdogConfig, fallback: number): number {
-  const raw = (watchdogJson as Record<string, unknown>)[key];
-  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : fallback;
+/**
+ * 2026-10-08 I-W3: config/watchdog.json's own $comment documents "Missing keys fail watchdog
+ * startup - a watchdog with unknown thresholds must not guess", but the loader below used to
+ * fall back to silent hardcoded defaults for any missing key - the documented contract was not
+ * implemented. This implements it, mirroring src/server/config/runtimeIntervals.ts's "Missing
+ * required keys fail boot" pattern: every key is required, numeric, finite, and positive.
+ * DEFAULT_WATCHDOG_CONFIG is derived at import time, so an incomplete config throws during
+ * `argus watchdog` startup (argusWatchdog.ts imports this module before any judgment runs) -
+ * the watchdog refuses to start rather than guarding a live engine with guessed thresholds.
+ * Fail closed: an unknown-threshold watchdog must not guess.
+ */
+export const REQUIRED_WATCHDOG_KEYS: (keyof WatchdogConfig)[] = [
+  'heartbeatStaleMs',
+  'confirmTicks',
+  'frozenConfirmTicks',
+  'maxRestarts',
+  'restartWindowMs',
+  'maintenanceFreshnessMs',
+  'maintenanceDeferralMaxMs',
+  'startupGraceMs',
+  'restartCooldownBaseMs',
+  'restartCooldownMaxMs',
+];
+
+export function loadWatchdogConfig(raw: Record<string, unknown> = watchdogJson as Record<string, unknown>): WatchdogConfig {
+  for (const key of REQUIRED_WATCHDOG_KEYS) {
+    const value = raw[key];
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+      throw new Error(
+        `config/watchdog.json missing or invalid numeric field: ${key} - refusing to start the watchdog with unknown thresholds`,
+      );
+    }
+  }
+  const cfg: WatchdogConfig = {
+    heartbeatStaleMs: raw.heartbeatStaleMs as number,
+    confirmTicks: raw.confirmTicks as number,
+    frozenConfirmTicks: raw.frozenConfirmTicks as number,
+    maxRestarts: raw.maxRestarts as number,
+    restartWindowMs: raw.restartWindowMs as number,
+    maintenanceFreshnessMs: raw.maintenanceFreshnessMs as number,
+    maintenanceDeferralMaxMs: raw.maintenanceDeferralMaxMs as number,
+    startupGraceMs: raw.startupGraceMs as number,
+    restartCooldownBaseMs: raw.restartCooldownBaseMs as number,
+    restartCooldownMaxMs: raw.restartCooldownMaxMs as number,
+  };
+  return cfg;
 }
 
 /**
  * Production thresholds come from config/watchdog.json (AGENTS.md hard rule: no hardcoded
- * operational/safety thresholds in TypeScript). Tests may spread-override individual fields.
+ * operational/safety thresholds in TypeScript). Fails loudly at startup on missing/invalid
+ * keys (see loadWatchdogConfig). Tests may spread-override individual fields of this object.
  */
-export const DEFAULT_WATCHDOG_CONFIG: WatchdogConfig = {
-  heartbeatStaleMs: num('heartbeatStaleMs', 60_000),
-  confirmTicks: num('confirmTicks', 2),
-  frozenConfirmTicks: num('frozenConfirmTicks', 10),
-  maxRestarts: num('maxRestarts', 3),
-  restartWindowMs: num('restartWindowMs', 3_600_000),
-  maintenanceFreshnessMs: num('maintenanceFreshnessMs', 300_000),
-  maintenanceDeferralMaxMs: num('maintenanceDeferralMaxMs', 1_800_000),
-  startupGraceMs: num('startupGraceMs', 180_000),
-  restartCooldownBaseMs: num('restartCooldownBaseMs', 120_000),
-  restartCooldownMaxMs: num('restartCooldownMaxMs', 1_800_000),
-};
+export const DEFAULT_WATCHDOG_CONFIG: WatchdogConfig = loadWatchdogConfig();
 
 function isBadTick(obs: TickObservation, cfg: WatchdogConfig): boolean {
   if (!obs.pidAlive) return true;
