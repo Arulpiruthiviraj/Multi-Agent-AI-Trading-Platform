@@ -38,7 +38,9 @@ export async function sweepCandidateRankingsRetention(nowMs = Date.now()): Promi
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
     return totalDeleted;
-  } catch {
+  } catch (e) {
+    // 2026-10-08 defect hunt (P2-R4): sweep failures were invisible (bare catch) - log loudly.
+    console.error('[operationalRetention] sweepNewsClustersRetention failed:', e instanceof Error ? e.message : String(e));
     return totalDeleted;
   }
 }
@@ -102,11 +104,31 @@ export async function sweepNewsArticlesRetention(nowMs = Date.now()): Promise<nu
   const cutoffIso = new Date(nowMs - runtimeIntervals.newsArticlesRetentionDays * 24 * 60 * 60 * 1000).toISOString();
   const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
   const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
-  const deleteBatch = sqliteDb.prepare(
-    'DELETE FROM news_articles WHERE id IN (SELECT id FROM news_articles WHERE published_at < ? LIMIT ?)'
-  );
   let totalDeleted = 0;
   try {
+    // 2026-10-08 defect hunt (P2-R2): rows written before NewsNormalizer.normalizePublishedAt
+    // (or by any path bypassing it) may carry non-ISO published_at (RFC-2822 pubDate,
+    // "YYYY-MM-DD HH:MM:SS"). ISO-text comparison can never prune those rows, so repair them
+    // to ISO first in JS (SQLite cannot parse these formats). The set shrinks to zero and
+    // stays there; unparseable dates fail closed to now (never pruned as "old").
+    // Bounded + yielding like the delete loop below.
+    const repairSelect = sqliteDb.prepare(
+      `SELECT id, published_at AS publishedAt FROM news_articles WHERE published_at NOT LIKE '____-__-__T%' LIMIT ?`
+    );
+    const repairUpdate = sqliteDb.prepare('UPDATE news_articles SET published_at=? WHERE id=?');
+    for (let i = 0; i < maxBatches; i++) {
+      const rows = repairSelect.all(batchSize) as Array<{ id: string; publishedAt: string | null }>;
+      if (rows.length === 0) break;
+      for (const row of rows) {
+        const ms = row.publishedAt ? Date.parse(row.publishedAt) : NaN;
+        repairUpdate.run(Number.isFinite(ms) ? new Date(ms).toISOString() : new Date(nowMs).toISOString(), row.id);
+      }
+      if (rows.length < batchSize) break;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    const deleteBatch = sqliteDb.prepare(
+      'DELETE FROM news_articles WHERE id IN (SELECT id FROM news_articles WHERE published_at < ? LIMIT ?)'
+    );
     for (let i = 0; i < maxBatches; i++) {
       const result = deleteBatch.run(cutoffIso, batchSize);
       totalDeleted += result.changes;
@@ -114,7 +136,11 @@ export async function sweepNewsArticlesRetention(nowMs = Date.now()): Promise<nu
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
     return totalDeleted;
-  } catch {
+  } catch (e) {
+    // 2026-10-08 defect hunt (P2-R4): sweep failures were invisible (bare catch). A
+    // persistently failing sweep is exactly the unbounded-growth class this workstream
+    // hunts - log loudly so it cannot fail silently.
+    console.error('[operationalRetention] sweepNewsArticlesRetention failed:', e instanceof Error ? e.message : String(e));
     return totalDeleted;
   }
 }
@@ -142,7 +168,9 @@ export async function sweepNewsClustersRetention(nowMs = Date.now()): Promise<nu
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
     return totalDeleted;
-  } catch {
+  } catch (e) {
+    // 2026-10-08 defect hunt (P2-R4): sweep failures were invisible (bare catch) - log loudly.
+    console.error('[operationalRetention] sweepNewsClustersRetention failed:', e instanceof Error ? e.message : String(e));
     return totalDeleted;
   }
 }

@@ -129,4 +129,33 @@ describe('news retention sweeps', () => {
     await expect(sweepNewsArticlesRetention()).resolves.toBe(0);
     await expect(sweepNewsClustersRetention()).resolves.toBe(0);
   });
+
+  it('P2-R2: prunes rows with non-ISO published_at (RFC-2822 pubDate, space-separated datetime)', async () => {
+    // Rows written before NewsNormalizer.normalizePublishedAt carried provider-native
+    // formats. ISO-text comparison could never prune them (e.g. "Thu, ..." sorts after
+    // any "2026-..." cutoff). The sweep must repair them to ISO first, then prune.
+    const oldDate = new Date(Date.now() - (intervals.newsArticlesRetentionDays + 5) * 24 * 60 * 60 * 1000);
+    const rfc2822 = oldDate.toUTCString(); // "Thu, 08 Oct 2026 12:00:00 GMT"
+    const spaceSep = oldDate.toISOString().slice(0, 10) + ' ' + oldDate.toISOString().slice(11, 19); // "YYYY-MM-DD HH:MM:SS"
+    const id1 = `art-rfc-${Date.now()}-1`;
+    const id2 = `art-spc-${Date.now()}-2`;
+    expect(rfc2822).not.toMatch(/^\d{4}-\d{2}-\d{2}T/); // sanity: genuinely non-ISO
+    insertArticle(id1, rfc2822);
+    insertArticle(id2, spaceSep);
+    const deleted = await sweepNewsArticlesRetention();
+    expect(deleted).toBeGreaterThanOrEqual(2);
+    const remaining = sqliteDb.prepare('SELECT COUNT(*) AS n FROM news_articles WHERE id IN (?, ?)').get(id1, id2) as any;
+    expect(remaining.n).toBe(0);
+  });
+
+  it('P2-R2: normalizer emits ISO published_at for every provider format', async () => {
+    const { normalizePublishedAt } = await import('../news/NewsNormalizer');
+    expect(normalizePublishedAt('Thu, 08 Oct 2026 12:00:00 GMT')).toBe(new Date(Date.parse('Thu, 08 Oct 2026 12:00:00 GMT')).toISOString());
+    expect(normalizePublishedAt('2026-10-01 12:00:00')).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(normalizePublishedAt(undefined)).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    // Unparseable fails closed to a parseable ISO "now", never a garbage passthrough.
+    const fallback = normalizePublishedAt('not a date');
+    expect(fallback).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(Math.abs(Date.parse(fallback) - Date.now())).toBeLessThan(60_000);
+  });
 });
