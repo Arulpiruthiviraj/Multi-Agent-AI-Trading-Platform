@@ -43,6 +43,7 @@ import { filterQuarantinedStrategies } from '../quant/strategies/StrategyEmissio
 import { selectWithBoundedExploration } from '../quant/strategies/StrategyExplorationScheduler';
 import { resolvePaperTestingOverlay } from '../research/paperTestingOverlay';
 import { snapshotFromStrategyContext } from '../quant/QuantitativeFeatureEngine';
+import { recordQuantInputEvidence } from '../observability/quantInputProvenance';
 import { assembleTradeThesis } from '../quant/thesis/assembleTradeThesis';
 import { StrategyContext, StrategyEvaluation } from '../quant/strategies/types';
 import { computeGroupedScores, GroupedScores } from '../quant/scoring/GroupedScores';
@@ -325,6 +326,12 @@ export class QuantSignalAgent {
     const resumeAt = this.nextCycleSymbol ? Math.max(0, ordered.indexOf(this.nextCycleSymbol)) : 0;
     const symbols = [...ordered.slice(resumeAt), ...ordered.slice(0, resumeAt)];
     const cycleStarted = Date.now();
+    const cycleId = generateTraceId('QUANT_CYCLE');
+    observeSafe(() => structuredLogger.info('quant_cycle_started', {
+      category: 'DISCOVERY', eventType: 'QUANT_CYCLE_STARTED', cycleId,
+      scheduledSymbols: symbols, resumeSymbol: this.nextCycleSymbol,
+      providerId: getRegisteredHistoricalBarProvider()?.id ?? null,
+    }));
 
     if (symbols.length === 0) {
       console.log('[QuantSignalAgent] No actively-tracked symbols yet (MarketDataWorker has no subscriptions) - nothing to evaluate this cycle.');
@@ -343,8 +350,14 @@ export class QuantSignalAgent {
         if (i >= symbols.length) return;
         const symbol = symbols[i];
         attemptedSymbols.push(symbol);
+        const attemptStarted = Date.now();
+        let outcome = 'ERROR';
+        observeSafe(() => structuredLogger.info('quant_symbol_evaluation_started', {
+          category: 'DISCOVERY', eventType: 'QUANT_SYMBOL_EVALUATION_STARTED', cycleId, symbol,
+        }));
         try {
           const result = await this.evaluateSymbol(symbol);
+          outcome = result ? 'ASSESSED' : 'NO_ASSESSMENT';
           if (result) { anySuccess = true; completedSymbols.push(symbol); }
         } catch (e: any) {
           notePipelineAgentFailure('QuantEngine', e);
@@ -361,6 +374,11 @@ export class QuantSignalAgent {
             console.warn(`[QuantSignalAgent] Alpaca rate limit — aborting remainder of quant cycle (${symbols.length} symbols, concurrency=${concurrency}). Remaining symbols may still use SQLite cache next cycle.`);
             return;
           }
+        } finally {
+          observeSafe(() => structuredLogger.info('quant_symbol_evaluation_finished', {
+            category: 'DISCOVERY', eventType: 'QUANT_SYMBOL_EVALUATION_FINISHED', cycleId, symbol,
+            durationMs: Date.now() - attemptStarted, outcome,
+          }));
         }
       }
     });
@@ -369,7 +387,7 @@ export class QuantSignalAgent {
     this.nextCycleSymbol = notAttemptedSymbols[0] ?? null;
     observeSafe(() => structuredLogger.info('quant_cycle_completed', {
       category: 'DISCOVERY', eventType: 'QUANT_CYCLE_COMPLETED',
-      durationMs: Date.now() - cycleStarted, concurrency, attemptedSymbols, completedSymbols,
+      cycleId, durationMs: Date.now() - cycleStarted, concurrency, attemptedSymbols, completedSymbols,
       notAttemptedSymbols, reason: abortRateLimit ? 'PROVIDER_BACKOFF' : 'COMPLETED',
     }));
     if (anySuccess) {
@@ -392,6 +410,7 @@ export class QuantSignalAgent {
    */
   async evaluateSymbol(symbol: string, options?: { emitIdeas?: boolean }): Promise<{ regime: RegimeResult; marketContext: MarketContextResult; strategyEvaluations: StrategyEvaluation[]; groupedScores: { BUY: GroupedScores; SELL: GroupedScores }; aiContradictionAnalysis: ContradictionAnalysisResult | null } | null> {
     const emitIdeas = options?.emitIdeas !== false;
+    const traceId = generateTraceId(symbol);
     notePipelineAgentTick('QuantEngine');
     const endMs = Date.now();
     const startMs = endMs - LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
@@ -406,6 +425,13 @@ export class QuantSignalAgent {
       console.warn(`[QuantSignalAgent] ${symbol}: ensureBars rate-limited — attempting SQLite cache only`);
     }
     const bars: Bar[] = await historicalDataGateway.getBars(symbol, TIMEFRAME, startMs, endMs);
+    observeSafe(() => structuredLogger.info('quant_bar_input_availability', {
+      category: 'DISCOVERY', eventType: 'QUANT_BAR_INPUT_AVAILABILITY', symbol, traceId,
+      timeframe: TIMEFRAME, requestedStartMs: startMs, requestedEndMs: endMs,
+      barCount: bars.length, requiredBarCount: MIN_BARS_TO_EVALUATE,
+      firstBarTimestamp: bars[0]?.timestamp ?? null, lastBarTimestamp: bars[bars.length - 1]?.timestamp ?? null,
+      outcome: bars.length < MIN_BARS_TO_EVALUATE ? 'INSUFFICIENT_BARS' : 'SUFFICIENT_BAR_COUNT',
+    }));
 
     if (bars.length < MIN_BARS_TO_EVALUATE) {
       console.log(`[QuantSignalAgent] ${symbol}: only ${bars.length} real bars available (need ${MIN_BARS_TO_EVALUATE}+) - skipping this cycle.`);
@@ -464,7 +490,8 @@ export class QuantSignalAgent {
       /* shadow diagnostics only - must never affect real evaluation */
     }
     const marketContext = await getMarketContext(symbol, bars, TIMEFRAME, startMs, endMs);
-    const currentPrice = resolveQuantCurrentPrice(bars[bars.length - 1], marketDataWorker.getLatestPrice(symbol), Date.now());
+    const liveQuotePriceUsed = marketDataWorker.getLatestPrice(symbol);
+    const currentPrice = resolveQuantCurrentPrice(bars[bars.length - 1], liveQuotePriceUsed, Date.now());
 
     // Real StrategyEngine context - reuses regime.features (trend/volatility/priceAction, already
     // computed by classifyRegime above) rather than recomputing them a second time; only momentum/
@@ -565,13 +592,26 @@ export class QuantSignalAgent {
       SELL: computeGroupedScores(strategyContext, 'SELL'),
     };
 
-    const traceId = generateTraceId(symbol);
+    recordQuantInputEvidence(symbol, traceId, () => ({
+      capturedAtMs: Date.now(), timeframe: TIMEFRAME, strategyContext,
+      liveQuotePriceUsed,
+      bars, intradayBars: intradayBars ?? null, intradaySessionOpenMs: intradaySessionOpenMs ?? null,
+      quoteAfterContext: marketDataWorker.getObservedQuoteEvidence(symbol),
+      limitation: 'Quote is a later diagnostic observation, not proof of the quote used to resolve currentPrice. Bar provider availability timestamps and upstream benchmark input bars are not captured.',
+    }));
     // Phase 13 (2026-08-31 real-edge audit): a strategy with real, repeatedly-verified negative
     // evidence (e.g. PULLBACK_CONTINUATION) can be quarantined from winning real selection without
     // stopping its background evaluation - strategyEvaluations (persisted below, unfiltered) and
     // adaptedEvaluations' own telemetry above are both completely unaffected; only the pool
     // bestStrategyIdea() actually picks from is filtered here.
     const emissionEligibleEvaluations = await filterQuarantinedStrategies(adaptedEvaluations);
+    observeSafe(() => structuredLogger.info('quant_selection_pool', {
+      category: 'DISCOVERY', eventType: 'QUANT_SELECTION_POOL', symbol, traceId, focusId,
+      evaluatedStrategies: strategyEvaluations.map(e => e.strategy),
+      focusedStrategies: focusedEvaluations.map(e => e.strategy),
+      adaptedStrategies: adaptedEvaluations.map(e => e.strategy),
+      emissionEligibleStrategies: emissionEligibleEvaluations.map(e => e.strategy),
+    }));
     // Phase 4: the real Strategy Engine is the primary idea source; the Phase-3 regime-only mapping
     // is an honest fallback for when no individual strategy's own conditions clear its confidence bar.
     const ranked = rankEvaluationsForRegime(emissionEligibleEvaluations, regime.regime);

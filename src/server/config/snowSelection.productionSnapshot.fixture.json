@@ -1,0 +1,748 @@
+{
+  "source": "Read-only production quant_assessments snapshot; outputs, not reconstructed input features",
+  "observedAt": "2026-10-09T14:26:42.053Z",
+  "regime": "BULLISH_TREND",
+  "volatility": "LOW",
+  "evaluations": [
+    {
+      "strategy": "MA_CROSSOVER",
+      "side": "BUY",
+      "setupScore": 100,
+      "confidence": 1,
+      "triggerMet": true,
+      "conditionsMet": [
+        "SMA50 and SMA200 available",
+        "SMA50 above SMA200 (golden-cross stack)",
+        "EMA9 above EMA20",
+        "Price above SMA50",
+        "ADX trend strength (>= 25)",
+        "Favorable market regime"
+      ],
+      "conditionsFailed": [],
+      "contradictions": [],
+      "invalidationConditions": [
+        "SMA50/SMA200 stack flips against the position.",
+        "ADX fades below 25."
+      ],
+      "stop": {
+        "price": 276.2203761539149,
+        "basis": "1x ATR beyond SMA50."
+      },
+      "target": {
+        "price": 357.2612476921704,
+        "basis": "2x ATR measured move; MA systems have no fixed target."
+      },
+      "applicableRegimes": [
+        "BULLISH_TREND",
+        "BEARISH_TREND"
+      ]
+    },
+    {
+      "strategy": "PULLBACK_CONTINUATION",
+      "side": "BUY",
+      "setupScore": 83,
+      "confidence": 0.4,
+      "triggerMet": false,
+      "conditionsMet": [
+        "Price pulled back to/near SMA20 without breaking decisively through it",
+        "RSI in a healthy (non-extreme) pullback zone",
+        "Bullish reversal candlestick at the pullback low",
+        "Volume contracted during the pullback (below average - lack of opposing pressure)",
+        "No structural reversal against the trend (no opposing CHoCH)"
+      ],
+      "conditionsFailed": [
+        "Established uptrend (market structure + regime)"
+      ],
+      "contradictions": [
+        "Defining trigger did not fire on this bar - confidence capped; not a tradeable setup."
+      ],
+      "invalidationConditions": [
+        "Price closes decisively below SMA20 / the pullback low.",
+        "Market structure flips to CHOCH_BEARISH."
+      ],
+      "stop": {
+        "price": 307.27,
+        "basis": "Most recent real swing low (307.27) that defines the pullback."
+      },
+      "target": {
+        "price": 333.28,
+        "basis": "Nearest real resistance level - the prior trend high being retested."
+      },
+      "applicableRegimes": [
+        "BULLISH_TREND",
+        "BEARISH_TREND"
+      ]
+    },
+    {
+      "strategy": "RANGE_REVERSION",
+      "side": "SELL",
+      "setupScore": 80,
+      "confidence": 0.4,
+      "triggerMet": true,
+      "conditionsMet": [
+        "Price near the range resistance boundary",
+        "RSI showing strength at the boundary (>=60)",
+        "No real volume spike (a genuine breakout would show one)",
+        "No real structural break in the fade direction (range still holding)"
+      ],
+      "conditionsFailed": [
+        "Range regime confirmed (RANGING market structure + real consolidation)"
+      ],
+      "contradictions": [],
+      "invalidationConditions": [
+        "A real close beyond the resistance boundary confirms the range is breaking, not holding.",
+        "A real volume spike accompanies the break (genuine breakout, not a fade-worthy range test)."
+      ],
+      "stop": {
+        "price": 333.28,
+        "basis": "At the real resistance boundary being faded (a close through it invalidates the range)."
+      },
+      "target": {
+        "price": 325.4,
+        "basis": "The opposite real range boundary - trading the width of the range."
+      },
+      "applicableRegimes": [
+        "SIDEWAYS_RANGE"
+      ]
+    },
+    {
+      "strategy": "FIBONACCI_PULLBACK",
+      "side": "BUY",
+      "setupScore": 80,
+      "confidence": 0.4,
+      "triggerMet": false,
+      "conditionsMet": [
+        "Fibonacci retracement of the trailing daily range is available",
+        "Uptrend structure or bullish regime",
+        "RSI in a healthy (non-extreme) pullback zone",
+        "Volume not exploding (RVOL < breakout threshold — pullback, not a new breakout)"
+      ],
+      "conditionsFailed": [
+        "Price near 61.8% retracement (within 0.35%)"
+      ],
+      "contradictions": [
+        "Defining trigger did not fire on this bar - confidence capped; not a tradeable setup."
+      ],
+      "invalidationConditions": [
+        "Price closes through the 61.8% reference against the trend (retracement became a reversal).",
+        "Market structure trend flips against the side."
+      ],
+      "stop": {
+        "price": 313.7352761539148,
+        "basis": "1x ATR beyond the 61.8% retracement."
+      },
+      "target": {
+        "price": 341.95,
+        "basis": "Range extreme (Fib 0/100 of the trailing daily range)."
+      },
+      "applicableRegimes": [
+        "BULLISH_TREND",
+        "BEARISH_TREND"
+      ]
+    },
+    {
+      "strategy": "CANDLESTICK_REVERSAL",
+      "side": "BUY",
+      "setupScore": 75,
+      "confidence": 0.4,
+      "triggerMet": false,
+      "conditionsMet": [
+        "A detected candlestick pattern is present",
+        "Bullish reversal candle (hammer/engulfing/doji)",
+        "RSI not already overbought"
+      ],
+      "conditionsFailed": [
+        "Near support (within 0.4%)"
+      ],
+      "contradictions": [
+        "Defining trigger did not fire on this bar - confidence capped; not a tradeable setup."
+      ],
+      "invalidationConditions": [
+        "Price closes through the support reference (failed reversal)."
+      ],
+      "stop": {
+        "price": 312.4843761539148,
+        "basis": "1x ATR beyond the S/R reference."
+      },
+      "target": {
+        "price": 357.2612476921704,
+        "basis": "2x ATR measured move."
+      },
+      "applicableRegimes": [
+        "SIDEWAYS_RANGE",
+        "BULLISH_TREND",
+        "BEARISH_TREND"
+      ]
+    },
+    {
+      "strategy": "RELATIVE_STRENGTH_ROTATION",
+      "side": "BUY",
+      "setupScore": 75,
+      "confidence": 0.75,
+      "triggerMet": true,
+      "conditionsMet": [
+        "Relative strength vs SPY is available (not fabricated)",
+        "Positive relative strength vs SPY",
+        "Favorable market regime",
+        "ADX trend strength (>= 25)",
+        "Bullish daily stack (price > SMA50 > SMA200)",
+        "EMA9 > EMA20 (existing EMAs; Argus does not compute EMA8/EMA21)"
+      ],
+      "conditionsFailed": [
+        "Favorable sector regime when a sector ETF trend exists",
+        "Stock period % > 0 while SPY period % < 0 (RS while SPY is down)"
+      ],
+      "contradictions": [
+        "No market-breadth data source (advance/decline, new highs/lows) exists in this codebase - not fabricated from the handful of symbols fetched here."
+      ],
+      "invalidationConditions": [
+        "Relative strength vs SPY flips against the side.",
+        "Sector regime flips against the side."
+      ],
+      "stop": {
+        "price": 318.51437615391484,
+        "basis": "1x ATR from current price."
+      },
+      "target": {
+        "price": 357.2612476921704,
+        "basis": "2x ATR measured move."
+      },
+      "applicableRegimes": [
+        "BULLISH_TREND",
+        "BEARISH_TREND"
+      ]
+    },
+    {
+      "strategy": "TREND_FOLLOWING",
+      "side": "BUY",
+      "setupScore": 67,
+      "confidence": 0.4,
+      "triggerMet": false,
+      "conditionsMet": [
+        "Market structure real TRENDING (not ranging/choppy)",
+        "Moving averages ordered bullishly (SMA20 > SMA50 > SMA200)",
+        "DMI +DI > -DI with real ADX trend strength",
+        "Chaikin Money Flow confirming accumulation (CMF > 0)"
+      ],
+      "conditionsFailed": [
+        "Strong BULLISH_TREND regime (trendStrength >= 50)",
+        "MACD bullish (line above signal)"
+      ],
+      "contradictions": [
+        "Defining trigger did not fire on this bar - confidence capped; not a tradeable setup."
+      ],
+      "invalidationConditions": [
+        "ADX falls below 20 (real trend strength fading - market structure shifting toward RANGING/CHOPPY).",
+        "A structural CHoCH event occurs against the uptrend."
+      ],
+      "stop": {
+        "price": 289.1360000000001,
+        "basis": "SMA50 as a trailing stop - designed to be moved with the trend, not a fixed level."
+      },
+      "target": {
+        "price": null,
+        "basis": "Trend-following is intentionally open-ended - no fixed target; trail the stop (e.g. along SMA50) as the trend extends."
+      },
+      "applicableRegimes": [
+        "BULLISH_TREND",
+        "BEARISH_TREND"
+      ]
+    },
+    {
+      "strategy": "OSCILLATOR_MOMENTUM",
+      "side": "BUY",
+      "setupScore": 67,
+      "confidence": 0.4,
+      "triggerMet": false,
+      "conditionsMet": [
+        "RSI above midline (50)",
+        "ADX not dead (< 25 still allowed as confirmation only if DI aligned)",
+        "+DI > -DI",
+        "Favorable market regime"
+      ],
+      "conditionsFailed": [
+        "MACD histogram positive",
+        "ROC > 0"
+      ],
+      "contradictions": [
+        "Defining trigger did not fire on this bar - confidence capped; not a tradeable setup."
+      ],
+      "invalidationConditions": [
+        "MACD histogram flips against the position.",
+        "RSI recrosses the 50 midline against the side."
+      ],
+      "stop": {
+        "price": 318.51437615391484,
+        "basis": "1x ATR from current price."
+      },
+      "target": {
+        "price": 357.2612476921704,
+        "basis": "2x ATR measured move."
+      },
+      "applicableRegimes": [
+        "BULLISH_TREND",
+        "BEARISH_TREND"
+      ]
+    },
+    {
+      "strategy": "VOLUME_CONFIRMATION",
+      "side": "BUY",
+      "setupScore": 60,
+      "confidence": 0.4,
+      "triggerMet": false,
+      "conditionsMet": [
+        "Chaikin Money Flow >= 0",
+        "Structure not printing BOS_BEARISH",
+        "Favorable market regime"
+      ],
+      "conditionsFailed": [
+        "RVOL spike (>= 2x) or isSpike flag",
+        "MFI > 50"
+      ],
+      "contradictions": [
+        "Defining trigger did not fire on this bar - confidence capped; not a tradeable setup."
+      ],
+      "invalidationConditions": [
+        "RVOL collapses and CMF flips against the side.",
+        "Structure prints BOS against the position."
+      ],
+      "stop": {
+        "price": 318.51437615391484,
+        "basis": "1x ATR from current price."
+      },
+      "target": {
+        "price": 357.2612476921704,
+        "basis": "2x ATR measured move."
+      },
+      "applicableRegimes": [
+        "BULLISH_TREND",
+        "BEARISH_TREND"
+      ]
+    },
+    {
+      "strategy": "VWAP_MEAN_REVERSION",
+      "side": "BUY",
+      "setupScore": 50,
+      "confidence": 0.2,
+      "triggerMet": false,
+      "conditionsMet": [
+        "Volume not a trend-day expansion (RVOL < 1.5)",
+        "Bullish reversal candlestick",
+        "VWAP reclaim print (or still below waiting reclaim)"
+      ],
+      "conditionsFailed": [
+        "Ranging / non-trending regime",
+        "Extended below VWAP (distancePct <= -1)",
+        "ADX below range ceiling (< 20)"
+      ],
+      "contradictions": [
+        "No genuine session VWAP (real intraday bars required) — the extension read is not a real VWAP deviation.",
+        "Defining trigger did not fire on this bar - confidence capped; not a tradeable setup."
+      ],
+      "invalidationConditions": [
+        "Market structure trend flips against the fade.",
+        "ADX rises through 20 (range thesis gone)."
+      ],
+      "stop": {
+        "price": 318.51437615391484,
+        "basis": "1x ATR beyond the extended print."
+      },
+      "target": {
+        "price": null,
+        "basis": "No genuine session VWAP available."
+      },
+      "applicableRegimes": [
+        "SIDEWAYS_RANGE"
+      ]
+    },
+    {
+      "strategy": "DONCHIAN_CHANNEL_BREAKOUT",
+      "side": "BUY",
+      "setupScore": 50,
+      "confidence": 0.4,
+      "triggerMet": false,
+      "conditionsMet": [
+        "Prior 20-bar channel available (current bar excluded)",
+        "ADX trend strength (>= 25)",
+        "Favorable market regime"
+      ],
+      "conditionsFailed": [
+        "Close above prior-channel high",
+        "RVOL confirmation (>= 1.5x)",
+        "ATR expansion (volatility regime EXPANDING)"
+      ],
+      "contradictions": [
+        "Defining trigger did not fire on this bar - confidence capped; not a tradeable setup."
+      ],
+      "invalidationConditions": [
+        "Price closes back through the broken channel extreme (false breakout).",
+        "ADX fades below 25."
+      ],
+      "stop": {
+        "price": 329.0343761539148,
+        "basis": "1x ATR beyond the broken prior-channel extreme."
+      },
+      "target": {
+        "price": 357.2612476921704,
+        "basis": "2x ATR measured move."
+      },
+      "applicableRegimes": [
+        "BULLISH_TREND",
+        "BEARISH_TREND"
+      ]
+    },
+    {
+      "strategy": "SR_BOUNCE",
+      "side": "SELL",
+      "setupScore": 50,
+      "confidence": 0.4,
+      "triggerMet": false,
+      "conditionsMet": [
+        "Nearest support and/or resistance exists",
+        "Not a volume-spike breakout (RVOL below breakout threshold)"
+      ],
+      "conditionsFailed": [
+        "Price within 0.4% of the nearer boundary",
+        "Bearish reversal candle"
+      ],
+      "contradictions": [
+        "Selling a resistance bounce against BULLISH_TREND - a breakout through the level is the higher-probability outcome.",
+        "Defining trigger did not fire on this bar - confidence capped; not a tradeable setup."
+      ],
+      "invalidationConditions": [
+        "Price closes through the bounced level (flip to breakout, not bounce)."
+      ],
+      "stop": {
+        "price": 346.19562384608514,
+        "basis": "1x ATR beyond the bounced level."
+      },
+      "target": {
+        "price": 325.4,
+        "basis": "Opposite S/R boundary."
+      },
+      "applicableRegimes": [
+        "SIDEWAYS_RANGE",
+        "BULLISH_TREND",
+        "BEARISH_TREND"
+      ]
+    },
+    {
+      "strategy": "BOLLINGER_VOLATILITY",
+      "side": "BUY",
+      "setupScore": 40,
+      "confidence": 0.4,
+      "triggerMet": false,
+      "conditionsMet": [
+        "Bollinger width available (squeeze is prior-bar state; not required on the same print as EXPANDING)",
+        "ADX trend strength (>= 25)"
+      ],
+      "conditionsFailed": [
+        "Price above upper Keltner (expansion break)",
+        "Volatility regime EXPANDING on the break",
+        "RVOL confirmation (>= 1.5x)"
+      ],
+      "contradictions": [],
+      "invalidationConditions": [
+        "Price closes back inside the Keltner channel (failed expansion).",
+        "Volatility regime returns to CONTRACTING without follow-through."
+      ],
+      "stop": {
+        "price": 331.7408956699119,
+        "basis": "1x ATR beyond the broken Keltner band."
+      },
+      "target": {
+        "price": 357.2612476921704,
+        "basis": "2x ATR measured move."
+      },
+      "applicableRegimes": [
+        "BULLISH_TREND",
+        "BEARISH_TREND",
+        "SIDEWAYS_RANGE"
+      ]
+    },
+    {
+      "strategy": "PREVIOUS_PERIOD_BREAKOUT",
+      "side": "BUY",
+      "setupScore": 40,
+      "confidence": 0.4,
+      "triggerMet": false,
+      "conditionsMet": [
+        "Previous-day high/low available",
+        "Favorable market regime"
+      ],
+      "conditionsFailed": [
+        "Close above previous-day high",
+        "RVOL confirmation (>= 2x)",
+        "ATR expansion (volatility regime EXPANDING)"
+      ],
+      "contradictions": [],
+      "invalidationConditions": [
+        "Price closes back through the broken previous-day extreme (false breakout).",
+        "RVOL collapses below 1.5x."
+      ],
+      "stop": {
+        "price": 321.88437615391484,
+        "basis": "1x ATR beyond the broken previous-day extreme."
+      },
+      "target": {
+        "price": 357.2612476921704,
+        "basis": "2x ATR measured move."
+      },
+      "applicableRegimes": [
+        "BULLISH_TREND",
+        "BEARISH_TREND"
+      ]
+    },
+    {
+      "strategy": "VWAP_VOLUME_STRUCTURE",
+      "side": "BUY",
+      "setupScore": 33,
+      "confidence": 0.33,
+      "triggerMet": false,
+      "conditionsMet": [
+        "ADX trend strength (>= 25)",
+        "Bullish rejection candle (hammer / engulfing)"
+      ],
+      "conditionsFailed": [
+        "Established uptrend (market structure)",
+        "Price at or above session VWAP",
+        "Pullback toward VWAP (|distancePct| <= 0.35)",
+        "RVOL confirmation (>= 1.5x)"
+      ],
+      "contradictions": [
+        "No genuine session VWAP (real intraday bars required) — the VWAP anchor is not real on this bar set."
+      ],
+      "invalidationConditions": [
+        "Close through session VWAP against the trade.",
+        "Market structure CHoCH against the side.",
+        "RVOL collapses below follow-through (1.5x)."
+      ],
+      "stop": {
+        "price": 316.12437615391485,
+        "basis": "1x ATR beyond the nearer of VWAP and current price."
+      },
+      "target": {
+        "price": 357.2612476921704,
+        "basis": "2x ATR measured move from current price (no invented VWAP band)."
+      },
+      "applicableRegimes": [
+        "BULLISH_TREND",
+        "BEARISH_TREND"
+      ]
+    },
+    {
+      "strategy": "OPENING_RANGE_BREAKOUT",
+      "side": "BUY",
+      "setupScore": 33,
+      "confidence": 0.33,
+      "triggerMet": false,
+      "conditionsMet": [
+        "Directional regime (not fading a range as a default)",
+        "Prior-day high available as range context (not a fabricated PDH)"
+      ],
+      "conditionsFailed": [
+        "Opening range available (intraday bars required): Only daily-granularity bars available - opening range requires intraday bars.",
+        "Close above opening-range high",
+        "RVOL confirmation (>= 2x)",
+        "Price above session VWAP"
+      ],
+      "contradictions": [
+        "No opening range: daily bars cannot produce an ORB. This is HOLD evidence, not a skip of the condition."
+      ],
+      "invalidationConditions": [
+        "Price closes back inside the opening range (false breakout).",
+        "RVOL collapses below 2x."
+      ],
+      "stop": {
+        "price": null,
+        "basis": "Opening-range extreme if resolved; otherwise no stop level."
+      },
+      "target": {
+        "price": 357.2612476921704,
+        "basis": "2x ATR measured move (range width is not invented when OR is unavailable)."
+      },
+      "applicableRegimes": [
+        "BULLISH_TREND",
+        "BEARISH_TREND",
+        "SIDEWAYS_RANGE"
+      ]
+    },
+    {
+      "strategy": "MOMENTUM_BREAKOUT",
+      "side": "BUY",
+      "setupScore": 25,
+      "confidence": 0.25,
+      "triggerMet": false,
+      "conditionsMet": [
+        "Favorable market regime",
+        "Positive relative strength vs SPY"
+      ],
+      "conditionsFailed": [
+        "Structural break in trade direction (BOS)",
+        "RVOL confirmation (>=1.5x average volume)",
+        "ATR expansion (volatility regime EXPANDING)",
+        "Price above session VWAP",
+        "Favorable sector regime",
+        "Positive momentum (ROC > 0)"
+      ],
+      "contradictions": [],
+      "invalidationConditions": [
+        "Price closes back below the broken level (false breakout).",
+        "RVOL drops back below 1.2x average on the follow-through bar(s).",
+        "Market regime flips away from BULLISH_TREND."
+      ],
+      "stop": {
+        "price": 320.3643761539148,
+        "basis": "1x ATR below the broken structural level (333.28)."
+      },
+      "target": {
+        "price": 333.28,
+        "basis": "Next real resistance level beyond the breakout."
+      },
+      "applicableRegimes": [
+        "BULLISH_TREND",
+        "BEARISH_TREND"
+      ]
+    },
+    {
+      "strategy": "MEAN_REVERSION",
+      "side": "BUY",
+      "setupScore": 20,
+      "confidence": 0.1,
+      "triggerMet": false,
+      "conditionsMet": [
+        "Bullish reversal candlestick"
+      ],
+      "conditionsFailed": [
+        "Ranging / non-trending regime (not a real directional trend)",
+        "RSI oversold (<=30)",
+        "Price at/below the lower Keltner Channel",
+        "Stochastic RSI confirming oversold (<=20)"
+      ],
+      "contradictions": [],
+      "invalidationConditions": [
+        "Price makes a real new low beyond the recent range (the range itself is breaking, not just reverting).",
+        "Market structure trend flips to a real DOWNTREND."
+      ],
+      "stop": {
+        "price": 325.4,
+        "basis": "Nearest real support level - beyond it, the range is broken, not just reverting."
+      },
+      "target": {
+        "price": 319.26713162555825,
+        "basis": "Keltner Channel middle line (the statistical 'mean' being reverted to)."
+      },
+      "applicableRegimes": [
+        "SIDEWAYS_RANGE"
+      ]
+    },
+    {
+      "strategy": "GAP_CONTINUATION",
+      "side": "BUY",
+      "setupScore": 20,
+      "confidence": 0.2,
+      "triggerMet": false,
+      "conditionsMet": [
+        "Favorable market regime"
+      ],
+      "conditionsFailed": [
+        "Gap up vs prior UTC-day close",
+        "Gap size >= 0.5%",
+        "RVOL confirmation (>= 2x)",
+        "Price above session VWAP"
+      ],
+      "contradictions": [
+        "No gap vs prior UTC-day close (threshold in detectGap) — not a fabricated earnings/news gap."
+      ],
+      "invalidationConditions": [
+        "Gap fills back through the prior close (continuation failed).",
+        "RVOL collapses below 1.5x."
+      ],
+      "stop": {
+        "price": 318.51437615391484,
+        "basis": "1x ATR from current price (gap fill is the thesis fail)."
+      },
+      "target": {
+        "price": 357.2612476921704,
+        "basis": "2x ATR measured move."
+      },
+      "applicableRegimes": [
+        "BULLISH_TREND",
+        "BEARISH_TREND"
+      ]
+    },
+    {
+      "strategy": "STATISTICAL_MEAN_REVERSION",
+      "side": "BUY",
+      "setupScore": 20,
+      "confidence": 0.1,
+      "triggerMet": false,
+      "conditionsMet": [
+        "Close z-score available (20-bar window)"
+      ],
+      "conditionsFailed": [
+        "Close z-score <= -2.5",
+        "RSI oversold (<= 30)",
+        "Ranging regime (not fading a trend as a default)",
+        "ADX below range ceiling (< 20)"
+      ],
+      "contradictions": [],
+      "invalidationConditions": [
+        "Market structure trend flips against the fade.",
+        "ADX rises through 20 (range thesis gone).",
+        "Z-score continues through the extreme without reverting (non-stationary)."
+      ],
+      "stop": {
+        "price": 318.51437615391484,
+        "basis": "1x ATR beyond the stretched print."
+      },
+      "target": {
+        "price": 319.26713162555825,
+        "basis": "Keltner middle as the mean proxy (z-score mean is the rolling SMA, not stored as a level)."
+      },
+      "applicableRegimes": [
+        "SIDEWAYS_RANGE"
+      ]
+    },
+    {
+      "strategy": "SMC_LIQUIDITY_SWEEP",
+      "side": "SELL",
+      "setupScore": 0,
+      "confidence": 0,
+      "triggerMet": false,
+      "conditionsMet": [
+        "Liquidity identified (swing or equal high/low)",
+        "Liquidity swept (wick beyond level, close back inside — not a trade by itself)"
+      ],
+      "conditionsFailed": [
+        "CHoCH confirmation in reversal direction (required — sweep without CHoCH is ignored as a trade)",
+        "Displacement in trade direction",
+        "Order block in trade direction",
+        "Unfilled FVG in trade direction",
+        "Volume confirmation (RVOL >= 1.2)",
+        "Same-timeframe regime alignment (not a higher-timeframe read — this stack evaluates one bar timeframe per cycle)"
+      ],
+      "contradictions": [
+        "Sweep without CHoCH confirmation — wait; do not fade the breakout on the sweep bar alone.",
+        "Wick sweep of buy-side liquidity then close back inside. Pattern classification only — not evidence of intentional institutional manipulation."
+      ],
+      "invalidationConditions": [
+        "Price closes back through the sweep extreme (continuation, not a reversal).",
+        "CHoCH prints against the setup after entry."
+      ],
+      "stop": {
+        "price": 347.7156238460852,
+        "basis": "1x ATR above the sweep extreme (334.80)."
+      },
+      "target": {
+        "price": 307.27,
+        "basis": "Opposing liquidity (SWING_LOW at 307.27)."
+      },
+      "applicableRegimes": [
+        "BULLISH_TREND",
+        "BEARISH_TREND",
+        "SIDEWAYS_RANGE"
+      ]
+    }
+  ]
+}
