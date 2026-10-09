@@ -215,10 +215,16 @@ describe('calculatePositionSizing - real, shared RiskEngine/BacktestEngine sizin
     expect(result.gates.find(g => g.gate === 'sufficient_size')?.passed).toBe(false);
   });
 
-  it('BUY-only gates (symbol/sector/open-positions/correlation) are not evaluated for a SELL proposal, matching RiskEngine\'s pre-refactor behavior', async () => {
+  // 2026-10-08 defect hunt (D6): superseded. SELL used to OMIT these gates entirely, breaking
+  // the "every gate is recorded" audit invariant. They are now honestly recorded SKIPPED
+  // (a SELL reduces exposure; these caps limit new risk deployment, not exits).
+  it('BUY-only gates (symbol/sector/open-positions/correlation) are recorded SKIPPED for a SELL proposal, never omitted', async () => {
     const result = await calculatePositionSizing(baseCtx({ side: 'SELL', existingPositions: [{ symbol: 'AAPL', quantity: 10 }] }));
     for (const gate of ['symbol_concentration', 'open_positions_cap', 'sector_concentration', 'correlation_exposure']) {
-      expect(result.gates.find(g => g.gate === gate)).toBeUndefined();
+      const recorded = result.gates.find(g => g.gate === gate);
+      expect(recorded, `gate ${gate} must be recorded for SELL`).toBeDefined();
+      expect(recorded!.passed).toBe(true);
+      expect(recorded!.detail.status).toBe('SKIPPED');
     }
   });
 
@@ -426,5 +432,25 @@ describe('calculatePositionSizing - Crypto Expansion Phase 1 fractional sizing',
     expect(result.maxQuantity).toBe(0); // floor(50/100)=0 at step=1, same as always - not the new min-notional path
     const gate = result.gates.find(g => g.gate === 'sufficient_size');
     expect(gate?.detail.reason).toBeUndefined();
+  });
+
+  // 2026-10-08 defect hunt (D6): SELL assessments never recorded gates 18-21
+  // (symbol_concentration, open_positions_cap, sector_concentration, correlation_exposure) at
+  // all, breaking the "every gate is recorded" audit invariant - a gap in risk_gate_results
+  // is indistinguishable from a dropped write. They are now honestly recorded SKIPPED
+  // (a SELL reduces exposure; these caps limit new risk deployment, not exits).
+  it('SELL records concentration/correlation gates as SKIPPED, never omits them', async () => {
+    const result = await calculatePositionSizing(baseCtx({
+      side: 'SELL', symbol: 'AAPL', currentPrice: 100,
+      existingPositions: [{ symbol: 'AAPL', quantity: 10, mark: { price: 100, priceAgeMs: 0, source: 'ibkr_gateway' } }],
+    }));
+    for (const gateName of ['order_notional_cap', 'symbol_concentration', 'open_positions_cap', 'sector_concentration', 'correlation_exposure']) {
+      const gate = result.gates.find(g => g.gate === gateName);
+      expect(gate, `gate ${gateName} must be recorded for SELL`).toBeDefined();
+      expect(gate!.passed).toBe(true);
+      expect(gate!.detail.status).toBe('SKIPPED');
+    }
+    // Sizing itself unchanged: exits stay unconstrained (RiskEngine clamps to held quantity).
+    expect(result.maxQuantity).toBe(Number.MAX_SAFE_INTEGER);
   });
 });
