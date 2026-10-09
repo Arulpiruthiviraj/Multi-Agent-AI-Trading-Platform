@@ -1,3 +1,4 @@
+// LABEL: MECHANISM_E2E - proves the real listener fan-out chain CHIEF_APPROVED_IDEA -> ... -> transactions.status on a manually emitted event. A regression tripwire for the transaction-status wiring; does NOT prove the consensus decision itself was produced.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
@@ -5,7 +6,7 @@ import os from 'os';
 import { eq } from 'drizzle-orm';
 
 /**
- * Phase 16A (ARGUS_PHASE16_READINESS_REPORT.md) - real end-to-end regression test for the root
+ * Phase 16A (ARGUS_PHASE16_READINESS_REPORT.md) - mechanism-level regression test for the root
  * cause found while investigating the 141 real transactions permanently stuck in `status: 'OPEN'`
  * despite a real, persisted RiskEngine rejection (see that report's forensics section for the
  * full evidence trail). The root cause was NOT a logic bug in current code - it was a stale,

@@ -1,3 +1,4 @@
+// LABEL: MECHANISM_E2E - fuller than candidateToFillE2E (real reviewIdea() entrypoint, real AIRouter with providers cleared), but the two ideas are STILL hand-placed into the router - TechnicalAgent/QuantEngine never actually evaluated anything, and the 'reasoning' strings claiming real RSI/MACD/MOMENTUM_BREAKOUT setups are fixture text. Proves the consensus->Risk->OMS->InternalPaperBroker chain CAN fire with AI down; does NOT prove agents emit independently.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';

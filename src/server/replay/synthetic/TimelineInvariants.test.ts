@@ -1,3 +1,4 @@
+// LABEL: UNIT - proves the checkTimelineInvariants pure-logic assertions on hand-built timelines. Does NOT exercise a real session.
 import { describe, it, expect } from 'vitest';
 import {
   checkTimelineInvariants,

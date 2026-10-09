@@ -1,3 +1,4 @@
+// LABEL: UNIT - pure-function sizing math; no DB, no broker, no market data.
 import { describe, it, expect } from 'vitest';
 import { calculatePositionSizing, returnCorrelation, getSector, SizingContext } from './PositionSizing';
 import { tradingSafety } from '../config/tradingSafety';

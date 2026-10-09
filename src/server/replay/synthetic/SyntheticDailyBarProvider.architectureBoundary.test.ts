@@ -1,3 +1,4 @@
+// LABEL: ARCHITECTURE_INVARIANT - proves the synthetic bar provider cannot be imported or run outside the synthetic harness (static check + runtime fail-closed backstop).
 /**
  * Architecture-boundary proof for SyntheticDailyBarProvider.ts, same pattern as
  * src/server/architecture.protection.test.ts: a static grep-based check that no file outside

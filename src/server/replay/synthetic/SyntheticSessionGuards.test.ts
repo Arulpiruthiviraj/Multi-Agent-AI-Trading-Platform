@@ -1,3 +1,4 @@
+// LABEL: SOAK - resource-bounds guard across one synthetic session (retention story for every written table; event-loop p99 bound). Proves resource-hygiene properties of the synthetic harness; does NOT prove production data availability or strategy behavior.
 /**
  * SYNTHETIC SESSION GUARDS (2026-10-08).
  *

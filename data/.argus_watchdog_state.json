@@ -7,6 +7,6 @@
   ],
   "stormLockout": true,
   "stormLockoutReason": "STORM LOCKOUT: 3 restarts within 60min (max 3) - auto-restart halted, engine left in its last state; requires explicit operator action (`argus watchdog-clear-lockout`) after investigation",
-  "stormLockoutAt": "2026-10-09T22:56:36.305Z",
-  "updatedAt": "2026-10-09T22:56:36.305Z"
+  "stormLockoutAt": "2026-10-09T22:59:56.774Z",
+  "updatedAt": "2026-10-09T22:59:56.774Z"
 }

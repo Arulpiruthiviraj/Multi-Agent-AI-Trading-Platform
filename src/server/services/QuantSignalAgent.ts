@@ -109,6 +109,18 @@ export interface DerivedIdea {
 }
 
 /**
+ * H2 (2026-10-09, Phase 3 certification): the evaluateSymbol() result shape, shared by the public
+ * observability wrapper and the private evaluation body so the two signatures cannot drift apart.
+ */
+export type QuantSymbolEvaluation = {
+  regime: RegimeResult;
+  marketContext: MarketContextResult;
+  strategyEvaluations: StrategyEvaluation[];
+  groupedScores: { BUY: GroupedScores; SELL: GroupedScores };
+  aiContradictionAnalysis: ContradictionAnalysisResult | null;
+} | null;
+
+/**
  * 2026-09-29 (intraday-bars-for-opening-range fix): pure window math, extracted from
  * evaluateSymbol() so it's directly unit-testable without mocking historicalDataGateway. Bounded to
  * today's real regular session (America/New_York, DST-correct via TradingCalendar.ts) - never more
@@ -316,6 +328,12 @@ export class QuantSignalAgent {
   private nextCycleSymbol: string | null = null;
 
   private async runCycle(): Promise<void> {
+    // H1 (2026-10-09, Phase 3 certification): per-cycle observability. cycleId correlates the
+    // STARTED/COMPLETED pair and every per-symbol STARTED/FINISHED event below; scheduledAtMs is
+    // captured at cycle entry (the timer's intended fire time, before universe assembly). Additive
+    // logging only - no scheduling, ordering, or evaluation behavior changes.
+    const cycleId = generateTraceId('quant-cycle');
+    const scheduledAtMs = Date.now();
     const active = marketDataWorker.getActiveSymbols();
     // Prefer liquid names that Quant needs most often — still only evaluates subscribed symbols.
     const priority = ['SPY', 'QQQ', 'NVDA', 'HOOD', 'COIN', 'AMD', 'RIOT', 'AAPL', 'MSFT', 'META'];
@@ -339,6 +357,13 @@ export class QuantSignalAgent {
       return;
     }
     const concurrency = Math.min(this.symbolConcurrency(), symbols.length);
+    // H1 continued: emitted after the empty-universe guard so every QUANT_CYCLE_STARTED is
+    // eventually followed by a QUANT_CYCLE_COMPLETED with the same cycleId (the empty case keeps
+    // its existing console.log-only behavior and never starts a cycle).
+    observeSafe(() => structuredLogger.info('quant_cycle_started', {
+      category: 'DISCOVERY', eventType: 'QUANT_CYCLE_STARTED',
+      cycleId, scheduledAtMs, universeSize: symbols.length, concurrency,
+    }));
     let nextIndex = 0;
     let abortRateLimit = false;
     let anySuccess = false;
@@ -356,6 +381,10 @@ export class QuantSignalAgent {
           category: 'DISCOVERY', eventType: 'QUANT_SYMBOL_EVALUATION_STARTED', cycleId, symbol,
         }));
         try {
+          // H2: cycle context (cycleId + position in the universe snapshot) rides along so the
+          // per-symbol STARTED/FINISHED events can be joined back to this cycle. No behavior
+          // change - evaluateSymbol treats cycleCtx as opaque correlation metadata.
+          const result = await this.evaluateSymbol(symbol, { cycleCtx: { cycleId, scheduledIndex: i } });
           const result = await this.evaluateSymbol(symbol);
           outcome = result ? 'ASSESSED' : 'NO_ASSESSMENT';
           if (result) { anySuccess = true; completedSymbols.push(symbol); }
@@ -408,7 +437,46 @@ export class QuantSignalAgent {
    * the production evaluation logic can never produce a spine-routed idea one call-frame deeper
    * than the caller intended. Default (undefined) preserves the existing live behavior exactly.
    */
-  async evaluateSymbol(symbol: string, options?: { emitIdeas?: boolean }): Promise<{ regime: RegimeResult; marketContext: MarketContextResult; strategyEvaluations: StrategyEvaluation[]; groupedScores: { BUY: GroupedScores; SELL: GroupedScores }; aiContradictionAnalysis: ContradictionAnalysisResult | null } | null> {
+  async evaluateSymbol(symbol: string, options?: { emitIdeas?: boolean; cycleCtx?: { cycleId: string; scheduledIndex: number } }): Promise<QuantSymbolEvaluation> {
+    // H2 (2026-10-09, Phase 3 certification): observability wrapper. Emits QUANT_SYMBOL_EVAL_STARTED
+    // on entry and QUANT_SYMBOL_EVAL_FINISHED on EVERY exit path (normal, insufficient-bars, thrown
+    // error) so a per-symbol evaluation can never again vanish without a trace. cycleCtx is opaque
+    // correlation metadata supplied by runCycle; on-demand callers (ConfluenceCoordinator, manual
+    // CONFIRM, fast lane) omit it and the events honestly carry null cycleId/scheduledIndex.
+    // traceId is minted here (one per call, same as before - it was previously minted deeper in the
+    // body) so the STARTED event and the H3 DESK_NO_TRADE below share the same correlation id.
+    // Additive logging only: errors are rethrown unchanged, return values pass through untouched.
+    const traceId = generateTraceId(symbol);
+    const cycleId: string | null = options?.cycleCtx?.cycleId ?? null;
+    const scheduledIndex: number | null = options?.cycleCtx?.scheduledIndex ?? null;
+    observeSafe(() => structuredLogger.info('quant_symbol_eval_started', {
+      category: 'DISCOVERY', eventType: 'QUANT_SYMBOL_EVAL_STARTED',
+      cycleId, traceId, symbol, scheduledIndex,
+    }));
+    let outcome: 'ASSESSED' | 'INSUFFICIENT_BARS' | 'RATE_LIMITED' | 'ERROR' = 'ERROR';
+    try {
+      const result = await this.evaluateSymbolInternal(symbol, options, traceId);
+      // evaluateSymbolInternal's only null return is the insufficient-bars early return below -
+      // every other path returns a full evaluation.
+      outcome = result === null ? 'INSUFFICIENT_BARS' : 'ASSESSED';
+      return result;
+    } catch (e: any) {
+      // Same 429 wording the runCycle fan-out guard already uses to arm provider backoff.
+      outcome = /429|rate-limited|Too Many Requests/i.test(String(e?.message || e)) ? 'RATE_LIMITED' : 'ERROR';
+      throw e;
+    } finally {
+      observeSafe(() => structuredLogger.info('quant_symbol_eval_finished', {
+        category: 'DISCOVERY', eventType: 'QUANT_SYMBOL_EVAL_FINISHED',
+        cycleId, traceId, symbol, outcome,
+      }));
+    }
+  }
+
+  private async evaluateSymbolInternal(
+    symbol: string,
+    options: { emitIdeas?: boolean; cycleCtx?: { cycleId: string; scheduledIndex: number } } | undefined,
+    traceId: string,
+  ): Promise<QuantSymbolEvaluation> {
     const emitIdeas = options?.emitIdeas !== false;
     const traceId = generateTraceId(symbol);
     notePipelineAgentTick('QuantEngine');
@@ -435,6 +503,22 @@ export class QuantSignalAgent {
 
     if (bars.length < MIN_BARS_TO_EVALUATE) {
       console.log(`[QuantSignalAgent] ${symbol}: only ${bars.length} real bars available (need ${MIN_BARS_TO_EVALUATE}+) - skipping this cycle.`);
+      // H3 (2026-10-09, Phase 3 certification): this early return used to be invisible to forensics
+      // (no DB row, no event, console.log only). Emit the same DESK_NO_TRADE vocabulary the rest of
+      // this agent uses. INSUFFICIENT_BARS is deliberately NOT folded into INSUFFICIENT_EVIDENCE:
+      // INSUFFICIENT_EVIDENCE means "evaluations ran but nothing qualified", this means "we never
+      // had enough real bars to evaluate at all" - a data-availability condition, and conflating
+      // the two is exactly the audit finding the 2026-09-29 no-trade-code precision fix addressed.
+      // Suppressed in evaluation-only mode (emitIdeas === false) per the fast-lane D1 rule that a
+      // pure evaluation records no DESK_NO_TRADE.
+      if (emitIdeas) {
+        eventBus.emit(EVENTS.DESK_NO_TRADE, {
+          traceId,
+          symbol,
+          code: 'INSUFFICIENT_BARS',
+          reason: `Only ${bars.length} real bars available (need ${MIN_BARS_TO_EVALUATE}+) - skipping this cycle.`,
+        });
+      }
       return null;
     }
 

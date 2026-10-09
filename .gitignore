@@ -14,6 +14,9 @@ data/.argus_cli_session
 data/*.db*
 data/*.sqlite*
 data/audit_trail.jsonl
+data/.argus_maintenance_state.json
+data/.argus_watchdog_state.json
+data/.first_fill_forensic_checkpoint.json
 data/shadow_portfolio.json
 data/backups/
 data/heap-snapshots/

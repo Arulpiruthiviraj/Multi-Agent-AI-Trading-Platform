@@ -1033,7 +1033,8 @@ export const COMMAND_HELP: Record<string, string> = {
   'pipeline-ready': 'Usage: argus pipeline-ready\nPipeline readiness check.',
   'readiness': 'Usage: argus readiness\nPre-session checklist: per-check PASS/WARN/FAIL with READY / READY_WITH_WARNINGS / NOT_READY verdict. Read-only; AI checks are advisory only.',
   'quant-readiness': 'Usage: argus quant-readiness [--json]\nProduction-state diagnostic: per-strategy authorization verdicts (AUTHORIZED_QUANT_POLICY / REQUIRES_CONSENSUS / NOT_ELIGIBLE / NOT_AUTHORIZED) computed by the real resolver against the live runtime DB. Read-only; requires the engine API.',
-  'session-checkpoint': 'Usage: argus session-checkpoint\nEarly-warning inactivity check: distinguishes healthy/suspicious/inconclusive zero-trade sessions, pipeline progress without fills, and observed fills. Run at 09:35/10:00/11:00/13:00/15:00 ET during PAPER sessions.',
+  'certify-next-session': 'Usage: argus certify-next-session [--db=<path>] [--json]\nPre-market release gate: snapshots the production DB read-only into an isolated copy, runs canonical authorization + data-readiness + build/config/schema provenance, and emits OVERALL_STATUS (READY / READY_WITH_CONDITIONS / NO_GO). Never seeds lifecycle, never promotes strategies, never arms LIVE.',
+  'session-checkpoint': 'Usage: argus session-checkpoint\nEarly-warning inactivity check: classifies the session HEALTHY_ZERO_TRADE / SUSPICIOUS_ZERO_TRADE (or TRADING). Run at 09:35/10:00/11:00/13:00/15:00 ET during PAPER sessions.',
   'session-report': 'Usage: argus session-report\nSession report.',
   'research': 'Usage: argus research <subcommand> [args]\nResearch intelligence (advisory only, never a trade). Run `argus research --help` for subcommands.',
   'trading-audit': 'Usage: argus trading-audit\nTrading audit trail.',
@@ -2202,6 +2203,67 @@ const commands: Record<string, () => Promise<void>> = {
     } else {
       console.log('QUANT_FIRST_OPERATIONALLY_INACTIVE: no strategy currently has quant-policy authority.');
       console.log('Missing lifecycle and ineligible strategies are rejected; consensus-only strategies retain consensus routing.');
+    }
+  },
+  async 'certify-next-session'() {
+    // Pre-market release gate. Snapshot the production DB read-only into an isolated
+    // copy (VACUUM INTO from a read-only connection: consistent even while the engine
+    // writes), then run the certification child against the copy. The child never
+    // touches the live DB; nothing here seeds lifecycle, promotes strategies, or arms
+    // LIVE. A NO_GO verdict is a certification RESULT (exit 3), not a bug.
+    const { parse } = await import('dotenv');
+    const { execFileSync } = await import('node:child_process');
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { resolve } = await import('node:path');
+
+    const dbFlag = process.argv.slice(3).find(a => a.startsWith('--db='));
+    const asJson = process.argv.slice(3).includes('--json');
+    const envFile = existsSync('.env') ? parse(readFileSync('.env')) : {};
+    const env = { ...envFile, ...process.env };
+    const sourcePath = resolve(dbFlag ? dbFlag.slice('--db='.length) : (env.ARGUS_DB_PATH || 'data/argus.db'));
+    if (!existsSync(sourcePath)) {
+      console.error(`certify-next-session: production DB not found: ${sourcePath}`);
+      process.exit(1);
+    }
+
+    const snapshotRoot = mkdtempSync(join(tmpdir(), 'argus-certify-next-session-'));
+    const snapshotDb = resolve(snapshotRoot, 'snapshot.db');
+    try {
+      // Consistent snapshot via the sqlite3 online backup API: works against a live
+      // engine DB, never writes to the source. Falls back to a WAL-aware file copy
+      // (main DB + WAL copied in that order: replay stays consistent, possibly stale).
+      try {
+        execFileSync('sqlite3', [sourcePath, `.backup '${snapshotDb.replace(/'/g, "''")}'`], { stdio: 'pipe' });
+      } catch (backupError: any) {
+        const { copyFileSync } = await import('node:fs');
+        copyFileSync(sourcePath, snapshotDb);
+        for (const suffix of ['-wal', '-shm']) {
+          const sidecar = sourcePath + suffix;
+          if (existsSync(sidecar)) copyFileSync(sidecar, snapshotDb + suffix);
+        }
+        console.error(`certify-next-session: sqlite3 .backup failed (${backupError?.message || backupError}); used file copy instead (snapshot may reflect the last checkpoint).`);
+      }
+      const code = await new Promise<number>((resolveCode, reject) => {
+        const child = spawn(process.execPath, [
+          '--use-system-ca', resolve('node_modules/tsx/dist/cli.mjs'),
+          resolve('scripts/certifyNextSession.ts'), `--isolated-db=${snapshotDb}`,
+          ...(asJson ? ['--json'] : []),
+        ], {
+          env: { ...env, SYNTHETIC_SIMULATION: 'false', ARGUS_DISABLE_MARKET_DATA_WS: 'true' },
+          stdio: 'inherit',
+        });
+        child.once('error', reject);
+        child.once('exit', c => resolveCode(c ?? 1));
+      });
+      process.exitCode = code;
+    } finally {
+      // Remove only this freshly-created snapshot directory; never sourcePath.
+      if (dirname(snapshotRoot) !== resolve(tmpdir()) ||
+          !snapshotRoot.split('/').pop()!.startsWith('argus-certify-next-session-')) {
+        throw new Error('Refusing snapshot cleanup outside the owned temporary directory');
+      }
+      rmSync(snapshotRoot, { recursive: true, force: true });
     }
   },
   async 'session-report'() {

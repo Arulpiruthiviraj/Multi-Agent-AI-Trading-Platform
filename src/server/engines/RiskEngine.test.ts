@@ -1,3 +1,4 @@
+// LABEL: UNIT - proves gate-policy decisions with a mock DB backing reads. Durable-ledger behavior has separate real-DB coverage.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as schema from '../db/schema';
 import { getTradingDateStr } from '../core/TradingCalendar';
