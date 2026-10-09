@@ -225,9 +225,13 @@ export function recordNewsCatalyst(catalyst: NewsCatalyst): NewsCatalyst {
     ...catalyst,
     symbol: key,
     status: shouldStage ? 'STAGED_FOR_OPEN' : 'ACTIVE',
+    // 2026-10-08 defect hunt (news D3): ACTIVE catalysts used to carry expiresAtMs=null and
+    // never expired, persisting as "evidence" until the MAX_PER_SYMBOL rotation evicted them.
+    // Give them the same horizon-based TTL staged catalysts get, so stale catalysts stop
+    // influencing discovery prioritization. Discovery/observability only - never gates trades.
     expiresAtMs: shouldStage
       ? computeCatalystExpiresAtMs(nowMs, catalyst.expectedHorizon)
-      : catalyst.expiresAtMs ?? null,
+      : catalyst.expiresAtMs ?? computeCatalystExpiresAtMs(nowMs, catalyst.expectedHorizon),
   };
 
   const list = bySymbol.get(key) ?? [];
@@ -248,7 +252,15 @@ export function recordNewsCatalyst(catalyst: NewsCatalyst): NewsCatalyst {
 
 export function getNewsCatalysts(symbol: string): NewsCatalyst[] {
   pruneExpired();
-  return [...(bySymbol.get(symbol.toUpperCase()) ?? [])];
+  // 2026-10-08 defect hunt (news D3): pruneExpired() marks staged catalysts EXPIRED but leaves
+  // them in the bySymbol map, and ACTIVE (non-staged) catalysts carry expiresAtMs=null so they
+  // never expired at all. Both then counted as "real catalyst evidence" indefinitely. Filter
+  // to live evidence here: EXPIRED/CONSUMED never count, and a past expiresAtMs never counts.
+  const nowMs = Date.now();
+  return [...(bySymbol.get(symbol.toUpperCase()) ?? [])].filter(
+    (c) => c.status !== 'EXPIRED' && c.status !== 'CONSUMED'
+      && (c.expiresAtMs == null || c.expiresAtMs > nowMs),
+  );
 }
 
 /**

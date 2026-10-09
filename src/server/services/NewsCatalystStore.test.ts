@@ -1,5 +1,13 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { recordNewsCatalyst, getNewsCatalysts, clearNewsCatalystsForTests, hasRealCatalystEvidence } from './NewsCatalystStore';
+
+// D3 tests need the in-RTH (ACTIVE, non-staged) path: force regular-session so shouldStage
+// is false and recordNewsCatalyst respects the caller-passed expiresAtMs. Existing tests
+// above read back immediately after recording, so they pass identically either way.
+vi.mock('../news/newsSessionCadence', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../news/newsSessionCadence')>();
+  return { ...actual, isUsEquityRegularSession: () => true };
+});
 
 describe('NewsCatalystStore', () => {
   beforeEach(() => clearNewsCatalystsForTests());
@@ -68,6 +76,33 @@ describe('NewsCatalystStore', () => {
         contribution: 0, reasoning: 'unit', recordedAt: new Date().toISOString(),
       });
       expect(hasRealCatalystEvidence('ZZNC')).toBe(false);
+    });
+  });
+
+  describe('D3: expired catalysts are not evidence (2026-10-08 defect hunt)', () => {
+    const base = {
+      traceId: 'd3', symbol: 'D3T', headline: 'Catalyst', source: 'unit', publishedAtMs: 1,
+      sentiment: 0.5, credibility: 0.9, catalystStrength: 'HIGH' as const, tradingBias: 'BULLISH' as const,
+      contribution: 0.2, reasoning: 'unit', recordedAt: new Date().toISOString(),
+    };
+
+    it('excludes a catalyst whose expiresAtMs is in the past from getNewsCatalysts', () => {
+      recordNewsCatalyst({ ...base, traceId: 'd3-past', expiresAtMs: Date.now() - 1000 });
+      expect(getNewsCatalysts('D3T')).toEqual([]);
+    });
+
+    it('an expired catalyst does not count as real catalyst evidence', () => {
+      recordNewsCatalyst({ ...base, traceId: 'd3-past2', expiresAtMs: Date.now() - 1000 });
+      expect(hasRealCatalystEvidence('D3T')).toBe(false);
+    });
+
+    it('ACTIVE catalysts now get a real future TTL instead of never expiring', () => {
+      const recorded = recordNewsCatalyst({ ...base, traceId: 'd3-active' });
+      expect(recorded.status).toBe('ACTIVE');
+      expect(recorded.expiresAtMs).not.toBeNull();
+      expect(recorded.expiresAtMs!).toBeGreaterThan(Date.now());
+      // Still live evidence right after recording.
+      expect(hasRealCatalystEvidence('D3T')).toBe(true);
     });
   });
 });
