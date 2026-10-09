@@ -65,6 +65,7 @@ import {
   emitPreopenRevalidationCompleted,
   emitPremarketPlanHandedToRth,
 } from '../premarket/premarketRefreshEvents';
+import { emitPremarketRefreshCompleted } from '../premarket/premarketFocusEvents';
 
 export type SetupType = 'PRIMARY' | 'BACKUP' | 'WATCHLIST';
 export type TradePlanStatus = 'DRAFT' | 'READY' | 'REVALIDATING' | 'VALID' | 'INVALIDATED' | 'EXPIRED' | 'EXECUTED' | 'CLOSED';
@@ -1277,6 +1278,12 @@ async function buildInitialPlans(input: LifecycleTickInput): Promise<InitialBuil
   emitPremarketPlanBuildCompleted({
     tradingDate: planDate, planCount: fresh.length, primaryCount, evidenceAsof: nowIso, at: nowIso,
   });
+  // The initial build IS a completed refresh cycle (version 1): emit the
+  // completion so the focus-report subscriber regenerates the report. The
+  // payload is bounded scalars only (same contract as the refresh path below).
+  emitPremarketRefreshCompleted({
+    tradingDate: planDate, refreshVersion: 1, refreshedAt: nowIso, planCount: fresh.length, at: nowIso,
+  });
 
   const lagAfter = await measureEventLoopLagMs();
   recordPerf({
@@ -1437,6 +1444,21 @@ async function runLifecycleRefresh(
     plansChanged, eventLoopLagMsBefore: lagBefore, eventLoopLagMsAfter: lagAfter,
   });
   lifecycleMemoryByDate.set(planDate, { lastRunAt: nowIso, lastRunKind: KIND_REASON[kind] });
+  // Every completed refresh cycle emits PREMARKET_REFRESH_COMPLETED so the
+  // focus-report subscriber regenerates the report — including no-material-
+  // change runs (the upsert on (plan_date, refresh_version) makes regeneration
+  // idempotent; redelivery of the same cycle carries the same version). The
+  // cycle version is the max plan refreshVersion after the run: unchanged or
+  // skipped plans keep their prior version, so a no-op refresh re-emits the
+  // current version rather than inventing a new one.
+  const cycleVersion = Math.max(1, ...outcomes.map((o) => o.newRefreshVersion));
+  emitPremarketRefreshCompleted({
+    tradingDate: planDate,
+    refreshVersion: cycleVersion,
+    refreshedAt: nowIso,
+    planCount: plans.length + newPlans,
+    at: nowIso,
+  });
   return {
     kind, tradingDate: planDate, refreshedCount, unchangedCount, expiredCount, skippedCount, newPlans, outcomes,
   };

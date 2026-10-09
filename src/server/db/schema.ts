@@ -2401,7 +2401,10 @@ export const premarketFocusReports = sqliteTable('premarket_focus_reports', {
   metricsJson: text('metrics_json'),
   createdAt: text('created_at').notNull(),
 }, (table) => ({
-  dateVersionIdx: index('idx_premarket_focus_reports_date_version').on(table.planDate, table.refreshVersion),
+  // UNIQUE (matches migration 0091's CREATE UNIQUE INDEX): the focus report
+  // upserts on (plan_date, refresh_version), so a redelivered refresh event
+  // regenerates the same row instead of inserting a duplicate.
+  dateVersionIdx: uniqueIndex('idx_premarket_focus_reports_date_version').on(table.planDate, table.refreshVersion),
 }));
 
 /**

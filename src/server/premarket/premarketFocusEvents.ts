@@ -4,17 +4,20 @@
  * - PREMARKET_CANDIDATE_SCORED: emitted once per scored candidate with a
  *   BOUNDED decomposition payload (top-N contributing components, rounded
  *   numbers, no unbounded arrays).
- * - PREMARKET_REFRESH_COMPLETED: emitted by workstream B's late refresh with
+ * - PREMARKET_REFRESH_COMPLETED: emitted by TradePlanBuilder at the end of
+ *   every completed refresh cycle (initial build + each scheduled /
+ *   event-driven refresh — see emitPremarketRefreshCompleted below) with
  *   { tradingDate, refreshVersion, refreshedAt, planCount, at }; this module
  *   subscribes and regenerates the focus report DEFENSIVELY (a subscriber must
  *   never throw into the bus — see EventBus.isolation.test.ts precedent; the
  *   bus also isolates listeners, this is defense in depth).
  *
  * Event-name home: the canonical registry is config/eventNames.json, but these
- * two names are defined here because workstream B (the refresh emitter) has
- * not landed yet. When B lands and registers them in config/eventNames.json,
- * re-export them from EVENTS here so there is a single source of truth. The
- * string values are stable either way.
+ * two names are defined here because the refresh emitter (TradePlanBuilder)
+ * emits them via the helpers in this module rather than through the catalog.
+ * A follow-up may register them in config/eventNames.json and re-export them
+ * from EVENTS here so there is a single source of truth. The string values
+ * are stable either way.
  *
  * Observability path (verified 2026-10-06): DISCOVERY_CANDIDATE_ADMITTED
  * reaches observability_events via a DIRECT structuredLogger.info() call in
@@ -142,8 +145,12 @@ export function emitPremarketCandidateScored(args: {
   }
 }
 
-/** Payload shape workstream B emits (documented here so the subscriber below
- *  validates against the real contract, not an assumption). */
+/** Payload shape TradePlanBuilder emits (documented here so the subscriber below
+ *  validates against the real contract, not an assumption). refreshVersion is
+ *  the refresh-cycle version: the max plan refreshVersion for the trading
+ *  date after the cycle completes (initial build = 1). The same cycle
+ *  re-emitted (redelivery) carries the same version, so the subscriber's
+ *  upsert on (plan_date, refresh_version) stays idempotent. */
 export interface PremarketRefreshCompletedPayload {
   tradingDate: string;
   refreshVersion: number;
@@ -161,6 +168,30 @@ function isValidRefreshPayload(payload: unknown): payload is PremarketRefreshCom
     Number.isInteger(p.refreshVersion) &&
     (p.refreshVersion as number) > 0
   );
+}
+
+/**
+ * Emit PREMARKET_REFRESH_COMPLETED at the end of a completed trade-plan
+ * refresh cycle. Called by TradePlanBuilder (initial build + every scheduled /
+ * event-driven refresh). Never throws: observability must not break the
+ * refresh cycle. Bounded payload: scalar identifiers, counts, timestamps only.
+ */
+export function emitPremarketRefreshCompleted(payload: PremarketRefreshCompletedPayload): void {
+  try {
+    if (!isValidRefreshPayload(payload)) {
+      console.warn('[premarket-focus] refusing to emit PREMARKET_REFRESH_COMPLETED with invalid payload');
+      return;
+    }
+    eventBus.emit(PREMARKET_REFRESH_COMPLETED, {
+      tradingDate: payload.tradingDate,
+      refreshVersion: payload.refreshVersion,
+      refreshedAt: typeof payload.refreshedAt === 'string' ? payload.refreshedAt : null,
+      planCount: typeof payload.planCount === 'number' ? payload.planCount : null,
+      at: typeof payload.at === 'string' ? payload.at : new Date().toISOString(),
+    });
+  } catch (e) {
+    console.error('[premarket-focus] emitPremarketRefreshCompleted failed (isolated)', e);
+  }
 }
 
 /**
