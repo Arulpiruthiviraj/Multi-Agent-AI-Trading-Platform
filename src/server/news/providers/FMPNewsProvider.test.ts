@@ -26,9 +26,11 @@ describe('FMPNewsProvider - secret leakage (Phase 8 hardening)', () => {
     );
 
     const provider = new FMPNewsProvider();
-    const result = await provider.fetchLatest();
+    // 2026-10-08 defect hunt (news D4): providers now THROW on transport/HTTP errors so the
+    // manager records the failure instead of reporting a dead feed as "Healthy". The secret-
+    // redaction contract is unchanged - logErrorSafely redacts before the rethrow.
+    await expect(provider.fetchLatest()).rejects.toThrow();
 
-    expect(result).toEqual([]);
     expect(consoleErrorSpy).toHaveBeenCalled();
     const loggedText = consoleErrorSpy.mock.calls[0][1] as string;
     expect(loggedText).not.toContain('fmp-real-secret-44444');

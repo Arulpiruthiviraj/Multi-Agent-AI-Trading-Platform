@@ -99,11 +99,14 @@ function extractFunctionBody(code: string, declMarker: string): string {
 describe('Part-31: quant router ordering invariants (ChiefTraderAgent)', () => {
   it('the QUANT_STRATEGY routing branch is guarded by the risk-exit check FIRST — a risk exit can never be diverted into the quant policy even if mis-tagged', () => {
     const code = stripComments(read('src/server/services/ChiefTraderAgent.ts'));
-    // The routing branch must read: if (!this.isRiskExit(idea) && normalizeTradeIdeaOrigin(idea.origin) === 'QUANT_STRATEGY')
-    // — the risk-exit exclusion must come before the quant-origin check in the same condition,
+    // 2026-10-08 defect hunt (F3, risk-exit spoofing): the guard was renamed isRiskExit ->
+    // isExitShaped and strengthened - it now excludes agent SELLs of ANY origin (not just
+    // PORTFOLIO_EXIT-stamped) from the quant router. The routing branch must read:
+    // if (!this.isExitShaped(idea) && normalizeTradeIdeaOrigin(idea.origin) === 'QUANT_STRATEGY')
+    // — the exit-shape exclusion must come before the quant-origin check in the same condition,
     // so reordering the operands or dropping the guard fails this test.
     expect(code).toMatch(
-      /if\s*\(\s*!this\.isRiskExit\(idea\)\s*&&\s*normalizeTradeIdeaOrigin\(idea\.origin\)\s*===\s*['"]QUANT_STRATEGY['"]\s*\)/,
+      /if\s*\(\s*!this\.isExitShaped\(idea\)\s*&&\s*normalizeTradeIdeaOrigin\(idea\.origin\)\s*===\s*['"]QUANT_STRATEGY['"]\s*\)/,
     );
   });
 
