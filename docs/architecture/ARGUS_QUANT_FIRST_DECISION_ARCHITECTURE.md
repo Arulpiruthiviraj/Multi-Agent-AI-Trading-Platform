@@ -80,7 +80,11 @@ Key properties:
   Transaction Observatory, forensics, and the replay suite see one approval shape with an
   explicit policy tag.
 - The operator CONFIRM side-lock (existing) still withholds any approval whose side
-  mismatches the confirmed side.
+  mismatches the confirmed side. The lock lives in memory only
+  (`ChiefTraderAgent.manualSideExpectations`): a process restart drops all registered
+  side-locks, and no lock is enforced again until the operator re-registers it. Persisting
+  it is an explicit operator decision (low priority) - deliberately not built (C-F4,
+  2026-10-08).
 
 ## 3. Provenance contract (`src/server/quant/tradeIdeaProvenance.ts`)
 

@@ -222,7 +222,13 @@ export class ChiefTraderAgent {
      *  symbol while this is > 0 - otherwise a later low-confidence idea (or a second agent)
      *  would approve the trade before the debate that was supposed to challenge it finished. */
     private pendingDebates: Map<string, number> = new Map();
-    /** Active Opportunity Feed CONFIRM requests: consensus side must match operator side. */
+    /** Active Opportunity Feed CONFIRM requests: consensus side must match operator side.
+     *  2026-10-08 C-F4 (documented, deliberately NOT persisted): this map is IN-MEMORY ONLY.
+     *  A process restart drops every registered side-lock - after a restart no operator CONFIRM
+     *  side-lock is enforced for any symbol until the operator re-registers it via
+     *  registerManualSideExpectation (manualTradeCoEvaluation.ts). Persistence is an explicit
+     *  operator decision (low priority) and is NOT built here - see the note in
+     *  docs/architecture/ARGUS_QUANT_FIRST_DECISION_ARCHITECTURE.md. No behavior change. */
     private manualSideExpectations: Map<string, { side: 'BUY' | 'SELL'; expiresAt: number }> = new Map();
 
     /** Debounced evaluateConsensus handles per symbol — co-eval window for multi-agent sync. */
