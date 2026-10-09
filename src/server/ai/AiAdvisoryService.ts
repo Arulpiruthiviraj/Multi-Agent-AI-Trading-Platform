@@ -395,12 +395,24 @@ export class AiAdvisoryService {
 
   private storeNote(symbol: string, note: string): void {
     const trimmed = note.length > 400 ? note.slice(0, 397) + '...' : note;
+    const now = Date.now();
+    // Sweep expired entries first: dead entries must not squat in the map and
+    // force the eviction of a live note, and expired notes are deleted here
+    // (not merely skipped on read).
+    for (const [key, entry] of this.noteCache) {
+      if (now > entry.expiresAt) this.noteCache.delete(key);
+    }
     if (this.noteCache.size >= ADVISORY_NOTE_MAX_ENTRIES) {
       // Evict oldest (Map preserves insertion order).
       const oldest = this.noteCache.keys().next();
       if (!oldest.done) this.noteCache.delete(oldest.value);
     }
-    this.noteCache.set(symbol, { note: trimmed, expiresAt: Date.now() + ADVISORY_NOTE_TTL_MS });
+    this.noteCache.set(symbol, { note: trimmed, expiresAt: now + ADVISORY_NOTE_TTL_MS });
+  }
+
+  /** Test-only: current note-cache entry count (live + expired-but-unswept). */
+  public __noteCacheSizeForTests(): number {
+    return this.noteCache.size;
   }
 
   private debug(message: string, kind: string, symbol: string, detail: string): void {

@@ -26,6 +26,7 @@ import { AIRouter, envKeyForProviderName, isPlaceholderApiKey, isAuthFailureErro
 import type { AIProvider } from './providers/AIProvider';
 import { db } from '../db';
 import * as schema from '../db/schema';
+import { eq } from 'drizzle-orm';
 import { EncryptionService } from '../core/EncryptionService';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 import { createSingleFlightGuard } from '../core/singleFlightInterval';
@@ -289,9 +290,127 @@ export function stopAIProviderHealthMonitor(): void {
   }
 }
 
+/**
+ * A1 (2026-10-08): sticky-Offline quarantine recovery.
+ *
+ * Defect this closes: aiProviders.health='Offline' had no recovery path. The writers
+ * (AIRouter.disableProviderForAuthFailure and the routeTask()/routeConsensus() failure
+ * branches, which quarantine via successRate decaying below 50) are real failure accounting,
+ * but the readers (routeTask/routeConsensus's `isKnownDead` filter) then permanently exclude
+ * an Offline provider whenever any live provider remains - and the only writer back to a
+ * routable health was a *successful routed call*, which that same exclusion made unreachable.
+ * The periodic health probe ran real checks every tick yet wrote only to an in-memory tracker,
+ * never to aiProviders.health. Net effect: one transient outage (or one auth failure, which
+ * writes health='Offline' with only an in-memory 5-minute routing cooldown) permanently
+ * removed the provider until manual DB surgery.
+ *
+ * Recovery contract (fail-closed at every step):
+ *  - Only rows currently health='Offline' are eligible; anything else is a no-op.
+ *  - An operator-disabled row (enabled=false) is never resurrected, even to 'Degraded'.
+ *  - The quarantine must have aged at least aiProviderQuarantineCooldownMs, measured from
+ *    the row's last_failure (the moment it last earned an Offline write). A missing or
+ *    unparseable last_failure fails closed - we cannot prove the cooldown elapsed.
+ *  - Only a REAL successful re-probe restores. A failed (or never-run) probe keeps the
+ *    provider Offline. The caller (tick()) passes whether this tick's own checkProviderHealth
+ *    probe succeeded, so recovery is always grounded in fresh evidence, never inference.
+ *  - Restore is deliberately conservative: health='Degraded' re-enters routing (only
+ *    'Offline' is excluded by the known-dead filter) but stays below 'Healthy' in sort
+ *    priority, and successRate is lifted just above the 50 quarantine line so the restored
+ *    row honors the existing "health='Offline' <=> successRate<50" write-time invariant.
+ *    The organic +/-1/-5 successRate math then governs from there - sustained real failures
+ *    re-quarantine, real successes promote to 'Healthy'.
+ *  - This is a health-state restore only. It never marks strategies VALIDATED/CHAMPION
+ *    (a separate lifecycle), never changes consensus thresholds, and never touches
+ *    RiskEngine/OMS/BrokerManager.
+ */
+export async function maybeRecoverQuarantinedProvider(
+  providerId: string,
+  probeSucceeded: boolean,
+  nowMs: number = Date.now(),
+): Promise<'restored' | 'kept-offline' | 'not-quarantined'> {
+  let rows: (typeof schema.aiProviders.$inferSelect)[];
+  try {
+    rows = await db.select().from(schema.aiProviders).where(eq(schema.aiProviders.id, providerId));
+  } catch (e) {
+    // A DB read failure is "cannot prove healthy" - fail closed, quarantine stands.
+    console.error(`[AIProviderHealthCheck] quarantine recovery: DB read failed for ${providerId} - kept Offline`, e);
+    return 'kept-offline';
+  }
+  const row = rows?.[0];
+  if (!row || row.health !== 'Offline') return 'not-quarantined';
+  if (row.enabled === false) {
+    // Operator intent wins over automatic recovery: a disabled provider stays out of
+    // rotation regardless of probe results.
+    return 'kept-offline';
+  }
+  const quarantinedAtMs = row.lastFailure ? Date.parse(row.lastFailure) : NaN;
+  if (!Number.isFinite(quarantinedAtMs)) {
+    console.warn(`[AIProviderHealthCheck] quarantine recovery: ${providerId} is Offline with no parseable last_failure - kept Offline (fail-closed)`);
+    return 'kept-offline';
+  }
+  if (nowMs - quarantinedAtMs < runtimeIntervals.aiProviderQuarantineCooldownMs) return 'kept-offline';
+  // Fail closed: a failed re-probe keeps the provider Offline. No decay, no half-credit.
+  if (!probeSucceeded) return 'kept-offline';
+  const restoredRate = Math.max(51, row.successRate ?? 0);
+  try {
+    await db.update(schema.aiProviders).set({
+      health: 'Degraded',
+      successRate: restoredRate,
+      lastSuccess: new Date(nowMs).toISOString(),
+    }).where(eq(schema.aiProviders.id, providerId));
+  } catch (e) {
+    console.error(`[AIProviderHealthCheck] quarantine recovery: DB write failed for ${providerId} - kept Offline`, e);
+    return 'kept-offline';
+  }
+  console.log(
+    `[AIProviderHealthCheck] Provider ${providerId} passed quarantine re-probe after ` +
+    `${Math.round((nowMs - quarantinedAtMs) / 60000)}min Offline - health Offline -> Degraded ` +
+    `(successRate ${restoredRate}). Sustained real failures will re-quarantine via the -5/failure math.`,
+  );
+  return 'restored';
+}
+
+/** Whether this tick's own checkProviderHealth probe for the provider succeeded. recordResult()
+ *  stamps lastCheckedAt on every probe and lastSuccessAt only on success, both from the same
+ *  Date.now() - so equality + recency means "this tick's probe just succeeded", not a stale
+ *  success from an earlier tick. */
+function wasProbeSuccessfulThisTick(providerId: string, tickStartMs: number): boolean {
+  const entry = tracker.get(providerId);
+  return !!entry
+    && entry.lastCheckedAt !== null
+    && entry.lastCheckedAt >= tickStartMs
+    && entry.lastSuccessAt === entry.lastCheckedAt;
+}
+
 async function tick(): Promise<void> {
+  const tickStartMs = Date.now();
   const entries = AIRouter.getInstance().listProviders();
   await Promise.all(entries.map(([id, provider]) => checkProviderHealth(id, provider)));
+  // A1 (2026-10-08): give quarantined providers a real, time-decayed path back. Each provider
+  // that just passed this tick's real probe gets exactly one recovery evaluation per tick;
+  // maybeRecoverQuarantinedProvider() is fail-closed on every other axis (cooldown, disabled
+  // rows, failed probes, DB errors).
+  for (const [id] of entries) {
+    await maybeRecoverQuarantinedProvider(id, wasProbeSuccessfulThisTick(id, tickStartMs), Date.now());
+  }
+  // Drop tracker entries for providers that are no longer registered (removed or
+  // reconfigured under a new id). getAIProviderHealthSnapshot() only ever looks
+  // up DB rows, so a stale entry for a gone provider is never surfaced - without
+  // this it would accumulate forever as provider rows churn.
+  pruneAIProviderHealthTracker();
+}
+
+/**
+ * Remove in-memory health-tracker entries for provider ids that are no longer
+ * registered on AIRouter. Called by the periodic tick(); exported so tests can
+ * prove stale entries are actually dropped. Pure cleanup: it never changes what
+ * getAIProviderHealthSnapshot() reports for any still-known provider.
+ */
+export function pruneAIProviderHealthTracker(): void {
+  const registered = new Set(AIRouter.getInstance().listProviders().map(([id]) => id));
+  for (const id of tracker.keys()) {
+    if (!registered.has(id)) tracker.delete(id);
+  }
 }
 
 /** Test-only - clears in-memory tracker without touching AIRouter's own state. */

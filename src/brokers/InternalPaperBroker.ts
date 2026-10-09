@@ -35,6 +35,11 @@
 
 import { BrokerPlugin, BrokerCapabilities, Order, Portfolio, Position } from './BrokerAdapter';
 import { tradingSafety } from '../server/config/tradingSafety';
+import {
+  evictOldestTerminalOrdersIfOverCap,
+  isPaperBrokerOrderEvictionEnabled,
+  resolvePaperBrokerOrderRegistryMax,
+} from './brokerMemory';
 
 export class InternalPaperBroker implements BrokerPlugin {
   async initialize() {
@@ -68,6 +73,17 @@ export class InternalPaperBroker implements BrokerPlugin {
   private _positions: Map<string, Position> = new Map();
   private _orders: Map<string, Order> = new Map();
   
+  // 2026-10-08 memory-hunt fix: _orders previously grew by one entry per paper order for
+  // process lifetime - terminal (FILLED/REJECTED/CANCELED) orders were never removed. Evict
+  // oldest-terminal-first when over the cap; non-terminal orders are never evicted (OMS
+  // follow-up, crash recovery, reconciliation depend on them), and terminal history remains
+  // in the trades/fills DB rows. Flag/env: ARGUS_PAPER_BROKER_ORDER_EVICTION,
+  // ARGUS_PAPER_BROKER_ORDER_REGISTRY_MAX (see brokerMemory.ts).
+  private boundOrderRegistry(): void {
+    if (!isPaperBrokerOrderEvictionEnabled()) return;
+    evictOldestTerminalOrdersIfOverCap(this._orders, resolvePaperBrokerOrderRegistryMax());
+  }
+
   async connect(credentials: any): Promise<boolean> {
     return this.authenticate(credentials);
   }
@@ -122,6 +138,7 @@ export class InternalPaperBroker implements BrokerPlugin {
       updatedAt: new Date()
     };
     this._orders.set(newOrder.id, newOrder);
+    this.boundOrderRegistry();
     return newOrder;
   }
 
@@ -265,5 +282,7 @@ export class InternalPaperBroker implements BrokerPlugin {
         pos.unrealizedPnlPercent = pos.unrealizedPnl / totalCost;
       }
     }
+    // Terminal orders settled by this tick can now be bounded out of the registry.
+    this.boundOrderRegistry();
   }
 }

@@ -49,7 +49,8 @@ export interface InternalEnsembleQualification {
 /** Simple, honest, non-backtested confidence heuristics for each Java RESEARCH engine's own
  *  result shape - same reasoning discipline as JavaQuantAdvisoryService.ts's factorCompositeToVote
  *  (a reasoned scale, not a claimed calibration). Returns null for NEUTRAL/no-signal. */
-function javaResultToVote(strategyId: string, result: Record<string, unknown>): { side: EnsembleSide; confidence: number } | null {
+/** Exported for unit tests (pure function). */
+export function javaResultToVote(strategyId: string, result: Record<string, unknown>): { side: EnsembleSide; confidence: number } | null {
   const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
   const bool = (v: unknown): boolean => v === true;
   const clamp = (v: number, lo = 0.05, hi = 0.95): number => Math.max(lo, Math.min(hi, v));
@@ -57,8 +58,13 @@ function javaResultToVote(strategyId: string, result: Record<string, unknown>): 
   switch (strategyId) {
     case 'rsi_mean_reversion': {
       const side = result.fadeSignal;
-      if (side === 'BUY' || side === 'SELL') return { side, confidence: clamp(Math.abs(num(result.rsi) - 50) / 50) };
-      return null;
+      // 2026-10-08 defect hunt (P2): a missing/NaN rsi must NOT map to maximum
+      // confidence. num() defaults non-finite to 0, and |0-50|/50 = 1 → the 0.95
+      // cap — the farthest point from 50, i.e. full strength from absent data.
+      // Every sibling case degrades to null/min on missing fields; do the same.
+      if (side !== 'BUY' && side !== 'SELL') return null;
+      if (typeof result.rsi !== 'number' || !Number.isFinite(result.rsi)) return null;
+      return { side, confidence: clamp(Math.abs(result.rsi - 50) / 50) };
     }
     case 'macd_crossover':
       if (bool(result.bullishCross)) return { side: 'BUY', confidence: 0.6 };

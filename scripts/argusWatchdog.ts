@@ -17,38 +17,55 @@
  *      (enginePid.ts's isPidAlive - the same check the CLI itself already trusts).
  *   2. GET /ready and check it responds ok (unauthenticated by design - see checkHealth()).
  *   3. Read data/.argus_runtime_session.json for lastHeartbeatAt (written every 15s while the
- *      real engine is alive) and cleanShutdown (true only after a real graceful stop).
- *   4. Feed all three into the pure state machine in argusWatchdogLogic.ts, which decides:
- *      NONE / LOG_SUSPECT / RESTART / FORCE_KILL_AND_RESTART / ALERT_HALTED / RESUMED_HEALTHY.
- *   5. Write its OWN heartbeat file (data/logs/.argus_watchdog_heartbeat.json) every tick, so
- *      something can answer "is the watchdog itself still alive" - see StartupHealthRegistry.ts's
- *      'Watchdog' entry, surfaced through the same `argus-cli health`/`start` companion-services
- *      report Chronos/Ollama/etc already use. This does not solve the infinite-regress problem
- *      (nothing watches the watchdog's watcher) - it only means an operator checking Argus's own
- *      health, which the pre-session checklist already asks for, also sees whether its guardian is
- *      still ticking, instead of that being a second, separate, easy-to-forget thing to check.
+ *      real engine is alive), startedAt (engine boot time - for the startup grace window), and
+ *      cleanShutdown (true only after a real graceful stop).
+ *   4. Read data/.argus_maintenance_state.json for a FRESH, explicit maintenance claim
+ *      (backup RUNNING, startup/shutdown in progress - see
+ *      scripts/lib/watchdogMaintenanceState.ts). A stale or missing file is untrusted and
+ *      ignored; deferral itself is time-bounded so a wedged maintenance still escalates.
+ *   5. Feed all of the above into the pure state machine in argusWatchdogLogic.ts, which decides:
+ *      NONE / LOG_SUSPECT / MAINTENANCE_DEFERRED / STARTUP_GRACE / COOLDOWN_WAIT /
+ *      RESTART / FORCE_KILL_AND_RESTART / STORM_LOCKOUT / RESUMED_HEALTHY.
+ *   6. Persist its own state (restart timestamps, storm lockout) to
+ *      data/.argus_watchdog_state.json every tick, so a storm lockout survives watchdog
+ *      restarts, and write its own heartbeat file
+ *      (data/logs/.argus_watchdog_heartbeat.json) carrying the current decision counters.
  *
  * What it does NOT do:
  *   - Never opens data/argus.db (stays a true, separate, read-only-of-Argus-state observer).
- *   - Never calls a trading/resume endpoint. It only ever runs `argus-cli start`, which - already,
- *     independently, verified live in this repo's own audits - leaves tradingState at
- *     TRADING_PAUSED after any restart. Resuming trading after an unattended restart remains a
- *     deliberate, separate, operator-only action.
- *   - Only force-kills a live-but-unresponsive ("frozen") process after a much longer confirmation
- *     window (frozenConfirmTicks) than a confirmed-dead PID needs - see argusWatchdogLogic.ts's
- *     own doc comment on why a bounded force-kill is acceptable at all (SQLite WAL mode already
- *     tolerates a mid-write kill, the same recovery this system relies on for any unexpected
- *     death) and why the window is deliberately long (ruling out "merely slow", not truly stuck).
- *   - Never restarts without bound. A rolling max-restarts-per-window budget exists specifically
- *     to prevent a restart storm; once exhausted it halts and alerts instead of continuing to try.
+ *   - Never calls a trading/resume endpoint. It only ever runs `argus-cli start` WITHOUT
+ *     `--enable-trading` - which - already, independently, verified live in this repo's own
+ *     audits - leaves tradingState at TRADING_PAUSED after any restart. Resuming trading after
+ *     an unattended restart remains a deliberate, separate, operator-only action. The restart
+ *     spec is asserted at runtime (argusWatchdogActions.assertRestartSpecNeverResumesTrading)
+ *     to contain no trading-resume flag.
+ *   - Never force-kills for "merely slow": force-kill needs frozenConfirmTicks consecutive
+ *     bad ticks with the pid alive, and - since the 2026-10-08 defect #3 hardening - a fresh
+ *     maintenance signal defers judgment entirely (up to a bounded deferral budget), and a
+ *     startup-grace window covers boot. Killing mid-maintenance is what caused the restart
+ *     storm; the storm is what STORM_LOCKOUT exists to stop.
+ *   - Never restarts without bound. A rolling max-restarts-per-window budget with exponential
+ *     backoff cooldowns exists specifically to prevent a restart storm; once exhausted it
+ *     engages STORM_LOCKOUT - persisted to disk, requiring explicit operator action
+ *     (`argus watchdog-clear-lockout`) to lift - instead of continuing to try.
+ *   - Never starts a second engine: before spawning, it reconciles the engine pid file against
+ *     the atomic startup claim (claimEnginePid's O_EXCL write) and refuses to spawn while a
+ *     live process holds the claim. `argus-cli start` itself also refuses - this is defense in
+ *     depth at the watchdog layer.
  *
- * Config via env vars (all optional, sane defaults):
- *   ARGUS_WATCHDOG_POLL_MS            default 30000
- *   ARGUS_WATCHDOG_HEARTBEAT_STALE_MS default 60000
- *   ARGUS_WATCHDOG_CONFIRM_TICKS      default 2
- *   ARGUS_WATCHDOG_FROZEN_CONFIRM_TICKS default 10
- *   ARGUS_WATCHDOG_MAX_RESTARTS       default 3
- *   ARGUS_WATCHDOG_RESTART_WINDOW_MS  default 3600000 (1h)
+ * Config: config/watchdog.json (all keys), each overridable via env var (sane defaults in the
+ * JSON itself):
+ *   ARGUS_WATCHDOG_POLL_MS                default 30000
+ *   ARGUS_WATCHDOG_HEARTBEAT_STALE_MS     default 60000
+ *   ARGUS_WATCHDOG_CONFIRM_TICKS          default 2
+ *   ARGUS_WATCHDOG_FROZEN_CONFIRM_TICKS   default 10
+ *   ARGUS_WATCHDOG_MAX_RESTARTS           default 3
+ *   ARGUS_WATCHDOG_RESTART_WINDOW_MS      default 3600000 (1h)
+ *   ARGUS_WATCHDOG_MAINTENANCE_FRESHNESS_MS   default 300000 (5min)
+ *   ARGUS_WATCHDOG_MAINTENANCE_DEFERRAL_MAX_MS default 1800000 (30min)
+ *   ARGUS_WATCHDOG_STARTUP_GRACE_MS       default 180000 (3min)
+ *   ARGUS_WATCHDOG_RESTART_COOLDOWN_BASE_MS   default 120000 (2min)
+ *   ARGUS_WATCHDOG_RESTART_COOLDOWN_MAX_MS   default 1800000 (30min)
  *   ARGUS_CLI_BASE_URL / BASE_URL     reused from argus-cli.ts's own convention (default http://127.0.0.1:3000)
  */
 import { readFileSync, existsSync, mkdirSync, appendFileSync, writeFileSync } from 'node:fs';
@@ -60,16 +77,35 @@ import { assertNotProductionRuntimePath } from '../src/server/core/productionRun
 import {
   initialStateMachine,
   nextState,
+  seedStateMachineFromPersistence,
   DEFAULT_WATCHDOG_CONFIG,
   type WatchdogConfig,
   type StateMachine,
   type TickObservation,
+  type WatchdogAction,
 } from './lib/argusWatchdogLogic';
+import {
+  readMaintenanceSignal,
+  type MaintenanceSignal,
+} from './lib/watchdogMaintenanceState';
+import {
+  loadWatchdogState,
+  saveWatchdogState,
+  resolveWatchdogStatePath,
+} from './lib/watchdogStateStore';
+import {
+  buildRestartSpawnSpec,
+  assertRestartSpecNeverResumesTrading,
+  shouldAttemptEngineSpawn,
+} from './lib/argusWatchdogActions';
 
 const ROOT = join(dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..');
 const SESSION_PATH = join(ROOT, 'data', '.argus_runtime_session.json');
+const MAINTENANCE_PATH = process.env.ARGUS_MAINTENANCE_STATE_PATH?.trim()
+  || join(ROOT, 'data', '.argus_maintenance_state.json');
 const LOG_PATH = join(ROOT, 'data', 'logs', 'watchdog.log');
 const WATCHDOG_HEARTBEAT_PATH = join(ROOT, 'data', 'logs', '.argus_watchdog_heartbeat.json');
+const WATCHDOG_STATE_PATH = resolveWatchdogStatePath();
 const BASE_URL = process.env.ARGUS_CLI_BASE_URL || process.env.BASE_URL || 'http://127.0.0.1:3000';
 
 function numEnv(name: string, fallback: number): number {
@@ -79,12 +115,18 @@ function numEnv(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+// Production thresholds come from config/watchdog.json (AGENTS.md hard rule); env vars override.
 const config: WatchdogConfig = {
   heartbeatStaleMs: numEnv('ARGUS_WATCHDOG_HEARTBEAT_STALE_MS', DEFAULT_WATCHDOG_CONFIG.heartbeatStaleMs),
   confirmTicks: numEnv('ARGUS_WATCHDOG_CONFIRM_TICKS', DEFAULT_WATCHDOG_CONFIG.confirmTicks),
   frozenConfirmTicks: numEnv('ARGUS_WATCHDOG_FROZEN_CONFIRM_TICKS', DEFAULT_WATCHDOG_CONFIG.frozenConfirmTicks),
   maxRestarts: numEnv('ARGUS_WATCHDOG_MAX_RESTARTS', DEFAULT_WATCHDOG_CONFIG.maxRestarts),
   restartWindowMs: numEnv('ARGUS_WATCHDOG_RESTART_WINDOW_MS', DEFAULT_WATCHDOG_CONFIG.restartWindowMs),
+  maintenanceFreshnessMs: numEnv('ARGUS_WATCHDOG_MAINTENANCE_FRESHNESS_MS', DEFAULT_WATCHDOG_CONFIG.maintenanceFreshnessMs),
+  maintenanceDeferralMaxMs: numEnv('ARGUS_WATCHDOG_MAINTENANCE_DEFERRAL_MAX_MS', DEFAULT_WATCHDOG_CONFIG.maintenanceDeferralMaxMs),
+  startupGraceMs: numEnv('ARGUS_WATCHDOG_STARTUP_GRACE_MS', DEFAULT_WATCHDOG_CONFIG.startupGraceMs),
+  restartCooldownBaseMs: numEnv('ARGUS_WATCHDOG_RESTART_COOLDOWN_BASE_MS', DEFAULT_WATCHDOG_CONFIG.restartCooldownBaseMs),
+  restartCooldownMaxMs: numEnv('ARGUS_WATCHDOG_RESTART_COOLDOWN_MAX_MS', DEFAULT_WATCHDOG_CONFIG.restartCooldownMaxMs),
 };
 const POLL_MS = numEnv('ARGUS_WATCHDOG_POLL_MS', 30_000);
 
@@ -99,11 +141,38 @@ function log(line: string): void {
   }
 }
 
+/** Structured decision line for every watchdog tick: check -> verdict -> action -> reason, plus
+ *  the diagnostic counters. Greppable as WATCHDOG_DECISION. */
+function logDecision(
+  action: WatchdogAction,
+  reason: string,
+  machine: StateMachine,
+  obs: TickObservation,
+  maintenance: MaintenanceSignal | null,
+): void {
+  const recentRestarts = machine.restartTimestamps.filter((t) => Date.now() - t <= config.restartWindowMs);
+  log(`WATCHDOG_DECISION ${JSON.stringify({
+    action,
+    reason,
+    state: machine.state,
+    pidAlive: obs.pidAlive,
+    healthOk: obs.healthOk,
+    heartbeatAgeMs: obs.heartbeatAgeMs,
+    cleanShutdown: obs.cleanShutdown,
+    maintenance: maintenance ? maintenance.kind : null,
+    consecutiveBadTicks: machine.consecutiveBadTicks,
+    restartsInWindow: recentRestarts.length,
+    maxRestarts: config.maxRestarts,
+    lastRestartAt: machine.lastRestartAtMs !== null ? new Date(machine.lastRestartAtMs).toISOString() : null,
+    stormLockout: machine.state === 'STORM_LOCKOUT',
+  })}`);
+}
+
 /** Best-effort, OS-native, dependency-free "push" alert to whoever is logged into this console -
  *  msg.exe ships with Windows and does not require any extra module. Silently no-ops on any
  *  failure (missing binary, non-interactive session, non-Windows) - an alert mechanism must never
  *  itself become a new failure mode. This does not replace real pager/notification integration for
- *  a production deployment; it is the smallest addition that makes RESTART_BUDGET_EXHAUSTED more
+ *  a production deployment; it is the smallest addition that makes STORM_LOCKOUT more
  *  visible than a log line alone, for a single-operator local desktop deployment.
  */
 function alertOperator(message: string): void {
@@ -117,6 +186,7 @@ function alertOperator(message: string): void {
 
 interface SessionFileShape {
   lastHeartbeatAt?: string;
+  startedAt?: string;
   cleanShutdown?: boolean;
 }
 
@@ -131,7 +201,7 @@ function readSessionFile(): SessionFileShape | null {
   }
 }
 
-function writeWatchdogHeartbeat(state: string): void {
+function writeWatchdogHeartbeat(machine: StateMachine, lastAction: WatchdogAction): void {
   // Mechanical backstop (2026-09-15, P1) - see productionRuntimePathGuard.ts's own header for the
   // real incident history this class of check closes (a different file, same shape of gap, found
   // live this same day). Deliberately called BEFORE the try/catch below, not inside it - that
@@ -141,16 +211,38 @@ function writeWatchdogHeartbeat(state: string): void {
   // never imported - the isMainModule guard at the bottom of this file is the primary fix for
   // that; this call is defense in depth in case that ever changes.
   assertNotProductionRuntimePath(WATCHDOG_HEARTBEAT_PATH, 'watchdog heartbeat file', join(ROOT, 'data', 'logs', '.argus_watchdog_heartbeat.json'));
+  const recentRestarts = machine.restartTimestamps.filter((t) => Date.now() - t <= config.restartWindowMs);
   try {
     mkdirSync(dirname(WATCHDOG_HEARTBEAT_PATH), { recursive: true });
     writeFileSync(WATCHDOG_HEARTBEAT_PATH, JSON.stringify({
       pid: process.pid,
       lastTickAt: new Date().toISOString(),
-      state,
+      state: machine.state,
+      lastAction,
+      consecutiveBadTicks: machine.consecutiveBadTicks,
+      restartsInWindow: recentRestarts.length,
+      maxRestarts: config.maxRestarts,
+      lastRestartAt: machine.lastRestartAtMs !== null ? new Date(machine.lastRestartAtMs).toISOString() : null,
+      stormLockout: machine.state === 'STORM_LOCKOUT',
+      lockoutReason: machine.lockoutReason,
     }, null, 2), 'utf8');
   } catch {
     /* best-effort - a failure here must not crash the watchdog's real job */
   }
+}
+
+/** Persist restart history + storm lockout every tick (best-effort). This is what makes the
+ *  storm lockout survive watchdog restarts. */
+function persistWatchdogState(machine: StateMachine): void {
+  assertNotProductionRuntimePath(WATCHDOG_STATE_PATH, 'watchdog state file', join(ROOT, 'data', '.argus_watchdog_state.json'));
+  saveWatchdogState({
+    schemaVersion: 1,
+    restartTimestamps: machine.restartTimestamps,
+    stormLockout: machine.state === 'STORM_LOCKOUT',
+    stormLockoutReason: machine.lockoutReason || undefined,
+    stormLockoutAt: machine.state === 'STORM_LOCKOUT' ? new Date().toISOString() : undefined,
+    updatedAt: new Date().toISOString(),
+  }, WATCHDOG_STATE_PATH);
 }
 
 async function checkHealth(): Promise<boolean> {
@@ -169,7 +261,7 @@ async function checkHealth(): Promise<boolean> {
   }
 }
 
-async function observe(): Promise<TickObservation> {
+async function observe(): Promise<{ obs: TickObservation; maintenance: MaintenanceSignal | null }> {
   const pid = readEnginePid();
   const pidAlive = pid !== null && isPidAlive(pid);
   const healthOk = await checkHealth();
@@ -179,14 +271,50 @@ async function observe(): Promise<TickObservation> {
     const t = Date.parse(session.lastHeartbeatAt);
     heartbeatAgeMs = Number.isFinite(t) ? Date.now() - t : null;
   }
+  let engineStartedAtMs: number | null = null;
+  if (session?.startedAt) {
+    const t = Date.parse(session.startedAt);
+    engineStartedAtMs = Number.isFinite(t) ? t : null;
+  }
   const cleanShutdown = typeof session?.cleanShutdown === 'boolean' ? session.cleanShutdown : null;
-  return { pidAlive, healthOk, heartbeatAgeMs, cleanShutdown };
+  // Maintenance signal: fresh, explicit "known maintenance is running" claim from the engine.
+  // Missing/stale/malformed -> null -> the conservative escalation path applies unchanged.
+  const maintenance = readMaintenanceSignal(MAINTENANCE_PATH, Date.now(), config.maintenanceFreshnessMs);
+  const obs: TickObservation = {
+    pidAlive,
+    healthOk,
+    heartbeatAgeMs,
+    cleanShutdown,
+    maintenance: maintenance ? { active: true, kind: maintenance.kind } : null,
+    engineStartedAtMs,
+  };
+  return { obs, maintenance };
 }
 
+/**
+ * Runs `argus-cli start` WITHOUT --enable-trading. Two safety gates before spawning:
+ *  1. assertRestartSpecNeverResumesTrading - a watchdog-initiated restart must never clear
+ *     TRADING_PAUSED, release a safety pause, resolve a broker mismatch, or change thresholds.
+ *  2. shouldAttemptEngineSpawn - never start a second engine while one holds the atomic
+ *     startup claim (a live PID on the pid file means the force-kill didn't take effect, or
+ *     the process is mid-shutdown; `argus-cli start` itself would also refuse).
+ */
 function attemptRestart(reasonLabel: string): void {
-  log(`${reasonLabel} -> running \`argus-cli start\`. This does NOT resume trading - the engine will boot to TRADING_PAUSED as always; an operator must explicitly resume.`);
-  const result = spawnSync(process.execPath, ['--use-system-ca', join(ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs'), join(ROOT, 'scripts', 'argus-cli.ts'), 'start'], {
-    cwd: ROOT,
+  log(`${reasonLabel} -> running \`argus-cli start\` (WITHOUT --enable-trading). This does NOT resume trading - the engine will boot to TRADING_PAUSED as always; an operator must explicitly resume.`);
+  const spec = buildRestartSpawnSpec(ROOT);
+  try {
+    assertRestartSpecNeverResumesTrading(spec);
+  } catch (e: any) {
+    log(`RESTART REFUSED: ${e?.message || e}`);
+    return;
+  }
+  const gate = shouldAttemptEngineSpawn();
+  if (!gate.ok) {
+    log(`RESTART REFUSED (single-engine claim): ${gate.reason}. Will re-check next tick.`);
+    return;
+  }
+  const result = spawnSync(spec.execPath, spec.args, {
+    cwd: spec.cwd,
     encoding: 'utf8',
     timeout: 180_000,
   });
@@ -216,18 +344,37 @@ function forceKillFrozenProcess(): void {
   }
 }
 
+let lockoutAlertedThisBoot = false;
+
 async function tick(machine: StateMachine): Promise<StateMachine> {
-  const obs = await observe();
-  const { machine: nextMachine, action } = nextState(machine, obs, config, Date.now());
+  const { obs, maintenance } = await observe();
+  const { machine: nextMachine, action, reason } = nextState(machine, obs, config, Date.now());
+
+  logDecision(action, reason, nextMachine, obs, maintenance);
 
   switch (action) {
     case 'NONE':
+      if (nextMachine.state === 'STORM_LOCKOUT' && !lockoutAlertedThisBoot) {
+        lockoutAlertedThisBoot = true;
+        const msg = `CRITICAL: Argus watchdog is in STORM LOCKOUT (${nextMachine.lockoutReason || 'reason not recorded'}). NOT restarting automatically - operator attention required. Lift only after investigation with: argus watchdog-clear-lockout`;
+        log(msg);
+        alertOperator(msg);
+      }
       break;
     case 'RESUMED_HEALTHY':
       log('Recovered -> HEALTHY.');
       break;
     case 'LOG_SUSPECT':
       log(`SUSPECT (consecutiveBadTicks=${nextMachine.consecutiveBadTicks}/${obs.pidAlive ? config.frozenConfirmTicks : config.confirmTicks}) pidAlive=${obs.pidAlive} healthOk=${obs.healthOk} heartbeatAgeMs=${obs.heartbeatAgeMs}`);
+      break;
+    case 'MAINTENANCE_DEFERRED':
+      log(`Maintenance in progress (${maintenance?.kind || 'unknown'}) - deferring frozen/dead judgment. Stale heartbeat is expected during maintenance, not evidence of a freeze.`);
+      break;
+    case 'STARTUP_GRACE':
+      log('Engine recently (re)started - deferring judgment until the startup grace window passes.');
+      break;
+    case 'COOLDOWN_WAIT':
+      log('Restart needed but inside exponential-backoff cooldown - waiting rather than storm-restarting.');
       break;
     case 'RESTART':
       attemptRestart('CONFIRMED_DEAD (unexpected, cleanShutdown=false or unreadable)');
@@ -236,10 +383,11 @@ async function tick(machine: StateMachine): Promise<StateMachine> {
       forceKillFrozenProcess();
       attemptRestart('FROZEN_CONFIRMED');
       break;
-    case 'ALERT_HALTED': {
-      const msg = `CRITICAL: Argus watchdog restart budget exhausted (${config.maxRestarts} restarts within ${config.restartWindowMs}ms). NOT retrying automatically - operator attention required. Restart this watchdog process to reset the budget once the underlying issue is understood.`;
+    case 'STORM_LOCKOUT': {
+      const msg = `CRITICAL: ${reason} Operator attention required. Lockout persisted to disk - restarting this watchdog will NOT clear it. Lift only after investigation with: argus watchdog-clear-lockout`;
       log(msg);
       alertOperator(msg);
+      lockoutAlertedThisBoot = true;
       break;
     }
   }
@@ -248,14 +396,27 @@ async function tick(machine: StateMachine): Promise<StateMachine> {
     log('Engine appears to have been stopped intentionally (cleanShutdown=true). Not restarting. Will resume watching in case it is started again.');
   }
 
-  writeWatchdogHeartbeat(nextMachine.state);
+  persistWatchdogState(nextMachine);
+  writeWatchdogHeartbeat(nextMachine, action);
   return nextMachine;
 }
 
 async function main(): Promise<void> {
   log(`Argus liveness watchdog starting. pollMs=${POLL_MS} config=${JSON.stringify(config)} baseUrl=${BASE_URL}`);
-  let machine = initialStateMachine();
-  writeWatchdogHeartbeat(machine.state);
+  const persisted = loadWatchdogState(WATCHDOG_STATE_PATH);
+  let machine: StateMachine;
+  if (persisted.stormLockout) {
+    machine = seedStateMachineFromPersistence(persisted);
+    log(`STORM LOCKOUT restored from persisted state (${persisted.stormLockoutReason || 'no reason recorded'} at ${persisted.stormLockoutAt || 'unknown time'}). NOT restarting automatically. Lift only after investigation with: argus watchdog-clear-lockout`);
+  } else {
+    machine = initialStateMachine();
+    machine.restartTimestamps = persisted.restartTimestamps;
+    if (persisted.restartTimestamps.length > 0) {
+      machine.lastRestartAtMs = persisted.restartTimestamps[persisted.restartTimestamps.length - 1];
+      log(`Restored ${persisted.restartTimestamps.length} prior restart timestamp(s) from persisted state - the storm budget survives watchdog restarts.`);
+    }
+  }
+  writeWatchdogHeartbeat(machine, 'NONE');
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {

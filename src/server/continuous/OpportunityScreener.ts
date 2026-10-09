@@ -23,11 +23,40 @@ export interface ScreenerTickResult {
 
 const priceHistory: Record<string, number[]> = {};
 const lastEvaluatedAt: Record<string, number> = {};
+/** Last accepted tick time per symbol - drives the idle eviction below. */
+const lastTickAtMs: Record<string, number> = {};
+/**
+ * 2026-10-08 leak-hunt: priceHistory/lastEvaluatedAt were keyed per symbol with no eviction -
+ * every distinct symbol ever ticked stayed forever (the per-symbol arrays were already capped
+ * at screenerMinHistoryBars, but the KEY SET grew without bound). MARKET_DATA only ticks
+ * subscribed symbols (capped by maxActiveSubscriptions), so a 1000-symbol cap is ~10x headroom:
+ * live behavior is untouched, and an evicted-then-returning symbol simply re-warms exactly
+ * like a fresh symbol. Engineering bound, not an operational threshold.
+ */
+const MAX_TRACKED_SYMBOLS = 1000;
 let listening = false;
 
 export function resetOpportunityScreenerForTests(): void {
   for (const k of Object.keys(priceHistory)) delete priceHistory[k];
   for (const k of Object.keys(lastEvaluatedAt)) delete lastEvaluatedAt[k];
+  for (const k of Object.keys(lastTickAtMs)) delete lastTickAtMs[k];
+}
+
+/** Test-only: number of distinct symbols currently holding screener history (leak-hunt). */
+export function getOpportunityScreenerTrackedSymbolCountForTests(): number {
+  return Object.keys(priceHistory).length;
+}
+
+/** Evict least-recently-ticked symbols down to MAX_TRACKED_SYMBOLS. */
+function evictIdleScreenerSymbols(): void {
+  const keys = Object.keys(priceHistory);
+  if (keys.length <= MAX_TRACKED_SYMBOLS) return;
+  const ordered = keys.sort((a, b) => (lastTickAtMs[a] ?? 0) - (lastTickAtMs[b] ?? 0));
+  for (const k of ordered.slice(0, keys.length - MAX_TRACKED_SYMBOLS)) {
+    delete priceHistory[k];
+    delete lastEvaluatedAt[k];
+    delete lastTickAtMs[k];
+  }
 }
 
 function clamp01(n: number): number {

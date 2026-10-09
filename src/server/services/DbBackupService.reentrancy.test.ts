@@ -15,7 +15,7 @@ describe('DbBackupService reentrancy guard', () => {
 
     let resolveFirst: () => void = () => {};
     const gate = new Promise<void>((resolve) => { resolveFirst = resolve; });
-    const runBackupSpy = vi.spyOn(svc, 'runBackup').mockImplementation(async () => { await gate; return "isolated-backup"; });
+    const runBackupSpy = vi.spyOn(svc, 'runBackup').mockImplementation(async () => { await gate; return { outcome: 'completed', destination: 'isolated-backup', sha256: 'x', bytesCopied: 1, durationMs: 1 }; });
 
     const guard = (svc as any).backupGuard;
     const first = guard.run(() => svc.runBackup());

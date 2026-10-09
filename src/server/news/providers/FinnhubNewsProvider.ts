@@ -18,7 +18,7 @@ export class FinnhubNewsProvider implements NewsProviderPlugin {
 
     try {
       const res = await fetch(`${networkEndpoints.marketData.finnhubBaseUrl}/news?category=general&token=${process.env.FINNHUB_API_KEY}`);
-      if (!res.ok) return [];
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
       const data = await res.json();
       
       return data.slice(0, 10).map((item: any) => ({
@@ -33,7 +33,9 @@ export class FinnhubNewsProvider implements NewsProviderPlugin {
       }));
     } catch (e) {
       console.error('[FinnhubNewsProvider] Error fetching news', e);
-      return [];
+      // 2026-10-08 defect hunt (news D4): rethrow so the manager records the failure
+      // instead of reporting a dead feed as "Healthy" with 0 articles.
+      throw e;
     }
   }
 }

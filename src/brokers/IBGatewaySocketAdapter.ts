@@ -235,8 +235,10 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
   }
 
   async placeOrder(order: Partial<Order>): Promise<Order> {
-    if (!order.symbol || !order.side || !order.quantity) {
-      throw new Error('placeOrder requires symbol, side, and quantity.');
+    // 2026-10-08 defect hunt (D5): the old falsy check (!order.quantity) rejected 0/NaN but
+    // let Infinity and negative quantities through to the socket. Coinbase-style finite > 0 check.
+    if (!order.symbol || !order.side || !Number.isFinite(order.quantity) || (order.quantity as number) <= 0) {
+      throw new Error('placeOrder requires symbol, side, and a finite quantity > 0.');
     }
     if (!this.session.isConnected()) {
       throw new Error('IBKR Gateway socket is not connected. Start IB Gateway Desktop on port 4002 (paper).');

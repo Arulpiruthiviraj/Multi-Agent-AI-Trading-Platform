@@ -22,6 +22,11 @@ import {
   writeWatchdogPid,
 } from '../src/server/app/watchdogPid';
 import {
+  clearStormLockout,
+  loadWatchdogState,
+  resolveWatchdogStatePath,
+} from './lib/watchdogStateStore';
+import {
   buildCliAuthHeaders,
   clearSessionFile,
   collectSetCookieHeaders,
@@ -969,7 +974,8 @@ export const COMMAND_HELP: Record<string, string> = {
   'watchdog-start': 'Usage: argus watchdog-start\nStart the detached auto-restart supervisor.',
   'watchdog-stop': 'Usage: argus watchdog-stop\nStop the watchdog supervisor.',
   'watchdog-restart': 'Usage: argus watchdog-restart\nRestart the watchdog supervisor.',
-  'watchdog-status': 'Usage: argus watchdog-status\nShow whether the watchdog is running and its PID.',
+  'watchdog-status': 'Usage: argus watchdog-status\nShow whether the watchdog is running and its PID, plus storm-lockout state and restart-budget counters.',
+  'watchdog-clear-lockout': 'Usage: argus watchdog-clear-lockout\nEXPLICIT OPERATOR ACTION: lift a watchdog storm lockout after investigating its cause. Does NOT start the engine or resume trading.',
   'status': 'Usage: argus status [--pretty]\nEngine runtime status (JSON, or beautiful colorful output with --pretty).',
   'dashboard': 'Usage: argus dashboard [--pretty]\nBeautiful live trading dashboard: state, mode, P&L, positions, readiness. Always pretty; --pretty forces colors even when piped.',
   'tui': 'Usage: argus tui\nOptional interactive mainframe-style terminal UI (keyboard: 1-7 pages, r refresh, ? help, q quit). Read-only; additively layered over existing APIs.',
@@ -1024,6 +1030,7 @@ export const COMMAND_HELP: Record<string, string> = {
   'strategy-scorecard': 'Usage: argus strategy-scorecard\nStrategy scorecard.',
   'pipeline-ready': 'Usage: argus pipeline-ready\nPipeline readiness check.',
   'readiness': 'Usage: argus readiness\nPre-session checklist: per-check PASS/WARN/FAIL with READY / READY_WITH_WARNINGS / NOT_READY verdict. Read-only; AI checks are advisory only.',
+  'quant-readiness': 'Usage: argus quant-readiness [--json]\nProduction-state diagnostic: per-strategy authorization verdicts (AUTHORIZED_QUANT_POLICY / REQUIRES_CONSENSUS / NOT_ELIGIBLE / NOT_AUTHORIZED) computed by the real resolver against the live runtime DB. Read-only; requires the engine API.',
   'session-checkpoint': 'Usage: argus session-checkpoint\nEarly-warning inactivity check: classifies the session HEALTHY_ZERO_TRADE / SUSPICIOUS_ZERO_TRADE (or TRADING). Run at 09:35/10:00/11:00/13:00/15:00 ET during PAPER sessions.',
   'session-report': 'Usage: argus session-report\nSession report.',
   'research': 'Usage: argus research <subcommand> [args]\nResearch intelligence (advisory only, never a trade). Run `argus research --help` for subcommands.',
@@ -1357,7 +1364,47 @@ const commands: Record<string, () => Promise<void>> = {
   },
   async 'watchdog-status'() {
     const running = isWatchdogProcessRunning();
-    console.log(JSON.stringify({ ok: true, running, pid: running ? readWatchdogPid() : null }, null, 2));
+    const statePath = resolveWatchdogStatePath();
+    const persisted = loadWatchdogState(statePath);
+    const nowMs = Date.now();
+    const restartWindowMs = 3_600_000; // mirrors config/watchdog.json default; status is diagnostic only
+    const restartsInWindow = persisted.restartTimestamps.filter((t) => nowMs - t <= restartWindowMs);
+    console.log(JSON.stringify({
+      ok: true,
+      running,
+      pid: running ? readWatchdogPid() : null,
+      stormLockout: persisted.stormLockout,
+      stormLockoutReason: persisted.stormLockoutReason || null,
+      stormLockoutAt: persisted.stormLockoutAt || null,
+      restartsInWindow: restartsInWindow.length,
+      lastRestartAt: persisted.restartTimestamps.length > 0
+        ? new Date(persisted.restartTimestamps[persisted.restartTimestamps.length - 1]).toISOString()
+        : null,
+    }, null, 2));
+    if (persisted.stormLockout) {
+      console.log('STORM LOCKOUT ACTIVE - the watchdog will not auto-restart the engine. Investigate, then run: argus watchdog-clear-lockout');
+    }
+  },
+  async 'watchdog-clear-lockout'() {
+    // EXPLICIT OPERATOR ACTION: lifting a storm lockout is never automatic and never implied by
+    // any other command (start/stop/restart do not touch it). This only clears the lockout flag;
+    // it does not start the engine and does not resume trading.
+    const statePath = resolveWatchdogStatePath();
+    const before = loadWatchdogState(statePath);
+    if (!before.stormLockout) {
+      console.log(JSON.stringify({ ok: true, message: 'No storm lockout is active - nothing to clear.' }, null, 2));
+      return;
+    }
+    const cleared = clearStormLockout(statePath);
+    console.log(JSON.stringify({
+      ok: cleared,
+      message: cleared
+        ? 'Storm lockout cleared. The watchdog may now restart the engine if it is dead - investigate the original cause first. This did NOT start the engine or resume trading.'
+        : 'Failed to clear the storm lockout state file - check filesystem permissions.',
+      previousReason: before.stormLockoutReason || null,
+      previousLockoutAt: before.stormLockoutAt || null,
+    }, null, 2));
+    if (!cleared) process.exit(1);
   },
   async status() {
     const data = await fetchJson('/api/v2/runtime/status');
@@ -2099,6 +2146,61 @@ const commands: Record<string, () => Promise<void>> = {
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
     console.log(text);
   },
+  async 'quant-readiness'() {
+    // 2026-10-08 code-only defect repair (defect #1): production-state diagnostic — what would
+    // the authorization layer decide for each canonical strategy, against the REAL runtime DB,
+    // right now? Read-only (never writes/promotes lifecycle state, never arms LIVE). Requires
+    // the engine API to be reachable; the verdicts come from the production resolver, not a
+    // forked copy, via GET /api/v2/diagnostics/quant-readiness. --json prints pure JSON.
+    const asJson = process.argv.slice(3).includes('--json');
+    let report: any;
+    try {
+      report = await fetchJson('/api/v2/diagnostics/quant-readiness');
+    } catch (e: any) {
+      console.error('quant-readiness: engine API unreachable — is the engine running?');
+      console.error(`  (${e?.message || e})`);
+      console.error('This diagnostic reads the live runtime DB through the engine; it cannot run against a stopped engine.');
+      process.exit(1);
+    }
+    if (!report?.ok) {
+      console.error(`quant-readiness: engine returned an error: ${report?.error || 'unknown'}`);
+      process.exit(1);
+    }
+    if (asJson) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+    const rows: Array<{ strategyId: string; lifecycleRecordExists: boolean; lifecycleStatus: string | null; authority: string; reason: string }> =
+      report.strategies || [];
+    console.log('QUANT READINESS — per-strategy authorization verdicts (live runtime DB)');
+    console.log(`generated: ${report.generatedAt}   paperOnlyEnforced: ${report.paperOnlyEnforced}   quantPolicyEnabled: ${report.quantPolicyEnabled}`);
+    console.log('');
+    const hdr = `${'STRATEGY'.padEnd(24)}${'LIFECYCLE'.padEnd(22)}${'AUTHORITY'.padEnd(24)}REASON`;
+    console.log(hdr);
+    console.log('-'.repeat(hdr.length));
+    for (const r of rows) {
+      const lifecycle = r.lifecycleRecordExists ? String(r.lifecycleStatus) : '(no record)';
+      console.log(
+        `${String(r.strategyId).padEnd(24)}${lifecycle.padEnd(22)}${String(r.authority).padEnd(24)}${r.reason}`,
+      );
+    }
+    console.log('');
+    const s = report.summary || {};
+    console.log(
+      `summary: ${s.total} strategies | AUTHORIZED_QUANT_POLICY=${s.authorizedQuantPolicy} ` +
+      `REQUIRES_CONSENSUS=${s.requiresConsensus} NOT_ELIGIBLE=${s.notEligible} ` +
+      `NOT_AUTHORIZED(missing lifecycle)=${s.notAuthorizedMissingLifecycle}`,
+    );
+    if (s.notAuthorizedMissingLifecycle > 0) {
+      console.log('ACTION: strategies with no lifecycle record are terminally NOT_AUTHORIZED — record an explicit');
+      console.log('lifecycle decision (e.g. UNTESTED baseline) via recordStrategyLifecycleTransition to restore routing.');
+    }
+    if (s.quantPolicyEligibleIds && s.quantPolicyEligibleIds.length > 0) {
+      console.log(`quant-policy eligible now: ${s.quantPolicyEligibleIds.join(', ')}`);
+    } else {
+      console.log('quant-policy eligible now: none — the quant-first path is dormant (all ideas take the consensus path).');
+    }
+  },
   async 'session-report'() {
     // Pre-market/market-open operator observability (2026-08-24 readiness audit, Part 10) - real
     // counts only, scoped to the current trading day, organic PAPER/LIVE always reported separately
@@ -2758,8 +2860,8 @@ const commands: Record<string, () => Promise<void>> = {
     console.log('');
     const groups: Array<[string, string[]]> = [
       ['System / lifecycle', ['status', 'dashboard', 'tui', 'ui', 'health', 'start', 'stop', 'restart', 'wait-ready', 'config']],
-      ['Watchdog (detached auto-restart supervisor)', ['watchdog-start', 'watchdog-stop', 'watchdog-restart', 'watchdog-status']],
-      ['Trading state / portfolio', ['resume', 'pause', 'ready', 'positions', 'portfolio', 'brokers', 'set-broker', 'paper-profile', 'readiness', 'session-checkpoint']],
+      ['Watchdog (detached auto-restart supervisor)', ['watchdog-start', 'watchdog-stop', 'watchdog-restart', 'watchdog-status', 'watchdog-clear-lockout']],
+      ['Trading state / portfolio', ['resume', 'pause', 'ready', 'positions', 'portfolio', 'brokers', 'set-broker', 'paper-profile', 'readiness', 'quant-readiness', 'session-checkpoint']],
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'premarket-focus', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],

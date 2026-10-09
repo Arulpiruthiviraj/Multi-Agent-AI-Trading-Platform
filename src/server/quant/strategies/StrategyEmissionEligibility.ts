@@ -30,6 +30,18 @@
  *   RETIRED            exposure REMOVED for negative evidence - background evaluation continues.
  *   ROLLED_BACK        a prior RETIRED/DEGRADED decision was explicitly reversed - eligible again.
  *
+ * EMISSION ELIGIBILITY ≠ EXECUTION AUTHORITY (2026-10-08, defect #1). This module decides
+ * only EMISSION ELIGIBILITY - which strategies may have their evaluated ideas emitted into
+ * ChiefTrader intake (the "real selection" pool bestStrategyIdea() picks from). Every
+ * "Eligible" label above means exactly that and nothing more. In particular,
+ * ACTIVE_EXPLORATION's "bounded, monitored real exposure while evidence accumulates" is
+ * exposure via the normal, unchanged consensus intake - the strategy's ideas still face
+ * debate, the 0.75 consensus bar, and every downstream gate; it is NOT AI-independent
+ * execution authority. EXECUTION AUTHORITY ("may skip consensus via QuantExecutionPolicy")
+ * is decided solely by QuantStrategyAuthorization.resolveQuantStrategyAuthorization(),
+ * which requires an explicit VALIDATED/CHAMPION lifecycle decision AND a real lifecycle
+ * record in this table. Never read "Eligible" here as quant-policy authorization.
+ *
  * Only RETIRED and DEGRADED remove real-selection exposure. Every other status (including the
  * UNTESTED default when no row exists at all) leaves a strategy exactly as eligible as it always
  * was - this module can only ever REMOVE exposure via an explicit, evidence-backed decision, never
@@ -38,7 +50,7 @@
  */
 import { db } from '../../db';
 import { learningVersions } from '../../db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, sql } from 'drizzle-orm';
 
 export type StrategyLifecycleStatus =
   | 'UNTESTED'
@@ -103,20 +115,44 @@ export async function recordStrategyLifecycleTransition(
   return id;
 }
 
-/** Most recent decision for this strategy - 'UNTESTED' when no row exists yet (today's baseline). */
+/** Most recent decision for this strategy - 'UNTESTED' when no row exists yet (today's baseline).
+ * 2026-10-08 defect hunt (P2): tie-break is (createdAt DESC, rowid DESC). createdAt is
+ * millisecond ISO text — two transitions recorded in the same millisecond would otherwise
+ * leave the .limit(1) winner to SQLite's whim. rowid is monotonic for append-only inserts,
+ * so the later-written row wins deterministically. History is append-only; nothing is
+ * rewritten, so rowid order == insertion order. */
 export async function getStrategyLifecycleStatus(strategyId: string): Promise<StrategyLifecycleStatus> {
   const rows = await db.select().from(learningVersions)
     .where(eq(learningVersions.versionType, strategyEligibilityVersionType(strategyId)))
-    .orderBy(desc(learningVersions.createdAt))
+    .orderBy(desc(learningVersions.createdAt), desc(sql`"learning_versions"."rowid"`))
     .limit(1);
   return (rows[0]?.status as StrategyLifecycleStatus | undefined) ?? 'UNTESTED';
 }
 
-/** Full, timestamped, auditable history of lifecycle decisions for this strategy - never mutated, never overwritten. */
+/**
+ * Read-only existence check: true when at least one lifecycle decision row exists for this
+ * strategy in learning_versions. NEVER creates a row. This is the distinction the
+ * authorization layer needs between "an explicit decision was recorded" (even UNTESTED)
+ * and "no decision was ever recorded": getStrategyLifecycleStatus() cannot make that
+ * distinction - it returns 'UNTESTED' for both, which would let missing state silently
+ * inherit the UNTESTED default's semantics. A genuinely absent record is missing state,
+ * and missing state must never gain privilege (see QuantStrategyAuthorization's
+ * NOT_AUTHORIZED / NO_LIFECYCLE_RECORD contract).
+ */
+export async function hasStrategyLifecycleRecord(strategyId: string): Promise<boolean> {
+  const rows = await db.select({ id: learningVersions.id }).from(learningVersions)
+    .where(eq(learningVersions.versionType, strategyEligibilityVersionType(strategyId)))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/** Full, timestamped, auditable history of lifecycle decisions for this strategy - never mutated, never overwritten.
+ * Same (createdAt DESC, rowid DESC) tie-break as getStrategyLifecycleStatus: same-millisecond
+ * transitions keep a deterministic newest-first order. */
 export async function getStrategyLifecycleHistory(strategyId: string): Promise<StrategyLifecycleTransition[]> {
   const rows = await db.select().from(learningVersions)
     .where(eq(learningVersions.versionType, strategyEligibilityVersionType(strategyId)))
-    .orderBy(desc(learningVersions.createdAt));
+    .orderBy(desc(learningVersions.createdAt), desc(sql`"learning_versions"."rowid"`));
   return rows.map((r) => ({
     id: r.id,
     strategyId,

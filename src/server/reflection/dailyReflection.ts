@@ -28,6 +28,7 @@ import {
   type PrimaryFate,
 } from './coverageReconciler';
 import { logErrorSafely } from '../core/SecretRedaction';
+import { weekStartMonday, computeAndPersistWeeklyDigest } from './weeklyDigest';
 import { callOutcomeAudits as runOutcomeAudits } from './outcomeAudits';
 
 export type ReflectionCohortStatus = 'OK' | 'INSUFFICIENT_EVIDENCE';
@@ -64,14 +65,22 @@ export async function callOutcomeAudits(tradingDate: string): Promise<void> {
 /**
  * Hook point for workstream K (session metrics / weekly digest).
  *
- * TODO(workstream K): wire this to src/server/reflection/weeklyDigest.ts
- * (computeAndPersistWeeklyDigest) - the multi-day blind-spot rollup that reads
- * mover_coverage alongside postmarket_reports. Called by runDailyReflection()
- * after persistence so the wiring exists when K's aggregation is ready to
- * consume a freshly reconciled date.
+ * Wired 2026-10-08 (docs-feature scan): weeklyDigest.ts's aggregation is
+ * complete and tested, so this hook now triggers computeAndPersistWeeklyDigest
+ * for the Monday-start week containing tradingDate. The digest write is
+ * idempotent (onConflictDoUpdate on weekStart) and the caller contains sync
+ * failures; async rejections are logged here. Diagnostic-only: never touches
+ * the trading spine.
  */
-export function computeSessionMetrics(_tradingDate: string): void {
-  // No-op until workstream K wires the weekly digest consumption.
+export function computeSessionMetrics(tradingDate: string): void {
+  try {
+    const weekStart = weekStartMonday(tradingDate);
+    void computeAndPersistWeeklyDigest(weekStart).catch((e) =>
+      logErrorSafely('[dailyReflection] weekly digest failed', e),
+    );
+  } catch (e) {
+    logErrorSafely('[dailyReflection] computeSessionMetrics failed', e);
+  }
 }
 
 function toRow(v: CoverageVerdict, tradingDate: string) {

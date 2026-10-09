@@ -16,6 +16,7 @@ import { db, sqliteDb } from '../db';
 import * as schema from '../db/schema';
 import { reconcilePeakEquityIntegrity } from '../engines/PeakEquityIntegrity';
 import { isPositiveFiniteMoney } from '../engines/AccountEquity';
+import { publishMaintenanceState } from './maintenanceState';
 
 export interface ArgusCoreBootResult {
   settingsRow: typeof schema.settings.$inferSelect | null;
@@ -110,6 +111,15 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
   if (restartSafety.shouldForcePause) {
     await tradingEngine.setTradingState('TRADING_PAUSED', { reason: restartSafety.reason, actor: 'RestartSafetyGuard' });
   }
+
+  // 2026-10-08 defect hunt (P2-W2): gracefulShutdown publishes {shutdownInProgress: true}
+  // and nothing cleared it on boot. On a fast watchdog-initiated restart the file was still
+  // fresh, so the watchdog read an active "shutdown" signal while the engine was actually
+  // booting - deferring judgment up to 30 min (maintenance deferral) instead of the intended
+  // 180 s startup grace. Clear it here, before this process writes its own session marker.
+  try {
+    publishMaintenanceState({ shutdownInProgress: false });
+  } catch { /* best-effort only - never block boot */ }
 
   beginRuntimeSession();
 

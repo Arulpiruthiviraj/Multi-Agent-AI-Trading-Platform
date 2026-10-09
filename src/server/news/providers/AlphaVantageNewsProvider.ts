@@ -20,7 +20,7 @@ export class AlphaVantageNewsProvider implements NewsProviderPlugin {
 
     try {
       const res = await fetch(`${networkEndpoints.marketData.alphaVantageBaseUrl}?function=NEWS_SENTIMENT&limit=10&apikey=${process.env.ALPHAVANTAGE_API_KEY}`);
-      if (!res.ok) return [];
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
       const data = await res.json();
       
       if (!data.feed) return [];
@@ -41,7 +41,9 @@ export class AlphaVantageNewsProvider implements NewsProviderPlugin {
       // include that URL (Node's undici includes it for some failure causes). Redacted before
       // logging - see SecretRedaction.ts.
       logErrorSafely('[AlphaVantageNewsProvider] Error fetching news', e);
-      return [];
+      // 2026-10-08 defect hunt (news D4): rethrow so the manager records the failure
+      // instead of reporting a dead feed as "Healthy" with 0 articles.
+      throw e;
     }
   }
 }

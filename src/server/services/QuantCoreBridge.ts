@@ -39,6 +39,15 @@ import type { RegimeResult } from '../quant/RegimeEngine';
 const QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED_ENV_VAR = 'QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED';
 const MIN_HISTORY_FOR_PARITY = 26; // matches SymbolState.java's MIN_HISTORY_FOR_INDICATORS
 const PARITY_COMPARE_INTERVAL_MS = 60_000; // per-symbol debounce - never compares every tick
+/** 2026-10-08 defect hunt (P1): staleness bound for the opportunistic per-symbol sweep.
+ *  A symbol idle longer than this has no live use for any of the six maps (see the
+ *  lastTickAtMs field comment). 24h is generous: the safety-net resync runs every
+ *  30min and tick data older than minutes is never acted on. */
+const STALE_SYMBOL_EVICTION_MS = 24 * 60 * 60_000;
+/** Throttle for the sweep itself: at most one full scan per minute (amortized). */
+const STALE_SWEEP_THROTTLE_MS = 60_000;
+/** Kill switch for the opportunistic stale-symbol sweep. */
+const BRIDGE_STALE_SYMBOL_EVICTION_ENABLED = true;
 /** Periodic safety-net resync (docs/audits/ARGUS_JAVA_QUANT_AUTHORITY_ADR_2026-09-10.md §6) - the
  *  gap-triggered resync in onTick() handles the main case (a reported sequence mismatch), but this
  *  catches anything a gap report could in principle miss (e.g. a dropped response whose own
@@ -406,6 +415,21 @@ export class QuantCoreBridgeService {
    *  never suppress one another's debounce window. */
   private readonly lastRegimeParityCompareAt: Record<string, number> = {};
   /**
+   * 2026-10-08 defect hunt (P1): the six per-symbol maps above had NO delete/eviction
+   * anywhere in this file — every distinct ticker ever ticked pinned its entries for
+   * process lifetime (same unbounded-per-symbol-Map class the 2026-10-08 ChiefTrader
+   * leak hunt fixed there). Per-symbol ARRAYS are capped at quantJavaCoreLocalHistoryCap,
+   * but the symbol KEYS were never evicted. Fixed with the same opportunistic sweep
+   * discipline ChiefTraderAgent uses: track last tick per symbol, and on admission
+   * drop symbols idle longer than STALE_SYMBOL_EVICTION_MS. Behavior-preserving by
+   * construction: price/volumeHistory are only read on resync (wholesale-replaced);
+   * an evicted sequenceBySymbol restarts at 0 and Java's sequence-gap check triggers
+   * the designed immediate resync; the throttle timestamps only suppress re-comparison
+   * inside their windows. BRIDGE_STALE_SYMBOL_EVICTION_ENABLED is the kill switch.
+   */
+  private readonly lastTickAtMs: Record<string, number> = {};
+  private lastStaleSweepAtMs = 0;
+  /**
    * 2026-09-11 circuit-breaker domain isolation (real, measured root cause - see the P0 breaker
    * forensic trace this session: institutional/strategy/volume_signal timeouts were found still
    * collaterally blocking healthy institutional/ensemble attempts even after the tick-concurrency
@@ -577,6 +601,19 @@ export class QuantCoreBridgeService {
     if (!this.listening) return;
     eventBus.unsubscribe('MARKET_DATA', this.onMarketData);
     this.listening = false;
+    // 2026-10-08 defect hunt (P1): release per-symbol state on stop — it is fully
+    // rebuildable on restart (sequence gap → immediate resync; histories rewarm from
+    // ticks), so holding it past stop is pure residue.
+    for (const sym of Object.keys(this.lastTickAtMs)) {
+      delete this.lastTickAtMs[sym];
+      delete this.priceHistory[sym];
+      delete this.volumeHistory[sym];
+      delete this.sequenceBySymbol[sym];
+      delete this.lastParityCompareAt[sym];
+      delete this.lastResyncAt[sym];
+      delete this.lastRegimeParityCompareAt[sym];
+    }
+    this.lastStaleSweepAtMs = 0;
   }
 
   /**
@@ -620,6 +657,27 @@ export class QuantCoreBridgeService {
   }
 
   private trackLocalHistory(symbol: string, price: number, volume: number): void {
+    const now = Date.now();
+    this.lastTickAtMs[symbol] = now;
+    // 2026-10-08 defect hunt (P1): opportunistic stale-symbol sweep (amortized —
+    // at most one scan per minute). Drops symbols idle beyond STALE_SYMBOL_EVICTION_MS
+    // from ALL per-symbol maps; see the lastTickAtMs field comment for why this is
+    // behavior-preserving.
+    if (BRIDGE_STALE_SYMBOL_EVICTION_ENABLED && now - this.lastStaleSweepAtMs >= STALE_SWEEP_THROTTLE_MS) {
+      this.lastStaleSweepAtMs = now;
+      const staleBefore = now - STALE_SYMBOL_EVICTION_MS;
+      for (const sym of Object.keys(this.lastTickAtMs)) {
+        if ((this.lastTickAtMs[sym] ?? now) < staleBefore) {
+          delete this.lastTickAtMs[sym];
+          delete this.priceHistory[sym];
+          delete this.volumeHistory[sym];
+          delete this.sequenceBySymbol[sym];
+          delete this.lastParityCompareAt[sym];
+          delete this.lastResyncAt[sym];
+          delete this.lastRegimeParityCompareAt[sym];
+        }
+      }
+    }
     const history = this.priceHistory[symbol] ?? (this.priceHistory[symbol] = []);
     history.push(price);
     // Must track tradingSafety.quantJavaCoreLocalHistoryCap == SymbolState.java's CircularDoubleArray
@@ -1371,6 +1429,18 @@ export class QuantCoreBridgeService {
   }
 
   /**
+   * 2026-10-08 C-F5 (documented, no behavior change): DORMANT / RESERVED. Verified by grep -
+   * this method has ZERO callers anywhere in src/, scripts/, or quant-core-java/ (the only
+   * other "onSignal" hits in the repo are unrelated SIGTERM/SIGINT handlers and Java test
+   * field names). It was built as the translation layer a future Java strategy's live vote
+   * would use to emit TRADE_IDEA_GENERATED (agent 'QuantCoreJava'), but no Java engine calls
+   * it today - Java strategies are all RESEARCH-status, reached only via fetchResearchStrategy()
+   * (a separate request/response-only path this function does not gate). If a future Java
+   * engine is ever wired to call this, it must go through the same explicit operator
+   * enablement + ChiefTrader consensus gates every other vote clears (see the flag check at
+   * the top of this method); wiring it is a deliberate, separately-reviewed decision, not an
+   * implied one.
+   *
    * Phase 3: translate a Java StrategySignal into the same TRADE_IDEA_GENERATED shape every
    * other agent produces. Fails closed (drops the idea, never throws) on any malformed field.
    * No-op entirely unless isLiveIdeaEmissionEnabled() (both flags on).

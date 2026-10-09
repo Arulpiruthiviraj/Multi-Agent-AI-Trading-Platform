@@ -28,9 +28,10 @@ export class NewsClusterEngine {
     finalSymbols: string[]
   ): Promise<ClusterOutcome | null> {
     try {
-      // 1. Insert Article first, clusterId TBD below - onConflictDoNothing is defense-in-depth
-      // for a server restart, where NewsDeduplicator's in-memory id cache resets but these rows
-      // are already durably stored.
+      // 1. Persist the article and its cluster atomically (N-D5, 2026-10-08): article +
+      // cluster update/insert in ONE transaction - onConflictDoNothing on the article is also
+      // defense-in-depth for a server restart, where NewsDeduplicator's in-memory id cache
+      // resets but these rows are already durably stored.
       const articlePublishedMs = Date.parse(article.publishedAt);
 
       // Phase F2 (real event clustering): find an existing cluster this article actually belongs
@@ -65,27 +66,19 @@ export class NewsClusterEngine {
 
       const clusterId = matched ? matched.id : `cluster_${uuidv4()}`;
 
-      const inserted = await db.insert(schema.newsArticles).values({
-        id: article.id,
-        title: article.title,
-        content: article.content,
-        url: article.url,
-        source: article.source,
-        author: article.author,
-        publishedAt: article.publishedAt,
-        clusterId: clusterId,
-        sentimentScore: impact.sentiment,
-        credibilityScore: credibility,
-        relevanceScore: 1.0,
-        summary: article.title,
-        symbols: JSON.stringify(finalSymbols)
-      }).onConflictDoNothing();
-      if (inserted.changes === 0) {
-        // Already persisted from a prior process lifetime - don't create an orphan cluster row
-        // (and don't let the caller re-run AI analysis / re-emit a trade idea for it) either.
-        return null;
+      // 2026-10-08 N-D5: merge-path inputs are computed BEFORE the write transaction, never
+      // inside it. The distinct-source read runs pre-tx (the new article's source is folded in
+      // via a JS Set union - identical result to reading post-insert), and eventBus emits stay
+      // outside the tx so only committed writes ever produce events.
+      interface MergePlan {
+        mergedSymbols: string[];
+        priorArticleCount: number;
+        sourceCount: number;
+        blendedSentiment: number;
+        blendedImpact: number;
+        existingTitle: string;
       }
-
+      let mergePlan: MergePlan | null = null;
       if (matched) {
         // 2a. Merge into the matched cluster - real corroboration, not a new independent event.
         const existingSymbols: string[] = matched.symbols;
@@ -95,7 +88,9 @@ export class NewsClusterEngine {
         const distinctSourcesRow = await db.select({ source: schema.newsArticles.source })
           .from(schema.newsArticles)
           .where(eq(schema.newsArticles.clusterId, clusterId));
-        const sourceCount = new Set(distinctSourcesRow.map((r) => r.source)).size;
+        // The new article's source joins the distinct set - same count the old post-insert
+        // read produced, computed without a read inside the write transaction.
+        const sourceCount = new Set([...distinctSourcesRow.map((r) => r.source), article.source]).size;
         // Running average - each additional corroborating article nudges sentiment/impact rather
         // than letting the single newest article overwrite the cluster's accumulated read.
         const blendedSentiment = existingRow.sentimentScore == null
@@ -104,55 +99,116 @@ export class NewsClusterEngine {
         const blendedImpact = existingRow.impactScore == null
           ? impact.impactScore
           : (existingRow.impactScore * priorArticleCount + impact.impactScore) / (priorArticleCount + 1);
-
-        await db.update(schema.newsClusters).set({
-          updatedAt: new Date().toISOString(),
-          sentimentScore: blendedSentiment,
-          impactScore: blendedImpact,
-          symbols: JSON.stringify(mergedSymbols),
-          articleCount: priorArticleCount + 1,
-          sourceCount,
-        }).where(eq(schema.newsClusters.id, clusterId));
-
-        eventBus.emit(EVENTS.NEWS_CLUSTER_UPDATED, {
-          clusterId,
-          title: existingRow.title,
-          symbols: mergedSymbols,
-          sentiment: blendedSentiment,
-          impactScore: blendedImpact,
-          articleCount: priorArticleCount + 1,
-          sourceCount,
-        });
-
-        return { clusterId, isNewCluster: false, priorArticleCount, sourceCount };
+        mergePlan = { mergedSymbols, priorArticleCount, sourceCount, blendedSentiment, blendedImpact, existingTitle: existingRow.title };
       }
 
-      // 2b. Insert a brand-new cluster - no existing cluster passed every matching layer.
-      await db.insert(schema.newsClusters).values({
-        id: clusterId,
-        title: article.title,
-        summary: article.content,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        eventType: category,
-        sentimentScore: impact.sentiment,
-        impactScore: impact.impactScore,
-        timeHorizon: impact.timeHorizon,
-        isArchived: false,
-        symbols: JSON.stringify(finalSymbols),
-        articleCount: 1,
-        sourceCount: 1,
+      // Atomic write: article + cluster update/insert in ONE transaction (better-sqlite3's tx
+      // callback is synchronous by driver design, matching this codebase's existing
+      // db.transaction((tx) => ...) pattern in DailyCompactionOrchestrator). If the cluster
+      // write throws after the article insert succeeded, the whole tx rolls back - no orphan
+      // news_articles row. The onConflictDoNothing dedup guard is preserved: a re-processed
+      // article id still short-circuits before any cluster row is touched.
+      interface TxOutcome {
+        isNewCluster: boolean;
+        priorArticleCount: number;
+        sourceCount: number;
+        title: string;
+        symbols: string[];
+        sentiment: number;
+        impactScore: number;
+      }
+      const txOutcome: TxOutcome | null = db.transaction((tx) => {
+        const inserted = tx.insert(schema.newsArticles).values({
+          id: article.id,
+          title: article.title,
+          content: article.content,
+          url: article.url,
+          source: article.source,
+          author: article.author,
+          publishedAt: article.publishedAt,
+          clusterId: clusterId,
+          sentimentScore: impact.sentiment,
+          credibilityScore: credibility,
+          relevanceScore: 1.0,
+          summary: article.title,
+          symbols: JSON.stringify(finalSymbols)
+        }).onConflictDoNothing().run();
+        if (inserted.changes === 0) {
+          // Already persisted from a prior process lifetime - don't create an orphan cluster row
+          // (and don't let the caller re-run AI analysis / re-emit a trade idea for it) either.
+          return null;
+        }
+
+        if (mergePlan) {
+          tx.update(schema.newsClusters).set({
+            updatedAt: new Date().toISOString(),
+            sentimentScore: mergePlan.blendedSentiment,
+            impactScore: mergePlan.blendedImpact,
+            symbols: JSON.stringify(mergePlan.mergedSymbols),
+            articleCount: mergePlan.priorArticleCount + 1,
+            sourceCount: mergePlan.sourceCount,
+          }).where(eq(schema.newsClusters.id, clusterId)).run();
+          return {
+            isNewCluster: false,
+            priorArticleCount: mergePlan.priorArticleCount,
+            sourceCount: mergePlan.sourceCount,
+            title: mergePlan.existingTitle,
+            symbols: mergePlan.mergedSymbols,
+            sentiment: mergePlan.blendedSentiment,
+            impactScore: mergePlan.blendedImpact,
+          };
+        }
+
+        // 2b. Insert a brand-new cluster - no existing cluster passed every matching layer.
+        tx.insert(schema.newsClusters).values({
+          id: clusterId,
+          title: article.title,
+          summary: article.content,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          eventType: category,
+          sentimentScore: impact.sentiment,
+          impactScore: impact.impactScore,
+          timeHorizon: impact.timeHorizon,
+          isArchived: false,
+          symbols: JSON.stringify(finalSymbols),
+          articleCount: 1,
+          sourceCount: 1,
+        }).run();
+        return {
+          isNewCluster: true,
+          priorArticleCount: 0,
+          sourceCount: 1,
+          title: article.title,
+          symbols: finalSymbols,
+          sentiment: impact.sentiment,
+          impactScore: impact.impactScore,
+        };
       });
 
-      eventBus.emit(EVENTS.NEWS_CLUSTER_CREATED, {
-        clusterId,
-        title: article.title,
-        symbols: finalSymbols,
-        sentiment: impact.sentiment,
-        impactScore: impact.impactScore
-      });
+      if (txOutcome === null) return null;
 
-      return { clusterId, isNewCluster: true, priorArticleCount: 0, sourceCount: 1 };
+      if (txOutcome.isNewCluster) {
+        eventBus.emit(EVENTS.NEWS_CLUSTER_CREATED, {
+          clusterId,
+          title: txOutcome.title,
+          symbols: txOutcome.symbols,
+          sentiment: txOutcome.sentiment,
+          impactScore: txOutcome.impactScore
+        });
+      } else {
+        eventBus.emit(EVENTS.NEWS_CLUSTER_UPDATED, {
+          clusterId,
+          title: txOutcome.title,
+          symbols: txOutcome.symbols,
+          sentiment: txOutcome.sentiment,
+          impactScore: txOutcome.impactScore,
+          articleCount: txOutcome.priorArticleCount + 1,
+          sourceCount: txOutcome.sourceCount,
+        });
+      }
+
+      return { clusterId, isNewCluster: txOutcome.isNewCluster, priorArticleCount: txOutcome.priorArticleCount, sourceCount: txOutcome.sourceCount };
     } catch (e) {
       console.error('[NewsClusterEngine] Failed to save to DB:', e);
       return null;

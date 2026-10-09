@@ -383,6 +383,12 @@ export class AlpacaBroker implements BrokerPlugin {
       const arm = assertLiveOrdersArmed();
       if (!arm.ok) throw new Error(arm.reason);
     }
+    // 2026-10-08 defect hunt (D5): quantity validation was missing entirely here - a NaN
+    // would serialize as null in the JSON payload and a negative quantity would go straight
+    // to the broker. Coinbase-style finite > 0 check, matching the other adapters.
+    if (!orderData.symbol || !orderData.side || !Number.isFinite(orderData.quantity) || (orderData.quantity as number) <= 0) {
+      throw new Error('placeOrder requires symbol, side, and a finite quantity > 0.');
+    }
     const payload: any = {
       symbol: orderData.symbol,
       qty: orderData.quantity,

@@ -38,13 +38,16 @@ describe('RssNewsProvider backoff', () => {
       mockParser(parseURL),
     );
 
-    expect(await provider.fetchLatest()).toEqual([]);
+    // 2026-10-08 defect hunt (news D4): transport/HTTP errors now rethrow so the manager
+    // records the failure (backoff state is still entered before the rethrow).
+    await expect(provider.fetchLatest()).rejects.toThrow('Status code 503');
     expect(parseURL).toHaveBeenCalledTimes(1);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(String(warnSpy.mock.calls[0][0])).toMatch(/HTTP 503/);
     expect(String(warnSpy.mock.calls[0][0])).toContain(String(runtimeIntervals.rssFeedErrorBackoffMs / 1000));
     expect(errorSpy).not.toHaveBeenCalled();
 
+    // In backoff: parseURL skipped, returns [] without throwing.
     expect(await provider.fetchLatest()).toEqual([]);
     expect(await provider.healthCheck()).toBe(false);
     expect(parseURL).toHaveBeenCalledTimes(1);

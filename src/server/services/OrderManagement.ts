@@ -43,9 +43,10 @@ import { isTelemetryPulsePayload } from '../core/telemetryPulse';
 import { createSingleFlightGuard } from '../core/singleFlightInterval';
 import { db } from '../db';
 import { trades, settings, brokerConnections, portfolio, reconciliationEvents, fills } from '../db/schema';
-import { eq, and, notInArray, isNotNull, inArray, isNull, gte } from 'drizzle-orm';
+import { eq, and, or, notInArray, isNotNull, inArray, isNull, gte, lt } from 'drizzle-orm';
 import crypto from 'crypto';
 import { BrokerManager } from '../../brokers/BrokerManager';
+import { BoundedWarnOnce } from '../../brokers/brokerMemory';
 import { BrokerPlugin, Order, brokerSupports } from '../../brokers/BrokerAdapter';
 import { updateTransactionStatus } from '../core/TransactionRegistry';
 import { tradingSafety } from '../config/tradingSafety';
@@ -115,7 +116,11 @@ const CRASH_RECOVERY_LOOKBACK_MS = tradingSafety.crashRecoveryLookbackMs;
 export class OrderManagementService {
   private intervalId: NodeJS.Timeout | null = null;
   private crashRecoveryIntervalId: NodeJS.Timeout | null = null;
-  private followUpWarned = new Set<string>();
+  // 2026-10-08 memory-hunt fix: this was an unbounded Set<string> keyed by order id - one
+  // entry per warned order for process lifetime. BoundedWarnOnce keeps the warn-once
+  // semantics for the working set (FIFO eviction past the cap; flag/env
+  // ARGUS_OMS_WARN_ONCE_MAX, see brokers/brokerMemory.ts).
+  private followUpWarned = new BoundedWarnOnce();
   // Batch 2 timer/reentrancy sweep (2026-09-23): followUpOpenOrders()/reconcileStaleOrders()/
   // reconcileInboundBrokerOrders() already tolerate concurrent execution via row-level CAS updates
   // (see cancelOrder()'s own "CAS guard" comment) rather than serialization - these guards are a
@@ -125,8 +130,8 @@ export class OrderManagementService {
   // tick re-runs the same real check with nothing lost, matching singleFlightInterval.ts's contract.
   private followUpGuard = createSingleFlightGuard((e) => console.error('[OMS] follow-up cycle failed', e));
   private crashRecoveryGuard = createSingleFlightGuard((e) => console.error('[OMS] crash-recovery cycle failed', e));
-  /** Unrecognized-open-broker-order ids already warned/paused-for (2026-09-09 P0 sprint) - avoids re-pausing every CRASH_RECOVERY_INTERVAL_MS cycle for the same still-unresolved order. */
-  private unknownPendingOrderWarned = new Set<string>();
+  /** Unrecognized-open-broker-order ids already warned/paused-for (2026-09-09 P0 sprint) - avoids re-pausing every CRASH_RECOVERY_INTERVAL_MS cycle for the same still-unresolved order. Bounded (2026-10-08 memory hunt) - see followUpWarned. */
+  private unknownPendingOrderWarned = new BoundedWarnOnce();
 
   constructor() {
     eventBus.on('RISK_ASSESSMENT_COMPLETED', async (assessment) => {
@@ -817,9 +822,8 @@ export class OrderManagementService {
         const match = brokerOrders.find(o => o.id === row.brokerOrderId);
 
         if (!match) {
-          if (age > FOLLOWUP_MAX_AGE_MS && !this.followUpWarned.has(row.id)) {
+          if (age > FOLLOWUP_MAX_AGE_MS && this.followUpWarned.warn(row.id)) {
             console.warn(`[OMS] Giving up follow-up for order ${row.id}: broker '${broker.id}' no longer reports order ${row.brokerOrderId}. Last known status stays ${row.status}.`);
-            this.followUpWarned.add(row.id);
           }
           continue;
         }
@@ -858,8 +862,7 @@ export class OrderManagementService {
   }
 
   private async cancelOrphanedOpenOrder(row: any, match: Order, broker: BrokerPlugin): Promise<void> {
-    if (this.followUpWarned.has(row.id)) return;
-    this.followUpWarned.add(row.id);
+    if (!this.followUpWarned.warn(row.id)) return;
     const canCancel = brokerSupports(broker, 'canCancelOrders');
     if (!canCancel) {
       console.error(`[OMS] Orphaned ${row.status} order ${row.id} exceeded follow-up max age and broker cannot cancel — pausing trading.`);
@@ -969,10 +972,9 @@ export class OrderManagementService {
       // case the sprint's "UNKNOWN -> PAUSE -> RECONCILE, never UNKNOWN -> RETRY" invariant is
       // about - never auto-cancelled, never assumed safe, surfaced loudly and trading paused until
       // an operator resolves it. One-time warn per orderId (not every 60s cycle) via the same
-      // in-memory Set pattern followUpWarned already uses.
+      // in-memory warn-once pattern followUpWarned already uses (both now BoundedWarnOnce).
       if (filledQty <= 0 && !isTerminalOrderStatus(o.status)) {
-        if (!unknownPendingWarned.has(o.id)) {
-          unknownPendingWarned.add(o.id);
+        if (unknownPendingWarned.warn(o.id)) {
           console.error(`[OMS] CRITICAL unrecognized open broker order ${o.id} (${o.side} ${o.quantity} ${o.symbol}, status=${o.status}) has no matching local trades row - pausing trading pending operator reconciliation.`);
           await triggerWebhooks({
             type: 'reconciliation_mismatch',
@@ -1047,6 +1049,57 @@ export class OrderManagementService {
       console.error('[OMS] crash-recovery: failed to query candidate trades', e);
       return;
     }
+
+    // 2026-10-08 defect hunt (D7): PENDING rows OLDER than the lookback (or with NULL
+    // submitted_at) silently fell out of recovery forever - neither reconciled nor surfaced.
+    // Surface them as RECONCILIATION_REQUIRED (never REJECTED - absence was never confirmed)
+    // with a reconciliation_events row each, through the same operator-visible mechanism the
+    // fill-ledger rejection path uses. The guarded UPDATE is idempotent: already-surfaced rows
+    // no longer match status='PENDING', so this cannot re-fire or clobber a concurrent
+    // resolution. Capped at 500 rows per cycle; a larger backlog is itself a loud signal.
+    try {
+      const cutoff = new Date(Date.now() - CRASH_RECOVERY_LOOKBACK_MS).toISOString();
+      const agedOut = await db.select().from(trades).where(and(
+        eq(trades.status, 'PENDING'),
+        isNull(trades.brokerOrderId),
+        or(lt(trades.submittedAt, cutoff), isNull(trades.submittedAt)),
+      )).limit(500);
+      for (const row of agedOut) {
+        try {
+          // Guarded UPDATE: a concurrent path may have resolved the row between our SELECT and
+          // this write - only rows still PENDING transition. Idempotent across cycles.
+          await db.update(trades)
+            .set({ status: 'RECONCILIATION_REQUIRED' })
+            .where(and(eq(trades.id, row.id), eq(trades.status, 'PENDING')));
+          const [after] = await db.select().from(trades).where(eq(trades.id, row.id));
+          if (!after || after.status !== 'RECONCILIATION_REQUIRED') continue; // resolved concurrently
+          await db.insert(reconciliationEvents).values({
+            checkedAt: new Date().toISOString(),
+            broker: (row as any).brokerId || 'unknown',
+            matches: false,
+            mismatches: JSON.stringify([{
+              type: 'CRASH_RECOVERY_LOOKBACK_EXCEEDED',
+              orderId: row.id,
+              symbol: (row as any).symbol,
+              side: (row as any).side,
+              submittedAt: (row as any).submittedAt,
+              error: `PENDING order aged past the ${CRASH_RECOVERY_LOOKBACK_MS}ms crash-recovery lookback with no brokerOrderId - true state unknown, needs operator reconciliation.`,
+            }]),
+            worstImpactDollars: null,
+            actionTaken: 'RECONCILIATION_REQUIRED',
+          });
+          console.warn(`[OMS] crash-recovery: order ${row.id} aged past the recovery lookback with no brokerOrderId - marked RECONCILIATION_REQUIRED (state unknown, not rejected).`);
+        } catch (rowErr) {
+          console.error(`[OMS] crash-recovery: failed to surface aged-out order ${row.id} as RECONCILIATION_REQUIRED`, rowErr);
+        }
+      }
+      if (agedOut.length >= 500) {
+        console.error('[OMS] crash-recovery: 500+ PENDING orders aged past the recovery lookback - backlog needs operator attention beyond this cycle.');
+      }
+    } catch (e) {
+      console.error('[OMS] crash-recovery: failed to surface aged-out PENDING orders', e);
+    }
+
     if (candidates.length === 0) return;
 
     let activeBroker: BrokerPlugin;
@@ -1082,7 +1135,8 @@ export class OrderManagementService {
     for (const { broker, rows } of candidatesByBroker.values()) {
       if (typeof broker.getOrderByClientOrderId !== 'function') {
         // Honest degradation - not every broker adapter supports lookup-by-client-order-id.
-        // AlpacaBroker and IBGatewaySocketAdapter (DEF-30, 2026-09-09) both implement it; a future
+        // AlpacaBroker, IBGatewaySocketAdapter (DEF-30, 2026-09-09) and
+        // InteractiveBrokersWebApiAdapter (D1, 2026-10-08) implement it; a future
         // adapter that doesn't is the only case this branch still exists for. Never fabricates a
         // reconciliation result it can't actually check. Skips only this broker's rows - a different
         // broker group in the same cycle may still be checkable.

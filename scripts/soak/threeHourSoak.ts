@@ -49,19 +49,27 @@ function buildChildEnv(dbPath: string): NodeJS.ProcessEnv {
 async function main(): Promise<void> {
   const seedArg = process.argv.find((a) => a.startsWith('--seed='));
   const seed = seedArg ? Number(seedArg.split('=')[1]) : 12345;
-  const soakId = `soak-3h-${Date.now()}`;
+  // 2026-10-09: wall-clock duration is configurable (default 180 = the original
+  // 3-hour soak). The child already accepted --minutes=; the parent just never
+  // exposed it. Validated: positive integer, capped at 24h to bound runaway runs.
+  const minArg = process.argv.find((a) => a.startsWith('--wall-minutes='));
+  const wallMinutes = minArg ? Number(minArg.split('=')[1]) : 180;
+  if (!Number.isInteger(wallMinutes) || wallMinutes <= 0 || wallMinutes > 1440) {
+    throw new Error(`--wall-minutes must be a positive integer <= 1440, got: ${minArg}`);
+  }
+  const soakId = `soak-${wallMinutes}min-${Date.now()}`;
   const { dbPath } = computeSyntheticSimulationPaths(soakId);
   const env = buildChildEnv(dbPath);
   const childScriptPath = path.join(__dirname, 'threeHourSoakChild.ts');
   const tsxCliPath = path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
-  console.log(`=== ARGUS 3-HOUR SOAK starting ===`);
+  console.log(`=== ARGUS SOAK starting (${wallMinutes}min wall-clock) ===`);
   console.log(`soakId=${soakId} seed=${seed} dbPath=${dbPath}`);
-  console.log(`Expected wall-clock duration: ~3h05m. Metrics sampled every 60s.`);
+  console.log(`Expected wall-clock duration: ~${wallMinutes + 5}m. Metrics sampled every 60s.`);
   console.log(`AI providers: none configured in this environment — soak runs all-AI-down (hardest case).`);
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(process.execPath, [tsxCliPath, childScriptPath, `--soak-id=${soakId}`, `--seed=${seed}`], {
+    const child = spawn(process.execPath, [tsxCliPath, childScriptPath, `--soak-id=${soakId}`, `--seed=${seed}`, `--minutes=${wallMinutes}`], {
       env,
       stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
     });

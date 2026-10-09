@@ -187,6 +187,54 @@ describe('ChiefTraderAgent policy router', () => {
     expect(noTrade[1].quantReasonCode).toBe('STRATEGY_RETIRED');
   });
 
+  it('NOT_AUTHORIZED (missing lifecycle record) is terminal: dropped, never re-routed to consensus', async () => {
+    // Defect #1 (2026-10-08): missing state fails closed. The idea is terminally rejected —
+    // it must not silently inherit consensus-path behavior, and the missing record must be
+    // visible in the DESK_NO_TRADE event for operator follow-up.
+    resolveQuantStrategyAuthorization.mockResolvedValue({
+      ...authorized(),
+      authority: 'NOT_AUTHORIZED',
+      reason: 'NO_LIFECYCLE_RECORD',
+      lifecycleStatus: null,
+    });
+
+    await agent.reviewIdea(quantIdea());
+
+    expect(evaluateQuantExecutionPolicy).not.toHaveBeenCalled();
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+    const noTrade = emit.mock.calls.find((c: any[]) => c[0] === EVENTS.DESK_NO_TRADE);
+    expect(noTrade).toBeTruthy();
+    expect(noTrade[1].terminalReasonCode).toBe('QUANT_NOT_AUTHORIZED');
+    expect(noTrade[1].quantReasonCode).toBe('NO_LIFECYCLE_RECORD');
+    expect(noTrade[1].reason).toContain('NO_LIFECYCLE_RECORD');
+    // Not silently re-routed: the consensus pool is empty and no consensus ran.
+    expect(agent.recentIdeas).toEqual([]);
+  });
+
+  it('paper-only lock disengaged (ENVIRONMENT_NOT_AUTHORIZED) never routes to the policy and never approves', async () => {
+    // Part-30 (Workstream F, 2026-10-08): the exact authorization shape the real
+    // resolver returns when PAPER_TRADING_ONLY is not engaged. The router must treat
+    // it as terminal — no policy evaluation, no chief approval, no consensus fallback.
+    resolveQuantStrategyAuthorization.mockResolvedValue({
+      ...authorized(),
+      authority: 'NOT_ELIGIBLE',
+      reason: 'ENVIRONMENT_NOT_AUTHORIZED',
+      lifecycleStatus: null,
+      paperOnlyEnforced: false,
+    });
+
+    await agent.reviewIdea(quantIdea());
+
+    expect(evaluateQuantExecutionPolicy).not.toHaveBeenCalled();
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+    const noTrade = emit.mock.calls.find((c: any[]) => c[0] === EVENTS.DESK_NO_TRADE);
+    expect(noTrade).toBeTruthy();
+    expect(noTrade[1].terminalReasonCode).toBe('QUANT_NOT_AUTHORIZED');
+    expect(noTrade[1].quantReasonCode).toBe('ENVIRONMENT_NOT_AUTHORIZED');
+    // Terminal: not silently re-routed into the consensus pool either.
+    expect(agent.recentIdeas).toEqual([]);
+  });
+
   it('REQUIRES_CONSENSUS falls through to the unchanged consensus path', async () => {
     resolveQuantStrategyAuthorization.mockResolvedValue({
       ...authorized(),

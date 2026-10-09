@@ -98,7 +98,7 @@ export async function flushObservabilityStore(): Promise<void> {
  */
 export async function sweepObservabilityRetention(nowMs = Date.now()): Promise<number> {
   if (observabilityConfig.dailyCompactionEnabled) {
-    const result = purgeVerifiedDays(observabilityEventsSource, observabilityConfig.retentionDays, nowMs);
+    const result = await purgeVerifiedDays(observabilityEventsSource, observabilityConfig.retentionDays, nowMs);
     return result.totalRowsPurged;
   }
   const cutoff = nowMs - observabilityConfig.retentionDays * 24 * 60 * 60 * 1000;

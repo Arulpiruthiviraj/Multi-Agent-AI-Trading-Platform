@@ -477,6 +477,11 @@ export class AIRouter {
     return typeof until === 'number' && until > nowMs;
   }
 
+  /** Test-only — current size of the bounded routeTask() in-flight coalescing map. */
+  public __routeTaskInFlightSizeForTests(): number {
+    return this.routeTaskInFlight.size;
+  }
+
   private async disableProviderForAuthFailure(providerId: string, reason: string): Promise<void> {
     const until = Date.now() + AI_AUTH_FAILURE_COOLDOWN_MS;
     this.authDisabledUntil.set(providerId, until);
@@ -655,6 +660,12 @@ export class AIRouter {
      this.providers.clear();
      this.authDisabledUntil.clear();
      this.skipUntil.clear();
+     // Same re-init cleanup as the maps above: credential bookkeeping is keyed by
+     // provider id and rebuilt below, so entries for providers removed (or
+     // reconfigured under a new id) since the last initialize() must not linger.
+     this.credentialSource.clear();
+     this.envFallbackCandidate.clear();
+     this.envFallbackAttempted.clear();
      
      // Load DB providers
      let dbProviders;

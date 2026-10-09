@@ -44,6 +44,15 @@ export interface SourceCompactionResult {
   summary: DailyCompactionSummary;
 }
 
+/** Result of a batched purgeWindow call. `truncated` is true when the call hit its per-call
+ *  batch budget before the window was fully purged - the caller must NOT mark the day PURGED
+ *  yet; the next sweep resumes idempotently (deletes are idempotent, so a resume is a safe
+ *  re-run over the remaining rows). */
+export interface PurgeWindowResult {
+  deleted: number;
+  truncated: boolean;
+}
+
 /** One pluggable raw-table source for the compaction pipeline. */
 export interface DailyCompactionSource {
   sourceType: string;
@@ -51,8 +60,10 @@ export interface DailyCompactionSource {
   /** Pure read over [windowStartMs, windowEndMs) - never mutates, safe to re-run. */
   compact(windowStartMs: number, windowEndMs: number, tradingDate: string): Promise<SourceCompactionResult>;
   /** Deletes raw rows for [windowStartMs, windowEndMs) - called ONLY after the corresponding
-   *  archive row reaches VERIFIED, inside the same transaction that marks it PURGED. */
-  purgeWindow(windowStartMs: number, windowEndMs: number): number;
+   *  archive row reaches VERIFIED. MUST be batched with event-loop yields between batches (see
+   *  observabilityEventsSource) - a large window can never block the event loop in one
+   *  synchronous slice. Idempotent: re-running after a crash deletes only what remains. */
+  purgeWindow(windowStartMs: number, windowEndMs: number): Promise<PurgeWindowResult>;
 }
 
 export interface CompactionOutcome {

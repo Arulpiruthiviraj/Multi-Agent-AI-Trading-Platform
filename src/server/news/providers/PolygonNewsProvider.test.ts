@@ -37,9 +37,11 @@ describe('PolygonNewsProvider - secret leakage (Phase 8 hardening)', () => {
     fetchSpy.mockRejectedValue(new Error('network error contacting https://api.polygon.io/v2/reference/news'));
 
     const provider = new PolygonNewsProvider();
-    const result = await provider.fetchLatest();
+    // 2026-10-08 defect hunt (news D4): providers now THROW on transport/HTTP errors so the
+    // manager records the failure instead of reporting a dead feed as "Healthy". The secret-
+    // redaction contract is unchanged.
+    await expect(provider.fetchLatest()).rejects.toThrow(); // never fabricates a result on a real fetch failure
 
-    expect(result).toEqual([]); // never fabricates a result on a real fetch failure
     expect(consoleErrorSpy).toHaveBeenCalled();
     const loggedText = consoleErrorSpy.mock.calls[0][1] as string;
     expect(loggedText).not.toContain('polygon-real-secret-99999');

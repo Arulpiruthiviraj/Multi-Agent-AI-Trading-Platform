@@ -351,6 +351,8 @@ export const trades = sqliteTable('trades', {
   // a row with no traceId (legacy data, or any future code path that doesn't set one) - it only
   // ever rejects a genuine second INSERT for the same real traceId.
   traceIdUniqueIdx: uniqueIndex('idx_trades_trace_id_unique').on(table.traceId),
+  // 2026-10-08 defect hunt (P2-M1): exists in migration 0082 but was missing from schema.ts.
+  positionScopeIdx: index('idx_trades_position_scope').on(table.brokerId, table.executionEnvironment, table.symbol),
 }));
 
 // Thin by design - today's brokers (Alpaca, InternalPaperBroker) are single-shot market orders,
@@ -484,7 +486,11 @@ export const reconciliationAcknowledgements = sqliteTable('reconciliation_acknow
   revokedAt: text('revoked_at'),
   revokedBy: text('revoked_by'),
   revokeReason: text('revoke_reason'),
-});
+  // 2026-10-08 defect hunt (P2-M1): exists as a UNIQUE index in migration 0032 but was
+  // missing from schema.ts - a future drizzle-kit generate would emit a duplicate.
+}, (table) => ({
+  brokerOrderIdx: uniqueIndex('idx_recon_ack_broker_order').on(table.broker, table.brokerOrderId),
+}));
 
 export const portfolioSnapshots = sqliteTable('portfolio_snapshots', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -756,6 +762,10 @@ export const newsPredictions = sqliteTable('news_predictions', {
   // P1-A remediation (2026-09-14) - see agentPredictions' identical timestampIdx doc comment
   // (PredictionOutcomeEvaluator's third bounded anti-join loop orders by createdAt here).
   createdAtIdx: index('idx_news_predictions_created_at').on(table.createdAt),
+  // 2026-10-08 defect hunt (P2-M1): these indexes exist in migration 0042 but were missing
+  // from schema.ts - a future drizzle-kit generate would emit duplicate CREATE INDEX.
+  symbolIdx: index('idx_news_predictions_symbol').on(table.symbol, table.createdAt),
+  clusterIdx: index('idx_news_predictions_cluster').on(table.clusterId),
 }));
 
 export const newsProviders = sqliteTable('news_providers', {
@@ -1691,7 +1701,9 @@ export const candidateRankings = sqliteTable('candidate_rankings', {
  */
 export const postmarketReports = sqliteTable('postmarket_reports', {
   id: text('id').primaryKey(), // == tradingDate, e.g. '2026-09-10'
-  tradingDate: text('trading_date').notNull().unique(),
+  // 2026-10-08 defect hunt (P2-M1): uniqueness is enforced by the NAMED unique index below
+  // (migration 0061), not an inline column constraint - the inline .unique() was schema drift.
+  tradingDate: text('trading_date').notNull(),
   generatedAt: text('generated_at').notNull(),
   argusCommit: text('argus_commit'),
   totalSymbolsTouched: integer('total_symbols_touched').notNull(),
@@ -1701,6 +1713,7 @@ export const postmarketReports = sqliteTable('postmarket_reports', {
   errorMessage: text('error_message'),
 }, (table) => ({
   tradingDateIdx: index('idx_postmarket_reports_trading_date').on(table.tradingDate),
+  tradingDateUniqueIdx: uniqueIndex('postmarket_reports_trading_date_unique').on(table.tradingDate),
 }));
 
 /**
@@ -2401,7 +2414,10 @@ export const premarketFocusReports = sqliteTable('premarket_focus_reports', {
   metricsJson: text('metrics_json'),
   createdAt: text('created_at').notNull(),
 }, (table) => ({
-  dateVersionIdx: index('idx_premarket_focus_reports_date_version').on(table.planDate, table.refreshVersion),
+  // UNIQUE (matches migration 0091's CREATE UNIQUE INDEX): the focus report
+  // upserts on (plan_date, refresh_version), so a redelivered refresh event
+  // regenerates the same row instead of inserting a duplicate.
+  dateVersionIdx: uniqueIndex('idx_premarket_focus_reports_date_version').on(table.planDate, table.refreshVersion),
 }));
 
 /**

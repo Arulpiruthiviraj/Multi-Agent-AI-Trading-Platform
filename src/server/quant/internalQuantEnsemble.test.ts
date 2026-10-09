@@ -280,4 +280,20 @@ describe('computeInternalEnsembleQualification - 2026-09-30 Java bridge fan-out 
     expect(peakInFlight).toBeLessThanOrEqual(tradingSafety.quantResearchStrategyFanoutMaxConcurrency);
     expect(peakInFlight).toBeGreaterThan(1); // still genuinely parallel, not accidentally serialized to 1
   });
+
+  it('2026-10-08 defect hunt (P2): rsi_mean_reversion with missing/NaN rsi yields no vote (never max confidence)', async () => {
+    const { javaResultToVote } = await import('./internalQuantEnsemble');
+    // The bug: num() defaulted a missing rsi to 0, and |0-50|/50 = 1 → the 0.95
+    // cap — full-strength confidence from absent data.
+    expect(javaResultToVote('rsi_mean_reversion', { fadeSignal: 'BUY' })).toBeNull();
+    expect(javaResultToVote('rsi_mean_reversion', { fadeSignal: 'SELL', rsi: NaN })).toBeNull();
+    expect(javaResultToVote('rsi_mean_reversion', { fadeSignal: 'SELL', rsi: 'high' })).toBeNull();
+    // Sanity: a real rsi still maps (rsi=80 → |80-50|/50 = 0.6).
+    expect(javaResultToVote('rsi_mean_reversion', { fadeSignal: 'BUY', rsi: 80 })).toEqual({
+      side: 'BUY',
+      confidence: 0.6,
+    });
+    // No fade signal → no vote (unchanged).
+    expect(javaResultToVote('rsi_mean_reversion', { fadeSignal: 'HOLD', rsi: 80 })).toBeNull();
+  });
 });

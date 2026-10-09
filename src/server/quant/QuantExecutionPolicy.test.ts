@@ -105,6 +105,15 @@ describe('QuantExecutionPolicy', () => {
     expect(d.reasonCode).toBe('QUANT_AUTHORITY_INVALID');
   });
 
+  it('a NOT_AUTHORIZED (missing lifecycle record) authorization never enters the quant policy', async () => {
+    // Defect #1 (2026-10-08): a strategy with no lifecycle record must fail closed at the
+    // authorization layer AND at this policy layer — missing state gains no execution path.
+    const auth = { ...authorized(), authority: 'NOT_AUTHORIZED' as const, reason: 'NO_LIFECYCLE_RECORD' as const, lifecycleStatus: null };
+    const d = await evaluateQuantExecutionPolicy(validIdea(), auth, { calibrationLookup: sufficientCalibration });
+    expect(d.approved).toBe(false);
+    expect(d.reasonCode).toBe('QUANT_AUTHORITY_INVALID');
+  });
+
   it.each([['HOLD'], [''], [null], [undefined]])('rejects invalid side %p', async (side) => {
     const d = await evaluateQuantExecutionPolicy(validIdea({ side }), authorized(), { calibrationLookup: sufficientCalibration });
     expect(d.approved).toBe(false);
@@ -178,6 +187,17 @@ describe('QuantExecutionPolicy', () => {
     const d = await evaluateQuantExecutionPolicy(idea, authorized(), { calibrationLookup: sufficientCalibration });
     expect(d.approved).toBe(false);
     expect(d.reasonCode).toBe('QUANT_SIGNAL_EXPIRED');
+  });
+
+  it('2026-10-08 defect hunt (P2): malformed expiresAt fails closed (never treated as not-expired)', async () => {
+    // Previously new Date(malformed).getTime() = NaN, and NaN <= Date.now() is
+    // false — a garbage expiry string slipped past as "not expired" (fail-open).
+    for (const bad of ['not-a-date', 'undefined', '{}', '--']) {
+      const idea = validIdea({ expiresAt: bad });
+      const d = await evaluateQuantExecutionPolicy(idea, authorized(), { calibrationLookup: sufficientCalibration });
+      expect(d.approved).toBe(false);
+      expect(d.reasonCode).toBe('QUANT_SIGNAL_EXPIRED');
+    }
   });
 
   it('rejects when too few independent support dimensions hold (no fake independence)', async () => {

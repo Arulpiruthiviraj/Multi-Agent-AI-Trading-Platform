@@ -111,7 +111,7 @@ describe('argusWatchdogLogic', () => {
     expect(m.restartTimestamps.length).toBe(1);
   });
 
-  it('halts with ALERT_HALTED instead of force-killing a frozen process once the restart budget is already exhausted', () => {
+  it('engages STORM LOCKOUT instead of force-killing a frozen process once the restart budget is already exhausted', () => {
     const cfg = { ...DEFAULT_WATCHDOG_CONFIG, maxRestarts: 0, frozenConfirmTicks: 2 };
     let m = initialStateMachine();
     let lastAction: string = 'NONE';
@@ -120,12 +120,12 @@ describe('argusWatchdogLogic', () => {
       m = r.machine;
       lastAction = r.action;
     }
-    expect(lastAction).toBe('ALERT_HALTED');
-    expect(m.state).toBe('RESTART_BUDGET_EXHAUSTED');
+    expect(lastAction).toBe('STORM_LOCKOUT');
+    expect(m.state).toBe('STORM_LOCKOUT');
   });
 
-  it('enforces a bounded restart budget and halts with ALERT_HALTED instead of storm-restarting', () => {
-    const cfg = { ...DEFAULT_WATCHDOG_CONFIG, maxRestarts: 2, confirmTicks: 1 };
+  it('enforces a bounded restart budget and engages STORM LOCKOUT instead of storm-restarting', () => {
+    const cfg = { ...DEFAULT_WATCHDOG_CONFIG, maxRestarts: 2, confirmTicks: 1, restartCooldownBaseMs: 1 };
     let m: StateMachine = initialStateMachine();
     let nowMs = 0;
     const actions: string[] = [];
@@ -143,17 +143,18 @@ describe('argusWatchdogLogic', () => {
     r = nextState(m, HEALTHY_OBS, cfg, (nowMs += 1000));
     m = r.machine; actions.push(r.action);
 
-    // Third death within the restart window should now be refused and alert instead.
+    // Third death within the restart window should now be refused and lock out instead.
     r = nextState(m, DEAD_OBS_UNEXPECTED, cfg, (nowMs += 1000));
     m = r.machine; actions.push(r.action);
 
     expect(actions.filter((a) => a === 'RESTART').length).toBe(2);
-    expect(actions[actions.length - 1]).toBe('ALERT_HALTED');
-    expect(m.state).toBe('RESTART_BUDGET_EXHAUSTED');
+    expect(actions[actions.length - 1]).toBe('STORM_LOCKOUT');
+    expect(m.state).toBe('STORM_LOCKOUT');
+    expect(m.lockoutReason).toContain('STORM LOCKOUT');
   });
 
-  it('prunes restarts outside the rolling window, allowing new restarts again later', () => {
-    const cfg = { ...DEFAULT_WATCHDOG_CONFIG, maxRestarts: 1, confirmTicks: 1, restartWindowMs: 10_000 };
+  it('storm lockout is terminal: it holds even after the restart window has fully aged out', () => {
+    const cfg = { ...DEFAULT_WATCHDOG_CONFIG, maxRestarts: 1, confirmTicks: 1, restartCooldownBaseMs: 1 };
     let m: StateMachine = initialStateMachine();
 
     let r = nextState(m, DEAD_OBS_UNEXPECTED, cfg, 0);
@@ -163,14 +164,16 @@ describe('argusWatchdogLogic', () => {
     r = nextState(m, HEALTHY_OBS, cfg, 1_000);
     m = r.machine;
 
-    // Second death still inside the 10s window - budget exhausted.
-    r = nextState(m, DEAD_OBS_UNEXPECTED, cfg, 2_000);
+    // Second death still inside the 10s window - budget exhausted -> lockout.
+    r = nextState(m, DEAD_OBS_UNEXPECTED, { ...cfg, restartWindowMs: 10_000 }, 2_000);
     m = r.machine;
-    expect(r.action).toBe('ALERT_HALTED');
+    expect(r.action).toBe('STORM_LOCKOUT');
 
-    // Third death well outside the window - the first restart has aged out, budget available again.
-    r = nextState(m, DEAD_OBS_UNEXPECTED, cfg, 50_000);
-    expect(r.action).toBe('RESTART');
+    // Far outside the window the first restart would have aged out - but the lockout is NOT
+    // lifted automatically; only an explicit operator action may clear it.
+    r = nextState(m, DEAD_OBS_UNEXPECTED, { ...cfg, restartWindowMs: 10_000 }, 500_000);
+    expect(r.action).toBe('NONE');
+    expect(r.machine.state).toBe('STORM_LOCKOUT');
   });
 
   it('treats a missing/unreadable session file (cleanShutdown null) as unexpected, not intentional', () => {

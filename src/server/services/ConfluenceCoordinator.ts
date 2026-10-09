@@ -65,6 +65,20 @@ import { recordCandidate } from '../core/recentCandidateRegistry';
  *  this module — see the 2026-09-22 header note above for why these three and not NewsAgent. */
 const TRIGGER_ELIGIBLE_AGENTS = new Set(['TechnicalAgent', 'QuantEngine', 'KronosEngine']);
 
+/**
+ * Memory-hygiene contract for this module's per-symbol trigger map (2026-10-08 leak hunt):
+ * `lastTriggeredAt` must not grow by one entry per distinct symbol for process lifetime. A
+ * broad discovery universe can surface thousands of tickers in a session; each entry is tiny,
+ * but the unbounded-Map class is what the P1-A heap incident was made of.
+ * - CONFLUENCE_TRIGGER_EVICTION_ENABLED is the one-line kill switch for the sweep.
+ * - CONFLUENCE_TRIGGER_STALE_MULTIPLIER is the generous staleness margin (10x the real
+ *   cooldown, mirroring ChiefTraderAgent's recordDebateStarted precedent). An entry this old
+ *   can never satisfy the cooldown check (`now - last < confluenceCoordinatorCooldownMs`), so
+ *   evicting it is behavior-preserving by construction - never touches trigger/confidence logic.
+ */
+const CONFLUENCE_TRIGGER_EVICTION_ENABLED = true;
+const CONFLUENCE_TRIGGER_STALE_MULTIPLIER = 10;
+
 type TradeIdeaPayload = {
   traceId?: string;
   symbol?: string;
@@ -103,6 +117,22 @@ export class ConfluenceCoordinator {
     this.lastTriggeredAt.delete(symbol.toUpperCase());
   }
 
+  /**
+   * 2026-10-08 leak hunt: `lastTriggeredAt` was set on every trigger with NO production delete
+   * (only the test hook above) - one entry per symbol that ever produced a qualifying signal,
+   * retained for process lifetime. The map's only read is the cooldown check
+   * (`now - last < confluenceCoordinatorCooldownMs`), so an entry older than
+   * CONFLUENCE_TRIGGER_STALE_MULTIPLIER x that cooldown can never affect it - the opportunistic
+   * sweep is behavior-preserving by construction.
+   */
+  private sweepStaleTriggerEntries(now: number): void {
+    if (!CONFLUENCE_TRIGGER_EVICTION_ENABLED) return;
+    const staleBeforeMs = now - tradingSafety.confluenceCoordinatorCooldownMs * CONFLUENCE_TRIGGER_STALE_MULTIPLIER;
+    for (const [sym, at] of this.lastTriggeredAt) {
+      if (at < staleBeforeMs) this.lastTriggeredAt.delete(sym);
+    }
+  }
+
   private async maybeTrigger(idea: TradeIdeaPayload): Promise<void> {
     if (!tradingSafety.confluenceCoordinatorEnabled) return;
     if (isTelemetryPulsePayload(idea)) return;
@@ -117,6 +147,7 @@ export class ConfluenceCoordinator {
     const now = Date.now();
     const last = this.lastTriggeredAt.get(symbol) ?? 0;
     if (now - last < tradingSafety.confluenceCoordinatorCooldownMs) return;
+    this.sweepStaleTriggerEntries(now);
     this.lastTriggeredAt.set(symbol, now);
     // Phase 9 (same-candidate convergence): this symbol just cleared the exact same real bar
     // (qualifying TechnicalAgent signal, cooldown respected) ConfluenceCoordinator itself already

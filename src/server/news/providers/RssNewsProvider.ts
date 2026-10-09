@@ -79,10 +79,26 @@ export class RssNewsProvider implements NewsProviderPlugin {
     if (this.inBackoff()) {
       return articles;
     }
+    let feed;
     try {
-      const feed = await this.parser.parseURL(this.feedUrl);
+      feed = await this.parser.parseURL(this.feedUrl);
       this.clearBackoff();
-      for (const item of feed.items) {
+    } catch (e) {
+      if (isTransientRssFailure(e)) {
+        this.enterBackoff(e);
+      } else {
+        const detail = e instanceof Error ? e.message : String(e);
+        console.warn(`[RssNewsProvider] Failed to fetch feed ${this.name}: ${detail}`);
+      }
+      // 2026-10-08 defect hunt (news D4): rethrow so NewsProviderManager records errorCount/
+      // lastError and the /providers route stops reporting a dead feed as "Healthy" with 0
+      // articles. Backoff state above is preserved; the manager's catch is the designed path.
+      throw e;
+    }
+    // Per-item mapping failures skip the bad item but keep the good ones - a single malformed
+    // entry must not discard the whole feed (nor masquerade as a transport failure above).
+    for (const item of feed.items ?? []) {
+      try {
         articles.push({
           id: item.guid || item.link || String(Date.now()),
           title: item.title || '',
@@ -93,13 +109,8 @@ export class RssNewsProvider implements NewsProviderPlugin {
           publishedAt: item.isoDate || item.pubDate || new Date().toISOString(),
           symbols: [] // Will be extracted by the pipeline
         });
-      }
-    } catch (e) {
-      if (isTransientRssFailure(e)) {
-        this.enterBackoff(e);
-      } else {
-        const detail = e instanceof Error ? e.message : String(e);
-        console.warn(`[RssNewsProvider] Failed to fetch feed ${this.name}: ${detail}`);
+      } catch (e) {
+        console.warn(`[RssNewsProvider] Skipping malformed item in feed ${this.name}:`, e instanceof Error ? e.message : String(e));
       }
     }
     return articles;

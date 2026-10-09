@@ -177,6 +177,21 @@ function parseLlmJson(content: string | undefined): unknown {
   }
 }
 
+/**
+ * Memory-hygiene contract for this file's per-symbol in-memory maps (2026-10-08 leak hunt):
+ * every per-symbol Map in this class must have a production delete/eviction path. A map that
+ * only ever gains one entry per distinct symbol is an unbounded leak against a broad discovery
+ * universe that can touch thousands of tickers in a single session - each entry is tiny, but the
+ * class of bug is what the P1-A heap incident was made of.
+ * - STALE_MAP_ENTRY_EVICTION_ENABLED is the one-line kill switch for the opportunistic sweeps.
+ * - STALE_ENTRY_COOLDOWN_MULTIPLIER is the generous staleness margin (10x the real cooldown,
+ *   mirroring the 2026-09-22 recordDebateStarted precedent). An entry this old can never affect
+ *   its map's live check, so evicting it is behavior-preserving by construction - the sweeps
+ *   never touch consensus logic, thresholds, weights, or decision behavior.
+ */
+const STALE_MAP_ENTRY_EVICTION_ENABLED = true;
+const STALE_ENTRY_COOLDOWN_MULTIPLIER = 10;
+
 export class ChiefTraderAgent {
     private recentIdeas: any[] = [];
     /** DEF-3 fix: interval handles for the two constructor timers (idea-TTL sweep + weight
@@ -207,7 +222,13 @@ export class ChiefTraderAgent {
      *  symbol while this is > 0 - otherwise a later low-confidence idea (or a second agent)
      *  would approve the trade before the debate that was supposed to challenge it finished. */
     private pendingDebates: Map<string, number> = new Map();
-    /** Active Opportunity Feed CONFIRM requests: consensus side must match operator side. */
+    /** Active Opportunity Feed CONFIRM requests: consensus side must match operator side.
+     *  2026-10-08 C-F4 (documented, deliberately NOT persisted): this map is IN-MEMORY ONLY.
+     *  A process restart drops every registered side-lock - after a restart no operator CONFIRM
+     *  side-lock is enforced for any symbol until the operator re-registers it via
+     *  registerManualSideExpectation (manualTradeCoEvaluation.ts). Persistence is an explicit
+     *  operator decision (low priority) and is NOT built here - see the note in
+     *  docs/architecture/ARGUS_QUANT_FIRST_DECISION_ARCHITECTURE.md. No behavior change. */
     private manualSideExpectations: Map<string, { side: 'BUY' | 'SELL'; expiresAt: number }> = new Map();
 
     /** Debounced evaluateConsensus handles per symbol — co-eval window for multi-agent sync. */
@@ -230,6 +251,17 @@ export class ChiefTraderAgent {
   registerManualSideExpectation(symbol: string, side: 'BUY' | 'SELL', ttlMs: number): void {
     const sym = String(symbol || '').toUpperCase();
     if (!sym) return;
+    // 2026-10-08 leak hunt: entries whose TTL expired were only deleted lazily inside
+    // consumeManualSideMismatch() - an operator CONFIRM for a symbol that was never evaluated
+    // again pinned its entry past expiry for process lifetime. Expired entries are dead by
+    // definition (consumeManualSideMismatch deletes them on read), so sweeping them here is
+    // behavior-preserving. Never touches the side-match/mismatch decision logic.
+    if (STALE_MAP_ENTRY_EVICTION_ENABLED) {
+      const now = Date.now();
+      for (const [s, lock] of this.manualSideExpectations) {
+        if (now > lock.expiresAt) this.manualSideExpectations.delete(s);
+      }
+    }
     this.manualSideExpectations.set(sym, { side, expiresAt: Date.now() + Math.max(1000, ttlMs) });
   }
 
@@ -252,9 +284,30 @@ export class ChiefTraderAgent {
   private recordDebateStarted(symbol: string): void {
     const now = Date.now();
     this.lastDebateStartedAt.set(symbol, now);
-    const staleBeforeMs = now - tradingSafety.consensusDebateCooldownMs * 10;
+    if (!STALE_MAP_ENTRY_EVICTION_ENABLED) return;
+    const staleBeforeMs = now - tradingSafety.consensusDebateCooldownMs * STALE_ENTRY_COOLDOWN_MULTIPLIER;
     for (const [sym, startedAt] of this.lastDebateStartedAt) {
       if (startedAt < staleBeforeMs) this.lastDebateStartedAt.delete(sym);
+    }
+  }
+
+  /**
+   * 2026-10-08 leak hunt: `lastConsensusEvalAt` was set on every scheduled/serialized evaluation
+   * and only ever deleted when a debate's .finally() ran for that symbol - a symbol whose ideas
+   * never triggered a debate kept its entry for process lifetime (same unbounded-per-symbol-Map
+   * class as the 2026-09-22 lastDebateStartedAt finding, fixed above). The map's only read is the
+   * same-agent-replacement throttle (`now - lastEval < consensusEvalMinIntervalMs`), so an entry
+   * older than STALE_ENTRY_COOLDOWN_MULTIPLIER x that interval can never affect the check - the
+   * opportunistic sweep below is behavior-preserving by construction. Never touches the throttle
+   * itself, the 0.75 threshold, or min-2.
+   */
+  private recordConsensusEval(symbol: string): void {
+    const now = Date.now();
+    this.lastConsensusEvalAt.set(symbol, now);
+    if (!STALE_MAP_ENTRY_EVICTION_ENABLED) return;
+    const staleBeforeMs = now - tradingSafety.consensusEvalMinIntervalMs * STALE_ENTRY_COOLDOWN_MULTIPLIER;
+    for (const [sym, at] of this.lastConsensusEvalAt) {
+      if (at < staleBeforeMs) this.lastConsensusEvalAt.delete(sym);
     }
   }
 
@@ -345,6 +398,17 @@ export class ChiefTraderAgent {
       clearInterval(this.weightSyncTimer);
       this.weightSyncTimer = null;
     }
+    // Memory-leak hunt (2026-10-08, TIMERS/SCHEDULERS): the DEF-3 fix above cleared the two
+    // constructor intervals but left pending per-symbol consensus-aggregation debounce timers
+    // armed. A timer firing after stop() invokes evaluateConsensus() - the same DB access the
+    // graceful-shutdown drain is designed to prevent (a tick landing after sqliteDb.close()
+    // throws "database connection is not open"), and each armed Timeout retains its closure
+    // (symbol/traceId/agent). Cancel every pending debounce and drop the map entries so no
+    // reference is retained. Does not change scheduling behavior while running - only cleanup.
+    for (const timer of this.consensusAggregationTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.consensusAggregationTimers.clear();
   }
   
   async syncWeights() {
@@ -371,8 +435,23 @@ export class ChiefTraderAgent {
     }
 }
 
-  private isRiskExit(idea: { agent: string, side: string }): boolean {
+  // 2026-10-08 defect hunt (core F3): the fast path must not key on a self-reported
+  // agent string alone. PortfolioMonitor's emitRiskExit stamps BOTH the agent name and
+  // origin='PORTFOLIO_EXIT'; require both so a spoofed agent name alone cannot skip
+  // the debate. Does not weaken the legitimate exit path (still flows RiskEngine+OMS).
+  //
+  // isExitShaped vs isRiskExit: an exit-shaped idea (risk-exit agent SELL, any origin)
+  // is NEVER routed to the quant policy and always proceeds when Autobot is off -
+  // protective exits are not strategy decisions. But only a genuine risk exit
+  // (exit-shaped AND origin=PORTFOLIO_EXIT) inherits the debate skip; a mis-tagged
+  // or spoofed exit falls through to normal consensus intake instead.
+  private isExitShaped(idea: { agent: string, side: string }): boolean {
     return idea.agent === RISK_EXIT_AGENT && idea.side === 'SELL';
+  }
+
+  private isRiskExit(idea: { agent: string, side: string, origin?: unknown }): boolean {
+    return this.isExitShaped(idea)
+      && normalizeTradeIdeaOrigin(idea.origin) === 'PORTFOLIO_EXIT';
   }
 
   private beginDebate(symbol: string): void {
@@ -412,7 +491,7 @@ export class ChiefTraderAgent {
     const enoughVotes = independent.length >= MIN_INDEPENDENT_AGREEING_AGENTS;
 
     if (forceImmediate || enoughVotes || windowMs <= 0) {
-      this.lastConsensusEvalAt.set(symbol, Date.now());
+      this.recordConsensusEval(symbol);
       this.evaluateConsensus(symbol, traceId).catch((e) =>
         console.error('[ChiefTrader] evaluateConsensus failed', e),
       );
@@ -421,7 +500,7 @@ export class ChiefTraderAgent {
 
     const timer = setTimeout(() => {
       this.consensusAggregationTimers.delete(symbol);
-      this.lastConsensusEvalAt.set(symbol, Date.now());
+      this.recordConsensusEval(symbol);
       this.evaluateConsensus(symbol, traceId).catch((e) =>
         console.error('[ChiefTrader] evaluateConsensus failed', e),
       );
@@ -548,7 +627,7 @@ export class ChiefTraderAgent {
   async reviewIdea(idea: { traceId: string, symbol: string, side: string, confidence: number, reasoning: string, agent: string, currentPrice?: number, newsDetails?: any, origin?: unknown, strategyId?: unknown }) {
     // Autobot-off: do not debate stray entry ideas (no LLM, no CHIEF_APPROVED_IDEA).
     // PortfolioMonitor risk-exit SELLs still proceed — capital preservation is not an entry vote.
-    if (!isLiveIdeaGenerationEnabled() && !this.isRiskExit(idea)) {
+    if (!isLiveIdeaGenerationEnabled() && !this.isExitShaped(idea)) {
       console.log(`[ChiefTrader] Ignoring ${idea.agent} ${idea.side} ${idea.symbol} — Autobot off or trading not TRADING_ENABLED`);
       return;
     }
@@ -561,7 +640,7 @@ export class ChiefTraderAgent {
     // at the idea gate; authority is resolved centrally by QuantStrategyAuthorization — never
     // self-granted by the emitter. Risk exits are excluded: protective exits never require
     // strategy authorization and never depend on LLM availability.
-    if (!this.isRiskExit(idea) && normalizeTradeIdeaOrigin(idea.origin) === 'QUANT_STRATEGY') {
+    if (!this.isExitShaped(idea) && normalizeTradeIdeaOrigin(idea.origin) === 'QUANT_STRATEGY') {
       const authorization = await resolveQuantStrategyAuthorization(idea);
       observeSafe(() => {
         structuredLogger.info('chief_decision_policy_selected', {
@@ -593,7 +672,13 @@ export class ChiefTraderAgent {
         await this.evaluateQuantPolicy(idea, authorization);
         return;
       }
-      if (authorization.authority === 'NOT_ELIGIBLE') {
+      if (authorization.authority === 'NOT_ELIGIBLE' || authorization.authority === 'NOT_AUTHORIZED') {
+        // NOT_ELIGIBLE: explicit operator decision removed exposure (DEGRADED/RETIRED) or the
+        // paper-only lock failed (LIVE). NOT_AUTHORIZED: no lifecycle record exists for the
+        // strategy (NO_LIFECYCLE_RECORD) — missing state, never silently defaulted. Both are
+        // terminal: the idea is dropped (DESK_NO_TRADE, terminalReasonCode 'QUANT_NOT_AUTHORIZED'),
+        // never re-routed to consensus. See QuantStrategyAuthorization's NOT_AUTHORIZED routing
+        // contract for the rationale.
         this.emitQuantStrategyNotEligible(idea, authorization);
         return;
       }
@@ -917,7 +1002,7 @@ export class ChiefTraderAgent {
       return;
     }
 
-    this.lastConsensusEvalAt.set(symbol, Date.now());
+    this.recordConsensusEval(symbol);
     const relevantIdeas = this.recentIdeas.filter(i => i.symbol === symbol && isConsensusIdeaFresh(i.receivedAt));
     // Phase 7E (MODERATE tier): raw, pre-calibration confidence per agent - the calibration-trust
     // bucket lookup must bucket on the SAME raw value calibrateConfidence() itself buckets on.
@@ -1096,7 +1181,7 @@ export class ChiefTraderAgent {
     if (approved && sideMismatch) {
       approved = false;
       reason = sideMismatch;
-      terminalReasonCode = 'AGENT_HOLD';
+      terminalReasonCode = 'MANUAL_SIDE_MISMATCH';
       eventBus.emit(EVENTS.TRADE_REJECTED_CONSENSUS, {
         traceId,
         symbol,
@@ -1525,6 +1610,35 @@ export class ChiefTraderAgent {
     const sideMismatch = this.consumeManualSideMismatch(symbol, approvedSide);
     if (sideMismatch) {
       console.log(`[ChiefTrader] QUANT POLICY approval withheld on ${symbol}: ${sideMismatch}`);
+      // 2026-10-08 defect hunt: lastConsensusOutcome was written above with
+      // approved=true; correct it - the approval was withheld, never granted.
+      this.lastConsensusOutcome = {
+        at: new Date().toISOString(),
+        symbol,
+        approved: false,
+        side: 'HOLD',
+        independentAgreeingAgents: 0,
+        requiredAgents: 0,
+        confidence: decision.strategyConfidence ?? 0,
+        threshold: 0,
+        reason: sideMismatch,
+        agentVotes: [{ agent: idea.agent, side: idea.side, confidence: idea.confidence }],
+        decisionTier: 'QUANT_EXECUTION',
+        terminalReasonCode: 'MANUAL_SIDE_MISMATCH',
+      };
+      eventBus.emit(EVENTS.DESK_NO_TRADE, {
+        traceId, symbol, side: approvedSide, confidence: decision.strategyConfidence, reason: sideMismatch,
+        decisionPolicy: 'QUANT_EXECUTION',
+        decisionTier: 'QUANT_EXECUTION',
+        terminalReasonCode: 'MANUAL_SIDE_MISMATCH',
+        strategyId: authorization.strategyId,
+        authorizationReason: authorization.reason,
+      });
+      eventBus.emit(EVENTS.CHIEF_CONSENSUS_COMPLETED, {
+        traceId, symbol, approved: false, confidence: decision.strategyConfidence ?? 0, side: approvedSide,
+        threshold: 0, reason: sideMismatch, decisionPolicy: 'QUANT_EXECUTION',
+        decisionTier: 'QUANT_EXECUTION', terminalReasonCode: 'MANUAL_SIDE_MISMATCH',
+      });
       eventBus.emit(EVENTS.TRADE_REJECTED_CONSENSUS, {
         traceId, symbol, side: approvedSide, confidence: decision.strategyConfidence, reason: sideMismatch,
         decisionPolicy: 'QUANT_EXECUTION',
@@ -1678,7 +1792,17 @@ export class ChiefTraderAgent {
     for (const symbol of symbols) {
       if (this.debatePending(symbol)) continue;
       const relevantIdeas = this.recentIdeas.filter(i => i.symbol === symbol && isConsensusIdeaFresh(i.receivedAt));
-      if (relevantIdeas.length === 0) continue;
+      if (relevantIdeas.length === 0) {
+        // 2026-10-08 leak hunt: this round is dead - no fresh ideas means no consensus_decisions
+        // row will ever be persisted for it, so its interim tally can never be reported by
+        // logAndResetInterimConsensusTally. Leaving it pinned the entry forever (one per symbol
+        // whose ideas went stale between this sweep and the TTL filter) AND would corrupt the
+        // NEXT round's collapse ratio by folding this dead round's count into it. Deleting here
+        // is observability-neutral: logAndResetInterimConsensusTally with a live round is
+        // untouched, and a dead round had no row to attach the count to.
+        this.interimEvaluationsSinceLastPersist.delete(symbol);
+        continue;
+      }
       const evidence: Evidence[] = coalesceEvidenceByAgent(await Promise.all(relevantIdeas.map(async i => ({
         ...i,
         ...(await this.calibrateConfidenceDetailed(i.agent, i.confidence).then(detail => ({ confidence: detail.decisionConfidence, calibrationDetail: detail }))),

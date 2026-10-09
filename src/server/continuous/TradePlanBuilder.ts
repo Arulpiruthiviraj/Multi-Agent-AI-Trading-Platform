@@ -65,6 +65,14 @@ import {
   emitPreopenRevalidationCompleted,
   emitPremarketPlanHandedToRth,
 } from '../premarket/premarketRefreshEvents';
+import { emitPremarketRefreshCompleted } from '../premarket/premarketFocusEvents';
+
+// 2026-10-09 defect hunt: TRADE_PLAN_REVALIDATION_RETENTION_DAYS and
+// pruneTradePlanRevalidations() live in ./tradePlanRevalidationRetention (re-exported below).
+// They were moved out of this module because the retention sweep's lazy dynamic import can
+// resolve while this module is still mid-evaluation (import cycle), which threw a TDZ
+// "Cannot access before initialization" on the const. The leaf module cannot cycle.
+export { TRADE_PLAN_REVALIDATION_RETENTION_DAYS, pruneTradePlanRevalidations } from './tradePlanRevalidationRetention';
 
 export type SetupType = 'PRIMARY' | 'BACKUP' | 'WATCHLIST';
 export type TradePlanStatus = 'DRAFT' | 'READY' | 'REVALIDATING' | 'VALID' | 'INVALIDATED' | 'EXPIRED' | 'EXECUTED' | 'CLOSED';
@@ -535,33 +543,6 @@ export async function getTradePlansForDate(planDate: string): Promise<Array<type
 
 export async function getRevalidationHistory(planId: string): Promise<Array<typeof tradePlanRevalidations.$inferSelect>> {
   return db.select().from(tradePlanRevalidations).where(eq(tradePlanRevalidations.planId, planId)).orderBy(desc(tradePlanRevalidations.revalidatedAt));
-}
-
-/** 2026-10-07 Discovery-D2: retention bound for the trade_plan_revalidations ledger, in days.
- * A code constant (not a config entry) by the same convention as CONFLUENCE_AGREEMENT_THRESHOLD
- * above: this is a storage-hygiene bound, not a trading parameter, and no operator tuning story
- * exists for it yet. 30 days comfortably covers every forensic lookback the revalidation history
- * actually serves (intraday revalidation forensics, RTH handoff review) while bounding the
- * write-amplified ledger this defect found. */
-export const TRADE_PLAN_REVALIDATION_RETENTION_DAYS = 30;
-
-/**
- * 2026-10-07 Discovery-D2: retention prune for the trade_plan_revalidations ledger. Deletes rows
- * older than TRADE_PLAN_REVALIDATION_RETENTION_DAYS. Code-based, no migration - the table is
- * append-only history with no long-term audit-trail requirement beyond the retention window
- * (unlike trades/fills/risk_assessments, which are never pruned). Called from the operational
- * retention sweep (src/server/db/operationalRetention.ts), never from any trading decision path.
- * Returns the number of rows deleted.
- */
-export async function pruneTradePlanRevalidations(nowMs: number = Date.now()): Promise<number> {
-  const cutoffIso = new Date(nowMs - TRADE_PLAN_REVALIDATION_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  try {
-    const result = await db.delete(tradePlanRevalidations).where(lt(tradePlanRevalidations.revalidatedAt, cutoffIso));
-    return (result as unknown as { changes?: number }).changes ?? 0;
-  } catch (e) {
-    console.error('[TradePlanBuilder] Failed to prune revalidation history', e);
-    return 0;
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1277,6 +1258,12 @@ async function buildInitialPlans(input: LifecycleTickInput): Promise<InitialBuil
   emitPremarketPlanBuildCompleted({
     tradingDate: planDate, planCount: fresh.length, primaryCount, evidenceAsof: nowIso, at: nowIso,
   });
+  // The initial build IS a completed refresh cycle (version 1): emit the
+  // completion so the focus-report subscriber regenerates the report. The
+  // payload is bounded scalars only (same contract as the refresh path below).
+  emitPremarketRefreshCompleted({
+    tradingDate: planDate, refreshVersion: 1, refreshedAt: nowIso, planCount: fresh.length, at: nowIso,
+  });
 
   const lagAfter = await measureEventLoopLagMs();
   recordPerf({
@@ -1437,6 +1424,21 @@ async function runLifecycleRefresh(
     plansChanged, eventLoopLagMsBefore: lagBefore, eventLoopLagMsAfter: lagAfter,
   });
   lifecycleMemoryByDate.set(planDate, { lastRunAt: nowIso, lastRunKind: KIND_REASON[kind] });
+  // Every completed refresh cycle emits PREMARKET_REFRESH_COMPLETED so the
+  // focus-report subscriber regenerates the report — including no-material-
+  // change runs (the upsert on (plan_date, refresh_version) makes regeneration
+  // idempotent; redelivery of the same cycle carries the same version). The
+  // cycle version is the max plan refreshVersion after the run: unchanged or
+  // skipped plans keep their prior version, so a no-op refresh re-emits the
+  // current version rather than inventing a new one.
+  const cycleVersion = Math.max(1, ...outcomes.map((o) => o.newRefreshVersion));
+  emitPremarketRefreshCompleted({
+    tradingDate: planDate,
+    refreshVersion: cycleVersion,
+    refreshedAt: nowIso,
+    planCount: plans.length + newPlans,
+    at: nowIso,
+  });
   return {
     kind, tradingDate: planDate, refreshedCount, unchangedCount, expiredCount, skippedCount, newPlans, outcomes,
   };

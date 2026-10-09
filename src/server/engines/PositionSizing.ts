@@ -352,6 +352,17 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
     } else {
       record('correlation_exposure', true, { skipped: true, status: 'SKIPPED', reason: 'no existing positions to correlate against' });
     }
+  } else {
+    // 2026-10-08 defect hunt (D6): SELL assessments never recorded gates 18-21 at all, breaking
+    // the "every gate is recorded" audit invariant (gaps in risk_gate_results are
+    // indistinguishable from dropped writes). Concentration/correlation caps limit NEW risk
+    // deployment - a SELL reduces exposure, so they are honestly SKIPPED, never invented.
+    // (Gate 17, order_notional_cap, is already recorded SKIPPED for SELL above.)
+    const sellSkipReason = 'SELL/exit reduces exposure - concentration/correlation caps limit new risk deployment, not position reduction.';
+    record('symbol_concentration', true, { status: 'SKIPPED', reason: sellSkipReason });
+    record('open_positions_cap', true, { status: 'SKIPPED', reason: sellSkipReason });
+    record('sector_concentration', true, { status: 'SKIPPED', reason: sellSkipReason });
+    record('correlation_exposure', true, { status: 'SKIPPED', reason: sellSkipReason });
   }
 
   // Final honesty: a binding clamp that leaves zero shares must not report passed:true.

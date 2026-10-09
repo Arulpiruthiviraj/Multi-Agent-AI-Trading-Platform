@@ -458,27 +458,51 @@ function checkEventLoop(bands: OperatorReadinessBands): ReadinessCheck {
   }
 }
 
-async function checkPremarket(): Promise<ReadinessCheck> {
+/**
+ * Trade-plan pipeline health (defect #6 split, 2026-10-08): is the premarket
+ * trade-plan pipeline running and producing? Evidence is the pipeline's OWN
+ * ledger (trade_plans) — never the focus-report table, so a missing report
+ * cannot masquerade as a dead pipeline. Independent of checkPremarketFocusReport.
+ */
+async function checkTradePlanPipeline(): Promise<ReadinessCheck> {
+  const id = 'tradePlanPipeline';
+  const label = 'Trade-plan pipeline';
   try {
-    const etDate = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'America/New_York',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(new Date());
-    const rows = await db
-      .select({ planDate: schema.premarketFocusReports.planDate, refreshVersion: schema.premarketFocusReports.refreshVersion })
-      .from(schema.premarketFocusReports)
-      .orderBy(desc(schema.premarketFocusReports.id))
-      .limit(5);
-    const today = rows.filter((r) => r.planDate === etDate);
-    if (today.length > 0) {
-      return pass('premarket', 'Premarket plan', `focus plan for ${etDate} present (v${today[0].refreshVersion})`);
-    }
-    const latestDate = rows.length > 0 ? rows[0].planDate : 'none recorded';
-    return warn('premarket', 'Premarket plan', `no focus plan for ${etDate} (latest: ${latestDate})`);
+    const {
+      gatherTradePlanPipelineEvidence,
+      evaluateTradePlanPipeline,
+      premarketRefreshWindows,
+    } = await import('../premarket/premarketReadiness');
+    const evidence = await gatherTradePlanPipelineEvidence();
+    const result = evaluateTradePlanPipeline(evidence, new Date(), premarketRefreshWindows());
+    if (result.status === 'PASS') return pass(id, label, result.detail);
+    if (result.status === 'FAIL') return fail(id, label, result.detail);
+    return warn(id, label, result.detail);
   } catch (e: unknown) {
-    return warn('premarket', 'Premarket plan', `premarket plan unreadable: ${errMsg(e)}`);
+    return warn(id, label, `pipeline ledger unreadable: ${errMsg(e)}`);
+  }
+}
+
+/**
+ * Premarket focus-report health (defect #6 split, 2026-10-08): was a focus
+ * report produced for the latest completed refresh? Evidence is the
+ * premarket_focus_reports table vs the pipeline's latest completed refresh
+ * version. A missing/stale report is WARN (observability, never a trading
+ * gate) and is independent of checkTradePlanPipeline — a stalled pipeline
+ * cannot masquerade as a missing report either.
+ */
+async function checkPremarketFocusReport(): Promise<ReadinessCheck> {
+  const id = 'premarketFocusReport';
+  const label = 'Premarket focus report';
+  try {
+    const { gatherFocusReportEvidence, evaluateFocusReportHealth } =
+      await import('../premarket/premarketReadiness');
+    const evidence = await gatherFocusReportEvidence();
+    const result = evaluateFocusReportHealth(evidence);
+    if (result.status === 'PASS') return pass(id, label, result.detail);
+    return warn(id, label, result.detail);
+  } catch (e: unknown) {
+    return warn(id, label, `focus report table unreadable: ${errMsg(e)}`);
   }
 }
 
@@ -529,7 +553,8 @@ export async function buildReadinessChecklist(): Promise<ReadinessChecklist> {
   checks.push(checkWal(bands));
   checks.push(checkMemory());
   checks.push(checkEventLoop(bands));
-  checks.push(await checkPremarket());
+  checks.push(await checkTradePlanPipeline());
+  checks.push(await checkPremarketFocusReport());
 
   return {
     generatedAt: new Date().toISOString(),

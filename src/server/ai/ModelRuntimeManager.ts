@@ -8,7 +8,7 @@
  * This module only probes. IBKR health adapts to the active broker (socket :4002 vs
  * Client Portal :5000 vs STANDBY when Alpaca/Internal Paper is active).
  */
-import { spawn, type ChildProcess } from 'child_process';
+import { spawn, type ChildProcess, type SpawnOptions } from 'child_process';
 import path from 'node:path';
 import { eventBus } from '../core/EventBus';
 import { openAliceVerificationService } from '../integrations/openalice/OpenAliceVerificationService';
@@ -44,7 +44,106 @@ export interface ModelRegistryEntry {
 const OLLAMA_HOST = preferIpv4Loopback(process.env.OLLAMA_HOST || networkEndpoints.aiLocal.ollamaDefault);
 const CHRONOS_URL = resolveLocalAiServiceUrl();
 
-const children: ChildProcess[] = [];
+/**
+ * A2 (2026-10-08): spawned model-runtime children are tracked in a BOUNDED set, reaped on
+ * 'exit'/'error', and killed on stop()/shutdown.
+ *
+ * Defect this replaces (the old `const children: ChildProcess[] = []` was push-only): every
+ * spawned child was appended and never removed - no 'exit' listener, no cap, no stop() -
+ * so (a) the array grew without bound across retryUnhealthy() calls (each ChildProcess object
+ * plus its listeners kept reachable forever), (b) retryUnhealthy() could spawn a second live
+ * Chronos while the first was still bound to the same port, and (c) children were spawned
+ * detached+unref'd with no shutdown hook, surviving engine shutdown as orphans.
+ */
+interface TrackedModelChild {
+  child: ChildProcess;
+  /** 'Ollama' | 'Chronos/Kronos' | 'Chronos/Kronos local_ai_service' - lets retryUnhealthy()
+   *  kill only the live child it is about to replace, never an unrelated one. */
+  label: string;
+  spawnedAtMs: number;
+}
+const trackedChildren = new Set<TrackedModelChild>();
+
+/** Remove one entry and drop its listeners so neither the ChildProcess nor the entry is kept
+ *  reachable after the child is gone. Idempotent: safe to call from both the 'exit'/'error'
+ *  listener and an explicit kill path. */
+function reapChild(entry: TrackedModelChild): void {
+  trackedChildren.delete(entry);
+  try { entry.child.removeAllListeners('exit'); } catch { /* already gone */ }
+  try { entry.child.removeAllListeners('error'); } catch { /* already gone */ }
+}
+
+/** Drop entries whose process already ended but whose 'exit' event has not been observed yet,
+ *  so size checks and shutdown sweeps always see the live set. */
+function reapDeadChildren(): void {
+  for (const entry of [...trackedChildren]) {
+    if (entry.child.exitCode !== null || entry.child.signalCode !== null) reapChild(entry);
+  }
+}
+
+/**
+ * Track a freshly spawned child. Returns false when the concurrency cap refused it - the
+ * caller must treat the child as NOT adopted (spawnTracked SIGKILLs it so it cannot leak).
+ * Reaping on 'exit' AND 'error': a spawn failure (e.g. binary not on PATH) surfaces as an
+ * async 'error' event, and without a listener Node would throw it unhandled while the entry
+ * stayed tracked forever.
+ */
+function trackChild(child: ChildProcess, label: string): boolean {
+  reapDeadChildren();
+  const cap = runtimeIntervals.modelRuntimeMaxChildren;
+  if (trackedChildren.size >= cap) {
+    console.warn(
+      `[ModelRuntime] NOT tracking ${label} (pid ${child.pid}): ${trackedChildren.size} children ` +
+      `already tracked (cap modelRuntimeMaxChildren=${cap}) - refusing to spawn what cannot be ` +
+      `tracked. Killing the excess child instead of leaking it.`,
+    );
+    try { child.kill('SIGKILL'); } catch { /* best-effort */ }
+    return false;
+  }
+  const entry: TrackedModelChild = { child, label, spawnedAtMs: Date.now() };
+  const onDone = () => reapChild(entry);
+  child.once('exit', onDone);
+  child.once('error', onDone);
+  trackedChildren.add(entry);
+  return true;
+}
+
+/** Kill every live tracked child carrying the given label (dead ones are reaped first).
+ *  Used by retryUnhealthy() before re-spawning Chronos: a retry must never stack a second
+ *  live process on the same port while the first is still alive. */
+function killTrackedChildrenByLabel(label: string): void {
+  reapDeadChildren();
+  for (const entry of [...trackedChildren]) {
+    if (entry.label !== label) continue;
+    try {
+      if (entry.child.exitCode === null && entry.child.signalCode === null) {
+        entry.child.kill('SIGTERM');
+      }
+    } catch (e: any) {
+      console.warn(`[ModelRuntime] Failed to kill ${label} (pid ${entry.child.pid}): ${e?.message}`);
+    }
+    reapChild(entry);
+  }
+}
+
+/**
+ * Spawn through the single tracked path. Returns the child, or null when the spawn failed
+ * synchronously or the tracking cap refused it (the over-cap child is SIGKILLed inside
+ * trackChild, never leaked). extraOpts may override defaults (tests pass { shell: false }).
+ */
+function spawnTracked(command: string, args: string[], label: string, extraOpts?: SpawnOptions): ChildProcess | null {
+  let child: ChildProcess;
+  try {
+    child = spawn(command, args, { stdio: 'ignore', detached: true, shell: true, ...extraOpts });
+  } catch (e: any) {
+    console.warn(`[ModelRuntime] Failed to spawn ${label}: ${e.message}`);
+    return null;
+  }
+  child.unref();
+  if (!trackChild(child, label)) return null;
+  console.log(`[ModelRuntime] Spawned ${label}: ${command} ${args.join(' ')} (pid ${child.pid})`);
+  return child;
+}
 
 async function probe(url: string, timeoutMs = runtimeIntervals.modelRuntimeProbeTimeoutMs): Promise<{ ok: boolean; latencyMs: number; body?: any; error?: string }> {
   const t0 = Date.now();
@@ -93,14 +192,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 function trySpawn(command: string, args: string[], label: string): void {
-  try {
-    const child = spawn(command, args, { stdio: 'ignore', detached: true, shell: true });
-    child.unref();
-    children.push(child);
-    console.log(`[ModelRuntime] Spawned ${label}: ${command} ${args.join(' ')} (pid ${child.pid})`);
-  } catch (e: any) {
-    console.warn(`[ModelRuntime] Failed to spawn ${label}: ${e.message}`);
-  }
+  spawnTracked(command, args, label);
 }
 
 function trySpawnChronos(): void {
@@ -111,18 +203,11 @@ function trySpawnChronos(): void {
   // below. path is a normal ESM import like every other module dependency in this file.
   const script = path.join(process.cwd(), 'scripts', 'local_ai_service.py');
   const py = process.platform === 'win32' ? 'python' : 'python3';
-  try {
-    const child = spawn(py, [script], {
-      stdio: 'ignore',
-      detached: true,
-      shell: true,
-      env: { ...process.env, LOCAL_AI_SERVICE_PORT: String(port) },
-    });
-    child.unref();
-    children.push(child);
-    console.log(`[ModelRuntime] Spawned Chronos/Kronos: ${py} ${script} (pid ${child.pid}, port ${port})`);
-  } catch (e: any) {
-    console.warn(`[ModelRuntime] Failed to spawn Chronos via python; falling back to npm run ai:serve: ${e.message}`);
+  const child = spawnTracked(py, [script], 'Chronos/Kronos', {
+    env: { ...process.env, LOCAL_AI_SERVICE_PORT: String(port) },
+  });
+  if (!child) {
+    console.warn('[ModelRuntime] Failed to spawn Chronos via python; falling back to npm run ai:serve');
     trySpawn('npm', ['run', 'ai:serve'], 'Chronos/Kronos local_ai_service');
   }
 }
@@ -139,6 +224,27 @@ export class ModelRuntimeManager {
 
   getRegistry(): ModelRegistryEntry[] {
     return this.registry;
+  }
+
+  /**
+   * A2 (2026-10-08): kill every tracked model-runtime child and drop all references.
+   * Called by the graceful-shutdown drain (src/server/core/gracefulShutdown.ts) so spawned
+   * Ollama/Chronos companions never outlive the engine as detached orphans - previously
+   * nothing killed them and the tracking array grew forever. Idempotent: safe to call
+   * twice, and safe when nothing was ever spawned.
+   */
+  stop(): void {
+    reapDeadChildren();
+    for (const entry of [...trackedChildren]) {
+      try {
+        if (entry.child.exitCode === null && entry.child.signalCode === null) {
+          entry.child.kill('SIGTERM');
+        }
+      } catch (e: any) {
+        console.warn(`[ModelRuntime] Failed to kill ${entry.label} (pid ${entry.child.pid}): ${e?.message}`);
+      }
+      reapChild(entry);
+    }
   }
 
   async startAndProbe(): Promise<ModelRegistryEntry[]> {
@@ -176,6 +282,10 @@ export class ModelRuntimeManager {
     let chronos = await probe(`${CHRONOS_URL}/health`, 3000);
     if (!chronos.ok && allowStart && allowChronos) {
       eventBus.emit('MODEL_STARTED', { modelId: 'chronos', endpoint: CHRONOS_URL });
+      // A2 (2026-10-08): never stack a second live Chronos on the same port - a previous
+      // retry may have left one alive (or still starting). Kill live same-label children
+      // first (dead ones are reaped inside), then spawn exactly one.
+      killTrackedChildrenByLabel('Chronos/Kronos');
       trySpawnChronos();
       for (let i = 0; i < 20 && !chronos.ok; i++) {
         await sleep(2000);
@@ -316,3 +426,26 @@ export class ModelRuntimeManager {
 }
 
 export const modelRuntimeManager = ModelRuntimeManager.getInstance();
+
+/** Test-only: spawn through the real tracked path (never real model binaries - the test passes
+ *  its own command, e.g. process.execPath). Returns the child, or null when the spawn failed
+ *  or the concurrency cap refused it. */
+export function __spawnModelChildForTests(
+  command: string,
+  args: string[],
+  label: string,
+  extraOpts?: SpawnOptions,
+): ChildProcess | null {
+  return spawnTracked(command, args, label, extraOpts);
+}
+
+/** Test-only: number of currently-tracked children (reaps dead ones first, like production). */
+export function __trackedModelChildCountForTests(): number {
+  reapDeadChildren();
+  return trackedChildren.size;
+}
+
+/** Test-only: the same label-scoped kill retryUnhealthy() uses before re-spawning. */
+export function __killTrackedChildrenByLabelForTests(label: string): void {
+  killTrackedChildrenByLabel(label);
+}

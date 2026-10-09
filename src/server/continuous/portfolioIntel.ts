@@ -22,6 +22,19 @@ export function resetPortfolioIntelForTests() {
   lastExitEmitAt.clear();
 }
 
+/**
+ * 2026-10-08 memory-leak hunt: drop exit-idea cooldown entries for symbols with no open
+ * holding. Keys are stored upper-cased by canEmitPortfolioExitIdea, so heldSymbols must be
+ * upper-cased too. Terminal-state cleanup only — a still-held symbol's cooldown is untouched,
+ * and a closed position cannot emit exit ideas anyway; removing its stale entry only stops
+ * the old position's cooldown from throttling a later re-entry's first exit idea.
+ */
+export function pruneExitCooldownsForFlatSymbols(heldSymbols: Set<string>): void {
+  for (const key of [...lastExitEmitAt.keys()]) {
+    if (!heldSymbols.has(key)) lastExitEmitAt.delete(key);
+  }
+}
+
 export function ensureHoldingSubscribed(symbol: string): void {
   if (!isPortfolioIntelEnabled()) return;
   const sym = String(symbol || '').toUpperCase();

@@ -24,6 +24,11 @@ import { getCryptoInstrument, getCryptoPaperExecutionAssumptions } from '../serv
 import { db } from '../server/db';
 import { cryptoPaperBrokerState, cryptoPaperOrders, cryptoPaperPositions } from '../server/db/schema';
 import { eq } from 'drizzle-orm';
+import {
+  evictOldestTerminalOrdersIfOverCap,
+  isPaperBrokerOrderEvictionEnabled,
+  resolvePaperBrokerOrderRegistryMax,
+} from './brokerMemory';
 
 const STATE_ROW_ID = 'singleton';
 
@@ -66,6 +71,24 @@ export class CryptoPaperBroker implements BrokerPlugin {
   private _clientOrderIdIndex: Map<string, string> = new Map(); // clientOrderId -> internal order id
   private _realizedPnl = 0;
   private triggeredStops = new Set<string>();
+
+  // 2026-10-08 memory-hunt fix: _orders (+ _clientOrderIdIndex, triggeredStops) previously
+  // grew by one entry per crypto paper order for process lifetime - terminal orders were
+  // never removed. Evict oldest-terminal-first when over the cap, coherently dropping the
+  // index entries and triggered-stop marks that point at evicted orders. Non-terminal orders
+  // are never evicted (OMS follow-up, crash recovery via getOrderByClientOrderId,
+  // reconciliation depend on them). The DB rows (persistOrder) are the durable record and
+  // are untouched - this bounds only the in-memory working set. Flag/env:
+  // ARGUS_PAPER_BROKER_ORDER_EVICTION, ARGUS_PAPER_BROKER_ORDER_REGISTRY_MAX.
+  private boundOrderRegistry(): void {
+    if (!isPaperBrokerOrderEvictionEnabled()) return;
+    evictOldestTerminalOrdersIfOverCap(this._orders, resolvePaperBrokerOrderRegistryMax(), (order) => {
+      for (const [clientOrderId, orderId] of this._clientOrderIdIndex) {
+        if (orderId === order.id) this._clientOrderIdIndex.delete(clientOrderId);
+      }
+      this.triggeredStops.delete(order.id);
+    });
+  }
 
   private validateOrder(order: Partial<Order>, excludeOrderId?: string): string | null {
     if (order.side !== 'BUY' && order.side !== 'SELL') return 'invalid order side';
@@ -240,6 +263,7 @@ export class CryptoPaperBroker implements BrokerPlugin {
       this._orders.set(order.id, order);
       if (orderData.clientOrderId) this._clientOrderIdIndex.set(orderData.clientOrderId, order.id);
       this.persistOrder(order);
+      this.boundOrderRegistry();
       return order;
     };
 
@@ -275,6 +299,7 @@ export class CryptoPaperBroker implements BrokerPlugin {
     this._orders.set(newOrder.id, newOrder);
     if (orderData.clientOrderId) this._clientOrderIdIndex.set(orderData.clientOrderId, newOrder.id);
     this.persistOrder(newOrder);
+    this.boundOrderRegistry();
     return newOrder;
   }
 
@@ -443,6 +468,8 @@ export class CryptoPaperBroker implements BrokerPlugin {
         pos.unrealizedPnlPercent = totalCost !== 0 ? pos.unrealizedPnl / totalCost : 0;
       }
     }
+    // Terminal orders settled by this tick can now be bounded out of the registry.
+    this.boundOrderRegistry();
   }
 
   /** Test/diagnostic only - real callers use portfolio()/positions(). */

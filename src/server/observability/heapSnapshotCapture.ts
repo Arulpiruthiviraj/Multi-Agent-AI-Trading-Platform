@@ -37,6 +37,7 @@ import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:f
 import { join } from 'node:path';
 import { observabilityConfig } from '../config/observability';
 import { structuredLogger, observeSafe } from './StructuredLogger';
+import { publishMaintenanceState } from '../core/maintenanceState';
 import type { MemoryTelemetryLevel } from './processTelemetry';
 
 interface HeapSnapshotState {
@@ -115,9 +116,25 @@ export async function captureHeapSnapshot(reason: string): Promise<{ ok: boolean
     const filename = `argus-${new Date().toISOString().replace(/[:.]/g, '-')}-${reason}.heapsnapshot`;
     const fullPath = join(dir, filename);
 
-    // v8.writeHeapSnapshot() is synchronous (a real, bounded V8 heap walk) - see this module's own
-    // header for why that is disclosed, not hidden. Duration below is the honest measurement.
-    writeHeapSnapshot(fullPath);
+    // 2026-10-08 defect hunt (P1-W1): v8.writeHeapSnapshot() is synchronous (a real, bounded
+    // V8 heap walk) - see this module's own header for why that is disclosed, not hidden.
+    // Duration below is the honest measurement. Publish a RUNNING maintenance claim BEFORE
+    // the walk so the external watchdog defers its frozen-process judgment for the duration
+    // (a multi-minute snapshot is otherwise indistinguishable from a dead event loop, and the
+    // 2026-09-14 live kill was exactly this shape). Best-effort: a publish failure must never
+    // block the capture.
+    try {
+      publishMaintenanceState({ heapSnapshot: { state: 'RUNNING', startedAt: new Date().toISOString() } });
+    } catch { /* best-effort only */ }
+    let snapshotOk = false;
+    try {
+      writeHeapSnapshot(fullPath);
+      snapshotOk = true;
+    } finally {
+      try {
+        publishMaintenanceState({ heapSnapshot: { state: snapshotOk ? 'SUCCEEDED' : 'FAILED' } });
+      } catch { /* best-effort only */ }
+    }
 
     const durationMs = Date.now() - startedAt;
     state.snapshotCount += 1;

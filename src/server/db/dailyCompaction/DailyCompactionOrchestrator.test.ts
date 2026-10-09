@@ -85,11 +85,11 @@ describe('DailyCompactionOrchestrator', () => {
         };
         return { sourceRowCount: raw, summary };
       },
-      purgeWindow(): number {
+      purgeWindow: async (): Promise<{ deleted: number; truncated: boolean }> => {
         if (opts.purgeThrows) throw opts.purgeThrows;
         const deleted = raw;
         raw = 0;
-        return deleted;
+        return { deleted, truncated: false };
       },
     };
     return { source, rawRemaining: () => raw };
@@ -180,9 +180,9 @@ describe('DailyCompactionOrchestrator', () => {
     const { source, rawRemaining } = makeFakeSource({ sourceType: 'T10', rowCount: 50 });
     await orchestrator.runDailyCompactionForDate(source, CLOSED_DATE, nowMs);
     // Re-wrap purgeWindow to throw, simulating a failure discovered only at purge time.
-    const throwingSource: DailyCompactionSource = { ...source, purgeWindow: () => { throw new Error('simulated purge failure'); } };
+    const throwingSource: DailyCompactionSource = { ...source, purgeWindow: async () => { throw new Error('simulated purge failure'); } };
     const farFuture = nowMs + 400 * 24 * 60 * 60 * 1000; // well past any retention window
-    const result = orchestrator.purgeVerifiedDays(throwingSource, 14, farFuture);
+    const result = await orchestrator.purgeVerifiedDays(throwingSource, 14, farFuture);
     expect(result.purgedDays).toBe(0);
     expect(rawRemaining()).toBe(50); // raw data never touched
     const row = db.select().from(schema.dailyLearningArchive).all()[0];
@@ -218,7 +218,7 @@ describe('DailyCompactionOrchestrator', () => {
     expect(row.compactionStatus).toBe('VERIFIED');
     expect(row.rawPurgedAt).toBeNull(); // simulates the crash point: verified, never purged
     const farFuture = nowMs + 400 * 24 * 60 * 60 * 1000;
-    const result = orchestrator.purgeVerifiedDays(source, 14, farFuture);
+    const result = await orchestrator.purgeVerifiedDays(source, 14, farFuture);
     expect(result.purgedDays).toBe(1);
     expect(rawRemaining()).toBe(0);
   });
@@ -230,11 +230,11 @@ describe('DailyCompactionOrchestrator', () => {
     for (const { source } of [good1, bad, good2]) {
       await orchestrator.runDailyCompactionForDate(source, CLOSED_DATE, nowMs);
     }
-    const throwingBad: DailyCompactionSource = { ...bad.source, purgeWindow: () => { throw new Error('boom'); } };
+    const throwingBad: DailyCompactionSource = { ...bad.source, purgeWindow: async () => { throw new Error('boom'); } };
     const farFuture = nowMs + 400 * 24 * 60 * 60 * 1000;
-    const r1 = orchestrator.purgeVerifiedDays(good1.source, 14, farFuture);
-    const r2 = orchestrator.purgeVerifiedDays(throwingBad, 14, farFuture);
-    const r3 = orchestrator.purgeVerifiedDays(good2.source, 14, farFuture);
+    const r1 = await orchestrator.purgeVerifiedDays(good1.source, 14, farFuture);
+    const r2 = await orchestrator.purgeVerifiedDays(throwingBad, 14, farFuture);
+    const r3 = await orchestrator.purgeVerifiedDays(good2.source, 14, farFuture);
     expect(r1.purgedDays).toBe(1);
     expect(r2.purgedDays).toBe(0); // bad day's own sweep call reports the failure
     expect(r3.purgedDays).toBe(1); // unaffected by the bad day
@@ -247,8 +247,8 @@ describe('DailyCompactionOrchestrator', () => {
     const { source, rawRemaining } = makeFakeSource({ sourceType: 'T14', rowCount: 6 });
     await orchestrator.runDailyCompactionForDate(source, CLOSED_DATE, nowMs);
     const farFuture = nowMs + 400 * 24 * 60 * 60 * 1000;
-    const first = orchestrator.purgeVerifiedDays(source, 14, farFuture);
-    const second = orchestrator.purgeVerifiedDays(source, 14, farFuture);
+    const first = await orchestrator.purgeVerifiedDays(source, 14, farFuture);
+    const second = await orchestrator.purgeVerifiedDays(source, 14, farFuture);
     expect(first.purgedDays).toBe(1);
     expect(second.purgedDays).toBe(0); // already PURGED - correctly excluded from "eligible"
     expect(rawRemaining()).toBe(0);
@@ -258,7 +258,7 @@ describe('DailyCompactionOrchestrator', () => {
     const { source, rawRemaining } = makeFakeSource({ sourceType: 'T15', rowCount: 9 });
     await orchestrator.runDailyCompactionForDate(source, CLOSED_DATE, nowMs);
     // nowMs is only 5 days after CLOSED_DATE - well inside a 14-day retention window.
-    const result = orchestrator.purgeVerifiedDays(source, 14, nowMs);
+    const result = await orchestrator.purgeVerifiedDays(source, 14, nowMs);
     expect(result.purgedDays).toBe(0);
     expect(rawRemaining()).toBe(9); // raw data correctly retained
   });
@@ -271,5 +271,40 @@ describe('DailyCompactionOrchestrator', () => {
     expect(outcome.reason).toBe('DAY_NOT_CLOSED');
     expect(db.select().from(schema.dailyLearningArchive).all()).toHaveLength(0);
     expect(rawRemaining()).toBe(3); // untouched - never even attempted
+  });
+
+  /**
+   * 2026-10-08 I-E1: the batched purgeWindow reports `truncated` when it hits the per-call
+   * batch budget before draining the window. A truncated day must NOT be marked PURGED (raw
+   * rows are still there) - it stays VERIFIED and the next sweep resumes idempotently.
+   */
+  it('truncated purge (batch budget hit) keeps the day VERIFIED - the next sweep resumes and completes', async () => {
+    const { source } = makeFakeSource({ sourceType: 'T17', rowCount: 10 });
+    let raw = 10;
+    let calls = 0;
+    const truncatingSource: DailyCompactionSource = {
+      ...source,
+      purgeWindow: async () => {
+        calls++;
+        if (calls === 1) {
+          raw -= 6;
+          return { deleted: 6, truncated: true }; // batch budget hit mid-window
+        }
+        const deleted = raw;
+        raw = 0;
+        return { deleted, truncated: false }; // resume completes the rest
+      },
+    };
+    await orchestrator.runDailyCompactionForDate(source, CLOSED_DATE, nowMs);
+    const farFuture = nowMs + 400 * 24 * 60 * 60 * 1000;
+    const first = await orchestrator.purgeVerifiedDays(truncatingSource, 14, farFuture);
+    expect(first.purgedDays).toBe(0); // NOT marked PURGED - rows remain
+    expect(db.select().from(schema.dailyLearningArchive).all()[0].compactionStatus).toBe('VERIFIED');
+    expect(raw).toBe(4); // partial progress is real and retained
+    const second = await orchestrator.purgeVerifiedDays(truncatingSource, 14, farFuture);
+    expect(second.purgedDays).toBe(1); // resumed and completed
+    expect(second.totalRowsPurged).toBe(4);
+    expect(db.select().from(schema.dailyLearningArchive).all()[0].compactionStatus).toBe('PURGED');
+    expect(raw).toBe(0);
   });
 });

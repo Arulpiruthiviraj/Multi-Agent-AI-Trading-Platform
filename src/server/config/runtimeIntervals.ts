@@ -35,6 +35,9 @@ export interface RuntimeIntervals {
   openAliceRequestTimeoutMs: number;
   openAliceMcpDefaultTimeoutMs: number;
   modelRuntimeProbeTimeoutMs: number;
+  /** 2026-10-08 (defect A2): max concurrently tracked model-runtime children (Ollama/Chronos
+   *  companions). Spawns past the cap are refused and the excess child is killed, not leaked. */
+  modelRuntimeMaxChildren: number;
   /** Bounded timeout for a real, cheap Ollama completion capability check (not just /api/tags
    *  reachability) — a loaded/OOM/misconfigured local model can be slower than the plain
    *  reachability probe above without being genuinely unavailable. */
@@ -57,6 +60,11 @@ export interface RuntimeIntervals {
    *  live DB's current size times this multiplier, rather than starting a multi-GB copy that can
    *  run the disk to zero mid-write. */
   dbBackupMinFreeSpaceMultiplier: number;
+  /** 2026-10-08: backup work runs in a worker_thread; this bounds how long the main thread waits
+   *  for it before terminating the worker and marking the run FAILED. Generous on purpose - a
+   *  16GB copy + integrity check on a slow disk takes tens of minutes, and a premature timeout
+   *  would strand a .partial orphan (swept later, but still wasted I/O). */
+  dbBackupWorkerTimeoutMs: number;
   eventStoreMaxRecentEvents: number;
   eventStoreMaxTraces: number;
   eventStoreSchemaVersion: number;
@@ -98,6 +106,42 @@ export interface RuntimeIntervals {
    *  retentionSweepBatchSize/retentionSweepMaxBatchesPerCall bound ObservabilityStore.ts's sweep. */
   candidateRankingsRetentionSweepBatchSize: number;
   candidateRankingsRetentionSweepMaxBatchesPerCall: number;
+  /** 2026-10-08 memory-leak follow-up: news_articles had no retention policy anywhere in the
+   *  codebase (same defect class as candidate_rankings 2026-09-22). Article rows are bulky and
+   *  lose trading value within hours - 30 days is generous. */
+  newsArticlesRetentionDays: number;
+  /** news_clusters are the durable news record of truth (small metadata rows; news_predictions
+   *  link to cluster ids) - longer 90-day window. */
+  newsClustersRetentionDays: number;
+  /** Batching bounds for the news sweeps - same batching + yielding discipline as the
+   *  candidate_rankings sweep so a large backlog can never block the event loop. */
+  newsRetentionSweepBatchSize: number;
+  newsRetentionSweepMaxBatchesPerCall: number;
+  /** 2026-10-08 defect hunt (news D2 / infra P2-R1/R3): four more append-only news/AI
+   *  tables with no prune path. escalation_decisions (one row per analyzed article) and
+   *  staged terminal catalyst rows lose value within days; jev_shadow_scores and ai_calls
+   *  (bulky prompt/response text) get 30 days; news_predictions aligns to news_clusters (90d). */
+  escalationDecisionsRetentionDays: number;
+  jevShadowScoresRetentionDays: number;
+  newsPredictionsRetentionDays: number;
+  stagedNewsCatalystsTerminalRetentionDays: number;
+  aiCallsRetentionDays: number;
+  /** 2026-10-08 synthetic session guard: a 6-minute synthetic session wrote rows
+   *  to 8 tables with no retention path. Conservative bounds: ohlcv_bars keeps a
+   *  full year for backtests/audits; predictions are graded within hours
+   *  (evaluationHorizonMs=1h) so 30d is generous; ledgers/traces keep 90d. */
+  ohlcvBarsRetentionDays: number;
+  agentPredictionsRetentionDays: number;
+  quantAssessmentsRetentionDays: number;
+  pitDecisionLedgerRetentionDays: number;
+  agentReasoningLogsRetentionDays: number;
+  transactionTracesRetentionDays: number;
+  sessionLifecycleSnapshotsRetentionDays: number;
+  tradeLifecycleTransitionsRetentionDays: number;
+  /** 2026-10-08 (defect A1): how long an aiProviders.health='Offline' quarantine must age
+   *  (measured from the row's last_failure) before AIProviderHealthCheck's real re-probe may
+   *  restore the provider to 'Degraded' on success. A failed re-probe keeps it Offline. */
+  aiProviderQuarantineCooldownMs: number;
 }
 
 const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
@@ -107,9 +151,10 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'chiefTraderWeightSyncMs', 'chiefTraderIdeaTtlMs', 'systemMetricsMs', 'portfolioReconciliationMs',
   'reconciliationBootWarmupMs', 'marketDataReconnectMs', 'networkReconnectBackoffMs', 'marketDataCrossCheckMs', 'kronosRecheckMs', 'kronosPredictionCooldownMs',
   'kronosHttpTimeoutMs', 'kronosForecastMaxConcurrent', 'openAlicePollMs', 'openAliceRequestTimeoutMs', 'openAliceMcpDefaultTimeoutMs',
-  'modelRuntimeProbeTimeoutMs', 'ollamaCompletionProbeTimeoutMs', 'fundamentalsCacheMaxAgeMs', 'macroCacheMaxAgeMs',
+  'modelRuntimeProbeTimeoutMs', 'modelRuntimeMaxChildren', 'ollamaCompletionProbeTimeoutMs', 'fundamentalsCacheMaxAgeMs', 'macroCacheMaxAgeMs',
   'externalDataRateLimitCooldownMs', 'dbBackupIntervalMs', 'dbBackupRetentionDays',
   'dbBackupMaxCount', 'dbBackupOrphanCleanupAgeMs', 'dbBackupMinFreeSpaceMultiplier',
+  'dbBackupWorkerTimeoutMs',
   'eventStoreMaxRecentEvents', 'eventStoreMaxTraces', 'eventStoreSchemaVersion',
   'agentActivityWindowMs', 'opportunityWindowHours', 'omsFollowUpMinAgeMs', 'omsFollowUpIntervalMs',
   'omsPollForFillTimeoutMs', 'omsPollForFillIntervalMs', 'autoTradeSchedulerMs', 'strategyEngineShadowMs',
@@ -117,6 +162,16 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'heartbeatWatchdogCheckMs', 'cryptoMarketDataIngestionMs',
   'candidateRankingsRetentionDays', 'candidateRankingsRetentionSweepMs',
   'candidateRankingsRetentionSweepBatchSize', 'candidateRankingsRetentionSweepMaxBatchesPerCall',
+  'newsArticlesRetentionDays', 'newsClustersRetentionDays',
+  'newsRetentionSweepBatchSize', 'newsRetentionSweepMaxBatchesPerCall',
+  'escalationDecisionsRetentionDays', 'jevShadowScoresRetentionDays',
+  'newsPredictionsRetentionDays', 'stagedNewsCatalystsTerminalRetentionDays',
+  'aiCallsRetentionDays',
+  'ohlcvBarsRetentionDays', 'agentPredictionsRetentionDays',
+  'quantAssessmentsRetentionDays', 'pitDecisionLedgerRetentionDays',
+  'agentReasoningLogsRetentionDays', 'transactionTracesRetentionDays',
+  'sessionLifecycleSnapshotsRetentionDays', 'tradeLifecycleTransitionsRetentionDays',
+  'aiProviderQuarantineCooldownMs',
 ];
 
 function loadRuntimeIntervals(): RuntimeIntervals {

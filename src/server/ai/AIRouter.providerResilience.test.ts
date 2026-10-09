@@ -253,4 +253,91 @@ describe('AIRouter provider-resilience fixes (D1/D3/D5)', () => {
       expect(row.health).toBe('Offline');
     });
   });
+
+  describe('D3 follow-up: in-flight coalescing map hygiene', () => {
+    it('the dedup entry is released on rejection: a later identical call retries the provider', async () => {
+      const provider = failingProvider('provider down');
+      aiRouter.registerProvider('d3-fail-provider', provider);
+
+      await expect(
+        aiRouter.routeTask('TestAgent', 'doomed prompt', 'trace-d3f-1'),
+      ).rejects.toThrow('All AI providers failed');
+      // The rejected entry was removed, not left behind.
+      expect(aiRouter.__routeTaskInFlightSizeForTests()).toBe(0);
+
+      // A later identical call makes a fresh provider attempt (no stale entry served).
+      await expect(
+        aiRouter.routeTask('TestAgent', 'doomed prompt', 'trace-d3f-2'),
+      ).rejects.toThrow('All AI providers failed');
+      expect(registeredChatCalls(provider)).toBe(2);
+      expect(aiRouter.__routeTaskInFlightSizeForTests()).toBe(0);
+    });
+
+    it('stale dedup entries are pruned past aiRouterInflightDedupTtlMs', async () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date());
+        let release!: () => void;
+        const gate = new Promise<void>((r) => { release = r; });
+        const provider = fastProvider('{"side":"HOLD"}');
+        // Hold the first call in-flight so its dedup entry outlives the TTL.
+        provider.chat.mockImplementationOnce(() =>
+          gate.then(() => ({ content: '{"side":"HOLD"}', tokens: 1 })),
+        );
+        aiRouter.registerProvider('d3-ttl-provider', provider);
+
+        const p1 = aiRouter.routeTask('TestAgent', 'stale prompt', 'trace-d3s-1');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(aiRouter.__routeTaskInFlightSizeForTests()).toBe(1);
+
+        // Gate the second call too so the map state is observable mid-flight
+        // (an ungated fast provider would settle before the assertion runs).
+        let release2!: () => void;
+        const gate2 = new Promise<void>((r) => { release2 = r; });
+        provider.chat.mockImplementationOnce(() =>
+          gate2.then(() => ({ content: '{"side":"HOLD"}', tokens: 1 })),
+        );
+
+        // Move past the 30s dedup TTL; the next distinct call must prune the
+        // stale entry instead of accumulating beside it.
+        vi.setSystemTime(new Date(Date.now() + 31_000));
+        const p2 = aiRouter.routeTask('TestAgent', 'fresh prompt', 'trace-d3s-2');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(aiRouter.__routeTaskInFlightSizeForTests()).toBe(1);
+        expect(registeredChatCalls(provider)).toBe(2);
+
+        release(); release2();
+        const [r1, r2] = await Promise.all([p1, p2]);
+        expect(r1.provider).toBe('d3-ttl-provider');
+        expect(r2.provider).toBe('d3-ttl-provider');
+        expect(aiRouter.__routeTaskInFlightSizeForTests()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('initialize() drops credential bookkeeping for providers removed since the last init', async () => {
+      // Seed one DB row with no usable credential: initialize() records it as
+      // credentialSource NONE (skipped, never registered).
+      const rowId = `stale-cred-${Date.now()}`;
+      await db.insert(schema.aiProviders).values({
+        id: rowId,
+        providerName: 'ZzxNoSuchProvider',
+        apiEndpoint: null,
+        priority: 0,
+        enabled: true,
+      });
+      await aiRouter.initialize();
+      expect(
+        aiRouter.getProviderRoutingSnapshot().some((r: any) => r.providerId === rowId),
+      ).toBe(true);
+
+      // Remove the row and re-initialize: the stale bookkeeping must be gone.
+      await db.delete(schema.aiProviders).where(eq(schema.aiProviders.id, rowId));
+      await aiRouter.initialize();
+      expect(
+        aiRouter.getProviderRoutingSnapshot().some((r: any) => r.providerId === rowId),
+      ).toBe(false);
+    });
+  });
 });

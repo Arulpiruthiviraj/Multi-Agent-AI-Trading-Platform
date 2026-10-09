@@ -327,6 +327,9 @@ export class InteractiveBrokersWebApiAdapter implements BrokerPlugin {
   private mapOrder(o: any): Order {
     return {
       id: String(o.orderId ?? o.order_id ?? o.id),
+      // cOID round-trips as order_ref on CP Web API order objects - carry it so crash
+      // recovery can match by our client order id.
+      clientOrderId: o.order_ref ?? o.orderRef ?? undefined,
       symbol: o.ticker || o.symbol || '',
       side: (o.side || '').toUpperCase() === 'SELL' ? 'SELL' : 'BUY',
       type: (o.orderType || 'MARKET').toUpperCase().includes('LMT') ? 'LIMIT' : 'MARKET',
@@ -338,6 +341,32 @@ export class InteractiveBrokersWebApiAdapter implements BrokerPlugin {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
+  }
+
+  /**
+   * 2026-10-08 defect hunt (D1): this adapter previously had no getOrderByClientOrderId, so
+   * crash recovery silently skipped every ibkr_web PENDING row with a NULL brokerOrderId
+   * (the exact pre-2026-09-09 IBKR gap, DEF-30, reopened for the other IBKR adapter).
+   * IBKR-gateway discipline: throw on ambiguity, return null ONLY on confirmed absence.
+   * The CP live-orders list only shows open orders, so absence here can never confirm the
+   * order never reached IBKR (a filled order leaves the list) - not-found throws, and OMS
+   * retries the lookup next cycle. Never fabricates a "confirmed absent".
+   */
+  async getOrderByClientOrderId(clientOrderId: string): Promise<Order | null> {
+    if (!this.isAuthenticated) {
+      throw new Error('IBKR Client Portal Gateway session is not authenticated - cannot answer order lookup (ambiguous, not a confirmed absence).');
+    }
+    const raw: any[] = await this.request('/iserver/account/orders').catch((e) => {
+      throw new Error(`IBKR order-list lookup failed - order state unknown, not confirmed absent: ${e instanceof Error ? e.message : String(e)}`);
+    });
+    const match = (raw || []).find((o: any) => {
+      const ref = o.order_ref ?? o.orderRef;
+      return typeof ref === 'string' && ref === clientOrderId;
+    });
+    if (!match) {
+      throw new Error(`Order with cOID ${clientOrderId} not in the IBKR open-orders list - state unknown (filled orders leave the list), not confirmed absent.`);
+    }
+    return this.mapOrder(match);
   }
 
   private mapStatus(ibkrStatus: string): Order['status'] {
@@ -360,8 +389,10 @@ export class InteractiveBrokersWebApiAdapter implements BrokerPlugin {
     if (!this.isAuthenticated) {
       throw new Error('IBKR Client Portal Gateway session is not authenticated. A human must log in (with 2FA) at the Gateway URL before orders can be placed.');
     }
-    if (!order.symbol || !order.side || !order.quantity) {
-      throw new Error('placeOrder requires symbol, side, and quantity.');
+    // 2026-10-08 defect hunt (D5): the old falsy check (!order.quantity) rejected 0/NaN but
+    // let Infinity and negative quantities through to the CP API. Coinbase-style finite > 0 check.
+    if (!order.symbol || !order.side || !Number.isFinite(order.quantity) || (order.quantity as number) <= 0) {
+      throw new Error('placeOrder requires symbol, side, and a finite quantity > 0.');
     }
 
     const accountId = await this.getAccountId();
@@ -375,7 +406,11 @@ export class InteractiveBrokersWebApiAdapter implements BrokerPlugin {
     const conid = await this.resolveConid(order.symbol);
 
     const mapped = resolveIbkrWebOrderType(order);
-    const orderPayload = {
+    // 2026-10-08 defect hunt (D1): send our client order id as IBKR's cOID (customer order id,
+    // documented to round-trip as order_ref on the order objects). Without this, a crash
+    // between broker-accept and local-record left PENDING rows unrecoverable for this adapter
+    // (no getOrderByClientOrderId existed). cOID must be unique per 24h and <= 64 chars.
+    const orderPayload: Record<string, unknown> = {
       conid,
       orderType: mapped.orderType,
       side: order.side,
@@ -384,6 +419,9 @@ export class InteractiveBrokersWebApiAdapter implements BrokerPlugin {
       auxPrice: mapped.auxPrice,
       tif: 'DAY',
     };
+    if (order.clientOrderId) {
+      orderPayload.cOID = String(order.clientOrderId).slice(0, 64);
+    }
 
     let response: any = await this.request(`/iserver/account/${accountId}/orders`, {
       method: 'POST',

@@ -282,352 +282,370 @@ export class SyntheticSessionEngine {
     if (options.newsInjections && options.newsInjections.length > 0) {
       process.env.NEWS_AGENT_MODE = 'ACTIVE_VOTE';
     }
-    const wallClockStart = Date.now();
-    const sessionStartMs = options.sessionStartMs ?? defaultSessionStartMs();
-    const sessionDurationMs = (options.sessionDurationMinutes ?? 90) * 60_000;
-    const sessionEndMs = sessionStartMs + sessionDurationMs;
-    const scenario = getScenario(options.scenarioId);
-    const universeConfigs = defaultSyntheticUniverse(options.universeSize ?? 5);
-    const universe = universeConfigs.map((u) => u.symbol);
+    // Per-session teardown guarantee (2026-10-08 memory-leak hunt): the DecisionTimeline's
+    // EventBus listeners, the event-loop histogram, and the installed ActiveReplaySession must
+    // be released even when a session throws mid-run - otherwise a failed iteration in a
+    // back-to-back session loop (e.g. scripts/soak/threeHourSoakChild.ts) leaks 19 listeners
+    // and retains the whole session per failure. Teardown lives in the finally below.
+    let timeline: DecisionTimeline | null = null;
+    let elHistogram: ReturnType<typeof monitorEventLoopDelay> | null = null;
+    try {
+      const wallClockStart = Date.now();
+      const sessionStartMs = options.sessionStartMs ?? defaultSessionStartMs();
+      const sessionDurationMs = (options.sessionDurationMinutes ?? 90) * 60_000;
+      const sessionEndMs = sessionStartMs + sessionDurationMs;
+      const scenario = getScenario(options.scenarioId);
+      const universeConfigs = defaultSyntheticUniverse(options.universeSize ?? 5);
+      const universe = universeConfigs.map((u) => u.symbol);
 
-    // --- Seed the isolated settings row + session-recovery isolation BEFORE boot (same fix this
-    // codebase already learned the hard way in reproduce_p1a.ts - a background worker re-reads
-    // trading state from the DB, so a post-boot in-memory override races and loses). ---
-    const { setSessionRecoveryPathForTests } = await import('../../core/sessionRecovery');
-    setSessionRecoveryPathForTests(this.sessionMarkerPath);
-    const { db } = await import('../../db');
-    const schema = await import('../../db/schema');
-    await db.insert(schema.settings).values({
-      tradingMode: 'PAPER', riskLevel: 'Medium', budget: options.initialCash ?? 100_000,
-      strategy: 'ADAPTIVE_MULTI_STRATEGY', maxTradeSize: 3000, dailyLossLimit: 5000,
-      takeProfitPct: 15, trailingStopPct: 5, minAiConfidence: 75, adversarialDebateMode: true,
-      autoBotEnabled: true, tradingState: 'TRADING_ENABLED',
-    } as any);
+      // --- Seed the isolated settings row + session-recovery isolation BEFORE boot (same fix this
+      // codebase already learned the hard way in reproduce_p1a.ts - a background worker re-reads
+      // trading state from the DB, so a post-boot in-memory override races and loses). ---
+      const { setSessionRecoveryPathForTests } = await import('../../core/sessionRecovery');
+      setSessionRecoveryPathForTests(this.sessionMarkerPath);
+      const { db } = await import('../../db');
+      const schema = await import('../../db/schema');
+      await db.insert(schema.settings).values({
+        tradingMode: 'PAPER', riskLevel: 'Medium', budget: options.initialCash ?? 100_000,
+        strategy: 'ADAPTIVE_MULTI_STRATEGY', maxTradeSize: 3000, dailyLossLimit: 5000,
+        takeProfitPct: 15, trailingStopPct: 5, minAiConfidence: 75, adversarialDebateMode: true,
+        autoBotEnabled: true, tradingState: 'TRADING_ENABLED',
+      } as any);
 
-    // --- Synthetic daily-bar history (closes the gap documented in
-    // docs/testing/ARGUS_SYNTHETIC_MARKET_CERTIFICATION.md §4 / ARGUS_SYNTHETIC_CERTIFICATION_RESULT.md
-    // §2-4): QuantSignalAgent - the only real production caller of StrategyEngine.evaluateAll(),
-    // i.e. the 5 CORE strategies - always requests '1Day' bars, and HistoricalDataGateway correctly
-    // refuses a real network fetch for them while SYNTHETIC_SIMULATION=true. Without a synthetic
-    // '1Day' substitute already cached, every CORE-strategy evaluation failed closed on every run.
-    // generateSyntheticPriorDayHistory() is derived from this SAME seed/scenario (a separate,
-    // symbol-specific RNG stream - see SyntheticDailyBarProvider.ts's own header - never a second,
-    // disconnected synthetic data source), anchored to connect smoothly to this session's own
-    // config.startPrice.
-    //
-    // MUST run BEFORE bootArgusCore() (real finding, 2026-10-06 - reproduced live): HistoricalDataGateway
-    // keeps a 60-second in-process memory cache keyed by symbol|timeframe|hour-bucket
-    // (HistoricalDataGateway.ts's own memoryKey()/cacheGet()/cacheSet()). bootArgusCore() starts
-    // several real background workers immediately, and one of them (confirmed live via a temporary
-    // debug probe: rawDbCount=0 at the moment of the very first QQQ 1Day query, well before this
-    // seeding had run) queries QQQ's '1Day' bars before any synthetic bars exist - caching an EMPTY
-    // result for 60 real seconds. Because this harness runs at up to 400x speed, an entire session's
-    // worth of QuantSignalAgent cycles can complete inside that same 60-second real-wall-clock window,
-    // so a cache entry poisoned even once near boot stayed poisoned for the practical duration of the
-    // whole session - QQQ specifically failed on every cycle while every other seeded symbol (queried
-    // for the first time only after this seeding had already run) succeeded. Seeding before boot means
-    // nothing can query these symbols before real synthetic rows already exist, so no empty result is
-    // ever cached in the first place - fixing the root cause rather than invalidating a cache after
-    // the fact. ---
-    {
-      const { generateSyntheticPriorDayHistory } = await import('./SyntheticDailyBarProvider');
-      for (const config of universeConfigs) {
-        const priorDays = generateSyntheticPriorDayHistory(config, scenario, options.seed, sessionStartMs);
-        for (const bar of priorDays) await persistDailyBar(config.symbol, bar);
-      }
-    }
-
-    const { bootArgusCore } = await import('../../core/ArgusCoreBoot');
-    await bootArgusCore();
-    await sleep(1500); // let boot's own async settle (matches every other harness this session)
-
-    // Determinism fix continued (2026-09-15, Rule 2): FundamentalAgent/MacroAgent are real,
-    // network-dependent idea agents (AlphaVantage market data + AIRouter LLM calls to whichever real
-    // provider is currently healthy) - unlike TechnicalAgent (deterministic RSI/MACD/BB) or
-    // KronosForecastAgent (a local, session-controlled :8008 service), there is no synthetic/isolated
-    // equivalent data source for these two today, and building a fabricated deterministic stand-in
-    // for a real AI call would be exactly the kind of invented evidence this simulator must not
-    // produce. Per the explicit instruction that "external AI providers are not consulted unless
-    // explicitly running a separate integration test," this engine disables both agents in-process
-    // for the duration of the session rather than let their real, rate-limited, non-deterministic
-    // output silently vary CHIEF_CONSENSUS_COMPLETED/TRADE_IDEA_GENERATED counts across same-seed
-    // runs (confirmed root cause of part of the 12-vs-13 prediction-count drift found in the
-    // 2026-09-15 determinism check). This is in-memory-only (pipelineAgentGate.ts), never touches
-    // config/pipelineAgents.json defaults, and is reset on process exit - production behavior when
-    // Autobot arms these agents is completely unaffected.
-    {
-      const { setPipelineAgentEnabled } = await import('../../core/pipelineAgentGate');
-      setPipelineAgentEnabled('FundamentalAgent', false);
-      setPipelineAgentEnabled('MacroAgent', false);
-    }
-
-    // Explicit, disclosed methodology change (2026-09-14, operator-authorized) - see
-    // CalibrationHistorySeeder.ts's own header for the full disclosure. Runs BEFORE the main loop
-    // so any real consensus reached during the session sees an already-established (real,
-    // genuinely-computed) calibration champion for these specific agent/bucket pairs, exactly as a
-    // deployment with real prior history would.
-    let calibrationSeedResults: import('./CalibrationHistorySeeder').CalibrationSeedResult[] = [];
-    if (options.calibrationSeeds && options.calibrationSeeds.length > 0) {
-      const { seedSyntheticCalibrationHistory } = await import('./CalibrationHistorySeeder');
-      calibrationSeedResults = await seedSyntheticCalibrationHistory(options.calibrationSeeds);
-    }
-
-    // News+Quant Independent-Consensus Round-Trip Certification (2026-10-06 follow-up): installed
-    // here, BEFORE the main loop, so the provider swap and NEWS_AGENT_MODE override are in place
-    // before any bar is processed. Dynamic imports only, after env vars + DB isolation (same rule
-    // as every other db-touching import in this file).
-    let injectableNewsProvider: import('./SyntheticInjectableNewsProvider').SyntheticInjectableNewsProvider | null = null;
-    let newsEngineForInjection: import('../../news/NewsEngine').NewsEngine | null = null;
-    if (options.newsInjections && options.newsInjections.length > 0) {
-      // NEWS_AGENT_MODE itself was already set at the very top of run() (before bootArgusCore()) -
-      // see that comment for why it cannot be set here.
-      const { SyntheticInjectableNewsProvider } = await import('./SyntheticInjectableNewsProvider');
-      const { newsEngine } = await import('../../news/NewsEngine');
-      newsEngineForInjection = newsEngine;
-      injectableNewsProvider = new SyntheticInjectableNewsProvider(() => this.clock.now());
-      // Real production seam (NewsProviderManager.replaceProviders(), 2026-10-06) - swaps out the
-      // real RSS/paid-news providers so this isolated session never reaches the real network, the
-      // same isolation guarantee this file already applies to FundamentalAgent/MacroAgent above.
-      newsEngine.providerManager.replaceProviders([injectableNewsProvider]);
-      for (const spec of options.newsInjections) injectableNewsProvider.inject(spec);
-    }
-
-    // These three imports must stay here (dynamic, after env vars + DB isolation are already in
-    // effect) - see this file's own top-of-file isolation note for why.
-    const { unavailableHistoricalMacroProvider } = await import('../HistoricalMacroProvider');
-    const { unavailableHistoricalFundamentalProvider } = await import('../HistoricalFundamentalProvider');
-    const { DecisionTimeline: DecisionTimelineClass } = await import('./DecisionTimeline');
-
-    // --- Generate the full deterministic session (market data + news) up front. Point-in-time
-    // safety is enforced by CONSUMPTION below (strict prefix), not by generation order. ---
-    const rng = new SyntheticRandom(options.seed);
-    const marketDataEngine = new SyntheticMarketDataEngine(rng, universeConfigs, scenario);
-    const barsBySymbol = marketDataEngine.generateSession(sessionStartMs, sessionEndMs);
-    const newsItems = await seedSyntheticNewsForScenario(scenario, sessionStartMs, universe);
-    const newsProvider = buildSyntheticNewsProvider(newsItems);
-
-    // --- Install the synthetic, replay-shaped session - the one seam RiskEngine/BrokerManager/OMS
-    // already redirect to (ReplayContext.ts). ---
-    // speedMultiplier is deliberately NOT passed to the clock's own auto-drift here: this engine's
-    // main loop is a DISCRETE, explicitly-driven sequence (every simulated-time step is an exact
-    // bar timestamp via clock.advance(t), mirroring FullArgusReplayEngine's own model), not a
-    // passive "let real time drive it" consumer. At a high multiplier, auto-drift between explicit
-    // advance() calls (while this loop's own real per-bar work - DB writes, EventBus dispatch,
-    // sleep(REAL_MS_BETWEEN_BARS) - is happening) could drift now() PAST the next bar's target
-    // before this loop calls advance() for it, tripping the clock's own no-backwards-travel guard
-    // (found via an actual repro during Phase 1 smoke testing - the fix is architectural, not a
-    // patched threshold). speedMultiplier instead scales the REAL wall-clock pacing between bars
-    // below (see realMsBetweenBars) - the lever that actually controls how fast a session
-    // completes in wall-clock time, which is what section 27's speed knobs are really asking for.
-    this.clock = new SyntheticMarketClock(sessionStartMs, { speedMultiplier: 1 });
-    const requestedSpeedMultiplier = options.speedMultiplier ?? 1;
-    const realMsBetweenBars = Math.max(5, Math.round(REAL_MS_BETWEEN_BARS / requestedSpeedMultiplier));
-    const cutoff = new InformationCutoff(this.clock);
-    const costs = replaySafety.costProfiles[replaySafety.defaultCostProfile];
-    this.broker = new HistoricalReplayBroker({
-      initialCash: options.initialCash ?? 100_000,
-      costs,
-      timezone: replaySafety.defaultTimezone,
-      extendedHours: false,
-      shortSelling: replaySafety.shortSellingDefault,
-      fractional: replaySafety.fractionalSharesDefault,
-    });
-    assertActiveSessionIsSynthetic(this.broker); // post-install proof - refuses to proceed if the broker is not structurally incapable of live orders
-
-    const barsBySymbolResearch = new Map<string, ResearchBar[]>();
-    for (const [symbol, bars] of barsBySymbol) {
-      barsBySymbolResearch.set(symbol, bars.map((b) => ({ timestamp: b.timestamp, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume })));
-    }
-
-    const session: ActiveReplaySession = {
-      replayId: options.simulationId,
-      status: 'RUNNING',
-      config: defaultReplayConfig({ symbols: universe, timezone: replaySafety.defaultTimezone, randomSeed: options.seed, agents: ['TechnicalAgent', 'QuantEngine', 'ChiefTrader', 'RiskAgent'] }),
-      clock: this.clock,
-      cutoff,
-      broker: this.broker,
-      datasets: [],
-      quality: { totalBars: 0, gaps: [], staleness: [], corporateActionFlags: [] } as any,
-      datasetHash: `synthetic-${options.seed}`,
-      configurationHash: `synthetic-${options.simulationId}`,
-      replayHash: `synthetic-${options.simulationId}-${options.seed}`,
-      news: newsProvider,
-      macro: unavailableHistoricalMacroProvider(),
-      fundamentals: unavailableHistoricalFundamentalProvider(),
-      events: [],
-      noTrade: {},
-      equity: [],
-      peakEquity: options.initialCash ?? 100_000,
-      pauseRequested: false,
-      stopRequested: false,
-      stepRequested: false,
-      aiCalls: 0,
-      aiCostUsd: 0,
-      aiLabel: 'SYNTHETIC_SIMULATION',
-      partial: false,
-      waiters: new Map(),
-      barsBySymbol: barsBySymbolResearch,
-      openStops: new Map(),
-      activeDiscoveredSymbols: new Set(),
-      discoveredAt: new Map(),
-      discoveryTickCounter: 0,
-      tradePnls: [],
-      tradeLedger: [],
-      rejectedOrders: [],
-      agentAvailability: {},
-      decisionEvidence: [],
-      evaluationsAttempted: 0,
-      strategyPassesAttempted: 0,
-      totalBars: Math.floor(sessionDurationMs / BAR_INTERVAL_MS),
-      currentBarIndex: 0,
-      currentTimestamp: sessionStartMs,
-      rejectionsForRetrospective: [],
-      agentIdeaStats: {},
-      stageDurations: {},
-      replayStartedAtMs: Date.now(),
-      campaign: { lockedForDate: null, lockAction: null, dailyRealizedByDate: new Map(), daysTargetMet: new Set(), postTargetEquityPeakByDate: new Map(), postTargetMaxDrawdownPct: 0 },
-    };
-    setActiveReplaySession(session);
-
-    // --- Real observability: event-loop delay histogram + periodic memory samples, matching the
-    // standing infrastructure this codebase already uses (processTelemetry.ts) rather than a new
-    // parallel mechanism. ---
-    const elHistogram = monitorEventLoopDelay({ resolution: 20 });
-    elHistogram.enable();
-    const memorySamples: MemorySample[] = [];
-
-    // --- Register symbols with the real MarketDataWorker so QuantSignalAgent's getActiveSymbols()
-    // includes them (subscribe() is safe to call directly here - it only opens a real stream when
-    // this process is authorized as the primary market-data owner, which an isolated harness
-    // process is not; see MarketDataWorker.ts's own isMarketDataWebSocketAuthorized() fail-close). ---
-    const { marketDataWorker } = await import('../../services/MarketDataWorker');
-    const { quantSignalAgent } = await import('../../services/QuantSignalAgent');
-    const { portfolioMonitor } = await import('../../services/PortfolioMonitor');
-    const { eventBus } = await import('../../core/EventBus');
-    for (const symbol of universe) marketDataWorker.subscribe(symbol);
-
-    this.timeline = new DecisionTimelineClass(this.clock);
-    this.timeline.start();
-
-    // Point-in-time accumulator for today's own synthetic '1Day' rollup bar - see
-    // rollupTodaysDailyBar()'s own doc comment. Only ever fed bars the loop below has already
-    // revealed (pushed immediately after persistBar() reveals that same minute bar), so this can
-    // never leak a later-session high/low/close into an earlier QuantSignalAgent cycle.
-    const { rollupTodaysDailyBar } = await import('./SyntheticDailyBarProvider');
-    const revealedBarsBySymbol = new Map<string, SyntheticBar[]>();
-    for (const symbol of universe) revealedBarsBySymbol.set(symbol, []);
-
-    // --- The main loop: mirrors FullArgusReplayEngine.processTimestamp()'s exact NEXT_BAR_OPEN
-    // sequencing (see that file's own comment this was modeled on) - the bar AT t is the fill
-    // vehicle for orders placed using the PREVIOUS bar's close as the last known decision price. ---
-    const timestamps = Array.from({ length: session.totalBars }, (_, i) => sessionStartMs + i * BAR_INTERVAL_MS);
-    for (let i = 0; i < timestamps.length; i++) {
-      const t = timestamps[i];
-      if (i === 0) {
-        // reset(), not advance()/setTime() - real found bug (2026-09-14): a separate reset() call
-        // BEFORE this loop started left a small but real gap during which further setup work (array
-        // construction, etc.) could elapse enough real wall-clock time for this clock's own 1:1
-        // auto-drift (it is always constructed with speedMultiplier:1 - see below) to carry now()
-        // past sessionStartMs, so this same bar's later setTime()-based advance() call would then
-        // see "the target is before the current time" and throw - reproduced live on a 240-bar
-        // VALIDATED_CONVERGENCE_CONTROL run. Calling reset() (unconditional, no backward-guard)
-        // here, at the very first moment t is actually used, closes that gap entirely instead of
-        // narrowing it.
-        this.clock.reset(t);
-      } else {
-        this.clock.advance(t);
-      }
-      this.broker.clockNowMs = t;
-
-      for (const symbol of universe) {
-        // A defensive per-bar re-subscribe used to live here (see git history) to fight real
-        // MarketUniverseScanner/OpportunityDiscovery subscription churn - since root-caused (2026-
-        // 09-14, Step 2) to those real, network-dependent discovery workers never having been kept
-        // idle for the session (see prepareIsolatedEnvironment()'s own comment on
-        // ARGUS_OPPORTUNITY_LOOP_ENABLED/ARGUS_BROAD_UNIVERSE_ENABLED/ARGUS_MARKET_MOVERS_ENABLED).
-        // With them genuinely idle, the ONE subscribe() call per symbol before this loop starts is
-        // sufficient - this reproduces the same activeStreams lifecycle production uses for a
-        // symbol nothing else is competing to evict, rather than continuously repairing it from
-        // outside.
-        const bars = barsBySymbol.get(symbol) ?? [];
-        const currentBar = bars[i]; // the bar AT this timestamp - fill vehicle
-        const previousBar = i > 0 ? bars[i - 1] : undefined; // strictly-before-t - decision price
-
-        if (currentBar) {
-          this.broker.nextFillPrice.set(symbol, currentBar.open);
-          this.broker.nextFillVolume.set(symbol, currentBar.volume);
-          await persistBar(symbol, currentBar);
-          const revealed = revealedBarsBySymbol.get(symbol)!;
-          revealed.push(currentBar);
-          const todayBar = rollupTodaysDailyBar(revealed, sessionStartMs);
-          if (todayBar) await persistDailyBar(symbol, todayBar);
-        }
-
-        if (previousBar) {
-          marketDataWorker.cacheObservedQuote(symbol, previousBar.close, t);
-          eventBus.emitMarketData(symbol, previousBar.close, previousBar.volume, new Date(t).toISOString());
+      // --- Synthetic daily-bar history (closes the gap documented in
+      // docs/testing/ARGUS_SYNTHETIC_MARKET_CERTIFICATION.md §4 / ARGUS_SYNTHETIC_CERTIFICATION_RESULT.md
+      // §2-4): QuantSignalAgent - the only real production caller of StrategyEngine.evaluateAll(),
+      // i.e. the 5 CORE strategies - always requests '1Day' bars, and HistoricalDataGateway correctly
+      // refuses a real network fetch for them while SYNTHETIC_SIMULATION=true. Without a synthetic
+      // '1Day' substitute already cached, every CORE-strategy evaluation failed closed on every run.
+      // generateSyntheticPriorDayHistory() is derived from this SAME seed/scenario (a separate,
+      // symbol-specific RNG stream - see SyntheticDailyBarProvider.ts's own header - never a second,
+      // disconnected synthetic data source), anchored to connect smoothly to this session's own
+      // config.startPrice.
+      //
+      // MUST run BEFORE bootArgusCore() (real finding, 2026-10-06 - reproduced live): HistoricalDataGateway
+      // keeps a 60-second in-process memory cache keyed by symbol|timeframe|hour-bucket
+      // (HistoricalDataGateway.ts's own memoryKey()/cacheGet()/cacheSet()). bootArgusCore() starts
+      // several real background workers immediately, and one of them (confirmed live via a temporary
+      // debug probe: rawDbCount=0 at the moment of the very first QQQ 1Day query, well before this
+      // seeding had run) queries QQQ's '1Day' bars before any synthetic bars exist - caching an EMPTY
+      // result for 60 real seconds. Because this harness runs at up to 400x speed, an entire session's
+      // worth of QuantSignalAgent cycles can complete inside that same 60-second real-wall-clock window,
+      // so a cache entry poisoned even once near boot stayed poisoned for the practical duration of the
+      // whole session - QQQ specifically failed on every cycle while every other seeded symbol (queried
+      // for the first time only after this seeding had already run) succeeded. Seeding before boot means
+      // nothing can query these symbols before real synthetic rows already exist, so no empty result is
+      // ever cached in the first place - fixing the root cause rather than invalidating a cache after
+      // the fact. ---
+      {
+        const { generateSyntheticPriorDayHistory } = await import('./SyntheticDailyBarProvider');
+        for (const config of universeConfigs) {
+          const priorDays = generateSyntheticPriorDayHistory(config, scenario, options.seed, sessionStartMs);
+          for (const bar of priorDays) await persistDailyBar(config.symbol, bar);
         }
       }
 
-      // Multi-bar partial-fill completion (2026-09-16, certification follow-up): once per bar, after
-      // this bar's own price/volume are loaded above, give any still-open PARTIALLY_FILLED order a
-      // real chance to progress using this bar's own liquidity - the same real mechanism a resting
-      // order at a genuine broker would receive. A no-op every bar with no working orders (the
-      // overwhelming common case); see HistoricalReplayBroker.advanceWorkingOrders()'s own doc
-      // comment for the full mechanism and its duplicate-bar guard.
-      this.broker.advanceWorkingOrders();
+      const { bootArgusCore } = await import('../../core/ArgusCoreBoot');
+      await bootArgusCore();
+      await sleep(1500); // let boot's own async settle (matches every other harness this session)
 
-      if (i > 0 && i % QUANT_TRIGGER_EVERY_BARS === 0) {
-        await quantSignalAgent.triggerNow().catch(() => { /* never fail the session on one agent's cycle error - matches production's own per-worker error isolation */ });
-      }
-      if (i > 0 && i % PORTFOLIO_MONITOR_TRIGGER_EVERY_BARS === 0) {
-        await portfolioMonitor.triggerNow().catch(() => { /* same per-worker isolation as above */ });
-      }
-      if (newsEngineForInjection && i % NEWS_TRIGGER_EVERY_BARS === 0) {
-        await newsEngineForInjection.triggerNow().catch(() => { /* same per-worker isolation as above */ });
+      // Determinism fix continued (2026-09-15, Rule 2): FundamentalAgent/MacroAgent are real,
+      // network-dependent idea agents (AlphaVantage market data + AIRouter LLM calls to whichever real
+      // provider is currently healthy) - unlike TechnicalAgent (deterministic RSI/MACD/BB) or
+      // KronosForecastAgent (a local, session-controlled :8008 service), there is no synthetic/isolated
+      // equivalent data source for these two today, and building a fabricated deterministic stand-in
+      // for a real AI call would be exactly the kind of invented evidence this simulator must not
+      // produce. Per the explicit instruction that "external AI providers are not consulted unless
+      // explicitly running a separate integration test," this engine disables both agents in-process
+      // for the duration of the session rather than let their real, rate-limited, non-deterministic
+      // output silently vary CHIEF_CONSENSUS_COMPLETED/TRADE_IDEA_GENERATED counts across same-seed
+      // runs (confirmed root cause of part of the 12-vs-13 prediction-count drift found in the
+      // 2026-09-15 determinism check). This is in-memory-only (pipelineAgentGate.ts), never touches
+      // config/pipelineAgents.json defaults, and is reset on process exit - production behavior when
+      // Autobot arms these agents is completely unaffected.
+      {
+        const { setPipelineAgentEnabled } = await import('../../core/pipelineAgentGate');
+        setPipelineAgentEnabled('FundamentalAgent', false);
+        setPipelineAgentEnabled('MacroAgent', false);
       }
 
-      memorySamples.push(sampleMemory(i));
-      await sleep(realMsBetweenBars);
+      // Explicit, disclosed methodology change (2026-09-14, operator-authorized) - see
+      // CalibrationHistorySeeder.ts's own header for the full disclosure. Runs BEFORE the main loop
+      // so any real consensus reached during the session sees an already-established (real,
+      // genuinely-computed) calibration champion for these specific agent/bucket pairs, exactly as a
+      // deployment with real prior history would.
+      let calibrationSeedResults: import('./CalibrationHistorySeeder').CalibrationSeedResult[] = [];
+      if (options.calibrationSeeds && options.calibrationSeeds.length > 0) {
+        const { seedSyntheticCalibrationHistory } = await import('./CalibrationHistorySeeder');
+        calibrationSeedResults = await seedSyntheticCalibrationHistory(options.calibrationSeeds);
+      }
+
+      // News+Quant Independent-Consensus Round-Trip Certification (2026-10-06 follow-up): installed
+      // here, BEFORE the main loop, so the provider swap and NEWS_AGENT_MODE override are in place
+      // before any bar is processed. Dynamic imports only, after env vars + DB isolation (same rule
+      // as every other db-touching import in this file).
+      let injectableNewsProvider: import('./SyntheticInjectableNewsProvider').SyntheticInjectableNewsProvider | null = null;
+      let newsEngineForInjection: import('../../news/NewsEngine').NewsEngine | null = null;
+      if (options.newsInjections && options.newsInjections.length > 0) {
+        // NEWS_AGENT_MODE itself was already set at the very top of run() (before bootArgusCore()) -
+        // see that comment for why it cannot be set here.
+        const { SyntheticInjectableNewsProvider } = await import('./SyntheticInjectableNewsProvider');
+        const { newsEngine } = await import('../../news/NewsEngine');
+        newsEngineForInjection = newsEngine;
+        injectableNewsProvider = new SyntheticInjectableNewsProvider(() => this.clock.now());
+        // Real production seam (NewsProviderManager.replaceProviders(), 2026-10-06) - swaps out the
+        // real RSS/paid-news providers so this isolated session never reaches the real network, the
+        // same isolation guarantee this file already applies to FundamentalAgent/MacroAgent above.
+        newsEngine.providerManager.replaceProviders([injectableNewsProvider]);
+        for (const spec of options.newsInjections) injectableNewsProvider.inject(spec);
+      }
+
+      // These three imports must stay here (dynamic, after env vars + DB isolation are already in
+      // effect) - see this file's own top-of-file isolation note for why.
+      const { unavailableHistoricalMacroProvider } = await import('../HistoricalMacroProvider');
+      const { unavailableHistoricalFundamentalProvider } = await import('../HistoricalFundamentalProvider');
+      const { DecisionTimeline: DecisionTimelineClass } = await import('./DecisionTimeline');
+
+      // --- Generate the full deterministic session (market data + news) up front. Point-in-time
+      // safety is enforced by CONSUMPTION below (strict prefix), not by generation order. ---
+      const rng = new SyntheticRandom(options.seed);
+      const marketDataEngine = new SyntheticMarketDataEngine(rng, universeConfigs, scenario);
+      const barsBySymbol = marketDataEngine.generateSession(sessionStartMs, sessionEndMs);
+      const newsItems = await seedSyntheticNewsForScenario(scenario, sessionStartMs, universe);
+      const newsProvider = buildSyntheticNewsProvider(newsItems);
+
+      // --- Install the synthetic, replay-shaped session - the one seam RiskEngine/BrokerManager/OMS
+      // already redirect to (ReplayContext.ts). ---
+      // speedMultiplier is deliberately NOT passed to the clock's own auto-drift here: this engine's
+      // main loop is a DISCRETE, explicitly-driven sequence (every simulated-time step is an exact
+      // bar timestamp via clock.advance(t), mirroring FullArgusReplayEngine's own model), not a
+      // passive "let real time drive it" consumer. At a high multiplier, auto-drift between explicit
+      // advance() calls (while this loop's own real per-bar work - DB writes, EventBus dispatch,
+      // sleep(REAL_MS_BETWEEN_BARS) - is happening) could drift now() PAST the next bar's target
+      // before this loop calls advance() for it, tripping the clock's own no-backwards-travel guard
+      // (found via an actual repro during Phase 1 smoke testing - the fix is architectural, not a
+      // patched threshold). speedMultiplier instead scales the REAL wall-clock pacing between bars
+      // below (see realMsBetweenBars) - the lever that actually controls how fast a session
+      // completes in wall-clock time, which is what section 27's speed knobs are really asking for.
+      this.clock = new SyntheticMarketClock(sessionStartMs, { speedMultiplier: 1 });
+      const requestedSpeedMultiplier = options.speedMultiplier ?? 1;
+      const realMsBetweenBars = Math.max(5, Math.round(REAL_MS_BETWEEN_BARS / requestedSpeedMultiplier));
+      const cutoff = new InformationCutoff(this.clock);
+      const costs = replaySafety.costProfiles[replaySafety.defaultCostProfile];
+      this.broker = new HistoricalReplayBroker({
+        initialCash: options.initialCash ?? 100_000,
+        costs,
+        timezone: replaySafety.defaultTimezone,
+        extendedHours: false,
+        shortSelling: replaySafety.shortSellingDefault,
+        fractional: replaySafety.fractionalSharesDefault,
+      });
+      assertActiveSessionIsSynthetic(this.broker); // post-install proof - refuses to proceed if the broker is not structurally incapable of live orders
+
+      const barsBySymbolResearch = new Map<string, ResearchBar[]>();
+      for (const [symbol, bars] of barsBySymbol) {
+        barsBySymbolResearch.set(symbol, bars.map((b) => ({ timestamp: b.timestamp, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume })));
+      }
+
+      const session: ActiveReplaySession = {
+        replayId: options.simulationId,
+        status: 'RUNNING',
+        config: defaultReplayConfig({ symbols: universe, timezone: replaySafety.defaultTimezone, randomSeed: options.seed, agents: ['TechnicalAgent', 'QuantEngine', 'ChiefTrader', 'RiskAgent'] }),
+        clock: this.clock,
+        cutoff,
+        broker: this.broker,
+        datasets: [],
+        quality: { totalBars: 0, gaps: [], staleness: [], corporateActionFlags: [] } as any,
+        datasetHash: `synthetic-${options.seed}`,
+        configurationHash: `synthetic-${options.simulationId}`,
+        replayHash: `synthetic-${options.simulationId}-${options.seed}`,
+        news: newsProvider,
+        macro: unavailableHistoricalMacroProvider(),
+        fundamentals: unavailableHistoricalFundamentalProvider(),
+        events: [],
+        noTrade: {},
+        equity: [],
+        peakEquity: options.initialCash ?? 100_000,
+        pauseRequested: false,
+        stopRequested: false,
+        stepRequested: false,
+        aiCalls: 0,
+        aiCostUsd: 0,
+        aiLabel: 'SYNTHETIC_SIMULATION',
+        partial: false,
+        waiters: new Map(),
+        barsBySymbol: barsBySymbolResearch,
+        openStops: new Map(),
+        activeDiscoveredSymbols: new Set(),
+        discoveredAt: new Map(),
+        discoveryTickCounter: 0,
+        tradePnls: [],
+        tradeLedger: [],
+        rejectedOrders: [],
+        agentAvailability: {},
+        decisionEvidence: [],
+        evaluationsAttempted: 0,
+        strategyPassesAttempted: 0,
+        totalBars: Math.floor(sessionDurationMs / BAR_INTERVAL_MS),
+        currentBarIndex: 0,
+        currentTimestamp: sessionStartMs,
+        rejectionsForRetrospective: [],
+        agentIdeaStats: {},
+        stageDurations: {},
+        replayStartedAtMs: Date.now(),
+        campaign: { lockedForDate: null, lockAction: null, dailyRealizedByDate: new Map(), daysTargetMet: new Set(), postTargetEquityPeakByDate: new Map(), postTargetMaxDrawdownPct: 0 },
+      };
+      setActiveReplaySession(session);
+
+      // --- Real observability: event-loop delay histogram + periodic memory samples, matching the
+      // standing infrastructure this codebase already uses (processTelemetry.ts) rather than a new
+      // parallel mechanism. ---
+      elHistogram = monitorEventLoopDelay({ resolution: 20 });
+      elHistogram.enable();
+      const memorySamples: MemorySample[] = [];
+
+      // --- Register symbols with the real MarketDataWorker so QuantSignalAgent's getActiveSymbols()
+      // includes them (subscribe() is safe to call directly here - it only opens a real stream when
+      // this process is authorized as the primary market-data owner, which an isolated harness
+      // process is not; see MarketDataWorker.ts's own isMarketDataWebSocketAuthorized() fail-close). ---
+      const { marketDataWorker } = await import('../../services/MarketDataWorker');
+      const { quantSignalAgent } = await import('../../services/QuantSignalAgent');
+      const { portfolioMonitor } = await import('../../services/PortfolioMonitor');
+      const { eventBus } = await import('../../core/EventBus');
+      for (const symbol of universe) marketDataWorker.subscribe(symbol);
+
+      timeline = new DecisionTimelineClass(this.clock);
+      this.timeline = timeline;
+      timeline.start();
+
+      // Point-in-time accumulator for today's own synthetic '1Day' rollup bar - see
+      // rollupTodaysDailyBar()'s own doc comment. Only ever fed bars the loop below has already
+      // revealed (pushed immediately after persistBar() reveals that same minute bar), so this can
+      // never leak a later-session high/low/close into an earlier QuantSignalAgent cycle.
+      const { rollupTodaysDailyBar } = await import('./SyntheticDailyBarProvider');
+      const revealedBarsBySymbol = new Map<string, SyntheticBar[]>();
+      for (const symbol of universe) revealedBarsBySymbol.set(symbol, []);
+
+      // --- The main loop: mirrors FullArgusReplayEngine.processTimestamp()'s exact NEXT_BAR_OPEN
+      // sequencing (see that file's own comment this was modeled on) - the bar AT t is the fill
+      // vehicle for orders placed using the PREVIOUS bar's close as the last known decision price. ---
+      const timestamps = Array.from({ length: session.totalBars }, (_, i) => sessionStartMs + i * BAR_INTERVAL_MS);
+      for (let i = 0; i < timestamps.length; i++) {
+        const t = timestamps[i];
+        if (i === 0) {
+          // reset(), not advance()/setTime() - real found bug (2026-09-14): a separate reset() call
+          // BEFORE this loop started left a small but real gap during which further setup work (array
+          // construction, etc.) could elapse enough real wall-clock time for this clock's own 1:1
+          // auto-drift (it is always constructed with speedMultiplier:1 - see below) to carry now()
+          // past sessionStartMs, so this same bar's later setTime()-based advance() call would then
+          // see "the target is before the current time" and throw - reproduced live on a 240-bar
+          // VALIDATED_CONVERGENCE_CONTROL run. Calling reset() (unconditional, no backward-guard)
+          // here, at the very first moment t is actually used, closes that gap entirely instead of
+          // narrowing it.
+          this.clock.reset(t);
+        } else {
+          this.clock.advance(t);
+        }
+        this.broker.clockNowMs = t;
+
+        for (const symbol of universe) {
+          // A defensive per-bar re-subscribe used to live here (see git history) to fight real
+          // MarketUniverseScanner/OpportunityDiscovery subscription churn - since root-caused (2026-
+          // 09-14, Step 2) to those real, network-dependent discovery workers never having been kept
+          // idle for the session (see prepareIsolatedEnvironment()'s own comment on
+          // ARGUS_OPPORTUNITY_LOOP_ENABLED/ARGUS_BROAD_UNIVERSE_ENABLED/ARGUS_MARKET_MOVERS_ENABLED).
+          // With them genuinely idle, the ONE subscribe() call per symbol before this loop starts is
+          // sufficient - this reproduces the same activeStreams lifecycle production uses for a
+          // symbol nothing else is competing to evict, rather than continuously repairing it from
+          // outside.
+          const bars = barsBySymbol.get(symbol) ?? [];
+          const currentBar = bars[i]; // the bar AT this timestamp - fill vehicle
+          const previousBar = i > 0 ? bars[i - 1] : undefined; // strictly-before-t - decision price
+
+          if (currentBar) {
+            this.broker.nextFillPrice.set(symbol, currentBar.open);
+            this.broker.nextFillVolume.set(symbol, currentBar.volume);
+            await persistBar(symbol, currentBar);
+            const revealed = revealedBarsBySymbol.get(symbol)!;
+            revealed.push(currentBar);
+            const todayBar = rollupTodaysDailyBar(revealed, sessionStartMs);
+            if (todayBar) await persistDailyBar(symbol, todayBar);
+          }
+
+          if (previousBar) {
+            marketDataWorker.cacheObservedQuote(symbol, previousBar.close, t);
+            eventBus.emitMarketData(symbol, previousBar.close, previousBar.volume, new Date(t).toISOString());
+          }
+        }
+
+        // Multi-bar partial-fill completion (2026-09-16, certification follow-up): once per bar, after
+        // this bar's own price/volume are loaded above, give any still-open PARTIALLY_FILLED order a
+        // real chance to progress using this bar's own liquidity - the same real mechanism a resting
+        // order at a genuine broker would receive. A no-op every bar with no working orders (the
+        // overwhelming common case); see HistoricalReplayBroker.advanceWorkingOrders()'s own doc
+        // comment for the full mechanism and its duplicate-bar guard.
+        this.broker.advanceWorkingOrders();
+
+        if (i > 0 && i % QUANT_TRIGGER_EVERY_BARS === 0) {
+          await quantSignalAgent.triggerNow().catch(() => { /* never fail the session on one agent's cycle error - matches production's own per-worker error isolation */ });
+        }
+        if (i > 0 && i % PORTFOLIO_MONITOR_TRIGGER_EVERY_BARS === 0) {
+          await portfolioMonitor.triggerNow().catch(() => { /* same per-worker isolation as above */ });
+        }
+        if (newsEngineForInjection && i % NEWS_TRIGGER_EVERY_BARS === 0) {
+          await newsEngineForInjection.triggerNow().catch(() => { /* same per-worker isolation as above */ });
+        }
+
+        memorySamples.push(sampleMemory(i));
+        await sleep(realMsBetweenBars);
+      }
+
+      // A few extra portfolio-monitor passes at the very end - gives take-profit/stop/trailing exit
+      // logic a real chance to fire against the session's final prices before results are collected,
+      // without which Test B's "position closed" stage could fail purely from insufficient real
+      // trigger opportunities near the end of a short session, not from any real pipeline defect.
+      for (let extra = 0; extra < 3; extra++) {
+        await portfolioMonitor.triggerNow().catch(() => {});
+        await sleep(realMsBetweenBars);
+      }
+
+      await sleep(REAL_SETTLE_MS); // let the real async chain (debounce -> consensus -> risk -> OMS) drain
+
+      const toMs = (ns: number) => (Number.isFinite(ns) ? ns / 1e6 : null);
+
+      return {
+        simulationId: options.simulationId,
+        scenarioId: options.scenarioId,
+        seed: options.seed,
+        universe,
+        sessionStartMs,
+        sessionEndMs,
+        timeline: this.timeline.getEntries(),
+        newsItems,
+        broker: this.broker,
+        memorySamples,
+        eventLoopP50Ms: toMs(elHistogram.percentile(50)),
+        eventLoopP95Ms: toMs(elHistogram.percentile(95)),
+        eventLoopP99Ms: toMs(elHistogram.percentile(99)),
+        eventLoopMaxMs: toMs(elHistogram.max),
+        wallClockDurationMs: Date.now() - wallClockStart,
+        dbPath: this.dbPath,
+        calibrationSeedResults,
+        costProfile: costs,
+      };
+    } finally {
+      // Guaranteed per-session teardown (see the try-open comment above): each step is
+      // individually guarded so one failing teardown cannot mask the original error or
+      // skip the remaining steps. Replay semantics are untouched - this only releases
+      // observation/listener/session-installation state the session no longer needs.
+      if (timeline) {
+        try { timeline.stop(); } catch { /* teardown must not throw */ }
+      }
+      if (elHistogram) {
+        try { elHistogram.disable(); } catch { /* teardown must not throw */ }
+      }
+      setActiveReplaySession(null);
     }
-
-    // A few extra portfolio-monitor passes at the very end - gives take-profit/stop/trailing exit
-    // logic a real chance to fire against the session's final prices before results are collected,
-    // without which Test B's "position closed" stage could fail purely from insufficient real
-    // trigger opportunities near the end of a short session, not from any real pipeline defect.
-    for (let extra = 0; extra < 3; extra++) {
-      await portfolioMonitor.triggerNow().catch(() => {});
-      await sleep(realMsBetweenBars);
-    }
-
-    await sleep(REAL_SETTLE_MS); // let the real async chain (debounce -> consensus -> risk -> OMS) drain
-
-    this.timeline.stop();
-    elHistogram.disable();
-    setActiveReplaySession(null);
-
-    const toMs = (ns: number) => (Number.isFinite(ns) ? ns / 1e6 : null);
-
-    return {
-      simulationId: options.simulationId,
-      scenarioId: options.scenarioId,
-      seed: options.seed,
-      universe,
-      sessionStartMs,
-      sessionEndMs,
-      timeline: this.timeline.getEntries(),
-      newsItems,
-      broker: this.broker,
-      memorySamples,
-      eventLoopP50Ms: toMs(elHistogram.percentile(50)),
-      eventLoopP95Ms: toMs(elHistogram.percentile(95)),
-      eventLoopP99Ms: toMs(elHistogram.percentile(99)),
-      eventLoopMaxMs: toMs(elHistogram.max),
-      wallClockDurationMs: Date.now() - wallClockStart,
-      dbPath: this.dbPath,
-      calibrationSeedResults,
-      costProfile: costs,
-    };
   }
 }
 

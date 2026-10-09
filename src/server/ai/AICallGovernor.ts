@@ -136,7 +136,7 @@ export interface JevProviderHandle {
 // Internals
 // ---------------------------------------------------------------------------
 
-type ProviderKey = 'jev' | 'generative';
+export type ProviderKey = 'jev' | 'generative';
 type CircuitStateName = 'CLOSED' | 'OPEN' | 'HALF_OPEN';
 
 interface CircuitState {
@@ -144,6 +144,21 @@ interface CircuitState {
   consecutiveFailures: number;
   openedAt: number;
   halfOpenProbesUsed: number;
+  /** Failure class of the most recent provider failure (never cleared by recovery). */
+  lastErrorKind: string | null;
+  /** Epoch ms of the most recent provider failure (never cleared by recovery). */
+  lastFailureAtMs: number | null;
+}
+
+function freshCircuitState(): CircuitState {
+  return {
+    state: 'CLOSED',
+    consecutiveFailures: 0,
+    openedAt: 0,
+    halfOpenProbesUsed: 0,
+    lastErrorKind: null,
+    lastFailureAtMs: null,
+  };
 }
 
 interface CacheEntry {
@@ -159,6 +174,10 @@ const CIRCUIT_TRIPPING_KINDS = new Set([
   'OVERLOAD',
   'SERVER',
   'NETWORK',
+  // 402 billing/quota: not transient, but the breaker (bounded cooldown + automatic
+  // probe recovery) is the right shape — cheap skip while down, self-healing when the
+  // operator tops up, without burning budget on a deterministically-doomed provider.
+  'BILLING',
   'UNKNOWN',
 ]);
 /**
@@ -272,8 +291,8 @@ export class AICallGovernor {
   private readonly inFlight = new Map<string, Promise<GovernorResult<unknown>>>();
   private readonly inFlightCount: Record<ProviderKey, number> = { jev: 0, generative: 0 };
   private readonly circuits: Record<ProviderKey, CircuitState> = {
-    jev: { state: 'CLOSED', consecutiveFailures: 0, openedAt: 0, halfOpenProbesUsed: 0 },
-    generative: { state: 'CLOSED', consecutiveFailures: 0, openedAt: 0, halfOpenProbesUsed: 0 },
+    jev: freshCircuitState(),
+    generative: freshCircuitState(),
   };
   private readonly providerUnhealthy: Record<ProviderKey, boolean> = { jev: false, generative: false };
 
@@ -890,6 +909,9 @@ export class AICallGovernor {
     inFlight: number;
     circuits: Record<string, 'CLOSED' | 'OPEN' | 'HALF_OPEN'>;
     cacheSize: number;
+    /** Per-symbol budget/cooldown tracking (bounded: MAX_SYMBOL_BUCKETS). */
+    symbolWindows: number;
+    symbolCooldowns: number;
   } {
     const sorted = [...this.diag.latencies].sort((a, b) => a - b);
     const pct = (p: number): number => {
@@ -908,6 +930,8 @@ export class AICallGovernor {
       inFlight: this.inFlightCount.jev + this.inFlightCount.generative,
       circuits: { jev: this.circuits.jev.state, generative: this.circuits.generative.state },
       cacheSize: this.cache.size,
+      symbolWindows: this.symbolWindows.size,
+      symbolCooldowns: this.symbolCooldownAt.size,
     };
   }
 
@@ -927,12 +951,7 @@ export class AICallGovernor {
     this.inFlightCount.jev = 0;
     this.inFlightCount.generative = 0;
     for (const key of ['jev', 'generative'] as ProviderKey[]) {
-      this.circuits[key] = {
-        state: 'CLOSED',
-        consecutiveFailures: 0,
-        openedAt: 0,
-        halfOpenProbesUsed: 0,
-      };
+      this.circuits[key] = freshCircuitState();
       this.providerUnhealthy[key] = false;
       this.providerWindows[key].reset();
     }

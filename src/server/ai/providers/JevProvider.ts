@@ -123,7 +123,7 @@ export class JevAnswerValidationError extends Error {
 export class JevHttpError extends Error {
   readonly statusCode: number;
   /** Coarse bucket for routing decisions; JevDecisionProvider refines by status code. */
-  readonly kind: 'AUTH' | 'RATE_LIMIT' | 'OVERLOAD' | 'SERVER';
+  readonly kind: 'AUTH' | 'RATE_LIMIT' | 'OVERLOAD' | 'SERVER' | 'BILLING';
 
   constructor(statusCode: number, statusText: string, bodySnippet?: string) {
     const snippet = (bodySnippet || '').trim();
@@ -134,12 +134,67 @@ export class JevHttpError extends Error {
       statusCode === 401 ? 'AUTH'
       : statusCode === 429 ? 'RATE_LIMIT'
       : statusCode === 529 ? 'OVERLOAD'
+      : statusCode === 402 ? 'BILLING'
       : 'SERVER';
   }
 }
 
 function isFiniteProbability(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
+}
+
+/** Cap on any single retry backoff: a vendor asking for longer waits (Retry-After)
+ *  still never parks one call past this bound. */
+const MAX_RETRY_DELAY_MS = 30_000;
+
+/**
+ * Full-jitter exponential backoff: the delay is uniform in [0.5x, 1.5x) of the
+ * exponential base, so concurrent retrying callers don't synchronize into a
+ * thundering herd against a recovering provider. Always capped.
+ */
+function jitteredDelayMs(baseMs: number): number {
+  return Math.min(MAX_RETRY_DELAY_MS, Math.floor(baseMs * (0.5 + Math.random())));
+}
+
+/**
+ * Abort-aware sleep for retry backoff: if the caller aborts (e.g. the
+ * AICallGovernor's hard timeout fires) mid-backoff, the wait ends immediately
+ * instead of sleeping out the full delay while the caller has already moved on.
+ */
+function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (!signal || signal.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(done, Math.max(0, ms));
+    function done(): void {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    }
+    signal.addEventListener('abort', done, { once: true });
+  });
+}
+
+/**
+ * Honor the vendor's Retry-After on 429 (delta-seconds or HTTP date), capped at
+ * MAX_RETRY_DELAY_MS. Returns null when absent/unparseable (caller falls back to
+ * jittered exponential backoff).
+ */
+function retryAfterMs(response: Response): number | null {
+  let raw: string | null = null;
+  try {
+    raw = response.headers?.get?.('retry-after') ?? null;
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  const secs = Number(raw.trim());
+  if (Number.isFinite(secs) && secs >= 0) return Math.min(MAX_RETRY_DELAY_MS, secs * 1000);
+  const dateMs = Date.parse(raw);
+  if (Number.isFinite(dateMs)) return Math.min(MAX_RETRY_DELAY_MS, Math.max(0, dateMs - Date.now()));
+  return null;
 }
 
 export class JevProvider extends BaseAIProvider {
@@ -283,10 +338,14 @@ export class JevProvider extends BaseAIProvider {
         });
         if (!response.ok) {
           // 429 rate limit / 529 vendor overload / 5xx: retry with backoff.
-          // 401 bad key / 422 our request was malformed: never retry.
+          // 401 bad key / 402 billing exhausted / 422 our request was malformed:
+          // never retry — retrying cannot fix these.
           if ((response.status === 429 || response.status === 529 || response.status >= 500) && retries < maxRetries) {
             retries++;
-            await new Promise((r) => setTimeout(r, delayMs));
+            // 429: honor the vendor's Retry-After when present (capped), so we
+            // back off for exactly as long as asked instead of guessing.
+            const vendorAskedMs = response.status === 429 ? retryAfterMs(response) : null;
+            await sleepAbortable(vendorAskedMs ?? jitteredDelayMs(delayMs), options?.signal);
             delayMs *= 2;
             continue;
           }
@@ -300,7 +359,7 @@ export class JevProvider extends BaseAIProvider {
         const isNetwork = /fetch|network|ECONN|ENOTFOUND|ETIMEDOUT/i.test(err?.message || '');
         if (!isAbort && isNetwork && retries < maxRetries) {
           retries++;
-          await new Promise((r) => setTimeout(r, delayMs));
+          await sleepAbortable(jitteredDelayMs(delayMs), options?.signal);
           delayMs *= 2;
           continue;
         }

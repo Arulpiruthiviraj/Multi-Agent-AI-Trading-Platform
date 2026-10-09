@@ -38,8 +38,8 @@ describe('mobileUtils', () => {
     expect(MOBILE_BREAKPOINT_PX).toBe(768);
   });
 
-  it('risk gate catalog has 26 entries for monitor UI (26th added 2026-10-07: close_short_position_exists, operator-only short-cover gate)', () => {
-    expect(riskGateOrder.gates.length).toBe(26);
+  it('risk gate catalog has 27 entries for monitor UI (27th: extended_hours_execution_policy)', () => {
+    expect(riskGateOrder.gates.length).toBe(27);
   });
 
   it('mobile tabs define 6 core views including settings', () => {

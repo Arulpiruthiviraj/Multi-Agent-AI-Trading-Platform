@@ -320,6 +320,23 @@ describe('cache', () => {
     );
     expect(againMax.status).toBe('CACHE_HIT');
   });
+
+  it('600+ cacheable inserts stay bounded at aiStateCacheMaxEntries from config', async () => {
+    const max = aiCallGovernor.aiStateCacheMaxEntries;
+    const inserts = max + 100; // deliberately over the cap, whatever config sets it to
+    const run = vi.fn(async () => ({ value: 'v', cacheable: true }));
+    gov.setGenerativeExecutor(run);
+    for (let i = 0; i < inserts; i++) {
+      // Stay under the per-minute budgets (generative 10/min binds first).
+      if (i > 0 && i % 10 === 0) advance(61_000);
+      const res = await gov.request(
+        genOpts({ material: material({ fingerprintParts: { n: i } }) }, run),
+      );
+      expect(res.status).toBe('CALLED');
+    }
+    expect(run).toHaveBeenCalledTimes(inserts);
+    expect(gov.getDiagnostics().cacheSize).toBeLessThanOrEqual(max);
+  });
 });
 
 // -- singleflight ----------------------------------------------------------------
@@ -343,6 +360,22 @@ describe('singleflight', () => {
     expect(d.singleflightJoins).toBe(19);
     expect(d.skips['DUPLICATE']).toBe(19);
     expect(d.called).toBe(1);
+  });
+
+  it('provider failure cycles never leave entries in the in-flight map', async () => {
+    const { provider, decide } = jevFailer('TIMEOUT');
+    gov.__setJevProviderForTests(provider);
+    for (let i = 0; i < 8; i++) {
+      const res = await gov.request(
+        jevOpts({ material: material({ fingerprintParts: { n: i } }) }),
+      );
+      // The first failures go through the provider (FAILED); once the circuit
+      // opens the rest skip at CIRCUIT_OPEN. Either way nothing may remain
+      // in-flight after the request settles.
+      expect(['FAILED', 'SKIPPED']).toContain(res.status);
+      expect(gov.getDiagnostics().inFlight).toBe(0);
+    }
+    expect(decide).toHaveBeenCalled();
   });
 });
 
@@ -381,6 +414,27 @@ describe('SYMBOL_COOLDOWN', () => {
     // as defense-in-depth for tighter cooldown configs rather than firing here.
     expect(gov.getDiagnostics().skips['PROVIDER_BUDGET'] ?? 0).toBe(0);
   });
+
+  it('churning 2500 unique symbols keeps per-symbol maps bounded', async () => {
+    // MAX_SYMBOL_BUCKETS (module constant) caps both maps at 2000; the cooldown
+    // map is additionally TTL-pruned on every symbol request. Non-cacheable so
+    // the cache does not grow alongside.
+    const run = vi.fn(async () => ({ value: 'v', cacheable: false }));
+    gov.setGenerativeExecutor(run);
+    for (let i = 0; i < 2500; i++) {
+      // Stay under the per-minute budgets (generative 10/min binds first, then
+      // the 30/min global); clock advances also let the cooldown TTL prune
+      // stale entries, as in production.
+      if (i > 0 && i % 10 === 0) advance(61_000);
+      const res = await gov.request(
+        genOpts({ material: material({ symbol: `CHURN${i}`, fingerprintParts: { n: i } }) }, run),
+      );
+      expect(res.status).toBe('CALLED');
+    }
+    const d = gov.getDiagnostics();
+    expect(d.symbolWindows).toBeLessThanOrEqual(2000);
+    expect(d.symbolCooldowns).toBeLessThanOrEqual(2000);
+  }, 120_000);
 });
 
 // -- budgets ----------------------------------------------------------------------

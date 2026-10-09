@@ -6,6 +6,11 @@ import crypto from 'crypto';
 import { BrokerPlugin, BrokerCapabilities, Order, Portfolio, Position } from './BrokerAdapter';
 import type { ReplayCostProfile } from '../server/replay/replaySafety';
 import { classifyMarketSession, sessionAllowsFills } from '../server/replay/marketSession';
+import {
+  evictOldestTerminalOrdersIfOverCap,
+  isPaperBrokerOrderEvictionEnabled,
+  resolvePaperBrokerOrderRegistryMax,
+} from './brokerMemory';
 
 export class HistoricalReplayBroker implements BrokerPlugin {
   id = 'historical_replay';
@@ -144,6 +149,15 @@ export class HistoricalReplayBroker implements BrokerPlugin {
   }
 
   async getBuyingPower() { return this.cash; }
+  /** 2026-10-08 defect hunt (D3): _orders grew one entry per replay order, never evicted -
+   *  the Oct-8 memory hunt bounded the other paper brokers but missed the replay broker.
+   *  Same evictOldestTerminalOrdersIfOverCap treatment: non-terminal orders are never evicted,
+   *  and replay rows are durable in the trades/fills DB tables anyway. */
+  private evictOrdersIfOverCap(): void {
+    if (!isPaperBrokerOrderEvictionEnabled()) return;
+    evictOldestTerminalOrdersIfOverCap(this._orders, resolvePaperBrokerOrderRegistryMax());
+  }
+
   async orders() { return Array.from(this._orders.values()); }
   async positions() { return Array.from(this._positions.values()); }
 
@@ -166,11 +180,14 @@ export class HistoricalReplayBroker implements BrokerPlugin {
         updatedAt: new Date(this.clockNowMs),
       };
       this._orders.set(rejected.id, rejected);
+      this.evictOrdersIfOverCap();
       return rejected;
     }
     const qtyReq = orderData.quantity || 0;
     const requestedQty = this.fractional ? qtyReq : Math.floor(qtyReq);
-    if (!(requestedQty > 0)) {
+    // 2026-10-08 defect hunt (D5): also reject non-finite quantities (Infinity passed the
+    // old > 0 check). Matches the Coinbase-style finite > 0 discipline of the real adapters.
+    if (!Number.isFinite(requestedQty) || !(requestedQty > 0)) {
       return {
         id: crypto.randomUUID(),
         symbol: orderData.symbol!,
@@ -308,6 +325,7 @@ export class HistoricalReplayBroker implements BrokerPlugin {
       updatedAt: new Date(this.clockNowMs),
     };
     this._orders.set(filled.id, filled);
+    this.evictOrdersIfOverCap();
     // Multi-bar partial-fill completion (2026-09-16, certification follow-up). Previously a
     // PARTIALLY_FILLED order here was permanently stuck at its first-bar filled quantity forever -
     // a real, disclosed simulator limitation (config/replaySafety.json's own

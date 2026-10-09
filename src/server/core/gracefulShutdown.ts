@@ -80,6 +80,17 @@ async function performDrain(handles: ShutdownHandles): Promise<void> {
     drainFailed = true;
     console.error(message, error);
   };
+  // 2026-10-08 defect #3: publish "shutdown in progress" to the maintenance-state file BEFORE
+  // tearing workers down. During a slow drain the heartbeat interval may stop while the process
+  // is still alive and briefly still answering /ready - without this signal the external
+  // watchdog would read that as a frozen process. Best-effort: a publish failure must never
+  // block or fail the drain itself (the watchdog then just uses its conservative path).
+  try {
+    const { publishMaintenanceState } = await import('./maintenanceState');
+    publishMaintenanceState({ shutdownInProgress: true });
+  } catch {
+    /* best-effort only - never block the drain */
+  }
   console.log('[gracefulShutdown] Stopping new trades and draining workers...');
   try {
     const { tradingEngine } = await import('../engines/TradingEngine');
@@ -198,6 +209,15 @@ async function performDrain(handles: ShutdownHandles): Promise<void> {
     openAliceVerificationService.stopPolling();
   } catch (e) {
     failed('[gracefulShutdown] Failed to stop OpenAliceVerificationService', e);
+  }
+  try {
+    // A2 (2026-10-08): kill any Ollama/Chronos companions this process spawned. They run
+    // detached+unref'd and previously had no stop path at all, so they survived engine
+    // shutdown as orphans. Best-effort: a kill failure must never block the drain.
+    const { modelRuntimeManager } = await import('../ai/ModelRuntimeManager');
+    modelRuntimeManager.stop();
+  } catch (e) {
+    failed('[gracefulShutdown] Failed to stop ModelRuntimeManager', e);
   }
   try {
     // R2 remediation (2026-09-06) - added after DEF-27's own lesson: stop every interval-driven

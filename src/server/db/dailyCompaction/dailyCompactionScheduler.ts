@@ -25,7 +25,7 @@ export async function runDailyCompactionSweep(nowMs: number = Date.now()): Promi
     if (tradingDate === today) continue;
     await runDailyCompactionForDate(observabilityEventsSource, tradingDate, nowMs);
   }
-  purgeVerifiedDays(observabilityEventsSource, observabilityConfig.retentionDays, nowMs);
+  await purgeVerifiedDays(observabilityEventsSource, observabilityConfig.retentionDays, nowMs);
 }
 
 export function startDailyCompactionSweep(): void {
