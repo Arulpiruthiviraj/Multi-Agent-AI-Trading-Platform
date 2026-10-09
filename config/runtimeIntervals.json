@@ -56,6 +56,8 @@
   "javaQuantAdvisoryMs": 90000,
   "institutionalStrategyVoteMs": 120000,
   "aiProviderHealthCheckMs": 180000,
+  "_aiProviderQuarantineCooldownComment": "2026-10-08 defect A1: aiProviders.health='Offline' was a sticky quarantine - routeTask/routeConsensus exclude Offline providers whenever any live provider remains, and the only writer back to a routable health was a successful ROUTED call the exclusion made unreachable. After this cooldown elapses (measured from the row's last_failure), AIProviderHealthCheck's real periodic re-probe restores the provider to 'Degraded' on success; a failed re-probe keeps it Offline. 1h is deliberately longer than every router-side skip cooldown (auth 5min, timeout 1min, quota/model 30min in tradingSafety.json) so recovery probes never run hotter than routing's own backoffs.",
+  "aiProviderQuarantineCooldownMs": 3600000,
   "sessionLifecycleEvalMs": 60000,
   "calibrationValidationCycleMs": 900000,
   "cryptoMarketDataIngestionMs": 15000,

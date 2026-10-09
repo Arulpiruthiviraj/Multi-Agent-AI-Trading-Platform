@@ -135,6 +135,10 @@ export interface RuntimeIntervals {
   transactionTracesRetentionDays: number;
   sessionLifecycleSnapshotsRetentionDays: number;
   tradeLifecycleTransitionsRetentionDays: number;
+  /** 2026-10-08 (defect A1): how long an aiProviders.health='Offline' quarantine must age
+   *  (measured from the row's last_failure) before AIProviderHealthCheck's real re-probe may
+   *  restore the provider to 'Degraded' on success. A failed re-probe keeps it Offline. */
+  aiProviderQuarantineCooldownMs: number;
 }
 
 const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
@@ -164,6 +168,7 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'quantAssessmentsRetentionDays', 'pitDecisionLedgerRetentionDays',
   'agentReasoningLogsRetentionDays', 'transactionTracesRetentionDays',
   'sessionLifecycleSnapshotsRetentionDays', 'tradeLifecycleTransitionsRetentionDays',
+  'aiProviderQuarantineCooldownMs',
 ];
 
 function loadRuntimeIntervals(): RuntimeIntervals {
