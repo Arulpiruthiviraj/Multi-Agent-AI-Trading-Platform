@@ -48,6 +48,7 @@ export type JevErrorKind =
   | 'TIMEOUT'
   | 'VALIDATION'
   | 'ABORTED'
+  | 'BILLING'
   | 'UNKNOWN';
 
 const DEFAULT_RETRYABLE: Record<JevErrorKind, boolean> = {
@@ -60,6 +61,11 @@ const DEFAULT_RETRYABLE: Record<JevErrorKind, boolean> = {
   TIMEOUT: true,
   VALIDATION: false,
   ABORTED: false,
+  // 402 payment-required: the account cannot pay, so retrying the same call can
+  // never succeed — only an operator topping up the TypeSafe account fixes it.
+  // Never retried; the governor trips its circuit on it (bounded cooldown with
+  // automatic probe-based recovery) instead of burning budget on a doomed call.
+  BILLING: false,
   UNKNOWN: false,
 };
 
@@ -331,6 +337,7 @@ export class JevDecisionProvider {
       if (status === 401) return fail('AUTH', 'Jev authentication failed (401) — check the API key', { status });
       if (status === 429) return fail('RATE_LIMIT', 'Jev rate limit hit (429)', { status });
       if (status === 529) return fail('OVERLOAD', 'Jev overloaded (529)', { status });
+      if (status === 402) return fail('BILLING', 'Jev billing/quota exhausted (402) — top up the TypeSafe account', { status });
       if (status === 422) return fail('VALIDATION', 'Jev rejected the request as malformed (422)', { status });
       if (status >= 500) return fail('SERVER', `Jev server error (${status})`, { status });
       return fail('UNKNOWN', `Jev request failed with HTTP ${status}`, { status });
