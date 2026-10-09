@@ -1,0 +1,132 @@
+{
+  "until": "2026-10-09T16:27:27.743Z",
+  "lifecycle": [
+    {
+      "version_type": "strategyEligibility:PULLBACK_CONTINUATION",
+      "status": "RETIRED",
+      "sample_size": 22,
+      "created_at": "2026-08-31T21:42:38.558Z",
+      "hypothesis": "Repeatedly verified (Phase 10-13 audits), real organic evidence: effective N ~22, win rate ~22.7%, Wilson lower bound ~0.101 (below-chance, statistically significant). No lookahead violation, no attribution corruption, no replay contamination confirmed independently across multiple passes. Quarantined from real emission (RESEARCH/SHADOW) per explicit operator decision - continues to be evaluated every cycle in the background so regime-specific recovery could still be discovered; reinstateStrategyForEmission() can restore it if future evidence changes this finding."
+    }
+  ],
+  "bars": {
+    "SNOW": [
+      {
+        "timeframe": "1Day",
+        "n": 251,
+        "first": 1760054400000,
+        "last": 1791504000000
+      },
+      {
+        "timeframe": "1Min",
+        "n": 342,
+        "first": 1787680320000,
+        "last": 1791554460000
+      }
+    ],
+    "MRNA": [
+      {
+        "timeframe": "1Day",
+        "n": 223,
+        "first": 1760054400000,
+        "last": 1788134400000
+      },
+      {
+        "timeframe": "1Min",
+        "n": 753,
+        "first": 1791207000000,
+        "last": 1791380580000
+      }
+    ],
+    "CRCL": []
+  },
+  "cycles": [
+    {
+      "ts": 1791562596152,
+      "symbol": null,
+      "trace_id": null,
+      "payload": {
+        "durationMs": 1026530,
+        "concurrency": 1,
+        "attemptedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM"
+        ],
+        "completedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM"
+        ],
+        "notAttemptedSymbols": [],
+        "reason": "COMPLETED"
+      }
+    }
+  ],
+  "quantNoTrade": [
+    {
+      "ts": 1791556002052,
+      "symbol": "SNOW",
+      "trace_id": "trace_SNOW_1791556002_516b",
+      "payload": {
+        "payload": {
+          "symbol": "SNOW",
+          "reason": "Quant live emit requires a strategy idea that clears live EV and min R:R. Regime-only fallback is not a trade.",
+          "code": "NO_ELIGIBLE_STRATEGY"
+        }
+      }
+    },
+    {
+      "ts": 1791558524716,
+      "symbol": "SNOW",
+      "trace_id": "trace_SNOW_1791558524_52a2",
+      "payload": {
+        "payload": {
+          "symbol": "SNOW",
+          "reason": "Quant live emit requires a strategy idea that clears live EV and min R:R. Regime-only fallback is not a trade.",
+          "code": "NO_ELIGIBLE_STRATEGY"
+        }
+      }
+    },
+    {
+      "ts": 1791560645750,
+      "symbol": "SNOW",
+      "trace_id": "trace_SNOW_1791560645_77c4",
+      "payload": {
+        "payload": {
+          "symbol": "SNOW",
+          "reason": "Quant live emit requires a strategy idea that clears live EV and min R:R. Regime-only fallback is not a trade.",
+          "code": "NO_ELIGIBLE_STRATEGY"
+        }
+      }
+    },
+    {
+      "ts": 1791563229210,
+      "symbol": "SNOW",
+      "trace_id": "trace_SNOW_1791563229_8039",
+      "payload": {
+        "payload": {
+          "symbol": "SNOW",
+          "reason": "Quant live emit requires a strategy idea that clears live EV and min R:R. Regime-only fallback is not a trade.",
+          "code": "NO_ELIGIBLE_STRATEGY"
+        }
+      }
+    }
+  ],
+  "authorizationChecks": [],
+  "policySelections": []
+}

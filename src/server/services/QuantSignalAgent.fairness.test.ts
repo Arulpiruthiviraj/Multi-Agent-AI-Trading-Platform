@@ -34,3 +34,20 @@ it('handles removal of the saved resume symbol without losing the current univer
   await agent.triggerNow();
   expect(evaluate.mock.calls.map(call => call[0])).toEqual(['SPY', 'AAPL', 'OKTA']);
 });
+
+it('journals the scheduled snapshot and finishes failed/null attempts under the same cycle id', async () => {
+  const agent = new QuantSignalAgent();
+  vi.spyOn(agent as any, 'symbolConcurrency').mockReturnValue(1);
+  vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['MRNA', 'CRCL']);
+  vi.spyOn(provider, 'getRegisteredHistoricalBarProvider').mockReturnValue(null);
+  vi.spyOn(agent, 'evaluateSymbol').mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('provider unavailable'));
+  const log = vi.spyOn(structuredLogger, 'info');
+  await agent.triggerNow();
+  const started = log.mock.calls.find(([message]) => message === 'quant_cycle_started')![1]!;
+  expect(started).toMatchObject({ scheduledSymbols: ['MRNA', 'CRCL'], providerId: null });
+  const finished = log.mock.calls.filter(([message]) => message === 'quant_symbol_evaluation_finished').map(([, fields]) => fields);
+  expect(finished).toEqual([
+    expect.objectContaining({ cycleId: started.cycleId, symbol: 'MRNA', outcome: 'NO_ASSESSMENT', durationMs: expect.any(Number) }),
+    expect.objectContaining({ cycleId: started.cycleId, symbol: 'CRCL', outcome: 'ERROR', durationMs: expect.any(Number) }),
+  ]);
+});

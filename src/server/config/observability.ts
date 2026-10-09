@@ -72,6 +72,9 @@ export interface ObservabilityConfig {
   heavyReportTimeoutMs: number;
   marketDataPersist: boolean;
   maxPayloadChars: number;
+  quantInputEvidenceEnabled: boolean;
+  quantInputEvidenceMaxBytes: number;
+  quantInputEvidenceChunkBytes: number;
   promptHashLength: number;
   legacyJsonlMaxBytes: number;
   legacyJsonlMaxBackups: number;
@@ -89,7 +92,7 @@ const REQUIRED_NUMBERS: (keyof ObservabilityConfig)[] = [
   'processTelemetryIntervalMs', 'processTelemetryRingSize', 'reflectionEngineMetricsRingSize',
   'memoryTelemetryPersistIntervalMs', 'memoryTelemetryWarningRssMb', 'memoryTelemetryCriticalRssMb',
   'memoryTelemetryWarningCommittedMb', 'memoryTelemetryCriticalCommittedMb',
-  'maxPayloadChars', 'promptHashLength',
+  'maxPayloadChars', 'promptHashLength', 'quantInputEvidenceMaxBytes', 'quantInputEvidenceChunkBytes',
   'legacyJsonlMaxBytes', 'legacyJsonlMaxBackups',
   'heapSnapshotBaselineDelayMs', 'heapSnapshotCooldownMs', 'heapSnapshotFollowUpDelayMs',
   'heapSnapshotMaxPerProcessLifetime', 'heapSnapshotMaxFilesOnDisk', 'heapSnapshotMaxTotalMb',
@@ -123,6 +126,9 @@ function loadObservabilityConfig(): ObservabilityConfig {
   }
   if (typeof raw.heapSnapshotDir !== 'string' || raw.heapSnapshotDir.length === 0) {
     throw new Error('config/observability.json missing string field: heapSnapshotDir');
+  }
+  if (typeof raw.quantInputEvidenceEnabled !== 'boolean' || !Number.isSafeInteger(raw.quantInputEvidenceMaxBytes) || raw.quantInputEvidenceMaxBytes <= 0 || !Number.isSafeInteger(raw.quantInputEvidenceChunkBytes) || raw.quantInputEvidenceChunkBytes <= 0 || raw.quantInputEvidenceChunkBytes > raw.quantInputEvidenceMaxBytes || Math.ceil(raw.quantInputEvidenceChunkBytes / 3) * 4 + 1024 > raw.maxPayloadChars) {
+    throw new Error('config/observability.json invalid quant input evidence bounds');
   }
   return raw;
 }
