@@ -154,7 +154,11 @@ session-scale p99 event-loop check.
 Boot the **exact build, exact config, exact schema** for the next session against an **isolated
 copy of production state** and require every mandatory readiness invariant. This is the
 pre-market release gate; its checklist is defined in full in
-`ARGUS_NEXT_SESSION_CERTIFICATION.md`.
+`ARGUS_NEXT_SESSION_CERTIFICATION.md`. Its executable form is
+`argus certify-next-session [--db=<path>] [--json]` (exit 0/2/3 =
+READY / READY_WITH_CONDITIONS / NO_GO): it snapshots the production DB read-only, runs
+canonical authorization + data readiness + build/config/schema provenance, and names the
+exact test files owning the areas a static probe cannot measure.
 
 **Verdict vocabulary (only these):**
 

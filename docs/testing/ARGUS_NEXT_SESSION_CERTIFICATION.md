@@ -15,6 +15,15 @@ conditions that do not touch safety (thresholds, gates, authority, reconciliatio
 condition is listed explicitly and expires at the next session. Authorization state is never
 manufactured to turn a NO_GO into a READY.
 
+**Executable form:** `argus certify-next-session [--db=<path>] [--json]`
+(`scripts/argus-cli.ts` → `scripts/certifyNextSession.ts`). Snapshots the production DB
+read-only into an isolated copy (sqlite3 online backup; never writes the source), runs the
+canonical authorization + data-readiness + build/config/schema provenance against the copy,
+and emits `OVERALL_STATUS` (`READY` / `READY_WITH_CONDITIONS` / `NO_GO`) with exit codes
+0 / 2 / 3 (1 = internal error). Exit 3 is a certification RESULT, not a bug. The checklist
+below is the human-readable contract; the CLI is its machine execution for the areas it can
+measure directly, and names the exact test files that own the rest (`delegatedToSuite`).
+
 ---
 
 ## 1. Mode and safety posture
