@@ -80,6 +80,17 @@ async function performDrain(handles: ShutdownHandles): Promise<void> {
     drainFailed = true;
     console.error(message, error);
   };
+  // 2026-10-08 defect #3: publish "shutdown in progress" to the maintenance-state file BEFORE
+  // tearing workers down. During a slow drain the heartbeat interval may stop while the process
+  // is still alive and briefly still answering /ready - without this signal the external
+  // watchdog would read that as a frozen process. Best-effort: a publish failure must never
+  // block or fail the drain itself (the watchdog then just uses its conservative path).
+  try {
+    const { publishMaintenanceState } = await import('./maintenanceState');
+    publishMaintenanceState({ shutdownInProgress: true });
+  } catch {
+    /* best-effort only - never block the drain */
+  }
   console.log('[gracefulShutdown] Stopping new trades and draining workers...');
   try {
     const { tradingEngine } = await import('../engines/TradingEngine');
