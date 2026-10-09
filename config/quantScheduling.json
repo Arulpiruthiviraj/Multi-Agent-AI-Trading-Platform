@@ -1,0 +1,13 @@
+{
+  "$comment": "Control-plane bounds, not strategy thresholds. Dynamic scheduling is opt-in until production soak. Cycle deadline is cooperative: never release an unfinished evaluation as though cancelled. Provider pacing and concurrency remain canonical.",
+  "dynamicSchedulingEnabled": false,
+  "maxCycleDurationMs": 60000,
+  "maxSymbolsPerCycle": 10,
+  "maxAdmissionBurst": 2,
+  "historicalRequestTimeoutMs": 15000,
+  "historicalMaxPages": 50,
+  "admissionLatencyTargetMs": 60000,
+  "admissionLatencyMinSamples": 10,
+  "latencyEvidenceWindowMs": 3600000,
+  "latencyEvidenceRowLimit": 5000
+}

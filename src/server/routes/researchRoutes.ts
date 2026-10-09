@@ -1,4 +1,6 @@
 import type { Router } from 'express';
+import { reviewQuantCertification, commitQuantCertification, quantCertificationConfig } from '../research/quantLifecycleCertification';
+import { isPaperTradingOnlyEnforced } from '../core/tradingModeEnv';
 import { isTheoreticalZeroCost, researchSafety } from '../config/researchSafety';
 import { assessDataQuality } from '../research/dataQuality';
 import { hashCanonicalDataset } from '../research/datasetHash';
@@ -40,6 +42,27 @@ import { pauseReplay, resumeReplay, stopReplay, stepReplay, getReplayRun, getRep
 import { exportReplayManifest, readReplayArtifact, exportTradesCsv, exportEquityCsv, exportRejectionsCsv, exportMissedOpportunitiesCsv, exportMarkdownReport, exportZipArchive, isValidReplayId } from '../replay/replayStore';
 
 export function mountResearchRoutes(v2Router: Router): void {
+  v2Router.get('/research/quant-certification/:strategyId', async (req, res) => {
+    try {
+      res.json({ ok: true, review: await reviewQuantCertification(String(req.params.strategyId)) });
+    } catch (e: any) { res.status(400).json({ ok: false, error: e.message }); }
+  });
+  // Inherits the existing authenticated route mount. No client-supplied evidence or status.
+  v2Router.post('/research/quant-certification/:strategyId/review', async (req, res) => {
+    try {
+      const { reviewHash, reason } = req.body ?? {};
+      if (typeof reviewHash !== 'string' || !/^[a-f0-9]{64}$/.test(reviewHash)
+        || typeof reason !== 'string' || !reason.trim() || reason.length > quantCertificationConfig.maxReviewReasonChars) {
+        return res.status(400).json({ ok: false, error: 'INVALID_REVIEW_REQUEST' });
+      }
+      const actor = (req as typeof req & { actor?: string }).actor ?? 'unknown';
+      const id = await commitQuantCertification(String(req.params.strategyId), reviewHash, actor, reason, () => ({
+        paperOnly: isPaperTradingOnlyEnforced(), mode: tradingEngine.state.tradingMode,
+        state: tradingEngine.state.tradingState, autobot: tradingEngine.state.enabled,
+      }));
+      res.json({ ok: true, lifecycleTransitionId: id, status: 'VALIDATED', live: 'NO-GO' });
+    } catch (e: any) { res.status(409).json({ ok: false, error: e.message }); }
+  });
   v2Router.get('/research/vectorbt/status', async (_req, res, next) => {
     try {
     const status = await getVectorBTStatus();

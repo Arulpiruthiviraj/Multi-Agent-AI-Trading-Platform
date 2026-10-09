@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { observabilityConfig } from '../../../config/observability';
 
 /**
  * Daily Learning Compaction, Phase 1 - §17 performance measurement at realistic volumes.
@@ -78,9 +79,31 @@ describe('Daily Learning Compaction performance (§17)', () => {
     const rawSizeEstimateBytes = rowCount * 200; // rough: ~200 bytes/row for this schema shape
 
     const purgeStart = performance.now();
-    const purgeResult = await orchestrator.purgeVerifiedDays(source, 0, windowEndMs + 2000);
+    // Production purge is deliberately bounded; retry verified work rather than assuming
+    // a single call must perform an unbounded million-row delete.
+    const batchBudget = observabilityConfig.retentionSweepBatchSize * observabilityConfig.retentionSweepMaxBatchesPerCall;
+    const maxCalls = Math.ceil(rowCount / batchBudget) + 1;
+    let remaining = rowCount;
+    for (let call = 0; call < maxCalls && remaining > 0; call++) {
+      const before = remaining;
+      await orchestrator.purgeVerifiedDays(source, 0, windowEndMs + 2000);
+      remaining = sqliteDb.prepare('SELECT count(*) AS n FROM observability_events WHERE ts >= ? AND ts < ?')
+        .get(windowStartMs, windowEndMs).n;
+      expect(before - remaining).toBeGreaterThan(0);
+      expect(before - remaining).toBeLessThanOrEqual(batchBudget);
+      if (remaining > 0) expect(db.select().from(schema.dailyLearningArchive).all()[0].compactionStatus).toBe('VERIFIED');
+    }
+    // An exact full-budget last batch is conservatively truncated until the next
+    // sweep observes an empty window. Exercise that confirmation instead of
+    // treating deleted rows alone as proof the archive status was finalized.
+    if (remaining === 0 && db.select().from(schema.dailyLearningArchive).all()[0].compactionStatus === 'VERIFIED') {
+      const confirmation = await orchestrator.purgeVerifiedDays(source, 0, windowEndMs + 2000);
+      expect(confirmation.purgedDays).toBe(1);
+      expect(confirmation.totalRowsPurged).toBe(0);
+    }
     const purgeMs = performance.now() - purgeStart;
-    expect(purgeResult.totalRowsPurged).toBe(rowCount);
+    expect(remaining).toBe(0);
+    expect(db.select().from(schema.dailyLearningArchive).all()[0].compactionStatus).toBe('PURGED');
 
     const mem = process.memoryUsage();
     const result = {

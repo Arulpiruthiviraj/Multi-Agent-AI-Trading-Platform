@@ -463,4 +463,27 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
       selectSpy.mockRestore();
     });
   });
-});
+  it('aborts a stalled historical request rather than holding Quant forever', async () => {
+    const { quantScheduling } = await import('../../config/quantScheduling');
+    const { registerHistoricalBarProvider } = await import('./historicalBarProvider');
+    registerHistoricalBarProvider(null);
+    const original = quantScheduling.historicalRequestTimeoutMs;
+    quantScheduling.historicalRequestTimeoutMs = 20; // isolated fault-injection latency
+    const getBars = vi.spyOn(historicalDataGateway, 'getBars').mockResolvedValue([]);
+    vi.stubGlobal('fetch', vi.fn((_url, opts) => new Promise((_resolve, reject) => {
+      opts.signal.addEventListener('abort', () => reject(opts.signal.reason), { once: true });
+    })));
+    try { await expect(historicalDataGateway.ensureBars('TIMEO', '1Day', 0, 86400000)).rejects.toThrow(); }
+    finally { quantScheduling.historicalRequestTimeoutMs = original; getBars.mockRestore(); }
+  });
+  it('rejects repeated historical page tokens without an endless provider loop', async () => {
+    const { registerHistoricalBarProvider } = await import('./historicalBarProvider');
+    registerHistoricalBarProvider(null);
+    const getBars = vi.spyOn(historicalDataGateway, 'getBars').mockResolvedValue([]);
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ bars: [], next_page_token: 'repeat' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await expect(historicalDataGateway.ensureBars('LOOPS', '1Day', 0, 86400000)).rejects.toThrow('repeated a page token');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally { getBars.mockRestore(); }
+  });});

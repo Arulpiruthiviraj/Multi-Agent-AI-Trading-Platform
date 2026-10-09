@@ -22,6 +22,7 @@ import { getRegisteredHistoricalBarProvider } from './historicalBarProvider';
 import { minutesInTimezone } from '../../replay/marketSession';
 import { replaySafety } from '../../replay/replaySafety';
 import { TRADING_TIMEZONE } from '../../core/TradingCalendar';
+import { quantScheduling } from '../../config/quantScheduling';
 
 /**
  * P1-1 (2026-10-04 remediation): a '1Day' bar's own timestamp is its session OPEN, so a bar fetched
@@ -300,7 +301,10 @@ export class HistoricalDataGateway {
 
     let pageToken: string | undefined;
     let fetchedAny = false;
+    let pageCount = 0;
+    const seenTokens = new Set<string>();
     do {
+      if (++pageCount > quantScheduling.historicalMaxPages) throw new Error('Historical bars pagination exceeded configured page budget');
       const url = new URL(`${ALPACA_DATA_HOST}/v2/stocks/${encodeURIComponent(symbol)}/bars`);
       url.searchParams.set('timeframe', timeframe);
       url.searchParams.set('start', new Date(startMs).toISOString());
@@ -314,6 +318,7 @@ export class HistoricalDataGateway {
       if (pageToken) url.searchParams.set('page_token', pageToken);
 
       const res = await fetch(url.toString(), {
+        signal: AbortSignal.timeout(quantScheduling.historicalRequestTimeoutMs),
         headers: {
           'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
           'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY,
@@ -352,6 +357,8 @@ export class HistoricalDataGateway {
         await this.persistBars(symbol, timeframe, mapped, 'alpaca', startMs, endMs);
       }
       pageToken = data.next_page_token || undefined;
+      if (pageToken && seenTokens.has(pageToken)) throw new Error('Historical bars pagination repeated a page token');
+      if (pageToken) seenTokens.add(pageToken);
       if (pageToken) await this.paceAlpacaFetch();
     } while (pageToken);
 

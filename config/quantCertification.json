@@ -1,0 +1,6 @@
+{
+  "$comment": "Explicit operator review only. OFF until isolated workflow tests and operator deployment. No automatic authority, retirement reversal, CHAMPION promotion or LIVE arming.",
+  "enabled": false,
+  "maxPaperEvidenceRows": 10000,
+  "maxReviewReasonChars": 1000
+}

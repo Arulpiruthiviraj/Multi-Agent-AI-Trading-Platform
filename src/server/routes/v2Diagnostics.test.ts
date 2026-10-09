@@ -33,8 +33,17 @@ describe('GET /api/v2/diagnostics/quant-readiness', () => {
 
     ({ sqliteDb } = await import('../db'));
     const { diagnosticsRouter } = await import('./v2Diagnostics');
+    // Import setup is outside timed route assertions, as with the existing reentrancy fixture.
+    await import('../services/QuantSignalAgent');
     app = express();
     app.use('/api/v2/diagnostics', diagnosticsRouter);
+  });
+
+  it('exposes scheduling state while refusing to certify an empty latency window', async () => {
+    const response = await request(app).get('/api/v2/diagnostics/quant-scheduling');
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, readOnly: true, live: 'NO-GO',
+      scheduling: { admissionLatencyCertified: false }, latency: { measured: [], awaiting: [] } });
   });
 
   afterAll(() => {

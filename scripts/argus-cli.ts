@@ -1032,6 +1032,7 @@ export const COMMAND_HELP: Record<string, string> = {
   'strategy-scorecard': 'Usage: argus strategy-scorecard\nStrategy scorecard.',
   'pipeline-ready': 'Usage: argus pipeline-ready\nPipeline readiness check.',
   'readiness': 'Usage: argus readiness\nPre-session checklist: per-check PASS/WARN/FAIL with READY / READY_WITH_WARNINGS / NOT_READY verdict. Read-only; AI checks are advisory only.',
+  'quant-session-certify': 'Usage: argus quant-session-certify\nRead-only narrow Quant authority/scheduling check. Exits unsuccessfully for missing authority or incomplete latency evidence; never promotes, resumes or arms LIVE.',
   'quant-readiness': 'Usage: argus quant-readiness [--json]\nProduction-state diagnostic: per-strategy authorization verdicts (AUTHORIZED_QUANT_POLICY / REQUIRES_CONSENSUS / NOT_ELIGIBLE / NOT_AUTHORIZED) computed by the real resolver against the live runtime DB. Read-only; requires the engine API.',
   'session-checkpoint': 'Usage: argus session-checkpoint\nEarly-warning inactivity check: distinguishes healthy/suspicious/inconclusive zero-trade sessions, pipeline progress without fills, and observed fills. Run at 09:35/10:00/11:00/13:00/15:00 ET during PAPER sessions.',
   'session-report': 'Usage: argus session-report\nSession report.',
@@ -2147,6 +2148,27 @@ const commands: Record<string, () => Promise<void>> = {
     const text = await res.text();
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
     console.log(text);
+  },
+  async 'quant-session-certify'() {
+    const readiness = await fetchJson('/api/v2/diagnostics/quant-readiness') as {
+      ok?: boolean; paperOnlyEnforced?: boolean; summary?: { authorizedQuantPolicy?: number };
+    } | null;
+    const scheduler = await fetchJson('/api/v2/diagnostics/quant-scheduling') as {
+      ok?: boolean; scheduling?: { enabled?: boolean; admissionLatencyCertified?: boolean };
+    } | null;
+    const reasons: string[] = [];
+    const count = readiness?.summary?.authorizedQuantPolicy;
+    if (readiness?.ok !== true || typeof count !== 'number' || !Number.isSafeInteger(count)
+      || count <= 0) reasons.push('NO_AUTHORIZED_PAPER_QUANT_STRATEGIES');
+    if (readiness?.paperOnlyEnforced !== true) reasons.push('PAPER_ONLY_NOT_CONFIRMED');
+    if (!scheduler?.ok || scheduler?.scheduling?.enabled !== true) reasons.push('QUANT_SCHEDULER_NOT_ENABLED');
+    if (scheduler?.scheduling?.admissionLatencyCertified !== true) reasons.push('ADMISSION_LATENCY_NOT_CERTIFIED');
+    console.log(JSON.stringify({ ok: reasons.length === 0, readOnly: true, live: 'NO-GO', reasons,
+      authorizedPaperQuantStrategies: readiness?.summary?.authorizedQuantPolicy ?? null,
+      scheduling: scheduler?.scheduling ?? null,
+      note: 'Narrow Quant authority/scheduling certificate only; does not certify broker/risk/OMS or organic edge.',
+    }, null, 2));
+    if (reasons.length) process.exit(1);
   },
   async 'quant-readiness'() {
     // 2026-10-08 code-only defect repair (defect #1): production-state diagnostic — what would

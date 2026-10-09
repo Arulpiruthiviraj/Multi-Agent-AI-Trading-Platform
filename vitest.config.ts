@@ -13,6 +13,9 @@ export default defineConfig({
     // (F33/F34 regression coverage) - every existing .test.ts file is untouched by this addition.
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'scripts/**/*.test.ts', 'tests/**/*.test.ts'],
     globals: false,
+    // Retained-heap tests must measure after real GC, not transient allocation noise.
+    pool: 'forks',
+    execArgv: ['--expose-gc'],
     setupFiles: ['./vitest.setup.ts'],
     // Parallel workers sharing Chronos/OpenAlice sockets produced ECONNRESET on in-process
     // supertest (GET /api/v2/quant/strategies) even though the handler is synchronous.

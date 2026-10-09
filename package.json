@@ -10,7 +10,7 @@
     "dev": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/ecosystem-dev.ts",
     "dev:core": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/devWithOpenAlice.ts",
     "dev:server-only": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && node scripts/writeBuildMetadata.mjs",
     "start": "node dist/server.cjs",
     "start:headless": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/start-headless.ts",
     "start:headless:prod": "node scripts/start-headless-prod.mjs",

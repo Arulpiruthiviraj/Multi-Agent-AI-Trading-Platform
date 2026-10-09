@@ -96,10 +96,11 @@ export async function recordStrategyLifecycleTransition(
   evidence: Record<string, unknown> | null,
   sampleSize: number,
   now: Date = new Date(),
+  expectedPreviousId?: string | null,
 ): Promise<string> {
   const id = makeVersionId(strategyId, now);
   const removing = EXPOSURE_REMOVING_STATUSES.has(status);
-  await db.insert(learningVersions).values({
+  const values = {
     id,
     versionType: strategyEligibilityVersionType(strategyId),
     parentVersionId: null,
@@ -111,7 +112,19 @@ export async function recordStrategyLifecycleTransition(
     createdAt: now.toISOString(),
     ...(removing ? { retiredAt: now.toISOString() } : {}),
     ...(status === 'CHAMPION' || status === 'VALIDATED' ? { promotedAt: now.toISOString() } : {}),
-  });
+  };
+  // Reviewed certification uses optimistic concurrency under the canonical writer.
+  // Legacy quarantine/reinstate callers keep their append-only behavior.
+  db.transaction(tx => {
+    if (expectedPreviousId !== undefined) {
+      const latest = tx.select({ id: learningVersions.id, createdAt: learningVersions.createdAt }).from(learningVersions)
+        .where(eq(learningVersions.versionType, strategyEligibilityVersionType(strategyId)))
+        .orderBy(desc(learningVersions.createdAt), desc(sql`"learning_versions"."rowid"`)).limit(1).get();
+      if ((latest?.id ?? null) !== expectedPreviousId) throw new Error('LIFECYCLE_REVIEW_STALE');
+      if (latest && latest.createdAt > now.toISOString()) throw new Error('LIFECYCLE_TIME_CONFLICT');
+    }
+    tx.insert(learningVersions).values(values).run();
+  }, { behavior: 'immediate' });
   return id;
 }
 
@@ -149,10 +162,12 @@ export async function hasStrategyLifecycleRecord(strategyId: string): Promise<bo
 /** Full, timestamped, auditable history of lifecycle decisions for this strategy - never mutated, never overwritten.
  * Same (createdAt DESC, rowid DESC) tie-break as getStrategyLifecycleStatus: same-millisecond
  * transitions keep a deterministic newest-first order. */
-export async function getStrategyLifecycleHistory(strategyId: string): Promise<StrategyLifecycleTransition[]> {
-  const rows = await db.select().from(learningVersions)
+export async function getStrategyLifecycleHistory(strategyId: string, options?: { limit: number }): Promise<StrategyLifecycleTransition[]> {
+  if (options && (!Number.isSafeInteger(options.limit) || options.limit <= 0)) throw new Error('Invalid lifecycle history bound');
+  const query = db.select().from(learningVersions)
     .where(eq(learningVersions.versionType, strategyEligibilityVersionType(strategyId)))
     .orderBy(desc(learningVersions.createdAt), desc(sql`"learning_versions"."rowid"`));
+  const rows = options ? await query.limit(options.limit) : await query;
   return rows.map((r) => ({
     id: r.id,
     strategyId,

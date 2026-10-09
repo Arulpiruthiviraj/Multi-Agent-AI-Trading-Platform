@@ -33,7 +33,7 @@ import { getRegisteredHistoricalBarProvider } from '../engines/backtest/historic
 import { classifyRegime, RegimeResult } from '../quant/RegimeEngine';
 import { quantCoreBridge } from './QuantCoreBridge';
 import { emitJavaCoreEnsembleVoteIfEligible } from './JavaCoreEnsembleVoteService';
-import { getMarketContext, MarketContextResult } from '../quant/MarketContext';
+import { getMarketContext, defaultBarsFetcher, MarketContextResult } from '../quant/MarketContext';
 import { computeMomentumFeatures } from '../quant/indicators/momentum';
 import { computeVolumeFeatures } from '../quant/indicators/volume';
 import { computeSupportResistanceFeatures } from '../quant/indicators/supportResistance';
@@ -72,6 +72,11 @@ import { createSingleFlightGuard } from '../core/singleFlightInterval';
 import { isExperimentalStrategyLive } from '../config/quantExperimentalStrategies';
 import { getTradingDateStr, tradingWallTimeToIso, TRADING_TIMEZONE } from '../core/TradingCalendar';
 import { replaySafety } from '../replay/replaySafety';
+import { quantScheduling } from '../config/quantScheduling';
+import { QuantAdmissionQueue } from './QuantAdmissionQueue';
+import { observabilityConfig } from '../config/observability';
+import { getRuntimeBuildEvidence } from '../observability/runtimeBuildEvidence';
+import { evaluateQuoteFreshness } from '../core/marketDataQuality';
 
 const DEFAULT_CYCLE_INTERVAL_MS = tradingSafety.quantCycleIntervalMs;
 const LOOKBACK_DAYS = tradingSafety.quantLookbackDays;
@@ -248,6 +253,28 @@ export function deriveColdStartBootstrapIdea(
 
 export class QuantSignalAgent {
   private intervalId: NodeJS.Timeout | null = null;
+  private stopGeneration = 0;
+  private knownAdmissions = new Set<string>();
+  private pendingAdmissions = new Set<string>();
+  private readonly onAdmissionMarketData = (data: { symbol?: string }) => {
+    observeSafe(() => {
+    if (!quantScheduling.dynamicSchedulingEnabled || !this.intervalId || typeof data?.symbol !== 'string') return;
+    const symbol = data.symbol.toUpperCase();
+    const active = new Set(marketDataWorker.getActiveSymbols().map(s => s.toUpperCase()));
+    this.knownAdmissions = new Set([...this.knownAdmissions].filter(s => active.has(s)));
+    this.pendingAdmissions = new Set([...this.pendingAdmissions].filter(s => active.has(s)));
+    if (this.knownAdmissions.has(symbol) || !active.has(symbol)) return;
+    const livePrice = marketDataWorker.getLatestPrice(symbol);
+    if (livePrice === null || !Number.isFinite(livePrice) || livePrice <= 0
+      || !evaluateQuoteFreshness({ priceAgeMs: marketDataWorker.getLatestPriceAgeMs(symbol) }).passed) return;
+    this.knownAdmissions.add(symbol);
+    this.pendingAdmissions.add(symbol);
+    const backoff = historicalDataGateway.getBarsRateLimitedUntilMs() > Date.now();
+    observeSafe(() => structuredLogger.info('quant_admission_nudge', { category: 'DISCOVERY',
+      eventType: 'QUANT_ADMISSION_NUDGE', symbol, outcome: backoff ? 'PROVIDER_BACKOFF' : 'REQUESTED' }));
+    if (!backoff) void this.cycleGuard.run(() => this.runCycle());
+    }, 'QUANT_ADMISSION_NUDGE');
+  };
   // Batch 2 timer/reentrancy sweep (2026-09-23): runCycle() fans out per-symbol evaluation across
   // the active universe (bounded concurrency via symbolConcurrency()), including real historical
   // bar fetches subject to a documented Alpaca 429 backoff path - i.e. it can legitimately run long
@@ -266,6 +293,18 @@ export class QuantSignalAgent {
     return this.isEnabled();
   }
 
+  /** Read-only automatic scheduling state; simulator/manual calls are not guard metrics. */
+  getSchedulingStatus() {
+    return {
+      enabled: this.isEnabled(), dynamicSchedulingEnabled: quantScheduling.dynamicSchedulingEnabled,
+      concurrency: this.symbolConcurrency(), nextCycleSymbol: this.nextCycleSymbol,
+      cycleIntervalMs: this.cycleIntervalMs(), maxCycleDurationMs: quantScheduling.maxCycleDurationMs,
+      maxSymbolsPerCycle: quantScheduling.maxSymbolsPerCycle, timerGuard: this.cycleGuard.getMetrics(),
+      guardScope: 'TIMER_AND_ADMISSION_NUDGES', pendingAdmissions: [...this.pendingAdmissions],
+      deadlineSemantics: 'COOPERATIVE_BETWEEN_EVALUATIONS', admissionLatencyCertified: false,
+    };
+  }
+
   private cycleIntervalMs(): number {
     return resolveRuntimeNumber('QUANT_ENGINE_INTERVAL_MS', DEFAULT_CYCLE_INTERVAL_MS);
   }
@@ -276,6 +315,8 @@ export class QuantSignalAgent {
       return;
     }
     if (this.intervalId) return;
+    this.knownAdmissions = new Set(marketDataWorker.getActiveSymbols().map(s => s.toUpperCase()));
+    if (quantScheduling.dynamicSchedulingEnabled) eventBus.on(EVENTS.MARKET_DATA, this.onAdmissionMarketData);
     const cycleMs = this.cycleIntervalMs();
     console.log(`[QuantSignalAgent] Starting - real regime/market-context evaluation every ${cycleMs / 1000}s for actively-tracked symbols.`);
     void this.cycleGuard.run(() => this.runCycle());
@@ -285,6 +326,9 @@ export class QuantSignalAgent {
   }
 
   stop(): void {
+    this.stopGeneration++;
+    eventBus.off(EVENTS.MARKET_DATA, this.onAdmissionMarketData);
+    this.pendingAdmissions.clear();
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
@@ -316,6 +360,7 @@ export class QuantSignalAgent {
   private nextCycleSymbol: string | null = null;
 
   private async runCycle(): Promise<void> {
+    const generation = this.stopGeneration;
     const active = marketDataWorker.getActiveSymbols();
     // Prefer liquid names that Quant needs most often — still only evaluates subscribed symbols.
     const priority = ['SPY', 'QQQ', 'NVDA', 'HOOD', 'COIN', 'AMD', 'RIOT', 'AAPL', 'MSFT', 'META'];
@@ -344,11 +389,21 @@ export class QuantSignalAgent {
     let anySuccess = false;
     const attemptedSymbols: string[] = [];
     const completedSymbols: string[] = [];
+    const dynamic = quantScheduling.dynamicSchedulingEnabled;
+    const queue = new QuantAdmissionQueue(symbols, quantScheduling.maxAdmissionBurst);
+    let budgetExhausted = false;
     const workers = Array.from({ length: concurrency }, async () => {
       while (!abortRateLimit) {
-        const i = nextIndex++;
-        if (i >= symbols.length) return;
-        const symbol = symbols[i];
+        if (dynamic && generation !== this.stopGeneration) return;
+        if (dynamic && (Date.now() - cycleStarted >= quantScheduling.maxCycleDurationMs
+          || attemptedSymbols.length >= quantScheduling.maxSymbolsPerCycle)) {
+          budgetExhausted = true;
+          return;
+        }
+        if (dynamic) queue.refresh(marketDataWorker.getActiveSymbols().map(s => s.toUpperCase()), [...this.pendingAdmissions]);
+        const symbol = dynamic ? queue.take() : symbols[nextIndex++];
+        if (!symbol) return;
+        this.pendingAdmissions.delete(symbol);
         attemptedSymbols.push(symbol);
         const attemptStarted = Date.now();
         let outcome = 'ERROR';
@@ -380,15 +435,18 @@ export class QuantSignalAgent {
             durationMs: Date.now() - attemptStarted, outcome,
           }));
         }
+        // Let timers, market-data callbacks and HTTP requests progress between evaluations.
+        if (dynamic) await new Promise<void>(resolve => setImmediate(resolve));
       }
     });
     await Promise.all(workers);
-    const notAttemptedSymbols = symbols.slice(attemptedSymbols.length);
-    this.nextCycleSymbol = notAttemptedSymbols[0] ?? null;
+    if (dynamic) queue.refresh(marketDataWorker.getActiveSymbols().map(s => s.toUpperCase()));
+    const notAttemptedSymbols = dynamic ? queue.pending() : symbols.slice(attemptedSymbols.length);
+    if (generation === this.stopGeneration) this.nextCycleSymbol = notAttemptedSymbols[0] ?? null;
     observeSafe(() => structuredLogger.info('quant_cycle_completed', {
       category: 'DISCOVERY', eventType: 'QUANT_CYCLE_COMPLETED',
       cycleId, durationMs: Date.now() - cycleStarted, concurrency, attemptedSymbols, completedSymbols,
-      notAttemptedSymbols, reason: abortRateLimit ? 'PROVIDER_BACKOFF' : 'COMPLETED',
+      notAttemptedSymbols, reason: generation !== this.stopGeneration ? 'STOPPED' : abortRateLimit ? 'PROVIDER_BACKOFF' : budgetExhausted ? 'CYCLE_BUDGET' : 'COMPLETED',
     }));
     if (anySuccess) {
       notePipelineAgentSuccess('QuantEngine');
@@ -489,7 +547,13 @@ export class QuantSignalAgent {
     } catch {
       /* shadow diagnostics only - must never affect real evaluation */
     }
-    const marketContext = await getMarketContext(symbol, bars, TIMEFRAME, startMs, endMs);
+    const benchmarkInputs: Array<{ symbol: string; timeframe: string; startMs: number; endMs: number; observedAtMs: number; bars: Bar[] }> = [];
+    const captureFetcher = observabilityConfig.quantInputEvidenceEnabled ? async (inputSymbol: string, timeframe: string, start: number, end: number) => {
+      const inputBars = await defaultBarsFetcher(inputSymbol, timeframe, start, end);
+      benchmarkInputs.push({ symbol: inputSymbol, timeframe, startMs: start, endMs: end, observedAtMs: Date.now(), bars: inputBars });
+      return inputBars;
+    } : undefined;
+    const marketContext = await getMarketContext(symbol, bars, TIMEFRAME, startMs, endMs, captureFetcher);
     const liveQuotePriceUsed = marketDataWorker.getLatestPrice(symbol);
     const currentPrice = resolveQuantCurrentPrice(bars[bars.length - 1], liveQuotePriceUsed, Date.now());
 
@@ -595,9 +659,10 @@ export class QuantSignalAgent {
     recordQuantInputEvidence(symbol, traceId, () => ({
       capturedAtMs: Date.now(), timeframe: TIMEFRAME, strategyContext,
       liveQuotePriceUsed,
-      bars, intradayBars: intradayBars ?? null, intradaySessionOpenMs: intradaySessionOpenMs ?? null,
+      bars, benchmarkInputs, intradayBars: intradayBars ?? null, intradaySessionOpenMs: intradaySessionOpenMs ?? null,
+      configuration: { tradingSafety, deskIntelligence, strategyFocus: focusId }, buildEvidence: getRuntimeBuildEvidence(),
       quoteAfterContext: marketDataWorker.getObservedQuoteEvidence(symbol),
-      limitation: 'Quote is a later diagnostic observation, not proof of the quote used to resolve currentPrice. Bar provider availability timestamps and upstream benchmark input bars are not captured.',
+      limitation: 'Quote is a later diagnostic observation, not proof of the quote used to resolve currentPrice. Provider original availability timestamps and independent runtime build attestation remain unavailable. observedAtMs is local fetch completion, not original availability.',
     }));
     // Phase 13 (2026-08-31 real-edge audit): a strategy with real, repeatedly-verified negative
     // evidence (e.g. PULLBACK_CONTINUATION) can be quarantined from winning real selection without

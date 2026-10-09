@@ -35,6 +35,17 @@ import { isQuantPolicyEnabled } from '../config/quantDecisionPolicy';
 
 export const diagnosticsRouter = Router();
 
+diagnosticsRouter.get('/quant-scheduling', async (_req, res) => {
+  try {
+    const { quantSignalAgent } = await import('../services/QuantSignalAgent');
+    const { buildQuantAdmissionLatency } = await import('../observability/quantAdmissionLatency');
+    const { getRuntimeBuildEvidence } = await import('../observability/runtimeBuildEvidence');
+    const latency = await buildQuantAdmissionLatency();
+    res.json({ ok: true, readOnly: true, live: 'NO-GO', latency, buildEvidence: getRuntimeBuildEvidence(),
+      scheduling: { ...quantSignalAgent.getSchedulingStatus(), admissionLatencyCertified: latency.certified } });
+  } catch { res.status(503).json({ ok: false, error: 'QUANT_SCHEDULING_UNAVAILABLE' }); }
+});
+
 export interface QuantReadinessStrategyRow {
   strategyId: string;
   lifecycleRecordExists: boolean;

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { QuantSignalAgent } from './QuantSignalAgent';
 
 /**
  * Batch 2 timer/reentrancy sweep (2026-09-23): QuantSignalAgent's timer now runs runCycle()
@@ -12,7 +13,6 @@ import { describe, it, expect, vi } from 'vitest';
  */
 describe('QuantSignalAgent reentrancy guard', () => {
   it('a second timer-driven cycle while the first is still in flight is coalesced, not run twice', async () => {
-    const { QuantSignalAgent } = await import('./QuantSignalAgent');
     const agent = new QuantSignalAgent();
 
     let resolveFirst: () => void = () => {};
@@ -33,7 +33,6 @@ describe('QuantSignalAgent reentrancy guard', () => {
   });
 
   it('triggerNow() is NOT coalesced by cycleGuard (simulator bypass preserved)', async () => {
-    const { QuantSignalAgent } = await import('./QuantSignalAgent');
     const agent = new QuantSignalAgent();
 
     const runCycleSpy = vi.spyOn(agent as any, 'runCycle').mockResolvedValue(undefined);
