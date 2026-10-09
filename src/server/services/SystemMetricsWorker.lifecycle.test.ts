@@ -33,7 +33,10 @@ describe('SystemMetricsWorker start/stop listener lifecycle', () => {
     worker.start();
     worker.stop();
 
-    expect(eventBus.listenerCount('MARKET_DATA')).toBe(baseline + 1);
+    // 2026-10-09 defect-hunt fix: stop() now unsubscribes everything start() registered,
+    // so after the final stop() the count returns to baseline (was baseline+1 when stop()
+    // leaked every listener it had ever added).
+    expect(eventBus.listenerCount('MARKET_DATA')).toBe(baseline);
     expect(eventBus.listenerCount('TRADE_IDEA_GENERATED')).toBe(
       eventBus.listenerCount('TRADE_IDEA_GENERATED'), // stable: no growth assertion possible without baseline capture
     );

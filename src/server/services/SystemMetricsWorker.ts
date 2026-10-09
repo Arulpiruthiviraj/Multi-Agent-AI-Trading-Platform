@@ -47,6 +47,12 @@ export class SystemMetricsWorker {
    *  produces byte-identical status transitions with at most 9 live timers. */
   private decayTimers: Record<string, NodeJS.Timeout> = {};
 
+  // 2026-10-09 defect hunt: start() registers six EventBus listeners. stop() must unsubscribe
+  // exactly what start() subscribed, or every Autobot toggle leaks six listeners (each
+  // re-running recordEvent per event and retaining its closure). Stored as fields so off()
+  // removes the identical function references on() added.
+  private boundListeners: Array<{ event: string; fn: (...args: any[]) => void }> = [];
+
   start() {
     if (this.intervalId) return;
     
@@ -55,13 +61,17 @@ export class SystemMetricsWorker {
        this.processStats[w] = { eventsProcessed: 0, status: 'Sleeping', cpu: 0, memory: 0, latency: 0 };
     });
     
-    // Wire into event bus to update stats
-    eventBus.on('MARKET_DATA', () => this.recordEvent('market-data-worker'));
-    eventBus.on('TRADE_IDEA_GENERATED', (data) => this.recordEvent(data.agent === 'NewsAgent' ? 'news-agent' : data.agent === 'MacroAgent' ? 'macro-agent' : data.agent === 'FundamentalAgent' ? 'fundamental-agent' : 'technical-engine'));
-    eventBus.on('CALCULATION_COMPLETED', () => this.recordEvent('technical-engine'));
-    eventBus.on('RISK_ASSESSMENT_COMPLETED', () => this.recordEvent('risk-engine'));
-    eventBus.on('ORDER_EXECUTED', () => this.recordEvent('order-management'));
-    eventBus.on('LEARNED_NEW_RULE', () => this.recordEvent('reflection-engine'));
+    // Wire into event bus to update stats - every listener is tracked so stop() can
+    // unsubscribe the identical references (anonymous inline functions could never be removed).
+    this.boundListeners = [
+      { event: 'MARKET_DATA', fn: () => this.recordEvent('market-data-worker') },
+      { event: 'TRADE_IDEA_GENERATED', fn: (data) => this.recordEvent(data.agent === 'NewsAgent' ? 'news-agent' : data.agent === 'MacroAgent' ? 'macro-agent' : data.agent === 'FundamentalAgent' ? 'fundamental-agent' : 'technical-engine') },
+      { event: 'CALCULATION_COMPLETED', fn: () => this.recordEvent('technical-engine') },
+      { event: 'RISK_ASSESSMENT_COMPLETED', fn: () => this.recordEvent('risk-engine') },
+      { event: 'ORDER_EXECUTED', fn: () => this.recordEvent('order-management') },
+      { event: 'LEARNED_NEW_RULE', fn: () => this.recordEvent('reflection-engine') },
+    ];
+    for (const { event, fn } of this.boundListeners) eventBus.on(event, fn);
 
     this.intervalId = setInterval(() => this.broadcastMetrics(), runtimeIntervals.systemMetricsMs);
   }
@@ -71,6 +81,10 @@ export class SystemMetricsWorker {
       clearInterval(this.intervalId);
       this.intervalId = null;
     }
+    // Unsubscribe every listener start() registered - without this, each start->stop->start
+    // cycle leaked six duplicate listeners (proven by SystemMetricsWorker.lifecycle.test.ts).
+    for (const { event, fn } of this.boundListeners) eventBus.off(event, fn);
+    this.boundListeners = [];
     for (const w of Object.keys(this.decayTimers)) clearTimeout(this.decayTimers[w]);
     this.decayTimers = {};
   }
