@@ -51,10 +51,20 @@ export function prepareOrderPosition(orderId: string, remote: { quantity: number
     const conflict = checkPositionFillEvidence(scope, remote.quantity);
     if (conflict) return conflict;
     // Old orders with ambiguous submission/fill state continue to reserve the symbol after restart.
+    // 2026-10-08 defect hunt (D2): this check had NO age bound. After an InternalPaperBroker
+    // restart (in-memory orders lost), followUpOpenOrders gives up after 30 min and
+    // reconcileStaleOrders only covers the 48h crash-recovery lookback - but the row stayed
+    // PENDING forever and this check then refused every future order for the symbol, a
+    // permanent silent per-symbol trading halt. Bound the check to the same lookback the
+    // recovery paths use: a row older than crashRecoveryLookbackMs is definitively beyond
+    // every recovery window, so it must not reserve the symbol. NULL submitted_at (legacy
+    // rows) still blocks - unknown age fails closed.
+    const recoveryCutoffIso = new Date(Date.now() - tradingSafety.crashRecoveryLookbackMs).toISOString();
     const pending = sqliteDb.prepare(`SELECT id FROM trades WHERE symbol=? AND broker_id=?
       AND execution_environment=? AND id<>? AND status NOT IN
-      ('FILLED','REJECTED','CANCELED','EXTERNAL_MANUAL','ARCHIVED_DIAGNOSTIC') LIMIT 1`)
-      .get(order.symbol, order.broker_id, order.execution_environment, orderId);
+      ('FILLED','REJECTED','CANCELED','EXTERNAL_MANUAL','ARCHIVED_DIAGNOSTIC')
+      AND (submitted_at IS NULL OR submitted_at >= ?) LIMIT 1`)
+      .get(order.symbol, order.broker_id, order.execution_environment, orderId, recoveryCutoffIso);
     if (pending) return 'POSITION_ORDER_UNRESOLVED';
     const fill = latestPositionFill(scope);
     const local = sqliteDb.prepare('SELECT quantity, average_price, broker_source FROM portfolio WHERE symbol=?')
