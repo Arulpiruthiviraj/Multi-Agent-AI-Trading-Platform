@@ -67,6 +67,14 @@ import {
 } from '../premarket/premarketRefreshEvents';
 import { emitPremarketRefreshCompleted } from '../premarket/premarketFocusEvents';
 
+// 2026-10-09 defect hunt: this constant MUST stay at the top of the module, before any other
+// top-level executable code. pruneTradePlanRevalidations() can be re-entered during this
+// module's own evaluation via an import cycle (operationalRetention's lazy dynamic import
+// resolving a partially-evaluated namespace) - a const declared lower (it was at line ~547)
+// throws "Cannot access before initialization" (TDZ) on that path. Top-level placement
+// guarantees initialization before any re-entrant call is possible.
+export const TRADE_PLAN_REVALIDATION_RETENTION_DAYS = 30;
+
 export type SetupType = 'PRIMARY' | 'BACKUP' | 'WATCHLIST';
 export type TradePlanStatus = 'DRAFT' | 'READY' | 'REVALIDATING' | 'VALID' | 'INVALIDATED' | 'EXPIRED' | 'EXECUTED' | 'CLOSED';
 export type RevalidationResultKind = 'REVALIDATED' | 'DOWNGRADED' | 'INVALIDATED' | 'EXPIRED';
@@ -538,17 +546,9 @@ export async function getRevalidationHistory(planId: string): Promise<Array<type
   return db.select().from(tradePlanRevalidations).where(eq(tradePlanRevalidations.planId, planId)).orderBy(desc(tradePlanRevalidations.revalidatedAt));
 }
 
-/** 2026-10-07 Discovery-D2: retention bound for the trade_plan_revalidations ledger, in days.
- * A code constant (not a config entry) by the same convention as CONFLUENCE_AGREEMENT_THRESHOLD
- * above: this is a storage-hygiene bound, not a trading parameter, and no operator tuning story
- * exists for it yet. 30 days comfortably covers every forensic lookback the revalidation history
- * actually serves (intraday revalidation forensics, RTH handoff review) while bounding the
- * write-amplified ledger this defect found. */
-export const TRADE_PLAN_REVALIDATION_RETENTION_DAYS = 30;
-
-/**
- * 2026-10-07 Discovery-D2: retention prune for the trade_plan_revalidations ledger. Deletes rows
- * older than TRADE_PLAN_REVALIDATION_RETENTION_DAYS. Code-based, no migration - the table is
+/** 2026-10-07 Discovery-D2: retention prune for the trade_plan_revalidations ledger. Deletes rows
+ * older than TRADE_PLAN_REVALIDATION_RETENTION_DAYS (declared at the top of this module - see
+ * the TDZ comment there). Code-based, no migration - the table is
  * append-only history with no long-term audit-trail requirement beyond the retention window
  * (unlike trades/fills/risk_assessments, which are never pruned). Called from the operational
  * retention sweep (src/server/db/operationalRetention.ts), never from any trading decision path.
