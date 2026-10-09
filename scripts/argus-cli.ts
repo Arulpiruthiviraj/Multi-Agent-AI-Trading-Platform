@@ -2170,7 +2170,7 @@ const commands: Record<string, () => Promise<void>> = {
       console.log(JSON.stringify(report, null, 2));
       return;
     }
-    const rows: Array<{ strategyId: string; lifecycle: string; authority: string; reason: string }> =
+    const rows: Array<{ strategyId: string; lifecycleRecordExists: boolean; lifecycleStatus: string | null; authority: string; reason: string }> =
       report.strategies || [];
     console.log('QUANT READINESS — per-strategy authorization verdicts (live runtime DB)');
     console.log(`generated: ${report.generatedAt}   paperOnlyEnforced: ${report.paperOnlyEnforced}   quantPolicyEnabled: ${report.quantPolicyEnabled}`);
