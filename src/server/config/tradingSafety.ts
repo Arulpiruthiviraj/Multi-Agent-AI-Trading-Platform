@@ -23,6 +23,20 @@ export interface TradingSafety {
    *  terminally transitioned and the concurrency slot released. Resource governor, not a trading
    *  threshold. */
   fastLaneEvaluationTimeoutMs: number;
+  /** 2026-10-09 (P1 fast-lane lease fix, hung-work Part 4): consecutive caller-timeouts for ONE
+   *  symbol after which its lease is QUARANTINED - the concurrency slot is returned to the pool
+   *  (capacity recovers) while the dedup entry is kept so no replacement concurrent evaluation
+   *  can start for that symbol. quantSignalAgent.evaluateSymbol() accepts no AbortSignal and
+   *  HistoricalDataGateway's provider fetch has no timeout/cancel path, so a permanently hung
+   *  evaluation cannot be cooperatively cancelled from here - quarantine is the bounded
+   *  alternative. Resource governor, not a trading threshold. */
+  fastLaneHungLeaseMaxConsecutiveTimeouts: number;
+  /** 2026-10-09 (P1 fast-lane lease fix, hung-work Part 4): maximum age of a lease (ms) before it
+   *  is QUARANTINED even without consecutive timeouts - the backstop that guarantees a
+   *  permanently hung task can never hold Fast Lane capacity forever. Same semantics as
+   *  fastLaneHungLeaseMaxConsecutiveTimeouts: slot recovered, dedup entry kept, late settle
+   *  discarded and never double-applied. Resource governor, not a trading threshold. */
+  fastLaneHungLeaseMaxAgeMs: number;
   /** 2026-10-08 (fast-lane D5 defect fix): bound for fastCanonicalDedup.ts's in-memory
    *  evidence-fingerprint idempotency cache. Oldest-first eviction past this size.
    *  Resource governor, not a trading threshold. */
@@ -333,6 +347,22 @@ export interface TradingSafety {
   manualTradeCoEvalTimeoutMs: number;
   /** Skip Alpaca fetch when cached bars cover at least this fraction of expected trading days. */
   quantBarsCacheMinCoverageRatio: number;
+  /**
+   * Stale-tail remediation (2026-10-09; Oct-9 missed-opportunity forensic found 508/972 late
+   * bar-input records with a latest timestamp >7 days old): HistoricalDataGateway.ensureBars()
+   * used to judge cache sufficiency on row count/coverage only, so an old-but-large cache
+   * suppressed the provider refresh entirely. After the count/coverage gate passes, a
+   * present-time request (endMs at/near now) additionally requires the NEWEST cached bar's
+   * timestamp to be within this tolerance of now; a stale tail falls through to a provider
+   * refresh instead of being accepted. Historical end-date requests (endMs more than this
+   * tolerance before now, e.g. backtest/PIT replay windows) are exempt.
+   * Default 72h = 259,200,000ms: covers a full weekend gap (Friday 16:00 ET close -> Monday
+   * pre-open is ~65h, so a legitimately fresh Friday bar is not flagged stale on a Monday
+   * morning run), while anything older than the last full trading session's data is flagged.
+   * It is a stale-tail tripwire, not per-minute intraday recency - the fetch window itself
+   * (end=endMs) supplies intraday recency once a refresh actually runs.
+   */
+  quantBarsTailFreshnessToleranceMs: number;
   /**
    * P1-A remediation Patch B (2026-09-14): bound on HistoricalDataGateway.memoryBars, a real,
    * standalone unbounded-Map defect found while investigating P1-A (not the proven cause of the
@@ -681,6 +711,8 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'fastLaneMaxConcurrentEvaluations',
   'fastLaneSymbolEvaluationCooldownMs',
   'fastLaneEvaluationTimeoutMs',
+  'fastLaneHungLeaseMaxConsecutiveTimeouts',
+  'fastLaneHungLeaseMaxAgeMs',
   'fastLaneCanonicalIdeaCacheMaxEntries',
   'stalePriceThresholdMs',
   'newsPriceWaitTimeoutMs',
@@ -765,6 +797,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'consensusAggregationWindowMs',
   'manualTradeCoEvalTimeoutMs',
   'quantBarsCacheMinCoverageRatio',
+  'quantBarsTailFreshnessToleranceMs',
   'historicalBarsMemoryCacheMaxEntries',
   'quantBarsRateLimitBaseBackoffMs',
   'quantBarsRateLimitMaxBackoffMs',
