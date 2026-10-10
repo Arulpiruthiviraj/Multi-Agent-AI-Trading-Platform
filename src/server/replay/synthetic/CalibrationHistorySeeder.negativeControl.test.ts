@@ -1,3 +1,4 @@
+// LABEL: COMPONENT - negative control: identical fixture setup with deliberately insufficient evidence must NOT converge; proves the calibration gate itself is real, not the fixture. Synthetic-only, isolated DB.
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';

@@ -1,3 +1,4 @@
+// LABEL: ARCHITECTURE_INVARIANT - proves the synthetic news provider cannot be imported or run outside the synthetic harness (static check + runtime fail-closed backstop).
 /**
  * Architecture-boundary proof for SyntheticInjectableNewsProvider.ts, same pattern as
  * SyntheticDailyBarProvider.architectureBoundary.test.ts: a static grep-based check that no file

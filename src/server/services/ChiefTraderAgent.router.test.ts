@@ -1,3 +1,4 @@
+// LABEL: UNIT - proves router dispatch with authorization+policy mocked at the seam. Asserts ROUTING only, not policy internals (covered by QuantExecutionPolicy.test.ts).
 /**
  * ChiefTraderAgent policy-router tests (Quant-First Decision Architecture, Phase 7).
  *

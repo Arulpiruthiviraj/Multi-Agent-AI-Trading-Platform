@@ -1,3 +1,4 @@
+// LABEL: ARCHITECTURE_INVARIANT - proves via real resolver+policy composition and code-shape locks that a LIVE environment can never grant quant authority. Fail-closed guarantee, not a trading outcome.
 /**
  * Part-30 spine-level LIVE authority tests (Workstream F, 2026-10-08).
  *

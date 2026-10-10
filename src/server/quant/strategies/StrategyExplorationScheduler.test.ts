@@ -1,3 +1,4 @@
+// LABEL: UNIT - proves bounded-exploration selection logic on hand-constructed strategy evaluations (triggerMet: true fixtures). Unit inputs, not real market signals; does NOT prove the production scheduler's timing.
 import { describe, it, expect, beforeEach } from 'vitest';
 import { selectWithBoundedExploration, resetStrategyExplorationStateForTests } from './StrategyExplorationScheduler';
 import type { StrategyEvaluation } from './types';

@@ -1,3 +1,4 @@
+// LABEL: FAULT_INJECTION - replays the Oct-7 multi-provider-collapse fault shape through the real AI+quant layers with a seeded VALIDATED fixture; proves the quant path survives while AI paths fail closed. Does NOT prove organic edge or production authority.
 /**
  * Part 49 — October 7 provider-collapse regression (permanent).
  *

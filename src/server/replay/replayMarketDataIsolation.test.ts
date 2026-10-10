@@ -1,3 +1,4 @@
+// LABEL: COMPONENT - proves HistoricalReplayMarketDataContext isolates replay market data from the live provider. Harness isolation, not trading behavior.
 import { describe, expect, it } from 'vitest';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { cacheReplayQuote, clearReplayQuotes, getReplayQuote, replayQuoteCount } from './HistoricalReplayMarketDataContext';

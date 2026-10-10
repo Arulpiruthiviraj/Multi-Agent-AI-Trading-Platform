@@ -1,3 +1,4 @@
+// LABEL: COMPONENT - proves per-session teardown (listener unsubscribe, active-session clear, heap slope) across back-to-back synthetic sessions. Regression tripwire; does NOT prove trading correctness.
 import { describe, it, expect, vi } from 'vitest';
 import { SyntheticSessionEngine } from './SyntheticSessionEngine';
 import { eventBus } from '../../core/EventBus';

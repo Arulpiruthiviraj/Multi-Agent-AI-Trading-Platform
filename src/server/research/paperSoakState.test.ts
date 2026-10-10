@@ -1,3 +1,4 @@
+// LABEL: UNIT - pure-function tests of the derivePaperSoakStatus readiness state machine. Defines the readiness vocabulary; does NOT prove any real soak occurred.
 import { describe, it, expect } from 'vitest';
 import { derivePaperSoakStatus } from './paperSoakState';
 import { classifyTradeEnvironment, isOrganicClosedPaper } from './organicPaper';

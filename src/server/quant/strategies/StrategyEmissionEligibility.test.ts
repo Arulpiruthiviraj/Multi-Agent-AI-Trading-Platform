@@ -1,3 +1,4 @@
+// LABEL: UNIT - proves emission-eligibility transitions per lifecycle status on a temp DB. Seeded statuses are the subject under test, not production state.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';

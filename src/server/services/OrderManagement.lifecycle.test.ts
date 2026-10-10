@@ -1,3 +1,4 @@
+// LABEL: COMPONENT - proves OMS order-lifecycle behavior (partial-fill aggregation, bounded follow-up job, cancellation) against a deterministic stub broker through the real BrokerManager. Stub broker, not Alpaca/IBKR.
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';

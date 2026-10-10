@@ -1,3 +1,4 @@
+// LABEL: UNIT - proves the evaluateCertification gate logic on hand-built timelines/result objects. Tests the certifier's math, not a real certified session.
 import { describe, it, expect } from 'vitest';
 import { evaluateCertification } from './CertificationGate';
 import type { SyntheticSessionResult } from './SyntheticSessionEngine';

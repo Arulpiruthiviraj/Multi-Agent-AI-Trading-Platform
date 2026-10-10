@@ -1,0 +1,9 @@
+# October 9 retrospective market cohort
+
+This is a supplement to the frozen full-session forensic, not a replacement for its point-in-time findings. The read-only Alpaca market-data request completed with HTTP 200 at 2026-10-10T03:18:08.331Z (server Date: Sat, 10 Oct 2026 03:18:08 GMT). It returned 40 daily bars for the existing 20-symbol audit cohort, covering October 8 and October 9 New York session dates, with no further page token. Source: Alpaca REST; feed: IEX; adjustment: raw.
+
+The largest close-to-previous-close rises in this cohort were MRNA +14.17%, PCVX +9.82%, SNOW +7.43%, SNAP +6.31%, RBLX +5.58%, and CRCL +4.56%. These are provider-reported retrospective raw-price returns, not a market-wide gainer ranking, total returns, consolidated closing-auction prices, or evidence of achievable execution profit. Raw corporate-action effects are not corrected here.
+
+The frozen Argus evidence shows zero regular-session Quant assessments for MRNA, PCVX and CRCL. MRNA's first retained assessment occurred at 17:14 ET, after the regular session. CRCL had a subscription promotion but no assessment through the 18:44 ET cutoff. SNOW was assessed 14 times during the regular session and 22 times over the retained day, but its assessments reported NO_ELIGIBLE_STRATEGY. These are distinct coverage and selection outcomes; later appreciation does not prove a contemporaneously authorized, economical BUY existed.
+
+Raw response and derived cohort rows are retained privately under `data/backups/forensic-2026-10-09-184442/retrospective-bars.json` and `retrospective-cohort-returns.json`. They were fetched after the forensic cutoff and do not certify that Argus received these bars during trading. Original frozen evidence, lifecycle refusals, consensus thresholds, RiskEngine and execution findings remain unchanged.

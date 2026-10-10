@@ -1,3 +1,4 @@
+// LABEL: UNIT - proves the deterministic policy on hand-built idea fixtures (incl. a synthetic AUTHORIZED_QUANT_POLICY object). Decision-logic only; no DB, no scheduler, no broker.
 /**
  * QuantExecutionPolicy tests (Quant-First Decision Architecture, Phase 16).
  *

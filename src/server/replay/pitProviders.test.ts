@@ -1,3 +1,4 @@
+// LABEL: POINT_IN_TIME_REPLAY - proves per-provider VisibleAt zero-lookahead filtering on real temp-DB rows. Tests the no-lookahead filter, not trading outcomes.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';

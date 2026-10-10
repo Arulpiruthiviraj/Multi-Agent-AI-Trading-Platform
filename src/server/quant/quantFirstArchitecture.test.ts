@@ -1,3 +1,4 @@
+// LABEL: ARCHITECTURE_INVARIANT - static guarantees: the deterministic quant path can never grow a second order path, an LLM dependency, or a direct line to the execution spine.
 /**
  * Quant-First architecture protection tests (Phase 16.11-16.15, 16.25).
  *

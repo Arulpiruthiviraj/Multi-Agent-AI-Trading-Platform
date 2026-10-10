@@ -1,0 +1,2209 @@
+{
+  "scope": {
+    "from": "2026-10-08T04:00:00.000Z",
+    "until": "2026-10-09T22:44:42.883Z",
+    "frozenAt": "2026-10-09T22:44:42.883Z",
+    "finishedAt": "2026-10-09T22:46:57.167Z",
+    "extracted": 2124947,
+    "expected": 2124947,
+    "tables": {
+      "quant_assessments": {
+        "count": 13521,
+        "complete": true
+      },
+      "consensus_decisions": {
+        "count": 31912,
+        "complete": true
+      },
+      "risk_assessments": {
+        "count": 0,
+        "complete": true
+      },
+      "trades": {
+        "count": 0,
+        "complete": true
+      },
+      "fills": {
+        "count": 0,
+        "complete": true
+      },
+      "ai_calls": {
+        "count": 33465,
+        "complete": true
+      },
+      "learning_versions": {
+        "count": 1,
+        "complete": true
+      },
+      "trade_plans": {
+        "count": 46,
+        "complete": true
+      },
+      "kill_switch_events": {
+        "count": 12,
+        "complete": true
+      },
+      "config_change_events": {
+        "count": 0,
+        "complete": true
+      }
+    },
+    "source": "C:\\WorkProjects\\Multi-Agent-AI-Trading-Platform\\data\\argus.db",
+    "schemaHash": "38b6f082c00e4ee9923feebc744a0b30622db09db705464b72a5df940dedcb92",
+    "scope": "CONSISTENT_READ_TRANSACTION; OBSERVABILITY_ROWS_ARE_NOT_COMPLETE_MARKET_TICKS"
+  },
+  "epochs": [
+    {
+      "id": "sess_6d99a8ba-18b6-4794-8fa5-1b796153ed4a",
+      "pid": 29536,
+      "first": 1791553250132,
+      "last": 1791561454678,
+      "ideas": 9797,
+      "assessments": 346,
+      "runtime": [
+        {
+          "ts": 1791553250136,
+          "type": "RUNTIME_PHASE_CHANGED",
+          "p": {
+            "fromPhase": "STOPPED",
+            "toPhase": "STARTING",
+            "effectivePhase": "STARTING",
+            "pid": 29536,
+            "uptimeMs": 21407,
+            "autobotEnabled": false,
+            "tradingState": "TRADING_ENABLED"
+          }
+        },
+        {
+          "ts": 1791553250138,
+          "type": "UNCLEAN_SHUTDOWN_DETECTED",
+          "p": {
+            "previousPid": 8364,
+            "previousStartedAt": "2026-10-08T11:48:23.344Z",
+            "previousLastHeartbeatAt": "2026-10-09T03:12:30.660Z",
+            "msSincePreviousHeartbeat": 37699478,
+            "currentPid": 29536
+          }
+        },
+        {
+          "ts": 1791553334620,
+          "type": "RUNTIME_PHASE_CHANGED",
+          "p": {
+            "fromPhase": "STARTING",
+            "toPhase": "RUNNING",
+            "effectivePhase": "SAFE_MODE",
+            "pid": 29536,
+            "uptimeMs": 105890,
+            "autobotEnabled": true,
+            "tradingState": "TRADING_PAUSED"
+          }
+        },
+        {
+          "ts": 1791553437166,
+          "type": "TRADING_STATE_CHANGED",
+          "p": {
+            "payload": {
+              "reason": "Owner explicitly requested PAPER trading activation",
+              "fromState": "TRADING_PAUSED",
+              "toState": "TRADING_ENABLED"
+            }
+          }
+        }
+      ],
+      "authority": {
+        "[REDACTED]:[REDACTED]:": 47
+      },
+      "terminals": {
+        "CONFIDENCE_BELOW_STRONG": 7008,
+        "AGENT_DATA_UNAVAILABLE": 142,
+        "AGENT_HOLD": 129,
+        "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 13,
+        "MODERATE_REJECT_CALIBRATION": 1
+      }
+    },
+    {
+      "id": "sess_732f80c9-1562-418d-ad12-eed5588bbdf1",
+      "pid": 32528,
+      "first": 1791561491273,
+      "last": 1791574881886,
+      "ideas": 17922,
+      "assessments": 5354,
+      "runtime": [
+        {
+          "ts": 1791561491275,
+          "type": "RUNTIME_PHASE_CHANGED",
+          "p": {
+            "fromPhase": "STOPPED",
+            "toPhase": "STARTING",
+            "effectivePhase": "STARTING",
+            "pid": 32528,
+            "uptimeMs": 1539,
+            "autobotEnabled": false,
+            "tradingState": "TRADING_ENABLED"
+          }
+        },
+        {
+          "ts": 1791561603016,
+          "type": "RUNTIME_PHASE_CHANGED",
+          "p": {
+            "fromPhase": "STARTING",
+            "toPhase": "RUNNING",
+            "effectivePhase": "SAFE_MODE",
+            "pid": 32528,
+            "uptimeMs": 113280,
+            "autobotEnabled": true,
+            "tradingState": "TRADING_PAUSED"
+          }
+        },
+        {
+          "ts": 1791561620461,
+          "type": "TRADING_STATE_CHANGED",
+          "p": {
+            "payload": {
+              "reason": "Owner authorized PAPER restart after isolated defect repairs",
+              "fromState": "TRADING_PAUSED",
+              "toState": "TRADING_ENABLED"
+            }
+          }
+        }
+      ],
+      "authority": {
+        "REQUIRES_CONSENSUS:NO_STRATEGY_ID:": 107,
+        "NOT_AUTHORIZED:NO_LIFECYCLE_RECORD:": 688
+      },
+      "terminals": {
+        "CONFIDENCE_BELOW_STRONG": 13853,
+        "AGENT_DATA_UNAVAILABLE": 119,
+        "AGENT_HOLD": 130,
+        "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 6
+      }
+    },
+    {
+      "id": "sess_55b0425e-3c37-4c81-ab03-23c6aa609740",
+      "pid": 1020,
+      "first": 1791574974282,
+      "last": 1791576411193,
+      "ideas": 1524,
+      "assessments": 556,
+      "runtime": [
+        {
+          "ts": 1791574974284,
+          "type": "RUNTIME_PHASE_CHANGED",
+          "p": {
+            "fromPhase": "STOPPED",
+            "toPhase": "STARTING",
+            "effectivePhase": "STARTING",
+            "pid": 1020,
+            "uptimeMs": 1230,
+            "autobotEnabled": false,
+            "tradingState": "TRADING_ENABLED"
+          }
+        },
+        {
+          "ts": 1791575094072,
+          "type": "RUNTIME_PHASE_CHANGED",
+          "p": {
+            "fromPhase": "STARTING",
+            "toPhase": "RUNNING",
+            "effectivePhase": "SAFE_MODE",
+            "pid": 1020,
+            "uptimeMs": 121018,
+            "autobotEnabled": true,
+            "tradingState": "TRADING_PAUSED"
+          }
+        },
+        {
+          "ts": 1791575143523,
+          "type": "TRADING_STATE_CHANGED",
+          "p": {
+            "payload": {
+              "reason": "Owner-authorized controlled PAPER diagnostic deployment; fresh clean reconciliation, empty positions and zero reported open orders",
+              "fromState": "TRADING_PAUSED",
+              "toState": "TRADING_ENABLED"
+            }
+          }
+        }
+      ],
+      "authority": {
+        "REQUIRES_CONSENSUS:NO_STRATEGY_ID:": 37,
+        "NOT_AUTHORIZED:NO_LIFECYCLE_RECORD:": 66
+      },
+      "terminals": {
+        "CONFIDENCE_BELOW_STRONG": 1089,
+        "AGENT_DATA_UNAVAILABLE": 5,
+        "AGENT_HOLD": 22
+      }
+    },
+    {
+      "id": "sess_d7425d42-f6c9-43eb-9b5c-496984fe43b1",
+      "pid": 22412,
+      "first": 1791576453001,
+      "last": 1791582567966,
+      "ideas": 0,
+      "assessments": 223,
+      "runtime": [
+        {
+          "ts": 1791576453014,
+          "type": "RUNTIME_PHASE_CHANGED",
+          "p": {
+            "fromPhase": "STOPPED",
+            "toPhase": "STARTING",
+            "effectivePhase": "STARTING",
+            "pid": 22412,
+            "uptimeMs": 13638,
+            "autobotEnabled": false,
+            "tradingState": "TRADING_ENABLED"
+          }
+        },
+        {
+          "ts": 1791576453015,
+          "type": "UNCLEAN_SHUTDOWN_DETECTED",
+          "p": {
+            "previousPid": 1020,
+            "previousStartedAt": "2026-10-09T19:44:26.068Z",
+            "previousLastHeartbeatAt": "2026-10-09T20:06:45.913Z",
+            "msSincePreviousHeartbeat": 47102,
+            "currentPid": 22412
+          }
+        },
+        {
+          "ts": 1791576611872,
+          "type": "TRADING_STATE_CHANGED",
+          "p": {
+            "payload": {
+              "reason": "Unclean prior shutdown detected - a persisted TRADING_ENABLED state requires explicit operator reactivation before resuming, the same discipline already applied to new BUY-side idea generation via the reconciliation-gated entry hold above.",
+              "fromState": "TRADING_ENABLED",
+              "toState": "TRADING_PAUSED"
+            }
+          }
+        },
+        {
+          "ts": 1791576671546,
+          "type": "RUNTIME_PHASE_CHANGED",
+          "p": {
+            "fromPhase": "STARTING",
+            "toPhase": "RUNNING",
+            "effectivePhase": "SAFE_MODE",
+            "pid": 22412,
+            "uptimeMs": 232170,
+            "autobotEnabled": true,
+            "tradingState": "TRADING_PAUSED"
+          }
+        }
+      ],
+      "authority": {},
+      "terminals": {}
+    },
+    {
+      "id": "sess_81560cc3-a5a9-4658-9404-1ee32691c7ff",
+      "pid": 4324,
+      "first": 1791582597375,
+      "last": 1791583313385,
+      "ideas": 0,
+      "assessments": 11,
+      "runtime": [
+        {
+          "ts": 1791582597380,
+          "type": "RUNTIME_PHASE_CHANGED",
+          "p": {
+            "fromPhase": "STOPPED",
+            "toPhase": "STARTING",
+            "effectivePhase": "STARTING",
+            "pid": 4324,
+            "uptimeMs": 13915,
+            "autobotEnabled": false,
+            "tradingState": "TRADING_ENABLED"
+          }
+        },
+        {
+          "ts": 1791582597381,
+          "type": "UNCLEAN_SHUTDOWN_DETECTED",
+          "p": {
+            "previousPid": 22412,
+            "previousStartedAt": "2026-10-09T20:10:13.886Z",
+            "previousLastHeartbeatAt": "2026-10-09T21:49:26.398Z",
+            "msSincePreviousHeartbeat": 30983,
+            "currentPid": 4324
+          }
+        },
+        {
+          "ts": 1791582708533,
+          "type": "RUNTIME_PHASE_CHANGED",
+          "p": {
+            "fromPhase": "STARTING",
+            "toPhase": "RUNNING",
+            "effectivePhase": "SAFE_MODE",
+            "pid": 4324,
+            "uptimeMs": 125068,
+            "autobotEnabled": true,
+            "tradingState": "TRADING_PAUSED"
+          }
+        }
+      ],
+      "authority": {},
+      "terminals": {}
+    },
+    {
+      "id": "sess_9a789506-e9a8-40bd-9090-eef3c109ace7",
+      "pid": 19232,
+      "first": 1791583343224,
+      "last": 1791583976381,
+      "ideas": 0,
+      "assessments": 14,
+      "runtime": [
+        {
+          "ts": 1791583343228,
+          "type": "RUNTIME_PHASE_CHANGED",
+          "p": {
+            "fromPhase": "STOPPED",
+            "toPhase": "STARTING",
+            "effectivePhase": "STARTING",
+            "pid": 19232,
+            "uptimeMs": 13246,
+            "autobotEnabled": false,
+            "tradingState": "TRADING_ENABLED"
+          }
+        },
+        {
+          "ts": 1791583343230,
+          "type": "UNCLEAN_SHUTDOWN_DETECTED",
+          "p": {
+            "previousPid": 4324,
+            "previousStartedAt": "2026-10-09T21:51:18.278Z",
+            "previousLastHeartbeatAt": "2026-10-09T22:01:53.386Z",
+            "msSincePreviousHeartbeat": 29844,
+            "currentPid": 19232
+          }
+        },
+        {
+          "ts": 1791583460220,
+          "type": "RUNTIME_PHASE_CHANGED",
+          "p": {
+            "fromPhase": "STARTING",
+            "toPhase": "RUNNING",
+            "effectivePhase": "SAFE_MODE",
+            "pid": 19232,
+            "uptimeMs": 130237,
+            "autobotEnabled": true,
+            "tradingState": "TRADING_PAUSED"
+          }
+        }
+      ],
+      "authority": {},
+      "terminals": {}
+    },
+    {
+      "id": "sess_328bc97f-b9d0-4897-a421-535c64ecaa06",
+      "pid": 4184,
+      "first": 1791583991030,
+      "last": 1791585877643,
+      "ideas": 16,
+      "assessments": 107,
+      "runtime": [
+        {
+          "ts": 1791583991034,
+          "type": "RUNTIME_PHASE_CHANGED",
+          "p": {
+            "fromPhase": "STOPPED",
+            "toPhase": "STARTING",
+            "effectivePhase": "STARTING",
+            "pid": 4184,
+            "uptimeMs": 13172,
+            "autobotEnabled": false,
+            "tradingState": "TRADING_ENABLED"
+          }
+        },
+        {
+          "ts": 1791583991035,
+          "type": "UNCLEAN_SHUTDOWN_DETECTED",
+          "p": {
+            "previousPid": 19232,
+            "previousStartedAt": "2026-10-09T22:03:42.555Z",
+            "previousLastHeartbeatAt": "2026-10-09T22:12:56.363Z",
+            "msSincePreviousHeartbeat": 14672,
+            "currentPid": 4184
+          }
+        },
+        {
+          "ts": 1791584121336,
+          "type": "RUNTIME_PHASE_CHANGED",
+          "p": {
+            "fromPhase": "STARTING",
+            "toPhase": "RUNNING",
+            "effectivePhase": "SAFE_MODE",
+            "pid": 4184,
+            "uptimeMs": 143466,
+            "autobotEnabled": true,
+            "tradingState": "TRADING_PAUSED"
+          }
+        },
+        {
+          "ts": 1791585662505,
+          "type": "TRADING_STATE_CHANGED",
+          "p": {
+            "payload": {
+              "reason": "Operator reviewed current reconciliation evidence and resumed via POST /api/v1/system/resume.",
+              "fromState": "TRADING_PAUSED",
+              "toState": "TRADING_ENABLED"
+            }
+          }
+        }
+      ],
+      "authority": {
+        "NOT_AUTHORIZED:NO_LIFECYCLE_RECORD:": 1,
+        "REQUIRES_CONSENSUS:NO_STRATEGY_ID:": 1
+      },
+      "terminals": {
+        "CONFIDENCE_BELOW_STRONG": 8,
+        "AGENT_DATA_UNAVAILABLE": 2,
+        "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 1,
+        "AGENT_HOLD": 1
+      }
+    }
+  ],
+  "cases": {
+    "MRNA": {
+      "symbol": "MRNA",
+      "events": {
+        "DISCOVERY_CANDIDATE_ADMITTED": 15,
+        "SUBSCRIPTION_PROMOTED": 11,
+        "SYMBOL_NOT_SUBSCRIBED": 18,
+        "MARKET_DATA_SUBSCRIPTION_OUTCOME": 33,
+        "WATCHLIST_SUBSCRIBE_REQUESTED": 11,
+        "IBKR_MARKET_DATA_SUBSCRIPTION_ACKNOWLEDGED": 18,
+        "IBKR_MARKET_DATA_SUBSCRIPTION_RECOVERED": 18,
+        "QUANT_BRIDGE_CALL_OUTCOME": 838,
+        "QUANT_CORE_TICK_RESYNC_SENT": 18,
+        "KRONOS_FORECAST_STARTED": 101,
+        "TECHNICAL_ANALYSIS_STARTED": 158,
+        "TECHNICAL_ANALYSIS_COMPLETED": 158,
+        "SUBSCRIPTION_EVICTED": 12,
+        "SUBSCRIPTION_NOT_PROMOTED": 5,
+        "KRONOS_FORECAST_COMPLETED": 44,
+        "IDEA_RATE_LIMITED": 7,
+        "PRICE_SNAPSHOT_REQUESTED": 22,
+        "TEMPORARY_DATA_RESCUE_GRANTED": 22,
+        "CONFLUENCE_COORDINATOR_TRIGGERED": 29,
+        "TRADE_IDEA_GENERATED": 69,
+        "FRESH_PRICE_WAIT_OUTCOME": 22,
+        "AI_DEBATE_FAIL_CLOSED_EXCLUDED": 11,
+        "CHIEF_CONSENSUS_STARTED": 54,
+        "CHIEF_CONSENSUS_COMPLETED": 54,
+        "CONSENSUS_TERMINAL_REASON": 54,
+        "CONSENSUS_MODEL_COMPARISON": 54,
+        "DESK_NO_TRADE": 56,
+        "TRADE_LIFECYCLE": 54,
+        "CONSENSUS_INTERIM_EVALUATIONS_COLLAPSED": 32,
+        "QUANT_CORE_PARITY_DIVERGENCE": 31,
+        "KRONOS_HIGH_CONFIDENCE": 31,
+        "QUANT_BRIDGE_MALFORMED_RESPONSE": 5,
+        "KRONOS_LOW_CONFIDENCE": 1,
+        "AGENT_DISAGREEMENT": 11,
+        "QUANT_ADVISORY_ANALYSIS_COMPLETED": 1,
+        "TEMPORARY_DATA_RESCUE_RELEASED": 3,
+        "QUANT_SYMBOL_EVALUATION_STARTED": 2,
+        "QUANT_BAR_INPUT_AVAILABILITY": 2,
+        "QUANT_SELECTION_POOL": 2,
+        "QUANT_ASSESSMENT_COMPLETED": 2,
+        "QUANT_QUOTE_EVIDENCE": 2,
+        "QUANT_SYMBOL_EVALUATION_FINISHED": 2,
+        "QUANT_CORE_STRATEGY_PARITY_DIVERGENCE": 1,
+        "QUANT_EVIDENCE_PRODUCED": 1
+      },
+      "firstAdmission": 1791556061163,
+      "firstPromotion": 1791556189614,
+      "assessments": 2,
+      "rthAssessments": 0,
+      "firstAssessment": 1791580449404,
+      "emittedRows": 0,
+      "triggers": 15,
+      "reasons": {
+        "UNSPECIFIED": 54,
+        "NO_ELIGIBLE_STRATEGY": 2
+      },
+      "notes": []
+    },
+    "RBLX": {
+      "symbol": "RBLX",
+      "events": {
+        "SUBSCRIPTION_PROMOTED": 10,
+        "SYMBOL_NOT_SUBSCRIBED": 11,
+        "MARKET_DATA_SUBSCRIPTION_OUTCOME": 100,
+        "WATCHLIST_SUBSCRIBE_REQUESTED": 10,
+        "IBKR_MARKET_DATA_SUBSCRIPTION_ACKNOWLEDGED": 11,
+        "IBKR_MARKET_DATA_SUBSCRIPTION_RECOVERED": 11,
+        "TECHNICAL_ANALYSIS_STARTED": 610,
+        "TECHNICAL_ANALYSIS_COMPLETED": 610,
+        "SUBSCRIPTION_ALREADY_ACTIVE": 392,
+        "KRONOS_FORECAST_STARTED": 362,
+        "QUANT_BRIDGE_CALL_OUTCOME": 2031,
+        "KRONOS_FORECAST_COMPLETED": 232,
+        "QUANT_CORE_TICK_RESYNC_SENT": 45,
+        "QUANT_CORE_PARITY_DIVERGENCE": 124,
+        "CONFLUENCE_COORDINATOR_TRIGGERED": 123,
+        "TRADE_IDEA_GENERATED": 286,
+        "CHIEF_CONSENSUS_STARTED": 227,
+        "CHIEF_CONSENSUS_COMPLETED": 227,
+        "CONSENSUS_TERMINAL_REASON": 227,
+        "CONSENSUS_MODEL_COMPARISON": 227,
+        "DESK_NO_TRADE": 241,
+        "TRADE_LIFECYCLE": 239,
+        "CONSENSUS_INTERIM_EVALUATIONS_COLLAPSED": 130,
+        "KRONOS_HIGH_CONFIDENCE": 181,
+        "IDEA_RATE_LIMITED": 71,
+        "PRICE_SNAPSHOT_REQUESTED": 90,
+        "TEMPORARY_DATA_RESCUE_GRANTED": 90,
+        "FRESH_PRICE_WAIT_OUTCOME": 90,
+        "KRONOS_UNAVAILABLE": 2,
+        "AI_DEBATE_FAIL_CLOSED_EXCLUDED": 42,
+        "AGENT_DISAGREEMENT": 52,
+        "QUANT_ADVISORY_ANALYSIS_COMPLETED": 4,
+        "QUANT_ADVISORY_PAYLOAD_STREAMED": 4,
+        "TEMPORARY_DATA_RESCUE_RELEASED": 14,
+        "SUBSCRIPTION_EVICTED": 5,
+        "DISCOVERY_CANDIDATE_ADMITTED": 14,
+        "QUANT_CONFLUENCE_SIDE_MISMATCH": 2,
+        "QUANT_ASSESSMENT_COMPLETED": 15,
+        "QUANT_QUOTE_EVIDENCE": 15,
+        "CHIEF_DECISION_POLICY_SELECTED": 12,
+        "STRATEGY_AUTHORIZATION_CHECKED": 12,
+        "QUANT_CORE_STRATEGY_PARITY_DIVERGENCE": 8,
+        "QUANT_EVIDENCE_PRODUCED": 8,
+        "DISCOVERY_CANDIDATE_FILTERED": 7,
+        "SUBSCRIPTION_NOT_PROMOTED": 1,
+        "QUANT_BAR_INPUT_AVAILABILITY": 10,
+        "QUANT_SELECTION_POOL": 6,
+        "QUANT_SYMBOL_EVALUATION_STARTED": 3,
+        "QUANT_SYMBOL_EVALUATION_FINISHED": 3,
+        "KRONOS_LOW_CONFIDENCE": 1
+      },
+      "firstAdmission": 1791557908501,
+      "firstPromotion": 1791553676275,
+      "assessments": 15,
+      "rthAssessments": 11,
+      "firstAssessment": 1791559644139,
+      "emittedRows": 13,
+      "triggers": 103,
+      "reasons": {
+        "UNSPECIFIED": 239,
+        "IDEA_GENERATION_GATED": 2
+      },
+      "notes": []
+    },
+    "PCVX": {
+      "symbol": "PCVX",
+      "events": {
+        "DISCOVERY_CANDIDATE_ADMITTED": 3,
+        "SUBSCRIPTION_NOT_PROMOTED": 2,
+        "DISCOVERY_CANDIDATE_FILTERED": 3
+      },
+      "firstAdmission": 1791557908619,
+      "firstPromotion": null,
+      "assessments": 0,
+      "rthAssessments": 0,
+      "firstAssessment": null,
+      "emittedRows": 0,
+      "triggers": 0,
+      "reasons": {},
+      "notes": []
+    },
+    "SNAP": {
+      "symbol": "SNAP",
+      "events": {
+        "SUBSCRIPTION_PROMOTED": 12,
+        "SYMBOL_NOT_SUBSCRIBED": 13,
+        "MARKET_DATA_SUBSCRIPTION_OUTCOME": 97,
+        "WATCHLIST_SUBSCRIBE_REQUESTED": 12,
+        "IBKR_MARKET_DATA_SUBSCRIPTION_ACKNOWLEDGED": 12,
+        "IBKR_MARKET_DATA_SUBSCRIPTION_RECOVERED": 12,
+        "TECHNICAL_ANALYSIS_STARTED": 599,
+        "TECHNICAL_ANALYSIS_COMPLETED": 599,
+        "CONFLUENCE_COORDINATOR_TRIGGERED": 126,
+        "TRADE_IDEA_GENERATED": 283,
+        "CHIEF_CONSENSUS_STARTED": 228,
+        "CHIEF_CONSENSUS_COMPLETED": 228,
+        "CONSENSUS_TERMINAL_REASON": 228,
+        "CONSENSUS_MODEL_COMPARISON": 228,
+        "DESK_NO_TRADE": 320,
+        "TRADE_LIFECYCLE": 228,
+        "SUBSCRIPTION_ALREADY_ACTIVE": 389,
+        "KRONOS_FORECAST_STARTED": 363,
+        "KRONOS_FORECAST_COMPLETED": 229,
+        "KRONOS_HIGH_CONFIDENCE": 173,
+        "PRICE_SNAPSHOT_REQUESTED": 85,
+        "TEMPORARY_DATA_RESCUE_GRANTED": 82,
+        "FRESH_PRICE_WAIT_OUTCOME": 85,
+        "QUANT_BRIDGE_CALL_OUTCOME": 1686,
+        "QUANT_CORE_TICK_RESYNC_SENT": 42,
+        "CONSENSUS_INTERIM_EVALUATIONS_COLLAPSED": 121,
+        "KRONOS_UNAVAILABLE": 2,
+        "QUANT_CORE_PARITY_DIVERGENCE": 123,
+        "AI_DEBATE_FAIL_CLOSED_EXCLUDED": 33,
+        "TEMPORARY_DATA_RESCUE_RELEASED": 13,
+        "QUANT_ASSESSMENT_COMPLETED": 92,
+        "QUANT_QUOTE_EVIDENCE": 92,
+        "QUANT_CORE_STRATEGY_PARITY_DIVERGENCE": 32,
+        "QUANT_EVIDENCE_PRODUCED": 32,
+        "IDEA_RATE_LIMITED": 60,
+        "QUANT_ADVISORY_ANALYSIS_COMPLETED": 4,
+        "QUANT_ADVISORY_PAYLOAD_STREAMED": 2,
+        "AGENT_DISAGREEMENT": 46,
+        "SUBSCRIPTION_EVICTED": 7,
+        "SUBSCRIPTION_NOT_PROMOTED": 2,
+        "MARKET_DATA_CAPACITY_FULL": 1,
+        "TEMPORARY_DATA_RESCUE_DENIED": 3,
+        "TRADE_IDEA_REJECTED": 1,
+        "DISCOVERY_CANDIDATE_ADMITTED": 7,
+        "DISCOVERY_CANDIDATE_FILTERED": 6,
+        "QUANT_BAR_INPUT_AVAILABILITY": 10,
+        "QUANT_SELECTION_POOL": 10,
+        "QUANT_SYMBOL_EVALUATION_STARTED": 3,
+        "QUANT_SYMBOL_EVALUATION_FINISHED": 3
+      },
+      "firstAdmission": 1791557908668,
+      "firstPromotion": 1791553676275,
+      "assessments": 92,
+      "rthAssessments": 85,
+      "firstAssessment": 1791554845100,
+      "emittedRows": 0,
+      "triggers": 588,
+      "reasons": {
+        "UNSPECIFIED": 228,
+        "NO_ELIGIBLE_STRATEGY": 92
+      },
+      "notes": []
+    },
+    "CRCL": {
+      "symbol": "CRCL",
+      "events": {
+        "DISCOVERY_CANDIDATE_ADMITTED": 4,
+        "SUBSCRIPTION_PROMOTED": 1,
+        "SYMBOL_NOT_SUBSCRIBED": 1,
+        "MARKET_DATA_SUBSCRIPTION_OUTCOME": 1,
+        "WATCHLIST_SUBSCRIBE_REQUESTED": 1,
+        "IBKR_MARKET_DATA_SUBSCRIPTION_ACKNOWLEDGED": 1,
+        "IBKR_MARKET_DATA_SUBSCRIPTION_RECOVERED": 1,
+        "QUANT_BRIDGE_CALL_OUTCOME": 11,
+        "QUANT_CORE_TICK_RESYNC_SENT": 1,
+        "KRONOS_FORECAST_STARTED": 1,
+        "SUBSCRIPTION_EVICTED": 1,
+        "SUBSCRIPTION_NOT_PROMOTED": 5,
+        "DISCOVERY_CANDIDATE_FILTERED": 3
+      },
+      "firstAdmission": 1791558874053,
+      "firstPromotion": 1791559275454,
+      "assessments": 0,
+      "rthAssessments": 0,
+      "firstAssessment": null,
+      "emittedRows": 0,
+      "triggers": 0,
+      "reasons": {},
+      "notes": []
+    },
+    "MRK": {
+      "symbol": "MRK",
+      "events": {
+        "SYMBOL_NOT_SUBSCRIBED": 6,
+        "MARKET_DATA_SUBSCRIPTION_OUTCOME": 110,
+        "WATCHLIST_SUBSCRIBE_REQUESTED": 5,
+        "IBKR_MARKET_DATA_SUBSCRIPTION_ACKNOWLEDGED": 6,
+        "IBKR_MARKET_DATA_SUBSCRIPTION_RECOVERED": 6,
+        "KRONOS_FORECAST_STARTED": 372,
+        "TECHNICAL_ANALYSIS_STARTED": 614,
+        "TECHNICAL_ANALYSIS_COMPLETED": 614,
+        "QUANT_BRIDGE_CALL_OUTCOME": 2843,
+        "KRONOS_FORECAST_COMPLETED": 240,
+        "KRONOS_HIGH_CONFIDENCE": 215,
+        "PRICE_SNAPSHOT_REQUESTED": 105,
+        "TEMPORARY_DATA_RESCUE_GRANTED": 103,
+        "CONFLUENCE_COORDINATOR_TRIGGERED": 142,
+        "TRADE_IDEA_GENERATED": 411,
+        "FRESH_PRICE_WAIT_OUTCOME": 105,
+        "CHIEF_CONSENSUS_STARTED": 267,
+        "AGENT_DISAGREEMENT": 50,
+        "CHIEF_CONSENSUS_COMPLETED": 267,
+        "CONSENSUS_TERMINAL_REASON": 267,
+        "CONSENSUS_MODEL_COMPARISON": 267,
+        "DESK_NO_TRADE": 348,
+        "TRADE_LIFECYCLE": 346,
+        "CONSENSUS_INTERIM_EVALUATIONS_COLLAPSED": 150,
+        "QUANT_CORE_TICK_RESYNC_SENT": 45,
+        "IDEA_RATE_LIMITED": 91,
+        "QUANT_CORE_PARITY_DIVERGENCE": 124,
+        "TEMPORARY_DATA_RESCUE_RELEASED": 13,
+        "DISCOVERY_CANDIDATE_ADMITTED": 7,
+        "AI_DEBATE_FAIL_CLOSED_EXCLUDED": 36,
+        "QUANT_BRIDGE_MALFORMED_RESPONSE": 13,
+        "QUANT_CORE_STRATEGY_PARITY_DIVERGENCE": 23,
+        "QUANT_EVIDENCE_PRODUCED": 23,
+        "QUANT_CONFLUENCE_SIDE_MISMATCH": 15,
+        "QUANT_ASSESSMENT_COMPLETED": 88,
+        "QUANT_QUOTE_EVIDENCE": 88,
+        "CHIEF_DECISION_POLICY_SELECTED": 79,
+        "STRATEGY_AUTHORIZATION_CHECKED": 79,
+        "QUANT_ADVISORY_ANALYSIS_COMPLETED": 3,
+        "KRONOS_UNAVAILABLE": 4,
+        "DISCOVERY_CANDIDATE_FILTERED": 4,
+        "SUBSCRIPTION_EVICTED": 2,
+        "SUBSCRIPTION_PROMOTED": 4,
+        "TEMPORARY_DATA_RESCUE_DENIED": 2,
+        "SUBSCRIPTION_NOT_PROMOTED": 2,
+        "QUANT_BAR_INPUT_AVAILABILITY": 7,
+        "QUANT_SELECTION_POOL": 7,
+        "KRONOS_LOW_CONFIDENCE": 3,
+        "QUANT_SYMBOL_EVALUATION_STARTED": 2,
+        "QUANT_SYMBOL_EVALUATION_FINISHED": 2
+      },
+      "firstAdmission": 1791555148067,
+      "firstPromotion": 1791561045592,
+      "assessments": 88,
+      "rthAssessments": 85,
+      "firstAssessment": 1791555678255,
+      "emittedRows": 86,
+      "triggers": 611,
+      "reasons": {
+        "UNSPECIFIED": 346,
+        "IDEA_GENERATION_GATED": 2
+      },
+      "notes": []
+    },
+    "TSLG": {
+      "symbol": "TSLG",
+      "events": {
+        "DISCOVERY_CANDIDATE_ADMITTED": 11,
+        "SUBSCRIPTION_NOT_PROMOTED": 2,
+        "DISCOVERY_CANDIDATE_FILTERED": 5
+      },
+      "firstAdmission": 1791557908679,
+      "firstPromotion": null,
+      "assessments": 0,
+      "rthAssessments": 0,
+      "firstAssessment": null,
+      "emittedRows": 0,
+      "triggers": 0,
+      "reasons": {},
+      "notes": []
+    },
+    "CF": {
+      "symbol": "CF",
+      "events": {
+        "DISCOVERY_CANDIDATE_ADMITTED": 1,
+        "SUBSCRIPTION_NOT_PROMOTED": 1,
+        "DISCOVERY_CANDIDATE_FILTERED": 1
+      },
+      "firstAdmission": 1791557908507,
+      "firstPromotion": null,
+      "assessments": 0,
+      "rthAssessments": 0,
+      "firstAssessment": null,
+      "emittedRows": 0,
+      "triggers": 0,
+      "reasons": {},
+      "notes": []
+    },
+    "SNOW": {
+      "symbol": "SNOW",
+      "events": {
+        "SUBSCRIPTION_PROMOTED": 7,
+        "SYMBOL_NOT_SUBSCRIBED": 10,
+        "MARKET_DATA_SUBSCRIPTION_OUTCOME": 102,
+        "WATCHLIST_SUBSCRIBE_REQUESTED": 7,
+        "IBKR_MARKET_DATA_SUBSCRIPTION_ACKNOWLEDGED": 10,
+        "IBKR_MARKET_DATA_SUBSCRIPTION_RECOVERED": 10,
+        "TECHNICAL_ANALYSIS_STARTED": 635,
+        "TECHNICAL_ANALYSIS_COMPLETED": 635,
+        "KRONOS_FORECAST_STARTED": 364,
+        "SUBSCRIPTION_ALREADY_ACTIVE": 383,
+        "PRICE_SNAPSHOT_REQUESTED": 95,
+        "TEMPORARY_DATA_RESCUE_GRANTED": 95,
+        "CONFLUENCE_COORDINATOR_TRIGGERED": 136,
+        "TRADE_IDEA_GENERATED": 303,
+        "FRESH_PRICE_WAIT_OUTCOME": 95,
+        "QUANT_BRIDGE_CALL_OUTCOME": 1940,
+        "KRONOS_FORECAST_COMPLETED": 224,
+        "KRONOS_HIGH_CONFIDENCE": 188,
+        "AI_DEBATE_FAIL_CLOSED_EXCLUDED": 50,
+        "CHIEF_CONSENSUS_STARTED": 245,
+        "CHIEF_CONSENSUS_COMPLETED": 245,
+        "CONSENSUS_TERMINAL_REASON": 245,
+        "CONSENSUS_MODEL_COMPARISON": 245,
+        "DESK_NO_TRADE": 267,
+        "TRADE_LIFECYCLE": 245,
+        "CONSENSUS_INTERIM_EVALUATIONS_COLLAPSED": 137,
+        "IDEA_RATE_LIMITED": 64,
+        "QUANT_CORE_PARITY_DIVERGENCE": 124,
+        "AGENT_DISAGREEMENT": 48,
+        "QUANT_CORE_TICK_RESYNC_SENT": 44,
+        "TEMPORARY_DATA_RESCUE_RELEASED": 17,
+        "DISCOVERY_CANDIDATE_ADMITTED": 12,
+        "QUANT_ASSESSMENT_COMPLETED": 22,
+        "QUANT_QUOTE_EVIDENCE": 22,
+        "QUANT_CORE_STRATEGY_PARITY_DIVERGENCE": 8,
+        "QUANT_EVIDENCE_PRODUCED": 8,
+        "SUBSCRIPTION_EVICTED": 5,
+        "QUANT_ADVISORY_ANALYSIS_COMPLETED": 3,
+        "SUBSCRIPTION_NOT_PROMOTED": 1,
+        "DISCOVERY_CANDIDATE_FILTERED": 2,
+        "QUANT_BAR_INPUT_AVAILABILITY": 12,
+        "QUANT_SELECTION_POOL": 12,
+        "QUANT_SYMBOL_EVALUATION_STARTED": 3,
+        "QUANT_SYMBOL_EVALUATION_FINISHED": 3,
+        "QUANT_ADVISORY_PAYLOAD_STREAMED": 2
+      },
+      "firstAdmission": 1791555148063,
+      "firstPromotion": 1791553676275,
+      "assessments": 22,
+      "rthAssessments": 14,
+      "firstAssessment": 1791556002053,
+      "emittedRows": 0,
+      "triggers": 153,
+      "reasons": {
+        "UNSPECIFIED": 245,
+        "NO_ELIGIBLE_STRATEGY": 22
+      },
+      "notes": []
+    },
+    "PBR": {
+      "symbol": "PBR",
+      "events": {
+        "DISCOVERY_CANDIDATE_ADMITTED": 10,
+        "SUBSCRIPTION_NOT_PROMOTED": 35,
+        "DISCOVERY_CANDIDATE_FILTERED": 5,
+        "SUBSCRIPTION_PROMOTED": 2,
+        "SYMBOL_NOT_SUBSCRIBED": 2,
+        "MARKET_DATA_SUBSCRIPTION_OUTCOME": 2,
+        "WATCHLIST_SUBSCRIBE_REQUESTED": 2,
+        "IBKR_MARKET_DATA_SUBSCRIPTION_ACKNOWLEDGED": 2,
+        "IBKR_MARKET_DATA_SUBSCRIPTION_RECOVERED": 2,
+        "SUBSCRIPTION_EVICTED": 2,
+        "KRONOS_FORECAST_STARTED": 2,
+        "KRONOS_FORECAST_COMPLETED": 2
+      },
+      "firstAdmission": 1791555148042,
+      "firstPromotion": 1791565225124,
+      "assessments": 0,
+      "rthAssessments": 0,
+      "firstAssessment": null,
+      "emittedRows": 0,
+      "triggers": 0,
+      "reasons": {},
+      "notes": []
+    },
+    "T": {
+      "symbol": "T",
+      "events": {
+        "DISCOVERY_CANDIDATE_ADMITTED": 34,
+        "SUBSCRIPTION_NOT_PROMOTED": 45,
+        "DISCOVERY_CANDIDATE_FILTERED": 16,
+        "NEWS_CATALYST": 4,
+        "NEWS_SENTIMENT_SCORED": 1,
+        "NEWS_CLUSTER_CREATED": 1,
+        "AI_CALL_CONSIDERED": 1,
+        "AI_CALL_STARTED": 1,
+        "NEWS_CATALYST_STAGED": 2,
+        "NEWS_ANALYZED": 1,
+        "AI_CALL_COMPLETED": 1,
+        "JEV_DECISION_COMPLETED": 1,
+        "AI_ADVISORY_NEWS_CATALYST": 1
+      },
+      "firstAdmission": 1791555148032,
+      "firstPromotion": null,
+      "assessments": 0,
+      "rthAssessments": 0,
+      "firstAssessment": null,
+      "emittedRows": 0,
+      "triggers": 0,
+      "reasons": {},
+      "notes": []
+    },
+    "IBB": {
+      "symbol": "IBB",
+      "events": {
+        "DISCOVERY_CANDIDATE_ADMITTED": 7,
+        "SUBSCRIPTION_NOT_PROMOTED": 5,
+        "DISCOVERY_CANDIDATE_FILTERED": 8
+      },
+      "firstAdmission": 1791555147975,
+      "firstPromotion": null,
+      "assessments": 0,
+      "rthAssessments": 0,
+      "firstAssessment": null,
+      "emittedRows": 0,
+      "triggers": 0,
+      "reasons": {},
+      "notes": []
+    },
+    "UBER": {
+      "symbol": "UBER",
+      "events": {
+        "SUBSCRIPTION_PROMOTED": 7,
+        "SYMBOL_NOT_SUBSCRIBED": 12,
+        "MARKET_DATA_SUBSCRIPTION_OUTCOME": 125,
+        "WATCHLIST_SUBSCRIBE_REQUESTED": 7,
+        "IBKR_MARKET_DATA_NO_ACKNOWLEDGEMENT": 1,
+        "IBKR_MARKET_DATA_SUBSCRIPTION_ACKNOWLEDGED": 11,
+        "IBKR_MARKET_DATA_SUBSCRIPTION_RECOVERED": 11,
+        "TECHNICAL_ANALYSIS_STARTED": 632,
+        "TECHNICAL_ANALYSIS_COMPLETED": 632,
+        "QUANT_BRIDGE_CALL_OUTCOME": 2355,
+        "KRONOS_FORECAST_STARTED": 333,
+        "KRONOS_FORECAST_COMPLETED": 225,
+        "KRONOS_HIGH_CONFIDENCE": 201,
+        "PRICE_SNAPSHOT_REQUESTED": 118,
+        "TEMPORARY_DATA_RESCUE_GRANTED": 111,
+        "CONFLUENCE_COORDINATOR_TRIGGERED": 138,
+        "TRADE_IDEA_GENERATED": 345,
+        "FRESH_PRICE_WAIT_OUTCOME": 118,
+        "AI_DEBATE_FAIL_CLOSED_EXCLUDED": 55,
+        "CHIEF_CONSENSUS_STARTED": 257,
+        "CHIEF_CONSENSUS_COMPLETED": 257,
+        "CONSENSUS_TERMINAL_REASON": 257,
+        "CONSENSUS_MODEL_COMPARISON": 257,
+        "DESK_NO_TRADE": 353,
+        "TRADE_LIFECYCLE": 257,
+        "CONSENSUS_INTERIM_EVALUATIONS_COLLAPSED": 147,
+        "IDEA_RATE_LIMITED": 81,
+        "QUANT_CORE_TICK_RESYNC_SENT": 40,
+        "QUANT_CORE_PARITY_DIVERGENCE": 121,
+        "TEMPORARY_DATA_RESCUE_RELEASED": 11,
+        "AGENT_DISAGREEMENT": 68,
+        "DISCOVERY_CANDIDATE_ADMITTED": 18,
+        "QUANT_ASSESSMENT_COMPLETED": 96,
+        "QUANT_QUOTE_EVIDENCE": 96,
+        "QUANT_CORE_STRATEGY_PARITY_DIVERGENCE": 28,
+        "QUANT_EVIDENCE_PRODUCED": 28,
+        "TEMPORARY_DATA_RESCUE_DENIED": 7,
+        "SUBSCRIPTION_EVICTED": 5,
+        "SUBSCRIPTION_NOT_PROMOTED": 13,
+        "CHIEF_DECISION_POLICY_SELECTED": 23,
+        "STRATEGY_AUTHORIZATION_CHECKED": 23,
+        "MODERATE_TIER_EVALUATED": 3,
+        "DISCOVERY_CANDIDATE_FILTERED": 7,
+        "QUANT_ADVISORY_ANALYSIS_COMPLETED": 2,
+        "MARKET_DATA_CAPACITY_FULL": 1,
+        "TRADE_IDEA_REJECTED": 1,
+        "KRONOS_UNAVAILABLE": 1,
+        "QUANT_BAR_INPUT_AVAILABILITY": 10,
+        "QUANT_SELECTION_POOL": 10,
+        "QUANT_SYMBOL_EVALUATION_STARTED": 3,
+        "QUANT_SYMBOL_EVALUATION_FINISHED": 3
+      },
+      "firstAdmission": 1791555148045,
+      "firstPromotion": 1791553676277,
+      "assessments": 96,
+      "rthAssessments": 90,
+      "firstAssessment": 1791556356674,
+      "emittedRows": 0,
+      "triggers": 765,
+      "reasons": {
+        "UNSPECIFIED": 257,
+        "NO_ELIGIBLE_STRATEGY": 96
+      },
+      "notes": []
+    },
+    "CPNG": {
+      "symbol": "CPNG",
+      "events": {
+        "DISCOVERY_CANDIDATE_ADMITTED": 12,
+        "SUBSCRIPTION_NOT_PROMOTED": 3,
+        "DISCOVERY_CANDIDATE_FILTERED": 6,
+        "NEWS_SENTIMENT_SCORED": 1,
+        "NEWS_CLUSTER_CREATED": 1,
+        "AI_CALL_CONSIDERED": 1,
+        "AI_CALL_STARTED": 1,
+        "NEWS_CATALYST": 1,
+        "NEWS_ANALYZED": 1,
+        "AI_CALL_COMPLETED": 1,
+        "JEV_DECISION_COMPLETED": 1,
+        "AI_ADVISORY_NEWS_CATALYST": 1
+      },
+      "firstAdmission": 1791558874052,
+      "firstPromotion": null,
+      "assessments": 0,
+      "rthAssessments": 0,
+      "firstAssessment": null,
+      "emittedRows": 0,
+      "triggers": 0,
+      "reasons": {},
+      "notes": []
+    },
+    "PBR.A": {
+      "symbol": "PBR.A",
+      "events": {
+        "DISCOVERY_CANDIDATE_ADMITTED": 19,
+        "SUBSCRIPTION_NOT_PROMOTED": 13,
+        "DISCOVERY_CANDIDATE_FILTERED": 5,
+        "SUBSCRIPTION_PROMOTED": 1,
+        "SYMBOL_NOT_SUBSCRIBED": 1,
+        "MARKET_DATA_SUBSCRIPTION_OUTCOME": 1,
+        "WATCHLIST_SUBSCRIBE_REQUESTED": 1,
+        "IBKR_MARKET_DATA_ERROR": 1,
+        "IBKR_MARKET_DATA_NO_ACKNOWLEDGEMENT": 1
+      },
+      "firstAdmission": 1791556061168,
+      "firstPromotion": 1791585652466,
+      "assessments": 0,
+      "rthAssessments": 0,
+      "firstAssessment": null,
+      "emittedRows": 0,
+      "triggers": 0,
+      "reasons": {},
+      "notes": []
+    },
+    "SGOV": {
+      "symbol": "SGOV",
+      "events": {
+        "DISCOVERY_CANDIDATE_ADMITTED": 16,
+        "DISCOVERY_CANDIDATE_FILTERED": 10
+      },
+      "firstAdmission": 1791555148026,
+      "firstPromotion": null,
+      "assessments": 0,
+      "rthAssessments": 0,
+      "firstAssessment": null,
+      "emittedRows": 0,
+      "triggers": 0,
+      "reasons": {},
+      "notes": []
+    },
+    "DUK": {
+      "symbol": "DUK",
+      "events": {
+        "DISCOVERY_CANDIDATE_ADMITTED": 3,
+        "DISCOVERY_CANDIDATE_FILTERED": 4,
+        "NEWS_CATALYST": 1,
+        "NEWS_CATALYST_STAGED": 1
+      },
+      "firstAdmission": 1791556061137,
+      "firstPromotion": null,
+      "assessments": 0,
+      "rthAssessments": 0,
+      "firstAssessment": null,
+      "emittedRows": 0,
+      "triggers": 0,
+      "reasons": {},
+      "notes": []
+    },
+    "MS": {
+      "symbol": "MS",
+      "events": {
+        "DISCOVERY_CANDIDATE_ADMITTED": 49,
+        "SUBSCRIPTION_NOT_PROMOTED": 72,
+        "DISCOVERY_CANDIDATE_FILTERED": 21,
+        "NEWS_CATALYST": 1,
+        "SUBSCRIPTION_PROMOTED": 4,
+        "SYMBOL_NOT_SUBSCRIBED": 11,
+        "MARKET_DATA_SUBSCRIPTION_OUTCOME": 68,
+        "WATCHLIST_SUBSCRIBE_REQUESTED": 4,
+        "IBKR_MARKET_DATA_SUBSCRIPTION_ACKNOWLEDGED": 10,
+        "IBKR_MARKET_DATA_SUBSCRIPTION_RECOVERED": 10,
+        "KRONOS_FORECAST_STARTED": 211,
+        "QUANT_BRIDGE_CALL_OUTCOME": 1148,
+        "QUANT_CORE_TICK_RESYNC_SENT": 22,
+        "TECHNICAL_ANALYSIS_STARTED": 363,
+        "TECHNICAL_ANALYSIS_COMPLETED": 363,
+        "QUANT_CORE_PARITY_DIVERGENCE": 78,
+        "KRONOS_FORECAST_COMPLETED": 132,
+        "KRONOS_HIGH_CONFIDENCE": 122,
+        "PRICE_SNAPSHOT_REQUESTED": 64,
+        "TEMPORARY_DATA_RESCUE_GRANTED": 61,
+        "CONFLUENCE_COORDINATOR_TRIGGERED": 82,
+        "TRADE_IDEA_GENERATED": 176,
+        "FRESH_PRICE_WAIT_OUTCOME": 64,
+        "CHIEF_CONSENSUS_STARTED": 147,
+        "AGENT_DISAGREEMENT": 37,
+        "CHIEF_CONSENSUS_COMPLETED": 147,
+        "CONSENSUS_TERMINAL_REASON": 147,
+        "CONSENSUS_MODEL_COMPARISON": 147,
+        "DESK_NO_TRADE": 188,
+        "TRADE_LIFECYCLE": 147,
+        "CONSENSUS_INTERIM_EVALUATIONS_COLLAPSED": 82,
+        "IDEA_RATE_LIMITED": 50,
+        "TEMPORARY_DATA_RESCUE_RELEASED": 12,
+        "AI_DEBATE_FAIL_CLOSED_EXCLUDED": 29,
+        "SUBSCRIPTION_EVICTED": 7,
+        "MARKET_DATA_CAPACITY_FULL": 1,
+        "TEMPORARY_DATA_RESCUE_DENIED": 3,
+        "TRADE_IDEA_REJECTED": 1,
+        "KRONOS_UNAVAILABLE": 2,
+        "QUANT_ADVISORY_ANALYSIS_COMPLETED": 1,
+        "QUANT_ASSESSMENT_COMPLETED": 41,
+        "QUANT_QUOTE_EVIDENCE": 41,
+        "QUANT_CORE_STRATEGY_PARITY_DIVERGENCE": 10,
+        "QUANT_EVIDENCE_PRODUCED": 10,
+        "QUANT_BAR_INPUT_AVAILABILITY": 5,
+        "QUANT_SELECTION_POOL": 5,
+        "IBKR_MARKET_DATA_NO_ACKNOWLEDGEMENT": 1,
+        "QUANT_SYMBOL_EVALUATION_STARTED": 1,
+        "QUANT_SYMBOL_EVALUATION_FINISHED": 1
+      },
+      "firstAdmission": 1791556061316,
+      "firstPromotion": 1791562305682,
+      "assessments": 41,
+      "rthAssessments": 39,
+      "firstAssessment": 1791569428359,
+      "emittedRows": 0,
+      "triggers": 164,
+      "reasons": {
+        "UNSPECIFIED": 147,
+        "NO_ELIGIBLE_STRATEGY": 41
+      },
+      "notes": []
+    },
+    "VCSH": {
+      "symbol": "VCSH",
+      "events": {
+        "DISCOVERY_CANDIDATE_ADMITTED": 7,
+        "DISCOVERY_CANDIDATE_FILTERED": 7
+      },
+      "firstAdmission": 1791556061174,
+      "firstPromotion": null,
+      "assessments": 0,
+      "rthAssessments": 0,
+      "firstAssessment": null,
+      "emittedRows": 0,
+      "triggers": 0,
+      "reasons": {},
+      "notes": []
+    },
+    "IGSB": {
+      "symbol": "IGSB",
+      "events": {
+        "DISCOVERY_CANDIDATE_ADMITTED": 15,
+        "DISCOVERY_CANDIDATE_FILTERED": 7
+      },
+      "firstAdmission": 1791557908608,
+      "firstPromotion": null,
+      "assessments": 0,
+      "rthAssessments": 0,
+      "firstAssessment": null,
+      "emittedRows": 0,
+      "triggers": 0,
+      "reasons": {},
+      "notes": []
+    }
+  },
+  "latency": {
+    "denominator": "FIRST_ADMISSION_PER_SESSION_SYMBOL_TO_FIRST_SUBSEQUENT_QUANT_COMPLETED_EVENT",
+    "admitted": 1789,
+    "matched": 231,
+    "unassessed": 1558,
+    "p50Ms": 774989,
+    "p95Ms": 3821833,
+    "maxMs": 11579648,
+    "slowest": [
+      {
+        "session": "sess_732f80c9-1562-418d-ad12-eed5588bbdf1",
+        "symbol": "COHR",
+        "admitted": 1791562588825,
+        "assessed": 1791574168473
+      },
+      {
+        "session": "sess_732f80c9-1562-418d-ad12-eed5588bbdf1",
+        "symbol": "SMCI",
+        "admitted": 1791562588815,
+        "assessed": 1791573083182
+      },
+      {
+        "session": "sess_732f80c9-1562-418d-ad12-eed5588bbdf1",
+        "symbol": "BAC",
+        "admitted": 1791562357524,
+        "assessed": 1791570263515
+      },
+      {
+        "session": "sess_732f80c9-1562-418d-ad12-eed5588bbdf1",
+        "symbol": "MS",
+        "admitted": 1791562305687,
+        "assessed": 1791569428358
+      },
+      {
+        "session": "sess_732f80c9-1562-418d-ad12-eed5588bbdf1",
+        "symbol": "GS",
+        "admitted": 1791561742958,
+        "assessed": 1791567141767
+      },
+      {
+        "session": "sess_732f80c9-1562-418d-ad12-eed5588bbdf1",
+        "symbol": "SBUX",
+        "admitted": 1791562588682,
+        "assessed": 1791567701914
+      },
+      {
+        "session": "sess_732f80c9-1562-418d-ad12-eed5588bbdf1",
+        "symbol": "ABBV",
+        "admitted": 1791561742943,
+        "assessed": 1791566715075
+      },
+      {
+        "session": "sess_6d99a8ba-18b6-4794-8fa5-1b796153ed4a",
+        "symbol": "SHOP",
+        "admitted": 1791554015970,
+        "assessed": 1791558740486
+      },
+      {
+        "session": "sess_d7425d42-f6c9-43eb-9b5c-496984fe43b1",
+        "symbol": "BABA",
+        "admitted": 1791577454228,
+        "assessed": 1791581665165
+      },
+      {
+        "session": "sess_732f80c9-1562-418d-ad12-eed5588bbdf1",
+        "symbol": "PFE",
+        "admitted": 1791562588681,
+        "assessed": 1791566775387
+      }
+    ]
+  },
+  "selections": {
+    "n": 913,
+    "matched": 912,
+    "triggered": 6373,
+    "eligibleTriggers": 169,
+    "excludedTriggers": 5982,
+    "quarantinedTriggers": 222
+  },
+  "cycles": [
+    {
+      "ts": 1791562596152,
+      "session": "sess_732f80c9-1562-418d-ad12-eed5588bbdf1",
+      "p": {
+        "durationMs": 1026530,
+        "concurrency": 1,
+        "attemptedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM"
+        ],
+        "completedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM"
+        ],
+        "notAttemptedSymbols": [],
+        "reason": "COMPLETED"
+      }
+    },
+    {
+      "ts": 1791575314849,
+      "session": "sess_55b0425e-3c37-4c81-ab03-23c6aa609740",
+      "p": {
+        "cycleId": "trace_QUANT_CYCLE_1791575059_989d",
+        "durationMs": 255151,
+        "concurrency": 1,
+        "attemptedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM"
+        ],
+        "completedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM"
+        ],
+        "notAttemptedSymbols": [],
+        "reason": "COMPLETED"
+      }
+    },
+    {
+      "ts": 1791576804461,
+      "session": "sess_d7425d42-f6c9-43eb-9b5c-496984fe43b1",
+      "p": {
+        "cycleId": "trace_QUANT_CYCLE_1791576533_478e",
+        "durationMs": 270975,
+        "concurrency": 1,
+        "attemptedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM"
+        ],
+        "completedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM"
+        ],
+        "notAttemptedSymbols": [],
+        "reason": "COMPLETED"
+      }
+    },
+    {
+      "ts": 1791577636768,
+      "session": "sess_d7425d42-f6c9-43eb-9b5c-496984fe43b1",
+      "p": {
+        "cycleId": "trace_QUANT_CYCLE_1791577070_8e99",
+        "durationMs": 566502,
+        "concurrency": 1,
+        "attemptedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM",
+          "DIA",
+          "SMH",
+          "XLF",
+          "XLE",
+          "XLK",
+          "SOXL",
+          "TQQQ",
+          "SQQQ",
+          "AMZN",
+          "GOOGL",
+          "GOOG",
+          "AVGO",
+          "BRK.B",
+          "JPM",
+          "V",
+          "UNH",
+          "XOM",
+          "MA",
+          "LLY",
+          "JNJ"
+        ],
+        "completedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM",
+          "DIA",
+          "SMH",
+          "XLF",
+          "XLE",
+          "XLK",
+          "SOXL",
+          "TQQQ",
+          "SQQQ",
+          "AMZN",
+          "GOOGL",
+          "GOOG",
+          "AVGO",
+          "BRK.B",
+          "JPM",
+          "V",
+          "UNH",
+          "XOM",
+          "MA",
+          "LLY",
+          "JNJ"
+        ],
+        "notAttemptedSymbols": [],
+        "reason": "COMPLETED"
+      }
+    },
+    {
+      "ts": 1791578934729,
+      "session": "sess_d7425d42-f6c9-43eb-9b5c-496984fe43b1",
+      "p": {
+        "cycleId": "trace_QUANT_CYCLE_1791577670_50e2",
+        "durationMs": 1264427,
+        "concurrency": 1,
+        "attemptedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "HOOD",
+          "COIN",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM",
+          "DIA",
+          "SMH",
+          "XLF",
+          "XLE",
+          "XLK",
+          "SOXL",
+          "TQQQ",
+          "SQQQ",
+          "AMZN",
+          "GOOGL",
+          "GOOG",
+          "AVGO",
+          "BRK.B",
+          "JPM",
+          "V",
+          "UNH",
+          "XOM",
+          "MA",
+          "LLY",
+          "JNJ",
+          "VZ",
+          "SNOW",
+          "DDOG",
+          "SNAP",
+          "NIO",
+          "OKTA",
+          "PLTR",
+          "NET",
+          "RBLX",
+          "PANW",
+          "CRWD",
+          "ORCL",
+          "SHOP",
+          "PINS",
+          "MDB",
+          "ARM",
+          "S",
+          "HPE",
+          "CSCO",
+          "ZM",
+          "CMCSA",
+          "XYZ",
+          "SBUX",
+          "RIVN",
+          "MARA",
+          "INTC",
+          "MRK",
+          "TTD",
+          "DELL",
+          "UBER",
+          "WFC",
+          "PEP",
+          "ISRG",
+          "WMT",
+          "PG",
+          "HD",
+          "COST",
+          "ABBV"
+        ],
+        "completedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "HOOD",
+          "COIN",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM",
+          "DIA",
+          "SMH",
+          "XLF",
+          "XLE",
+          "XLK",
+          "SOXL",
+          "TQQQ",
+          "SQQQ",
+          "AMZN",
+          "GOOGL",
+          "GOOG",
+          "AVGO",
+          "BRK.B",
+          "JPM",
+          "V",
+          "UNH",
+          "XOM",
+          "MA",
+          "LLY",
+          "JNJ",
+          "VZ",
+          "SNOW",
+          "DDOG",
+          "SNAP",
+          "NIO",
+          "OKTA",
+          "PLTR",
+          "NET",
+          "RBLX",
+          "PANW",
+          "CRWD",
+          "ORCL",
+          "SHOP",
+          "PINS",
+          "MDB",
+          "ARM",
+          "S",
+          "HPE",
+          "CSCO",
+          "ZM",
+          "CMCSA",
+          "XYZ",
+          "SBUX",
+          "RIVN",
+          "MARA",
+          "INTC",
+          "MRK",
+          "TTD",
+          "DELL",
+          "UBER",
+          "WFC",
+          "PEP",
+          "ISRG",
+          "WMT",
+          "PG",
+          "HD",
+          "COST",
+          "ABBV"
+        ],
+        "notAttemptedSymbols": [],
+        "reason": "COMPLETED"
+      }
+    },
+    {
+      "ts": 1791581669344,
+      "session": "sess_d7425d42-f6c9-43eb-9b5c-496984fe43b1",
+      "p": {
+        "cycleId": "trace_QUANT_CYCLE_1791579203_81fb",
+        "durationMs": 2465467,
+        "concurrency": 1,
+        "attemptedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "HOOD",
+          "COIN",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM",
+          "DIA",
+          "SMH",
+          "XLF",
+          "XLK",
+          "SOXL",
+          "TQQQ",
+          "SQQQ",
+          "AMZN",
+          "GOOGL",
+          "GOOG",
+          "AVGO",
+          "BRK.B",
+          "JPM",
+          "V",
+          "UNH",
+          "XOM",
+          "MA",
+          "LLY",
+          "JNJ",
+          "VZ",
+          "SNOW",
+          "DDOG",
+          "SNAP",
+          "NIO",
+          "OKTA",
+          "PLTR",
+          "NET",
+          "RBLX",
+          "PANW",
+          "CRWD",
+          "ORCL",
+          "SHOP",
+          "PINS",
+          "MDB",
+          "ARM",
+          "S",
+          "HPE",
+          "CSCO",
+          "ZM",
+          "CMCSA",
+          "XYZ",
+          "SBUX",
+          "RIVN",
+          "MARA",
+          "INTC",
+          "MRK",
+          "TTD",
+          "DELL",
+          "UBER",
+          "WFC",
+          "PEP",
+          "ISRG",
+          "WMT",
+          "PG",
+          "HD",
+          "ABBV",
+          "MRNA",
+          "TXN",
+          "LRCX",
+          "AMAT",
+          "MS",
+          "NU",
+          "SNDK",
+          "PATH",
+          "TEAM",
+          "TMO",
+          "CIEN",
+          "NFLX",
+          "F",
+          "GS",
+          "BA",
+          "BAC",
+          "CRM",
+          "KO",
+          "CVX",
+          "PFE",
+          "BABA",
+          "ABNB"
+        ],
+        "completedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "HOOD",
+          "COIN",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM",
+          "DIA",
+          "SMH",
+          "XLF",
+          "XLK",
+          "SOXL",
+          "TQQQ",
+          "SQQQ",
+          "AMZN",
+          "GOOGL",
+          "GOOG",
+          "AVGO",
+          "BRK.B",
+          "JPM",
+          "V",
+          "UNH",
+          "XOM",
+          "MA",
+          "LLY",
+          "JNJ",
+          "VZ",
+          "SNOW",
+          "DDOG",
+          "SNAP",
+          "NIO",
+          "OKTA",
+          "PLTR",
+          "NET",
+          "RBLX",
+          "PANW",
+          "CRWD",
+          "ORCL",
+          "SHOP",
+          "PINS",
+          "MDB",
+          "ARM",
+          "S",
+          "HPE",
+          "CSCO",
+          "ZM",
+          "CMCSA",
+          "XYZ",
+          "SBUX",
+          "RIVN",
+          "MARA",
+          "INTC",
+          "MRK",
+          "TTD",
+          "DELL",
+          "UBER",
+          "WFC",
+          "PEP",
+          "ISRG",
+          "WMT",
+          "PG",
+          "HD",
+          "ABBV",
+          "MRNA",
+          "TXN",
+          "LRCX",
+          "AMAT",
+          "MS",
+          "NU",
+          "SNDK",
+          "PATH",
+          "TEAM",
+          "TMO",
+          "CIEN",
+          "NFLX",
+          "F",
+          "GS",
+          "BA",
+          "BAC",
+          "CRM",
+          "KO",
+          "CVX",
+          "PFE",
+          "BABA",
+          "ABNB"
+        ],
+        "notAttemptedSymbols": [],
+        "reason": "COMPLETED"
+      }
+    },
+    {
+      "ts": 1791582948655,
+      "session": "sess_81560cc3-a5a9-4658-9404-1ee32691c7ff",
+      "p": {
+        "cycleId": "trace_QUANT_CYCLE_1791582672_5dff",
+        "durationMs": 276015,
+        "concurrency": 1,
+        "attemptedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM"
+        ],
+        "completedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM"
+        ],
+        "notAttemptedSymbols": [],
+        "reason": "COMPLETED"
+      }
+    },
+    {
+      "ts": 1791583557948,
+      "session": "sess_9a789506-e9a8-40bd-9090-eef3c109ace7",
+      "p": {
+        "cycleId": "trace_QUANT_CYCLE_1791583416_8a69",
+        "durationMs": 141544,
+        "concurrency": 1,
+        "attemptedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM"
+        ],
+        "completedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM"
+        ],
+        "notAttemptedSymbols": [],
+        "reason": "COMPLETED"
+      }
+    },
+    {
+      "ts": 1791584111705,
+      "session": "sess_328bc97f-b9d0-4897-a421-535c64ecaa06",
+      "p": {
+        "cycleId": "trace_QUANT_CYCLE_1791584071_e4d5",
+        "durationMs": 40171,
+        "concurrency": 1,
+        "attemptedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM"
+        ],
+        "completedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM"
+        ],
+        "notAttemptedSymbols": [],
+        "reason": "COMPLETED"
+      }
+    },
+    {
+      "ts": 1791584954609,
+      "session": "sess_328bc97f-b9d0-4897-a421-535c64ecaa06",
+      "p": {
+        "cycleId": "trace_QUANT_CYCLE_1791584632_2066",
+        "durationMs": 322605,
+        "concurrency": 1,
+        "attemptedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM",
+          "NIO",
+          "OKTA",
+          "HPE",
+          "S",
+          "RIVN",
+          "DELL",
+          "TTD",
+          "PATH",
+          "AI",
+          "ABNB",
+          "TSM",
+          "LRCX",
+          "ASML",
+          "F",
+          "KLAC",
+          "LCID",
+          "GM",
+          "DAL",
+          "MRVL",
+          "CSX"
+        ],
+        "completedSymbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AMD",
+          "AAPL",
+          "MSFT",
+          "META",
+          "GLD",
+          "TSLA",
+          "IWM",
+          "NIO",
+          "OKTA",
+          "HPE",
+          "S",
+          "RIVN",
+          "DELL",
+          "TTD",
+          "PATH",
+          "AI",
+          "ABNB",
+          "TSM",
+          "LRCX",
+          "ASML",
+          "F",
+          "KLAC",
+          "LCID",
+          "GM",
+          "DAL",
+          "MRVL",
+          "CSX"
+        ],
+        "notAttemptedSymbols": [],
+        "reason": "COMPLETED"
+      }
+    }
+  ],
+  "authority": {
+    "[REDACTED]:[REDACTED]:": 47,
+    "REQUIRES_CONSENSUS:NO_STRATEGY_ID:": 145,
+    "NOT_AUTHORIZED:NO_LIFECYCLE_RECORD:": 755
+  },
+  "errors": {
+    "NEWS_PROVIDER_FAILED:UNSPECIFIED": 2998,
+    "IBKR_HISTORICAL_DATA_ERROR:200": 322,
+    "QUANT_BRIDGE_MALFORMED_RESPONSE:UNSPECIFIED": 61
+  },
+  "providerStatus": {
+    "4afb8961-8fbf-4753-abfe-199d303a5102:error": {
+      "n": 6156,
+      "p95Ms": 61842,
+      "maxMs": 376205,
+      "currentProviderLabel": "Ollama (Local)"
+    },
+    "64809fae-e670-4325-b479-e178c018074b:error": {
+      "n": 278,
+      "p95Ms": 14290,
+      "maxMs": 231236,
+      "currentProviderLabel": "Gemini"
+    },
+    "ea9503ef-6759-442b-bc0c-ac63dad7787a:error": {
+      "n": 2293,
+      "p95Ms": 34314,
+      "maxMs": 245164,
+      "currentProviderLabel": "NVIDIA"
+    },
+    "72a7de39-1859-413a-8fac-89fcf5967295:error": {
+      "n": 562,
+      "p95Ms": 35609,
+      "maxMs": 88824,
+      "currentProviderLabel": "OpenRouter (Free Tier)"
+    },
+    "7882d1ad-71b0-4231-aade-8237c9b3dcd3:error": {
+      "n": 553,
+      "p95Ms": 15030,
+      "maxMs": 42598,
+      "currentProviderLabel": "OpenRouter"
+    },
+    "c0904948-916d-436a-a289-07ba788e1cef:error": {
+      "n": 694,
+      "p95Ms": 16001,
+      "maxMs": 51999,
+      "currentProviderLabel": "Kimi"
+    },
+    "ec013fbf-076c-421e-84a1-c32196346f23:error": {
+      "n": 108,
+      "p95Ms": 6109,
+      "maxMs": 10168,
+      "currentProviderLabel": "Claude"
+    },
+    "2f4747c9-6091-4edd-82e1-a5bf9de59fc7:error": {
+      "n": 140,
+      "p95Ms": 16021,
+      "maxMs": 64429,
+      "currentProviderLabel": "OpenAI"
+    },
+    "271db452-70eb-40c0-9823-cebf05ac8711:error": {
+      "n": 1353,
+      "p95Ms": 33664,
+      "maxMs": 90374,
+      "currentProviderLabel": "Mistral"
+    },
+    "0430f552-2545-419d-b47d-fc8694110e92:error": {
+      "n": 1204,
+      "p95Ms": 32575,
+      "maxMs": 245195,
+      "currentProviderLabel": "LiteLLM Gateway"
+    },
+    "ea9503ef-6759-442b-bc0c-ac63dad7787a:success": {
+      "n": 270,
+      "p95Ms": 21721,
+      "maxMs": 68985,
+      "currentProviderLabel": "NVIDIA"
+    },
+    "4afb8961-8fbf-4753-abfe-199d303a5102:success": {
+      "n": 11,
+      "p95Ms": 347708,
+      "maxMs": 347708,
+      "currentProviderLabel": "Ollama (Local)"
+    },
+    "64809fae-e670-4325-b479-e178c018074b:success": {
+      "n": 2,
+      "p95Ms": 3207,
+      "maxMs": 3207,
+      "currentProviderLabel": "Gemini"
+    }
+  },
+  "daily": {
+    "2026-10-08": {
+      "DISCOVERY_CANDIDATE_ADMITTED": 13608,
+      "SUBSCRIPTION_PROMOTED": 552,
+      "QUANT_ASSESSMENT_COMPLETED": 6907,
+      "QUANT_EVIDENCE_PRODUCED": 4017,
+      "TRADE_IDEA_GENERATED": 43405,
+      "CHIEF_APPROVED_IDEA": 0
+    },
+    "2026-10-09": {
+      "DISCOVERY_CANDIDATE_ADMITTED": 5450,
+      "SUBSCRIPTION_PROMOTED": 640,
+      "QUANT_ASSESSMENT_COMPLETED": 6611,
+      "QUANT_EVIDENCE_PRODUCED": 2113,
+      "TRADE_IDEA_GENERATED": 29259,
+      "CHIEF_APPROVED_IDEA": 0
+    }
+  },
+  "terminalReasons": {
+    "2026-10-08": {
+      "reasons": {
+        "CONFIDENCE_BELOW_STRONG": 26406,
+        "AGENT_HOLD": 190,
+        "AGENT_DATA_UNAVAILABLE": 469,
+        "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 80,
+        "MODERATE_REJECT_CALIBRATION": 7,
+        "INSUFFICIENT_AGENT_PARTICIPATION": 4
+      },
+      "groups": {
+        "0": 661,
+        "1": 24189,
+        "2": 2277,
+        "3": 29
+      }
+    },
+    "2026-10-09": {
+      "reasons": {
+        "CONFIDENCE_BELOW_STRONG": 21958,
+        "AGENT_DATA_UNAVAILABLE": 268,
+        "AGENT_HOLD": 282,
+        "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 20,
+        "MODERATE_REJECT_CALIBRATION": 1
+      },
+      "groups": {
+        "0": 551,
+        "1": 20575,
+        "2": 1403
+      }
+    }
+  },
+  "assessmentMetrics": {
+    "2026-10-08": {
+      "n": 6907,
+      "timeframes": {
+        "1Day": 6907
+      },
+      "results": 144060,
+      "triggers": 44706,
+      "buyTriggers": 22493,
+      "emitted": 511,
+      "strategies": {
+        "RANGE_REVERSION": 6745,
+        "MA_CROSSOVER": 6759,
+        "OSCILLATOR_MOMENTUM": 5704,
+        "RELATIVE_STRENGTH_ROTATION": 6427,
+        "BOLLINGER_VOLATILITY": 1195,
+        "GAP_CONTINUATION": 3943,
+        "PREVIOUS_PERIOD_BREAKOUT": 4103,
+        "FIBONACCI_PULLBACK": 309,
+        "TREND_FOLLOWING": 133,
+        "PULLBACK_CONTINUATION": 1834,
+        "VWAP_VOLUME_STRUCTURE": 2066,
+        "MEAN_REVERSION": 581,
+        "MOMENTUM_BREAKOUT": 597,
+        "DONCHIAN_CHANNEL_BREAKOUT": 934,
+        "VOLUME_CONFIRMATION": 33,
+        "CANDLESTICK_REVERSAL": 502,
+        "SR_BOUNCE": 386,
+        "STATISTICAL_MEAN_REVERSION": 61,
+        "OPENING_RANGE_BREAKOUT": 2182,
+        "VWAP_MEAN_REVERSION": 212
+      }
+    },
+    "2026-10-09": {
+      "n": 6614,
+      "timeframes": {
+        "1Day": 6614
+      },
+      "results": 137697,
+      "triggers": 47416,
+      "buyTriggers": 23275,
+      "emitted": 861,
+      "strategies": {
+        "RANGE_REVERSION": 6441,
+        "MA_CROSSOVER": 6386,
+        "OSCILLATOR_MOMENTUM": 5184,
+        "RELATIVE_STRENGTH_ROTATION": 6077,
+        "BOLLINGER_VOLATILITY": 1284,
+        "FIBONACCI_PULLBACK": 437,
+        "PULLBACK_CONTINUATION": 1688,
+        "GAP_CONTINUATION": 4049,
+        "VWAP_VOLUME_STRUCTURE": 1836,
+        "OPENING_RANGE_BREAKOUT": 5134,
+        "PREVIOUS_PERIOD_BREAKOUT": 4265,
+        "CANDLESTICK_REVERSAL": 414,
+        "SR_BOUNCE": 256,
+        "MEAN_REVERSION": 619,
+        "TREND_FOLLOWING": 116,
+        "DONCHIAN_CHANNEL_BREAKOUT": 1202,
+        "MOMENTUM_BREAKOUT": 716,
+        "STATISTICAL_MEAN_REVERSION": 173,
+        "VOLUME_CONFIRMATION": 172,
+        "VWAP_MEAN_REVERSION": 967
+      }
+    }
+  },
+  "supplement": {
+    "queriedAt": "2026-10-10T02:54:28.788Z",
+    "scope": "SUPPLEMENTAL_READ_NOT_THE_ORIGINAL_SNAPSHOT",
+    "cryptoOrders": {
+      "n": 0
+    }
+  },
+  "rawEvidence": {
+    "directory": "C:\\WorkProjects\\Multi-Agent-AI-Trading-Platform\\data\\backups\\forensic-2026-10-09-184442",
+    "hashAlgorithm": "SHA256",
+    "hashes": {
+      "manifest.json": "a76e06c8d98a5ac04be59cd62ec5119c890130968e3c89c52b86def4af19f19a",
+      "counts.json": "96c84609d3f57e1c027d703e3940e6f80ef44e6e02435e2e96b02386baaa432b",
+      "schema.json": "38b6f082c00e4ee9923feebc744a0b30622db09db705464b72a5df940dedcb92",
+      "quant_assessments.json": "621662f3d4bb10b9ddd6d4054234e0f08366d319b579cef10659118de89eed8d",
+      "consensus_decisions.json": "1ade692249ece5a3c4c977f25c22b68f5795b94998bd266724beff9bee6b14fa",
+      "risk_assessments.json": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "trades.json": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "fills.json": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "ai_calls.json": "7a1212902609cbf3ad86dedc3c9a2acf9c82fc57eac2ac2893f5598ba98e6ff6",
+      "learning_versions.json": "2bb68d95383fdc13a5c67b605cec2ce8fd31eaa67de15868ca5e0f80974f1996",
+      "trade_plans.json": "c6e7467b1e3b83e76649dc07abc2242cf50e5e43614856484178526675db7baf",
+      "kill_switch_events.json": "e1451c1c9035f4a0112f5a21c921df8189b59304ea48559ca60fdb7f41bf48dd",
+      "config_change_events.json": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "events.jsonl": "16db0c8020685c625452712d83d16b4ca96cd6ace8b217b303bac3191fdc8011"
+    }
+  }
+}

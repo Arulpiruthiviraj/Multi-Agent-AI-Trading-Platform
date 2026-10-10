@@ -1,3 +1,4 @@
+// LABEL: MECHANISM_E2E - evolution pipeline demonstration on synthetic fixtures. The honest proof here is the FAIL-CLOSED gate: SYNTHETIC_TEST_DATA is rejected at promotion by isPromotableProvenance(). Promotion mechanics proven only via direct-evaluation fixtures. Not production strategy selection.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';

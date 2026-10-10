@@ -1,3 +1,4 @@
+// LABEL: COMPONENT - proves replay ledger building and AI-replay availability plumbing. Data-pipeline coverage, not a trading proof.
 import { describe, it, expect } from 'vitest';
 import { aiHistoricalReplayAvailability } from './aiReplayAvailability';
 import { buildReplayLedger, overconfidenceFlags } from './buildReplayLedger';

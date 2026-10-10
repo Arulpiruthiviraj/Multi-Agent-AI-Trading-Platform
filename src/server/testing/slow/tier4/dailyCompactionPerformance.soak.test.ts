@@ -1,3 +1,4 @@
+// LABEL: SOAK - performance measurement of daily compaction at seeded event volumes in a temp DB (tier-4, off the fast suite). Measures compaction throughput, not trading.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';

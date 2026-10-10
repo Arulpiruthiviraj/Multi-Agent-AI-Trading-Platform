@@ -1,3 +1,4 @@
+// LABEL: MECHANISM_E2E - proves the spine CAN execute when two hand-placed, already-agreeing ideas are written directly into ChiefTrader's recentIdeas (the agents never actually evaluated anything) and clear consensus. Does NOT prove independent agent emission, production lifecycle state, scheduler timing, or IBKR behavior (InternalPaperBroker; fictional 'CNDE' symbol; hand-cached quotes).
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';

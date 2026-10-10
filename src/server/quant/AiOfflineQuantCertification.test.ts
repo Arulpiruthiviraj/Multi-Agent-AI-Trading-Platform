@@ -1,3 +1,4 @@
+// LABEL: MECHANISM_E2E - proves the all-AI-down quant spine CAN flow idea -> policy -> Risk -> OMS -> paper fill WHEN GIVEN a seeded VALIDATED lifecycle, seeded track record, and synthetic bars. Does NOT prove production readiness: production holds ZERO authorized strategies, so the outcome it demonstrates is not producible on the live DB.
 /**
  * Phase 17 — AI-offline certification for the Quant-First Decision Architecture.
  *

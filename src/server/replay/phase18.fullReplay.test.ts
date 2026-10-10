@@ -1,3 +1,4 @@
+// LABEL: POINT_IN_TIME_REPLAY - proves look-ahead, provider, broker, and honesty properties of the full replay harness on synthetic historical fixtures. Not organic trading evidence.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';

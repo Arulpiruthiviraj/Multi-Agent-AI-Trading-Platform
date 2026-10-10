@@ -1,3 +1,4 @@
+// LABEL: COMPONENT - proves the synthetic news injector drives a caller-supplied article through the real NewsEngine pipeline to a real TRADE_IDEA_GENERATED with point-in-time gating. 'Certifies' the injector only (explicitly scoped by the file itself); does NOT prove News+Quant independent consensus round trip.
 /**
  * Part A verification (per the mission's own instruction): proves the new
  * SyntheticInjectableNewsProvider actually drives a caller-supplied article through the REAL

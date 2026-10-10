@@ -1,3 +1,4 @@
+// LABEL: ARCHITECTURE_INVARIANT - proves the synthetic clock-override stays importable only inside the synthetic/forensic harness. Code-shape guarantee, not a runtime trading proof.
 /**
  * Unit + architecture-boundary tests for SyntheticWallClockOverride.ts. See that file's header for
  * the design principle this exists to prove: it controls WHEN the real evaluator cycle methods
