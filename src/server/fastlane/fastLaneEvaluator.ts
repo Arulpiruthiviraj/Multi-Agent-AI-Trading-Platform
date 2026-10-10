@@ -36,13 +36,20 @@ import {
   logFastEvaluationValidEvidence,
   logFastEvaluationExpired,
   logFastEvaluationFailed,
+  logFastEvaluationLeaseState,
 } from './fastLaneObservability';
 
 // 2026-10-06 (concurrency/dedup guard, Fast Lane Evaluator spec §16-17): bounded concurrency +
 // same-symbol race prevention. In-memory only, matches the established pattern every sibling
 // fast-lane module uses (no new persistent state). Coalesces concurrent calls for the SAME symbol
 // onto the SAME in-flight promise rather than running duplicate evaluations.
-const inFlightBySymbol = new Map<string, Promise<FastEvaluationResult>>();
+interface InFlightEvaluation {
+  response: Promise<FastEvaluationResult>;
+  work: Promise<unknown> | null;
+  responseFinished: boolean;
+  workSettled: boolean;
+}
+const inFlightBySymbol = new Map<string, InFlightEvaluation>();
 const lastEvaluatedAtBySymbol = new Map<string, number>();
 let activeEvaluationCount = 0;
 
@@ -81,9 +88,10 @@ function makeResult(
  * function are suppressed for fast-lane evaluations.
  *
  * 2026-10-08 (D4): a hung evaluateSymbol() promise can no longer leak a concurrency slot
- * forever - the evaluation races a tradingSafety.fastLaneEvaluationTimeoutMs watchdog; on
- * timeout the candidate is terminally transitioned and the slot released via the normal
- * finally path in evaluateFastCandidate().
+ * forever from the caller's perspective - the evaluation races the configured watchdog.
+ * Timeout is not cancellation: caller gets a bounded error, but the governor and same-symbol
+ * lease remain occupied until actual work settles. A truly hung worker needs recovery;
+ * admitting replacements would make the concurrency bound a lie.
  */
 export async function evaluateFastCandidate(candidateId: string): Promise<FastEvaluationResult> {
   const candidate = fastLaneManager.getCandidate(candidateId);
@@ -100,7 +108,11 @@ export async function evaluateFastCandidate(candidateId: string): Promise<FastEv
 
   // Dedup: coalesce concurrent calls for the same symbol onto one in-flight evaluation.
   const existing = inFlightBySymbol.get(candidate.symbol);
-  if (existing) return existing;
+  if (existing) {
+    return existing.responseFinished
+      ? makeResult(candidate, 'ERROR', ['SYMBOL_EVALUATION_STILL_RUNNING'])
+      : existing.response;
+  }
 
   // Per-symbol cooldown: prevent repeated near-simultaneous detections from re-evaluating the
   // same symbol faster than fastLaneSymbolEvaluationCooldownMs.
@@ -115,19 +127,36 @@ export async function evaluateFastCandidate(candidateId: string): Promise<FastEv
     return makeResult(candidate, 'ERROR', ['MAX_CONCURRENT_EVALUATIONS_REACHED']);
   }
 
-  const promise = runEvaluation(candidateId, candidate.symbol);
-  inFlightBySymbol.set(candidate.symbol, promise);
-  activeEvaluationCount += 1;
-  try {
-    return await promise;
-  } finally {
+  let flight!: InFlightEvaluation;
+  const release = () => {
+    // Reset/old completions must not delete a newer lease or decrement its count.
+    if (inFlightBySymbol.get(candidate.symbol) !== flight) return;
     activeEvaluationCount -= 1;
     inFlightBySymbol.delete(candidate.symbol);
     lastEvaluatedAtBySymbol.set(candidate.symbol, Date.now());
-  }
+    logFastEvaluationLeaseState(candidateId, candidate.symbol, 'RELEASED', activeEvaluationCount, tradingSafety.fastLaneMaxConcurrentEvaluations);
+  };
+  const response = Promise.resolve()
+    .then(() => runEvaluation(candidateId, candidate.symbol, work => {
+      flight.work = work;
+      void work.then(() => { flight.workSettled = true; }, () => { flight.workSettled = true; });
+    }))
+    .finally(() => {
+      flight.responseFinished = true;
+      if (flight.work && !flight.workSettled) {
+        logFastEvaluationLeaseState(candidateId, candidate.symbol, 'AWAITING_WORK_SETTLEMENT', activeEvaluationCount, tradingSafety.fastLaneMaxConcurrentEvaluations);
+        void flight.work.then(release, release);
+      } else release();
+    });
+  flight = { response, work: null, responseFinished: false, workSettled: false };
+  // Acquire before any provider/strategy work, including synchronous reentrancy.
+  inFlightBySymbol.set(candidate.symbol, flight);
+  activeEvaluationCount += 1;
+  logFastEvaluationLeaseState(candidateId, candidate.symbol, 'EVALUATING', activeEvaluationCount, tradingSafety.fastLaneMaxConcurrentEvaluations);
+  return response;
 }
 
-async function runEvaluation(candidateId: string, symbol: string): Promise<FastEvaluationResult> {
+async function runEvaluation(candidateId: string, symbol: string, trackWork: (work: Promise<unknown>) => void): Promise<FastEvaluationResult> {
   const candidate = fastLaneManager.getCandidate(candidateId);
   if (!candidate) return makeResult({ id: candidateId, symbol }, 'ERROR', ['CANDIDATE_NOT_FOUND']);
 
@@ -140,7 +169,7 @@ async function runEvaluation(candidateId: string, symbol: string): Promise<FastE
   // D4 (2026-10-08): liveness watchdog. evaluateSymbol() is awaited, but a promise that never
   // settles would skip the finally in evaluateFastCandidate() and permanently leak one of the
   // bounded concurrency slots. Race it against the configured timeout; on timeout the candidate
-  // is terminally transitioned (NO_SETUP with an honest reason) and the slot is released.
+  // is terminally transitioned (NO_SETUP with an honest reason); its lease remains until settlement.
   // D1 (2026-10-08): { emitIdeas: false } - this is a pure evaluation, never a vote.
   let timedOut = false;
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -151,10 +180,9 @@ async function runEvaluation(candidateId: string, symbol: string): Promise<FastE
         resolve(null);
       }, tradingSafety.fastLaneEvaluationTimeoutMs);
     });
-    evaluation = await Promise.race([
-      quantSignalAgent.evaluateSymbol(symbol, { emitIdeas: false }),
-      timeoutPromise,
-    ]);
+    const work = quantSignalAgent.evaluateSymbol(symbol, { emitIdeas: false });
+    trackWork(work);
+    evaluation = await Promise.race([work, timeoutPromise]);
   } catch (e) {
     logFastEvaluationFailed(candidateId, symbol, e instanceof Error ? e.name : 'UNKNOWN_ERROR');
     fastLaneManager.transitionState(candidateId, 'NO_SETUP', 'strategy evaluation threw');
@@ -164,14 +192,14 @@ async function runEvaluation(candidateId: string, symbol: string): Promise<FastE
   }
 
   if (timedOut) {
-    // The underlying promise may still be pending; it holds no slot (the slot is released by the
-    // caller) and its eventual settlement is discarded - it can no longer transition this
+    // Pending underlying work retains its governor and same-symbol lease.
+    // Its eventual result is discarded - it can no longer transition this
     // terminally-closed candidate because expireStale() deletes terminal records.
     logFastEvaluationFailed(candidateId, symbol, 'EVALUATION_TIMEOUT');
     fastLaneManager.transitionState(
       candidateId,
       'NO_SETUP',
-      `strategy evaluation exceeded fastLaneEvaluationTimeoutMs (${tradingSafety.fastLaneEvaluationTimeoutMs}ms) - abandoned, slot released`,
+      `strategy evaluation exceeded fastLaneEvaluationTimeoutMs (${tradingSafety.fastLaneEvaluationTimeoutMs}ms) - caller timed out, slot retained until work settles`,
     );
     return makeResult(candidate, 'ERROR', ['EVALUATION_TIMEOUT'], { dataSufficiency });
   }
@@ -225,4 +253,16 @@ export function resetFastLaneEvaluatorForTests(): void {
 /** For tests/observability: current in-flight evaluation count. */
 export function fastLaneActiveEvaluationCountForTests(): number {
   return activeEvaluationCount;
+}
+
+/** Operator diagnostics distinguish caller timeout from actual work settlement. */
+export function getFastLaneEvaluatorDiagnostics() {
+  return {
+    activeWorkCount: activeEvaluationCount,
+    maximumConcurrentWork: tradingSafety.fastLaneMaxConcurrentEvaluations,
+    inFlight: Array.from(inFlightBySymbol, ([symbol, flight]) => ({
+      symbol,
+      state: flight.responseFinished ? 'AWAITING_WORK_SETTLEMENT' : 'EVALUATING',
+    })),
+  };
 }

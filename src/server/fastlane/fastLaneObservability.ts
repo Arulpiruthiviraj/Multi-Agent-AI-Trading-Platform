@@ -220,3 +220,14 @@ export function logFastResourcePromotionRequested(
     });
   });
 }
+/** A timed-out caller is not a cancelled provider/Quant worker. */
+export function logFastEvaluationLeaseState(
+  candidateId: string, symbol: string,
+  state: 'EVALUATING' | 'AWAITING_WORK_SETTLEMENT' | 'RELEASED',
+  activeWorkCount: number, maximumConcurrentWork: number,
+): void {
+  observeSafe(() => structuredLogger.info('fast_evaluation_lease_state', {
+    category: 'FAST_LANE', eventType: 'FAST_EVALUATION_LEASE_STATE',
+    candidateId, symbol, state, activeWorkCount, maximumConcurrentWork,
+  }));
+}

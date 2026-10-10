@@ -5,6 +5,7 @@ import {
   evaluateFastCandidate,
   resetFastLaneEvaluatorForTests,
   fastLaneActiveEvaluationCountForTests,
+  getFastLaneEvaluatorDiagnostics,
 } from './fastLaneEvaluator';
 import { tradingSafety } from '../config/tradingSafety';
 
@@ -168,17 +169,123 @@ describe('fastLaneEvaluator (research/paper only, no execution authority)', () =
     expect(spy).toHaveBeenCalledWith('IIIII', { emitIdeas: false });
   });
 
-  it('D4: a hung evaluation hits the watchdog - candidate terminally transitioned, concurrency slot released', async () => {
+  it('a timeout must retain the governor slot until the underlying work really settles', async () => {
+    const originalTimeout = tradingSafety.fastLaneEvaluationTimeoutMs;
+    const originalMax = tradingSafety.fastLaneMaxConcurrentEvaluations;
+    (tradingSafety as any).fastLaneEvaluationTimeoutMs = 20;
+    (tradingSafety as any).fastLaneMaxConcurrentEvaluations = 1;
+    let finish!: (value: null) => void;
+    const underlying = new Promise<null>(resolve => { finish = resolve; });
+    try {
+      const first = inject('LEASE');
+      const next = inject('NEXT');
+      const spy = vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockImplementation(() => underlying);
+      const result = await evaluateFastCandidate(first.id);
+      expect(result.reasonCodes).toContain('EVALUATION_TIMEOUT');
+      expect(fastLaneActiveEvaluationCountForTests()).toBe(1);
+      expect(getFastLaneEvaluatorDiagnostics().inFlight).toEqual([{ symbol: 'LEASE', state: 'AWAITING_WORK_SETTLEMENT' }]);
+      expect((await evaluateFastCandidate(first.id)).reasonCodes).toContain('SYMBOL_EVALUATION_STILL_RUNNING');
+      const refused = await evaluateFastCandidate(next.id);
+      expect(refused.reasonCodes).toContain('MAX_CONCURRENT_EVALUATIONS_REACHED');
+      expect(spy).toHaveBeenCalledTimes(1);
+      finish(null);
+      await underlying;
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(fastLaneActiveEvaluationCountForTests()).toBe(0);
+      expect(fastLaneManager.getCandidate(first.id)?.state).toBe('NO_SETUP');
+      spy.mockResolvedValue(null);
+      await evaluateFastCandidate(next.id);
+      expect(spy).toHaveBeenCalledTimes(2);
+    } finally {
+      finish(null);
+      (tradingSafety as any).fastLaneEvaluationTimeoutMs = originalTimeout;
+      (tradingSafety as any).fastLaneMaxConcurrentEvaluations = originalMax;
+    }
+  });
+
+  it('a late rejection releases exactly one retained lease without reviving a timed-out candidate', async () => {
+    const originalTimeout = tradingSafety.fastLaneEvaluationTimeoutMs;
+    (tradingSafety as any).fastLaneEvaluationTimeoutMs = 20;
+    let reject!: (reason: Error) => void;
+    const underlying = new Promise<null>((_, fail) => { reject = fail; });
+    try {
+      const c = inject('REJCT');
+      vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockImplementation(() => underlying);
+      expect((await evaluateFastCandidate(c.id)).reasonCodes).toContain('EVALUATION_TIMEOUT');
+      expect(fastLaneActiveEvaluationCountForTests()).toBe(1);
+      reject(new Error('late provider failure'));
+      await underlying.catch(() => undefined);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(fastLaneActiveEvaluationCountForTests()).toBe(0);
+      expect(getFastLaneEvaluatorDiagnostics().inFlight).toEqual([]);
+      expect(fastLaneManager.getCandidate(c.id)?.state).toBe('NO_SETUP');
+    } finally {
+      reject(new Error('cleanup'));
+      (tradingSafety as any).fastLaneEvaluationTimeoutMs = originalTimeout;
+    }
+  });
+
+  it('an old completion after reset cannot release a newer same-symbol lease', async () => {
+    const originalTimeout = tradingSafety.fastLaneEvaluationTimeoutMs;
+    (tradingSafety as any).fastLaneEvaluationTimeoutMs = 20;
+    let finishOld!: (value: null) => void;
+    let finishNew!: (value: null) => void;
+    const oldWork = new Promise<null>(resolve => { finishOld = resolve; });
+    const newWork = new Promise<null>(resolve => { finishNew = resolve; });
+    try {
+      const c = inject('RESET');
+      vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockImplementationOnce(() => oldWork).mockImplementationOnce(() => newWork);
+      expect((await evaluateFastCandidate(c.id)).reasonCodes).toContain('EVALUATION_TIMEOUT');
+      resetFastLaneEvaluatorForTests();
+      const response = evaluateFastCandidate(c.id);
+      await Promise.resolve();
+      finishOld(null);
+      await oldWork;
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(fastLaneActiveEvaluationCountForTests()).toBe(1);
+      expect(getFastLaneEvaluatorDiagnostics().inFlight[0]?.symbol).toBe('RESET');
+      finishNew(null);
+      await response;
+      expect(fastLaneActiveEvaluationCountForTests()).toBe(0);
+    } finally {
+      finishOld(null);
+      finishNew(null);
+      (tradingSafety as any).fastLaneEvaluationTimeoutMs = originalTimeout;
+    }
+  });
+
+  it('acquires capacity before a synchronous provider callback can reenter admission', async () => {
+    const originalMax = tradingSafety.fastLaneMaxConcurrentEvaluations;
+    (tradingSafety as any).fastLaneMaxConcurrentEvaluations = 1;
+    try {
+      const first = inject('OWNER');
+      const second = inject('OTHER');
+      let reentered!: Promise<any>;
+      const spy = vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockImplementation(() => {
+        expect(fastLaneActiveEvaluationCountForTests()).toBe(1);
+        reentered = evaluateFastCandidate(second.id);
+        return Promise.resolve(null);
+      });
+      await evaluateFastCandidate(first.id);
+      expect((await reentered).reasonCodes).toContain('MAX_CONCURRENT_EVALUATIONS_REACHED');
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(fastLaneActiveEvaluationCountForTests()).toBe(0);
+    } finally {
+      (tradingSafety as any).fastLaneMaxConcurrentEvaluations = originalMax;
+    }
+  });
+
+  it('D4: a hung evaluation times out for the caller without pretending to cancel work', async () => {
     const originalTimeout = tradingSafety.fastLaneEvaluationTimeoutMs;
     (tradingSafety as any).fastLaneEvaluationTimeoutMs = 50;
     try {
       const c = inject('JJJJJ');
-      // A promise that never settles - the pre-fix code leaked its concurrency slot forever.
+      // Never-settling work stays counted until genuine cancellation or settlement.
       vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockImplementation(() => new Promise(() => {}) as any);
       const result = await evaluateFastCandidate(c.id);
       expect(result.status).toBe('ERROR');
       expect(result.reasonCodes).toContain('EVALUATION_TIMEOUT');
-      expect(fastLaneActiveEvaluationCountForTests()).toBe(0); // slot released, lane not wedged
+      expect(fastLaneActiveEvaluationCountForTests()).toBe(1);
       // Candidate terminally transitioned to NO_SETUP with an honest reason (kept until its TTL
       // elapses per D2's bounded-retention rule, then swept).
       expect(fastLaneManager.getCandidate(c.id)?.state).toBe('NO_SETUP');

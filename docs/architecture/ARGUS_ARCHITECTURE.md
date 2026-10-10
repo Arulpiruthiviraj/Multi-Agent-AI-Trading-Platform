@@ -4642,3 +4642,26 @@ This control-plane repair does not implement an indicator, change strategy selec
 grant lifecycle authority or alter any decision/execution gate. It is isolated and
 not deployed by the forensic mission. Regression coverage uses real isolated SQLite
 and replaces only the external provider boundary.
+## October 9 follow-up: Fast Lane timeout is not cancellation
+
+The Fast Lane governor now retains both its concurrency slot and same-symbol lease
+after a caller timeout until the real `evaluateSymbol(..., { emitIdeas: false })`
+promise settles. Previously `Promise.race` returned an error and released admission
+while underlying work continued, permitting repeated timeout/replacement cycles to
+exceed the configured concurrency limit. A controlled pending-work regression failed
+on that implementation and passes with the retained lease.
+
+Acquisition precedes strategy/provider execution, including synchronous reentrancy.
+Concurrent callers still coalesce while the response is pending; callers arriving
+after timeout receive `SYMBOL_EVALUATION_STILL_RUNNING`. Late resolution/rejection
+releases exactly the owned lease, never revives a terminal candidate or releases a
+newer lease. `FAST_EVALUATION_LEASE_STATE` persists EVALUATING,
+AWAITING_WORK_SETTLEMENT and RELEASED with active/maximum work counts.
+`getFastLaneEvaluatorDiagnostics()` exposes the same current distinction.
+
+A genuinely never-settling operation remains capacity-consuming. This is an honest
+bound, not a cancellation implementation or a liveness certificate; provider deadlines
+and explicit recovery remain necessary. Evaluation remains research-only and cannot
+emit ideas or orders. No concurrency/timeout threshold was increased. The defect is
+proven by source and controlled regression; its causal contribution to October 9's
+resource stalls is unverified. This repair remains isolated, not deployed.
