@@ -4622,3 +4622,23 @@ Verification checkpoint (2026-10-09, isolated branch `codex/argus-session-repair
 
 Runtime evidence remains separate: the main checkout's source-launched PAPER PID 22412 was paused after an unclean restart not issued by this repair batch. A watchdog-observed health/heartbeat stall during verification recovered in the same PID without a restart; memory fell, but the cause is unproven. Read-only recovery checks returned broker synchronization READY, clean last reconciliation, no positions and zero reported open orders. The current Quant-readiness endpoint still reports 21 strategies, zero authorized, 20 missing lifecycle and one retired. No new lifecycle records, deployment, flag activation or trading resume occurred. No organic edge, enabled-feature soak, full point-in-time availability or multi-hour reliability certificate is claimed.
 Final operational probe at 2026-10-09 16:59 ET: the main engine's authenticated runtime-status request timed out again and the existing watchdog returned to SUSPECT (tick 2/10; PID alive, health false). The earlier recovery was not sustained reliability. Current trading state could not be freshly read; the last authenticated state was PAPER/TRADING_PAUSED. This recurring runtime stall remains unresolved and blocks stronger readiness/deployment claims. The isolated repair build is not the running engine.
+# October 9 full-session forensic follow-up: historical cache-tail refresh
+
+`HistoricalDataGateway.ensureBars` no longer treats a sufficient daily sample count as
+proof that the requested window's tail has been fetched. A daily tail older than
+`quantScheduling.dailyCacheTailRefreshGapMs` triggers the existing registered-provider
+path, even with enough samples. The four-calendar-day tolerance is a conservative
+refresh heuristic covering a normal weekend plus one holiday, **not an exchange
+calendar or freshness certificate**. Historical requests compare against their own
+end, never today's wall clock. Minute-bar behavior is unchanged.
+
+Stale-tail attempts share a bounded per-window retry schedule using the gateway's
+existing working-set bound and `staleCacheRefreshCooldownMs` (five minutes, matching
+the ordinary Quant cycle). Empty/failing real providers retain existing cache fallback
+semantics, timestamps and source. A failed attempt never makes old bars current.
+Synthetic isolation remains prior to provider access. All bars still come through
+the established provider registry/Alpaca path, pacing, bounded requests and pagination.
+This control-plane repair does not implement an indicator, change strategy selection,
+grant lifecycle authority or alter any decision/execution gate. It is isolated and
+not deployed by the forensic mission. Regression coverage uses real isolated SQLite
+and replaces only the external provider boundary.

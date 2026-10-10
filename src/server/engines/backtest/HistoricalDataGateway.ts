@@ -91,6 +91,9 @@ export class HistoricalDataGateway {
    * see that config field's own doc comment for how the bound was chosen.
    */
   private memoryBars = new Map<string, { bars: Bar[]; expiresAt: number }>();
+  // Control-plane retry scheduling, not bar freshness or a second data source.
+  // Bound stale-tail attempts by the existing gateway working-set limit.
+  private staleTailRefreshAttempts = new Map<string, number>();
 
   private cacheGet(key: string): { bars: Bar[]; expiresAt: number } | undefined {
     const hit = this.memoryBars.get(key);
@@ -215,7 +218,20 @@ export class HistoricalDataGateway {
       existing.length >= minBars
       || coverage >= tradingSafety.quantBarsCacheMinCoverageRatio;
 
-    if (sufficient) {
+    const latestTimestamp = existing[existing.length - 1]?.timestamp;
+    const dailyTailNeedsRefresh = (timeframe === '1Day' || timeframe === '1D')
+      && latestTimestamp != null
+      && endMs - latestTimestamp > quantScheduling.dailyCacheTailRefreshGapMs;
+    const refreshKey = this.memoryKey(symbol, timeframe, startMs, endMs);
+    const now = Date.now();
+    const lastAttempt = this.staleTailRefreshAttempts.get(refreshKey);
+    const retryCoolingDown = lastAttempt != null && now >= lastAttempt
+      && now - lastAttempt < quantScheduling.staleCacheRefreshCooldownMs;
+
+    // Minimum sample count says nothing about whether the requested tail was fetched.
+    // October 9 telemetry contained hundreds of sufficiently large but weeks-old caches.
+    // Never refresh against today's date for a historical window; use its requested end.
+    if (sufficient && (!dailyTailNeedsRefresh || retryCoolingDown)) {
       this.consecutiveRateLimits = 0;
       return;
     }
@@ -248,6 +264,16 @@ export class HistoricalDataGateway {
       throw new Error(
         `HistoricalDataGateway refuses a real network fetch for ${symbol} (${timeframe}) during a synthetic simulation session (SYNTHETIC_SIMULATION=true) - no real Alpaca/IBKR historical-bar call is made. The synthetic session must provide its own bars for any timeframe a caller needs, or that caller must not run during synthetic sessions.`,
       );
+    }
+
+    if (dailyTailNeedsRefresh) {
+      this.staleTailRefreshAttempts.delete(refreshKey);
+      this.staleTailRefreshAttempts.set(refreshKey, now);
+      while (this.staleTailRefreshAttempts.size > tradingSafety.historicalBarsMemoryCacheMaxEntries) {
+        this.staleTailRefreshAttempts.delete(this.staleTailRefreshAttempts.keys().next().value!);
+      }
+      // Attempt provenance is explicit; it never claims the refreshed cache is current.
+      console.info(`[HistoricalDataGateway] ${symbol} ${timeframe}: refreshing old cache tail (latest=${latestTimestamp}, requestedEnd=${endMs})`);
     }
 
     const provider = getRegisteredHistoricalBarProvider();
