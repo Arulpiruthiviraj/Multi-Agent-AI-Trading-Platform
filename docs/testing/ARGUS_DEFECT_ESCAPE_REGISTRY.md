@@ -331,6 +331,34 @@ on it. This is a testing-mission Phase 1 document; it records history, it does n
 - **Responsible layer:** LAYER 2 (architecture invariant — module graph integrity) +
   LAYER 5 checklist.
 
+### OCT10_SOAK_PATH_RETENTION_ESCAPE
+
+- **What happened (found 2026-10-10):** A 180-sim-minute SOAK_3H synthetic session (the
+  soak profile from `scripts/soak/threeHourSoakChild.ts`) wrote rows to
+  **16 append-only tables with no prune path anywhere in the codebase**:
+  `consensus_debate_predictions` (27/iter), `consensus_decisions` (8/iter),
+  `consensus_evidence` (10/iter), `reconciliation_events` (1/iter) — confirmed by row
+  counts against an isolated synthetic DB — plus 12 more on the session path in live
+  configurations (`portfolio_snapshots`, `ai_usage`, `kronos_predictions`,
+  `prediction_outcomes`, `prediction_outcome_horizons`, `missed_opportunities`,
+  `learning_observations`, `meta_label_features`, `quant_forecasts`,
+  `explainability_reports`, `training_examples`, `learned_rules`). At soak cadence
+  (hundreds of iterations per run) these grow unbounded — the same defect class as
+  `candidate_rankings` (2026-09-22) and `news_articles` (2026-10-08).
+- **OLD_TEST_GAP:** The 2026-10-08 session guard ran a 6-minute QUIET_OPEN session and
+  asserted every written table had a retention story — but the soak profile (news shock,
+  8 symbols, 180 sim-minutes, reconciliation worker, outcome evaluators) writes tables
+  the 6-minute session never touches. No test enumerated the soak profile's write set.
+- **NEW_TEST:** `src/server/db/soakPathRetention.test.ts` — per-table cutoff/idempotency
+  for all 16 sweepers, consensus_evidence join/orphan semantics, event-loop heartbeat,
+  never-throws; `retentionCoverage.test.ts` extended with all 16 tables (fails by design
+  if any lacks a sweeper). Bonus: the new tests caught `prepare()` outside the try block
+  violating the sweeper "never throws" contract, and wrong key/time columns for
+  `quant_forecasts` (PK is `forecast_id`) and `prediction_outcomes` (no `created_at`).
+- **NEW_RELEASE_INVARIANT:** `RETENTION_COVERAGE` — the coverage test runs in the
+  pre-market gate; any append-only table without a registered sweeper is a red gate.
+- **Responsible layer:** LAYER 4 (soak) + LAYER 5 checklist.
+
 ---
 
 ## Reading this registry
