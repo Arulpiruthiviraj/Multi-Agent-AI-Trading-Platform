@@ -220,3 +220,119 @@ export function logFastResourcePromotionRequested(
     });
   });
 }
+
+// 2026-10-09 (P1 fast-lane lease fix): lease lifecycle observability.
+//
+// A lease = the concurrency slot + the per-symbol dedup entry, acquired together when an
+// evaluation starts and held until the underlying work SETTLES (resolves or rejects) - never
+// released on caller timeout. Work states:
+//   RUNNING            - underlying evaluateSymbol() still executing, a caller is still waiting
+//   CALLER_TIMED_OUT   - the caller's watchdog fired; the caller got its timeout result but the
+//                        lease is still held (slot + dedup) until the late work settles
+//   QUARANTINED        - bounded hung-work recovery: the slot was returned to the capacity pool
+//                        while the dedup entry is kept (no replacement concurrent work allowed);
+//                        explicit degraded state, never silent
+// (SETTLED leases are removed from the book immediately; they appear only in the settle event.)
+export type FastLaneLeaseWorkState = 'RUNNING' | 'CALLER_TIMED_OUT' | 'QUARANTINED';
+
+export interface FastLaneLeaseSnapshot {
+  candidateId: string;
+  symbol: string;
+  generation: number;
+  acquiredAt: number;
+  ageMs: number;
+  state: FastLaneLeaseWorkState;
+  /** Whether this lease currently holds one of the bounded concurrency slots. */
+  slotHeld: boolean;
+  /** Whether any caller has observed a timeout on this lease. */
+  timedOut: boolean;
+}
+
+export interface FastLaneLeaseBookSnapshot {
+  generatedAt: number;
+  generation: number;
+  /** Leases currently on the book (RUNNING / CALLER_TIMED_OUT / QUARANTINED). */
+  activeLeaseCount: number;
+  /** Concurrency slots currently held by leases (<= fastLaneMaxConcurrentEvaluations). */
+  slotsHeld: number;
+  /** Age of the oldest lease on the book, ms. 0 when the book is empty. */
+  oldestLeaseAgeMs: number;
+  /** Oldest-first, so the longest-held lease is leases[0]. */
+  leases: FastLaneLeaseSnapshot[];
+}
+
+export function logFastLeaseAcquired(candidateId: string, symbol: string, generation: number): void {
+  observeSafe(() => {
+    structuredLogger.info('fast_lease_acquired', {
+      category: 'FAST_LANE', eventType: 'FAST_LEASE_ACQUIRED', candidateId, symbol, generation,
+    });
+  });
+}
+
+export function logFastLeaseCallerTimeout(
+  candidateId: string, symbol: string, generation: number, leaseAgeMs: number, consecutiveTimeouts: number,
+): void {
+  observeSafe(() => {
+    structuredLogger.info('fast_lease_caller_timeout', {
+      category: 'FAST_LANE', eventType: 'FAST_LEASE_CALLER_TIMEOUT',
+      candidateId, symbol, generation, leaseAgeMs, consecutiveTimeouts,
+    });
+  });
+}
+
+export function logFastLeaseSettled(
+  candidateId: string, symbol: string, generation: number, leaseAgeMs: number,
+  resultStatus: string, lateSettle: boolean,
+): void {
+  observeSafe(() => {
+    structuredLogger.info('fast_lease_settled', {
+      category: 'FAST_LANE', eventType: 'FAST_LEASE_SETTLED',
+      candidateId, symbol, generation, leaseAgeMs, resultStatus, lateSettle,
+    });
+  });
+}
+
+export function logFastLeaseQuarantined(
+  candidateId: string, symbol: string, generation: number, reason: string,
+  leaseAgeMs: number, consecutiveTimeouts: number,
+): void {
+  observeSafe(() => {
+    structuredLogger.info('fast_lease_quarantined', {
+      category: 'FAST_LANE', eventType: 'FAST_LEASE_QUARANTINED',
+      candidateId, symbol, generation, reason, leaseAgeMs, consecutiveTimeouts,
+    });
+  });
+}
+
+export function logFastLeaseLateSettleDiscarded(candidateId: string, symbol: string, generation: number): void {
+  observeSafe(() => {
+    structuredLogger.info('fast_lease_late_settle_discarded', {
+      category: 'FAST_LANE', eventType: 'FAST_LEASE_LATE_SETTLE_DISCARDED',
+      candidateId, symbol, generation,
+    });
+  });
+}
+
+/** Structured snapshot of the whole lease book (see getFastLaneLeaseSnapshot in fastLaneEvaluator.ts). */
+export function logFastLeaseBookSnapshot(snapshot: FastLaneLeaseBookSnapshot): void {
+  observeSafe(() => {
+    structuredLogger.info('fast_lease_book_snapshot', {
+      category: 'FAST_LANE',
+      eventType: 'FAST_LEASE_BOOK_SNAPSHOT',
+      generatedAt: snapshot.generatedAt,
+      generation: snapshot.generation,
+      activeLeaseCount: snapshot.activeLeaseCount,
+      slotsHeld: snapshot.slotsHeld,
+      oldestLeaseAgeMs: snapshot.oldestLeaseAgeMs,
+      leases: snapshot.leases.map((l) => ({
+        candidateId: l.candidateId,
+        symbol: l.symbol,
+        generation: l.generation,
+        ageMs: l.ageMs,
+        state: l.state,
+        slotHeld: l.slotHeld,
+        timedOut: l.timedOut,
+      })),
+    });
+  });
+}

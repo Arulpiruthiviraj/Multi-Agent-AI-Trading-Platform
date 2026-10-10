@@ -304,6 +304,39 @@ export interface TradingSafety {
    * rate-limit headroom. Fail-closed on 429 still aborts the remainder of the cycle.
    */
   quantMaxConcurrentSymbols: number;
+  /**
+   * 2026-10-09 (P2 scheduler mission, Task C): env-var name gating the bounded
+   * priority quant scheduler (src/server/scheduling/quantPriorityScheduler.ts). Off by
+   * default - QuantSignalAgent keeps its existing runCycle fan-out unless the operator
+   * explicitly opts in. Control-plane only: no strategy/threshold/gate changes.
+   */
+  quantPrioritySchedulerEnabledEnvVar: string;
+  /** Bounded pool for scheduler-driven evaluateSymbol() calls (see QUANT_SCHEDULER_CAPACITY.md). */
+  quantSchedulerQuantWorkerPoolSize: number;
+  /** Separate bounded pool for scheduler-initiated ensureBars() pre-fetches. */
+  quantSchedulerDataFetchPoolSize: number;
+  /** Admission queue bound; overflow terminally EVICTS (preemption), never drops silently. */
+  quantSchedulerMaxQueueDepth: number;
+  /** Liveness watchdog for one scheduler-initiated provider fetch -> PROVIDER_TIMEOUT. */
+  quantSchedulerDataFetchTimeoutMs: number;
+  /** How long a terminal outcome is remembered for singleflight dedup. */
+  quantSchedulerDedupWindowMs: number;
+  /** Scheduler routing check: sufficient-count but older-tail cache -> data-fetch queue. */
+  quantSchedulerTailFreshnessToleranceMs: number;
+  /** Deadline/expiry sweeper cadence. */
+  quantSchedulerSweepIntervalMs: number;
+  /** Per-priority assessment deadlines (admission -> terminal). */
+  quantSchedulerP0DeadlineMs: number;
+  quantSchedulerP1DeadlineMs: number;
+  quantSchedulerP2DeadlineMs: number;
+  quantSchedulerP3DeadlineMs: number;
+  /** User-endorsed certification SLA targets (HIGH = P0/P1, NORMAL = P2). */
+  quantSchedulerHighPriorityAdmissionToStartSlaMs: number;
+  quantSchedulerHighPriorityAdmissionToCompleteSlaMs: number;
+  quantSchedulerNormalAdmissionToStartSlaMs: number;
+  quantSchedulerNormalAdmissionToCompleteSlaMs: number;
+  /** Bounded wait for one scheduler-driven cycle batch. */
+  quantSchedulerMaxBatchWaitMs: number;
   predictionOutcomeIntervalMs: number;
   /**
    * P1-A remediation (2026-09-14): PredictionOutcomeEvaluator.evaluatePending() previously fetched
@@ -779,6 +812,22 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'quantLookbackDays',
   'quantCycleIntervalMs',
   'quantMaxConcurrentSymbols',
+  'quantSchedulerQuantWorkerPoolSize',
+  'quantSchedulerDataFetchPoolSize',
+  'quantSchedulerMaxQueueDepth',
+  'quantSchedulerDataFetchTimeoutMs',
+  'quantSchedulerDedupWindowMs',
+  'quantSchedulerTailFreshnessToleranceMs',
+  'quantSchedulerSweepIntervalMs',
+  'quantSchedulerP0DeadlineMs',
+  'quantSchedulerP1DeadlineMs',
+  'quantSchedulerP2DeadlineMs',
+  'quantSchedulerP3DeadlineMs',
+  'quantSchedulerHighPriorityAdmissionToStartSlaMs',
+  'quantSchedulerHighPriorityAdmissionToCompleteSlaMs',
+  'quantSchedulerNormalAdmissionToStartSlaMs',
+  'quantSchedulerNormalAdmissionToCompleteSlaMs',
+  'quantSchedulerMaxBatchWaitMs',
   'predictionOutcomeIntervalMs',
   'predictionOutcomeBatchSize',
   'predictionOutcomeMaxCycleWallClockMs',
@@ -967,6 +1016,31 @@ function loadTradingSafety(): TradingSafety {
   if (typeof raw.minCalibrationSampleSize !== 'number') {
     throw new Error('config/tradingSafety.json missing number field: minCalibrationSampleSize');
   }
+  for (const k of [
+    'quantSchedulerQuantWorkerPoolSize',
+    'quantSchedulerDataFetchPoolSize',
+    'quantSchedulerMaxQueueDepth',
+    'quantSchedulerDataFetchTimeoutMs',
+    'quantSchedulerDedupWindowMs',
+    'quantSchedulerTailFreshnessToleranceMs',
+    'quantSchedulerSweepIntervalMs',
+    'quantSchedulerP0DeadlineMs',
+    'quantSchedulerP1DeadlineMs',
+    'quantSchedulerP2DeadlineMs',
+    'quantSchedulerP3DeadlineMs',
+    'quantSchedulerHighPriorityAdmissionToStartSlaMs',
+    'quantSchedulerHighPriorityAdmissionToCompleteSlaMs',
+    'quantSchedulerNormalAdmissionToStartSlaMs',
+    'quantSchedulerNormalAdmissionToCompleteSlaMs',
+    'quantSchedulerMaxBatchWaitMs',
+  ] as const) {
+    if (typeof raw[k] !== 'number') {
+      throw new Error(`config/tradingSafety.json missing number field: ${k}`);
+    }
+  }
+  if (typeof raw.quantPrioritySchedulerEnabledEnvVar !== 'string' || !raw.quantPrioritySchedulerEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: quantPrioritySchedulerEnabledEnvVar');
+  }
   if (typeof raw.javaQuantVoteEnabledEnvVar !== 'string' || !raw.javaQuantVoteEnabledEnvVar) {
     throw new Error('config/tradingSafety.json missing string field: javaQuantVoteEnabledEnvVar');
   }
@@ -997,6 +1071,15 @@ export function isExtendedHoursExecutionEnabled(): boolean {
 /** Off unless the operator has explicitly set this env var to 'true'. See quantColdStartBootstrapEnabledEnvVar's doc comment above. */
 export function isQuantColdStartBootstrapEnabled(): boolean {
   return isRuntimeFlagEnabled(tradingSafety.quantColdStartBootstrapEnabledEnvVar);
+}
+
+/**
+ * 2026-10-09 (P2 scheduler mission, Task C): off unless the operator explicitly opts in.
+ * When true, QuantSignalAgent.runCycle admits its universe to the bounded priority
+ * scheduler instead of the legacy snapshot+worker-pool fan-out. Control-plane only.
+ */
+export function isQuantPrioritySchedulerEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.quantPrioritySchedulerEnabledEnvVar);
 }
 
 /** Off unless the operator has explicitly set this env var to 'true'. See consensusModerateTierEnabledEnvVar's doc comment above. */
