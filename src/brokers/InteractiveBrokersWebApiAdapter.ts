@@ -284,7 +284,17 @@ export class InteractiveBrokersWebApiAdapter implements BrokerPlugin {
     const buyingPower = summary?.buyingpower?.amount ?? cash;
     const equity = summary?.netliquidation?.amount ?? cash;
 
-    const rawPositions: any[] = await this.request(`/portfolio/${accountId}/positions/0`).catch(() => []);
+    // 2026-10-10 (full-stack defect hunt, cross-cutting adjudication 6b): the
+    // positions request used to swallow EVERY failure into `[]` via
+    // `.catch(() => [])`. A fabricated empty list is indistinguishable from
+    // "the broker genuinely has no positions", so RiskEngine gate 23 could
+    // approve trades that conflict with real (but unobservable) positions.
+    // Failures now throw so every caller sees a diagnosable error: TradingEngine
+    // budget checks and ArgusCoreBoot wrap portfolio() in try/catch, and
+    // RiskEngine's evaluateRiskSerialized has a top-level fail-closed catch.
+    // This matches the 2026-10-10 orders() fix in this same file (D1 throw-on-
+    // ambiguity discipline, 2026-10-08). F26: never fabricate broker state.
+    const rawPositions: any[] = await this.request(`/portfolio/${accountId}/positions/0`);
     // 2026-10-05 P1 fix: the Web API omits avgCost/mktPrice for some positions. The old `?? 0`
     // fabricated a zero basis/mark — F26 explicitly forbids fabricated numeric zeros
     // (null = genuinely unavailable). A fabricated 0 basis both trips
