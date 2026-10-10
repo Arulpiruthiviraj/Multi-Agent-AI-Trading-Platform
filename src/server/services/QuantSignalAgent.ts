@@ -274,6 +274,49 @@ export function deriveColdStartBootstrapIdea(
   };
 }
 
+/**
+ * 2026-10-10 (Part 21 selection-pool explainability): bounded, pure breakdown of the
+ * quant selection chain for NO_ELIGIBLE_STRATEGY diagnostics. Trigger != eligibility:
+ * a strategy can triggerMet and still be excluded by the focus filter, the adaptive
+ * regime filter, the quarantine filter, or the EV/R:R economics gate. Each exclusion
+ * stage is named explicitly so the next SNOW-style "triggered but never emitted" case
+ * is answerable from persisted DESK_NO_TRADE evidence instead of a forensic
+ * reconstruction. Bounded by construction: strategy-ID lists only (<=21 entries each).
+ */
+export interface SelectionPoolBreakdown {
+  evaluated: string[];
+  triggered: string[];
+  excludedByFocus: string[];
+  excludedByAdaptiveRegime: string[];
+  excludedByQuarantine: string[];
+  economicsRefusal: string | null;
+  remaining: string[];
+}
+
+export function buildSelectionPoolBreakdown(args: {
+  strategyEvaluations: Array<{ strategy: string; triggerMet: boolean }>;
+  focusedEvaluations: Array<{ strategy: string }>;
+  adaptedEvaluations: Array<{ strategy: string }>;
+  emissionEligibleEvaluations: Array<{ strategy: string }>;
+  economicsRefusal: string | null;
+}): SelectionPoolBreakdown {
+  const idsOf = (evals: Array<{ strategy: string }>): string[] => evals.map(e => e.strategy);
+  const notIn = (all: string[], kept: string[]): string[] => all.filter(s => !kept.includes(s));
+  const evaluated = idsOf(args.strategyEvaluations);
+  const focused = idsOf(args.focusedEvaluations);
+  const adapted = idsOf(args.adaptedEvaluations);
+  const emissionEligible = idsOf(args.emissionEligibleEvaluations);
+  return {
+    evaluated,
+    triggered: args.strategyEvaluations.filter(e => e.triggerMet).map(e => e.strategy),
+    excludedByFocus: notIn(evaluated, focused),
+    excludedByAdaptiveRegime: notIn(focused, adapted),
+    excludedByQuarantine: notIn(adapted, emissionEligible),
+    economicsRefusal: args.economicsRefusal,
+    remaining: emissionEligible,
+  };
+}
+
 export class QuantSignalAgent {
   private intervalId: NodeJS.Timeout | null = null;
   // Batch 2 timer/reentrancy sweep (2026-09-23): runCycle() fans out per-symbol evaluation across
@@ -1009,6 +1052,16 @@ export class QuantSignalAgent {
         symbol,
         code,
         reason: 'Quant live emit requires a strategy idea that clears live EV and min R:R. Regime-only fallback is not a trade.',
+        // 2026-10-10 (Part 21 selection-pool explainability): bounded breakdown of the
+        // full selection chain, persisted with the event. Makes the next SNOW-style
+        // "strategy triggered but never emitted" case answerable from evidence.
+        selectionPool: buildSelectionPoolBreakdown({
+          strategyEvaluations,
+          focusedEvaluations,
+          adaptedEvaluations,
+          emissionEligibleEvaluations,
+          economicsRefusal: noTradeCode ?? null,
+        }),
       });
     }
 

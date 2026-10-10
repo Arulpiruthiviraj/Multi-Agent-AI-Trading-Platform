@@ -128,6 +128,48 @@ on it. This is a testing-mission Phase 1 document; it records history, it does n
   `decisionProvenance.test.ts` (POINT_IN_TIME_REPLAY) and
   `decisionProvenanceRetention.test.ts`.
 
+### OCT9_STALE_CACHE_TAIL_ESCAPE
+
+- **What happened (2026-10-09):** `HistoricalDataGateway.ensureBars()` judged cache
+  sufficiency on row count/coverage only. An old-but-large cache suppressed the provider
+  refresh entirely — the Oct-9 forensic found 508/972 late bar-input records with a newest
+  bar more than 7 days old. Strategies evaluated on stale inputs while the cache looked
+  "sufficient".
+- **OLD_TEST_GAP:** Gateway tests seeded caches with sufficient row counts and asserted
+  the fetch was skipped; no test seeded a sufficient-count cache with a STALE tail and
+  asserted a refresh was attempted. Fixture `CACHEDENOUGH` itself carried a 31-day-old
+  newest bar — the defect, disguised as the happy path.
+- **NEW_TEST:** Stale-tail gate tests in `HistoricalDataGateway.test.ts` (fresh tail ->
+  accept; stale tail -> refresh attempted; exact tolerance boundary +/-60s deterministic;
+  historical end-date exemption; provider failure -> old data not relabeled fresh; empty
+  provider -> missing stays missing; concurrency coalescing; 429 cooldown preserved).
+- **NEW_RELEASE_INVARIANT:** `STALE_CACHE_STATUS` — `certify-next-session` probes the
+  production snapshot's bar tails; the gateway refuses to treat a stale tail as sufficient.
+- **Responsible layer:** LAYER 1 (gateway contract) + LAYER 5 (`certify-next-session`).
+- **IMPLEMENTED 2026-10-10:** commit `f9277c7` (tail-freshness gate on `ensureBars()` cache
+  acceptance + in-flight refresh coalescing).
+
+### OCT9_FAST_LANE_LEASE_ESCAPE
+
+- **What happened (2026-10-09):** `fastLaneEvaluator.ts` released its concurrency slot AND
+  its per-symbol dedup entry on caller timeout while `evaluateSymbol()` could still be
+  running. The governor believed a slot was free while work continued (invisible
+  concurrency), and a replacement evaluation for the same symbol could start, defeating
+  the dedup guard (duplicate concurrent work).
+- **OLD_TEST_GAP:** Evaluator tests awaited the evaluator promise normally; no test timed
+  out the caller while the underlying work was still in flight and then asserted the slot
+  stayed held and no duplicate evaluation started.
+- **NEW_TEST:** Lease tests in `fastLaneEvaluator.test.ts` (caller timeout -> lease held in
+  CALLER_TIMED_OUT; late settle discarded via generation guard; replacement refused via
+  PRIOR_EVALUATION_STILL_IN_FLIGHT; bounded quarantine after N consecutive timeouts / T ms
+  age returns the slot while keeping dedup; lease-book observability).
+- **NEW_RELEASE_INVARIANT:** `FAST_LANE_LEASE_TEST` — `certify-next-session` points at the
+  lease suite; a caller timeout must never release active capacity.
+- **Responsible layer:** LAYER 1 (evaluator contract) + LAYER 2 (concurrency invariant).
+- **IMPLEMENTED 2026-10-10:** commit `27e17d3` (lease-held-until-settle + bounded hung-work
+  quarantine). The bounded priority scheduler (`quantPriorityScheduler.ts`) applies the same
+  pattern to its quant stage (watchdog -> quarantine -> age-bounded eviction).
+
 ### OCT9_ZERO_AUTHORIZED_STRATEGIES_ESCAPE
 
 - **What happened (2026-10-09):** The Oct-9 session ran with **21 strategies, 0 authorized
