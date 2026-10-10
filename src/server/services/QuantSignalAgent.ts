@@ -396,6 +396,29 @@ export class QuantSignalAgent {
     });
   }
 
+  /**
+   * 2026-10-10 (defect hunt, Lead 5 split-brain fix): retires the priority
+   * scheduler singleton so the legacy sequential fan-out is the ONLY active
+   * evaluation path. stop() terminally transitions every tracked candidate to
+   * EVICTED/SCHEDULER_STOPPED (explicit, never silent) and late-settling
+   * evaluateSymbol() continuations are discarded by the scheduler's own
+   * exactly-once terminal guard - no duplicate transitions, no stuck symbols.
+   * Called when the feature flag is off (it may have been on for an earlier
+   * cycle) and when the scheduler path fails mid-cycle before falling back to
+   * the legacy fan-out. Idempotent; a no-op when the scheduler was never
+   * created or is already stopped; never throws into the cycle.
+   */
+  private retirePriorityScheduler(reason: string): void {
+    const scheduler = getQuantPriorityScheduler();
+    if (!scheduler || scheduler.isStopped()) return;
+    try {
+      scheduler.stop();
+      console.log(`[QuantSignalAgent] Priority scheduler retired (${reason}) - in-flight candidates evicted to explicit terminals; the legacy fan-out is now the only evaluation path.`);
+    } catch {
+      /* scheduler shutdown must never break the cycle */
+    }
+  }
+
   /** Synthetic Market Session Simulator (2026-09-14 mandate, Phase 7): a manual trigger for the
    *  SAME real runCycle() the timer calls - timer-driven agents have no clock injection, so a
    *  simulator running on an accelerated synthetic clock cannot wait on a real setInterval. This
@@ -471,7 +494,22 @@ export class QuantSignalAgent {
         console.error('[QuantSignalAgent] Priority scheduler unavailable after init - falling back to legacy fan-out.');
       } catch (e) {
         console.error('[QuantSignalAgent] Priority scheduler path failed - falling back to legacy fan-out', e);
+        // 2026-10-10 (defect hunt, Lead 5 split-brain fix): the scheduler path may have
+        // admitted candidates BEFORE failing - retire the scheduler so the legacy
+        // fan-out below is the only active evaluation path for these symbols. Without
+        // this, the scheduler's in-flight evaluateSymbol() calls run concurrently with
+        // the legacy fan-out on the same symbols (the scheduler's singleflight dedup
+        // only coordinates within itself; the legacy path never consults it).
+        this.retirePriorityScheduler('scheduler-path-failed');
       }
+    } else {
+      // 2026-10-10 (defect hunt, Lead 5 split-brain fix): the flag may have been on for
+      // an earlier cycle (a scheduler from that cycle can still hold in-flight
+      // evaluations - runQuantSchedulerBatch's bounded wait leaves them tracked) and
+      // off now. Retire it before the legacy fan-out so both paths never evaluate the
+      // same symbol concurrently. Idempotent and a no-op when the scheduler was never
+      // created or is already stopped.
+      this.retirePriorityScheduler('flag-off');
     }
     let nextIndex = 0;
     let abortRateLimit = false;

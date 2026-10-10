@@ -45,7 +45,12 @@ a scheduling control plane, not a decision plane:
 **Safety posture.** Feature-flagged (`QUANT_PRIORITY_SCHEDULER_ENABLED`, default
 off): flag off keeps the legacy `runCycle` fan-out byte-for-byte — all existing
 scheduler certification (`src/server/certification/quantSchedulerSla.test.ts`) still
-exercises that path. No strategy, threshold, lifecycle, consensus, RiskEngine, OMS,
+exercises that path. Split-brain guard (2026-10-10): the scheduler's singleflight
+dedup only coordinates within itself, so `runCycle` retires the scheduler singleton
+(`stop()` → in-flights terminally `EVICTED`/`SCHEDULER_STOPPED`, late settles
+discarded) before running the legacy fan-out — on a flag on→off transition between
+cycles and on any scheduler-path failure that falls back to legacy — so the two
+paths never evaluate the same symbol concurrently. No strategy, threshold, lifecycle, consensus, RiskEngine, OMS,
 or broker changes; `evaluateSymbol()`'s signature and behavior contract are
 untouched (the scheduler calls it as a black box). Pool sizes (4/4) are
 conservative starting values, not measured optima — the measurement procedure to
