@@ -528,7 +528,7 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
       const margin = 60_000; // 60s each side - far above any test-vs-code clock skew
       const inside = await seedStaleSizedCache('BOUNDIN', now - (tol() - margin));
       const outside = await seedStaleSizedCache('BOUNDOUT', now - (tol() + margin));
-      const fetchMock = vi.fn(async () => ({
+      const fetchMock = vi.fn(async (..._args: unknown[]) => ({
         ok: true,
         json: async () => ({ bars: alpacaBarsAt([now - 30 * 60_000]) }),
       }));
