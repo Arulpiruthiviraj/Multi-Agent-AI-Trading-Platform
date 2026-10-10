@@ -75,10 +75,14 @@ import { freezeStrategyVersion } from '../../research/strategySpecs';
 export const DECISION_PROVENANCE_TABLE = 'decision_provenance';
 
 /** Byte caps enforced in code (reject/truncate). Sized against measured reality:
- *  a real production StrategyContext JSON is ~7KB, evaluations ~5KB. */
+ *  a real production StrategyContext JSON is ~7KB, evaluations ~5KB (core) to ~17KB (all 21
+ *  strategies live). Bar evidence is ~94B/bar (measured 2026-10-10); the 400-day quant lookback
+ *  yields 400-500+ cached 1Day bars, so the bar cap must clear ~47KB — the old 32KB cap refused
+ *  97.4% of real decisions in the 2026-10-10 soak. 64KB fits ~680 bars with headroom, and the
+ *  256KB whole-row cap below still bounds total row size. */
 export const PROVENANCE_STRATEGY_CONTEXT_MAX_BYTES = 64 * 1024;
 export const PROVENANCE_EVALUATIONS_MAX_BYTES = 32 * 1024;
-export const PROVENANCE_BAR_EVIDENCE_MAX_BYTES = 32 * 1024;
+export const PROVENANCE_BAR_EVIDENCE_MAX_BYTES = 64 * 1024;
 export const PROVENANCE_ROW_MAX_BYTES = 256 * 1024;
 /** A traceId should produce exactly one provenance row; the cap is defense-in-depth. */
 export const PROVENANCE_MAX_ROWS_PER_DECISION = 8;

@@ -308,4 +308,25 @@ describe('decision provenance: point-in-time replay', () => {
     expect(() => mod.recordDecisionProvenance(null as any)).not.toThrow();
     expect(() => mod.recordDecisionProvenance({} as any)).not.toThrow();
   });
+
+  it('realistic bar counts persist: 500-bar evidence (400-day lookback) is written, not refused', async () => {
+    // 2026-10-10 defect (soak forensic): PROVENANCE_BAR_EVIDENCE_MAX_BYTES was 32KB, which fits
+    // ~340 bars at the measured ~94B/bar of buildBarEvidence output — but the real 400-day quant
+    // lookback yields 400-500+ cached 1Day bars, so 97.4% of real decisions were refused
+    // provenance ('rejected_oversize') and the PIT replay feature was effectively dead.
+    const decisionId = uid();
+    const symbol = 'PITBARS';
+    const bars = seededBars(500, 77);
+    const ctx = productionShapedContext(symbol, bars);
+    const evaluations = evaluateAll(ctx);
+    const evidence = mod.buildBarEvidence(symbol, '1Day', bars, Date.now() - 60_000, DAY_MS);
+    // Sanity: this evidence genuinely exceeds the old 32KB cap, so the test reproduces the
+    // real-world refusal (not a synthetic edge case).
+    expect(Buffer.byteLength(JSON.stringify(evidence), 'utf8')).toBeGreaterThan(32 * 1024);
+    const outcome = await mod.persistDecisionProvenance(provenanceInput(decisionId, symbol, bars, ctx, evaluations, Date.now()));
+    expect(outcome).toBe('written');
+    const row = sqliteDb.prepare(`SELECT * FROM ${mod.DECISION_PROVENANCE_TABLE} WHERE decision_id = ?`).get(decisionId);
+    expect(row).toBeDefined();
+    expect(JSON.parse(row.bar_evidence_json)).toHaveLength(500);
+  });
 });
