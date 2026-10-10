@@ -621,6 +621,40 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
       expect(maxInFlight).toBe(1);
     });
 
+    it('evicts a wedged coalescing entry after quantBarsCoalesceEntryMaxAgeMs so a stalled provider fetch cannot hang future callers forever', async () => {
+      // 2026-10-10 (defect hunt, Lead 6): the inner provider call has no timeout/cancel
+      // path, so a stalled fetch (never-resolving promise) used to wedge the window's
+      // coalescing entry forever - every later ensureBars for that window awaited the
+      // same dead promise. The entry must be TTL-evicted so a later caller starts fresh.
+      const savedTtl = tradingSafety.quantBarsCoalesceEntryMaxAgeMs;
+      tradingSafety.quantBarsCoalesceEntryMaxAgeMs = 150; // short TTL: test-only override
+      try {
+        const now = Date.now();
+        const start = now - 90 * 86_400_000;
+        // Empty cache + a provider fetch that never settles (stalled TCP: fetch has no timeout).
+        const fetchMock = vi.fn(async () => new Promise(() => {}));
+        vi.stubGlobal('fetch', fetchMock);
+        const p1 = historicalDataGateway.ensureBars('WEDGESYM', '1Day', start, now);
+        p1.catch(() => {}); // never settles; never an unhandled rejection either
+        const key = historicalDataGateway.memoryKey('WEDGESYM', '1Day', start, now);
+        // The entry is admitted synchronously, before the inner's first await.
+        expect(historicalDataGateway.inflightEnsureBars.has(key)).toBe(true);
+        await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+        // TTL eviction fires even though the inner never settled (with the short test
+        // TTL it may fire while the paced fetch is still queued - either way the dead
+        // entry is gone and no future caller can wedge onto it).
+        await vi.waitFor(() => expect(historicalDataGateway.inflightEnsureBars.has(key)).toBe(false));
+        // A later caller is NOT wedged onto the dead promise: it starts a fresh inner fetch.
+        const p2 = historicalDataGateway.ensureBars('WEDGESYM', '1Day', start, now);
+        p2.catch(() => {});
+        // The fresh entry is admitted synchronously (before any await in ensureBars).
+        expect(historicalDataGateway.inflightEnsureBars.has(key)).toBe(true);
+        await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      } finally {
+        tradingSafety.quantBarsCoalesceEntryMaxAgeMs = savedTtl;
+      }
+    });
+
     it('preserves the 429 retry cooldown: backoff still arms, and a stale tail is surfaced honestly instead of served silently', async () => {
       const now = Date.now();
       // Arm the shared backoff with an empty cache (existing preserved behavior).

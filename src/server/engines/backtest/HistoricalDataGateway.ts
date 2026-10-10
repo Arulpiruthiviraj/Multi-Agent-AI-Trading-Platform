@@ -128,8 +128,10 @@ export class HistoricalDataGateway {
    * redundant fetch back-to-back - a self-inflicted mini-storm when, e.g., QuantSignalAgent,
    * RiskEngine and MissedOpportunityEvaluator evaluate the same symbol in the same cycle.
    * The public ensureBars() below is a thin wrapper that shares one in-flight
-   * ensureBarsInner() promise per window. Bounded: the entry is always removed on settle,
-   * so the map only ever holds genuinely in-flight calls. A shared rejection is shared
+   * ensureBarsInner() promise per window. Bounded two ways: the entry is removed on settle,
+   * and a TTL (quantBarsCoalesceEntryMaxAgeMs) evicts it if the inner never settles - the
+   * inner provider call has no timeout/cancel path, so without the TTL one stalled fetch
+   * would wedge the window forever. A shared rejection is shared
    * honestly - every coalesced caller sees the same error; none gets silent stale data.
    */
   private inflightEnsureBars = new Map<string, Promise<void>>();
@@ -267,10 +269,37 @@ export class HistoricalDataGateway {
     if (inFlight) return inFlight;
     const run = this.ensureBarsInner(symbol, timeframe, startMs, endMs);
     this.inflightEnsureBars.set(coalesceKey, run);
+    // 2026-10-10 (defect hunt, Lead 6): liveness bound for the coalescing entry. The
+    // inner provider call has no timeout/cancel path (fetch/IBKR), so a stalled call
+    // would otherwise wedge this window's entry FOREVER - every future caller for the
+    // window would await the same dead promise. Past quantBarsCoalesceEntryMaxAgeMs the
+    // entry is evicted with a loud warn; a later caller starts a fresh inner (the zombie
+    // inner, if it ever settles, completes harmlessly - the generation-guarded delete
+    // below never removes a newer entry). unref'd so a wedged entry never holds the
+    // process open on its own.
+    const maxAgeMs = tradingSafety.quantBarsCoalesceEntryMaxAgeMs;
+    const evictTimer = setTimeout(() => {
+      if (this.inflightEnsureBars.get(coalesceKey) === run) {
+        this.inflightEnsureBars.delete(coalesceKey);
+        console.warn(
+          `[HistoricalDataGateway] COALESCE_ENTRY_EVICTED for ${symbol} (${timeframe}): ` +
+          `in-flight ensureBars exceeded quantBarsCoalesceEntryMaxAgeMs=${maxAgeMs}ms - the ` +
+          `provider call is stalled (no timeout/cancel path). Entry evicted so future ` +
+          `callers start a fresh fetch instead of hanging forever.`,
+        );
+      }
+    }, maxAgeMs);
+    if (typeof (evictTimer as unknown as { unref?: unknown }).unref === 'function') {
+      (evictTimer as unknown as { unref: () => void }).unref();
+    }
     try {
       await run;
     } finally {
-      this.inflightEnsureBars.delete(coalesceKey);
+      clearTimeout(evictTimer);
+      // Generation-guarded: never delete a newer entry admitted after a TTL eviction.
+      if (this.inflightEnsureBars.get(coalesceKey) === run) {
+        this.inflightEnsureBars.delete(coalesceKey);
+      }
     }
   }
 

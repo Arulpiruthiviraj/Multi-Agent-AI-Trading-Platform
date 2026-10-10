@@ -406,6 +406,15 @@ export interface TradingSafety {
    */
   quantBarsTailFreshnessToleranceMs: number;
   /**
+   * 2026-10-10 (defect hunt, Lead 6): liveness bound for an ensureBars() in-flight
+   * coalescing entry (inflightEnsureBars). The inner provider call has no
+   * timeout/cancel path, so a stalled fetch would otherwise wedge the window's entry
+   * forever and hang every future caller for that window. Past this age the entry is
+   * evicted with a loud warn; a later caller starts a fresh inner. Generous on
+   * purpose - legitimate multi-page backfills take seconds.
+   */
+  quantBarsCoalesceEntryMaxAgeMs: number;
+  /**
    * P1-A remediation Patch B (2026-09-14): bound on HistoricalDataGateway.memoryBars, a real,
    * standalone unbounded-Map defect found while investigating P1-A (not the proven cause of the
    * reproduced RSS growth there - that was Patch A's evaluator overlap - but a real leak/bounded-
@@ -858,6 +867,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'manualTradeCoEvalTimeoutMs',
   'quantBarsCacheMinCoverageRatio',
   'quantBarsTailFreshnessToleranceMs',
+  'quantBarsCoalesceEntryMaxAgeMs',
   'historicalBarsMemoryCacheMaxEntries',
   'quantBarsRateLimitBaseBackoffMs',
   'quantBarsRateLimitMaxBackoffMs',

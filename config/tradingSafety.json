@@ -131,6 +131,8 @@
   "manualTradeCoEvalTimeoutMs": 20000,
   "quantBarsCacheMinCoverageRatio": 0.85,
   "quantBarsTailFreshnessToleranceMs": 259200000,
+  "_quantBarsCoalesceEntryMaxAgeMsComment": "2026-10-10 (defect hunt, Lead 6): liveness bound for an ensureBars() in-flight coalescing entry. The inner provider call has no timeout/cancel path (fetch/IBKR), so a stalled provider call would otherwise wedge the window's entry forever and hang every future caller for that window. Past this age the entry is evicted with a loud warn; a later caller starts a fresh inner. Generous on purpose - legitimate multi-page backfills take seconds, not minutes.",
+  "quantBarsCoalesceEntryMaxAgeMs": 300000,
   "historicalBarsMemoryCacheMaxEntries": 5000,
   "quantBarsRateLimitBaseBackoffMs": 30000,
   "quantBarsRateLimitMaxBackoffMs": 300000,
