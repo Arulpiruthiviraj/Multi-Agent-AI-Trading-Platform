@@ -175,9 +175,9 @@ async function main(): Promise<void> {
       iteration: currentIteration,
       rssMb: mu.rss / 1048576,
       heapUsedMb: mu.heapUsed / 1048576,
-      eventLoopP50Ms: eld.percentile(50),
-      eventLoopP95Ms: eld.percentile(95),
-      eventLoopMaxMs: eld.max,
+      eventLoopP50Ms: eld.percentile(50) / 1_000_000,
+      eventLoopP95Ms: eld.percentile(95) / 1_000_000,
+      eventLoopMaxMs: eld.max / 1_000_000,
       dbBytes,
       walBytes,
     });
@@ -257,7 +257,7 @@ async function main(): Promise<void> {
     type: 'SOAK_RESULT',
     soakId,
     seed,
-    methodology: 'Single long-lived process; back-to-back 180-sim-min sessions (150ms wall-clock/bar) for 180 wall-clock minutes against one isolated DB. SyntheticSessionEngine cannot pace true wall-clock (disclosed in its header).',
+    methodology: `Single long-lived process; back-to-back 180-sim-min sessions for a minimum ${wallMinutes} wall-clock minutes against one isolated DB; an iteration may overrun this budget. Synthetic and seeded, not production-state or provider certification.`,
     wallClockMinutes: (Date.now() - wallStart) / 60000,
     iterationsCompleted: iterations.length,
     iterationsFailed: failedIters.length,
@@ -283,7 +283,9 @@ async function main(): Promise<void> {
       totalNonFixtureFills: totalFills,
       note: 'Fills are informational only; zero is a legitimate outcome. Activity is proven by quant assessments, idea generation, and consensus evaluations in observability_events.',
     },
-    stabilityVerdict: failedIters.length === 0 ? 'PASS' : 'FAIL',
+    iterationVerdict: failedIters.length === 0 ? 'PASS' : 'FAIL',
+    stabilityVerdict: 'NOT_CERTIFIED',
+    resourceGateNote: 'Resource measurements are reported, but no validated resource acceptance bounds were applied.',
     iterationErrors: failedIters.map((i) => ({ iteration: i.iteration, error: i.error })),
     samplesTail: samples.slice(-5),
   };
@@ -293,7 +295,7 @@ async function main(): Promise<void> {
   fs.writeFileSync(path.join(resultsDir, `soak-${soakId}.json`), JSON.stringify(report, null, 2));
   if (typeof process.send === 'function') process.send(report);
   const stable = failedIters.length === 0;
-  console.log(`\n[soak] done: ${iterations.length} iterations, ${failedIters.length} failed, ${totalFills} fills. Stability: ${stable ? 'PASS' : 'FAIL'}`);
+  console.log(`\n[soak] done: ${iterations.length} iterations, ${failedIters.length} failed, ${totalFills} fills. Iteration completion: ${stable ? 'PASS' : 'FAIL'}; resource stability NOT_CERTIFIED`);
   process.exit(stable ? 0 : 2);
 }
 

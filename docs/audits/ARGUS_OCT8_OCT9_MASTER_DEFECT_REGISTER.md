@@ -37,3 +37,9 @@ Historical audits remain immutable. This document does not replace docs/architec
 The priority scheduler repeated the in-flight ownership defect: a new regression measured two underlying quant evaluations under a pool cap of one. Quant and data-fetch semaphore capacity now stays held until actual settlement, even after caller timeout/terminal expiry. Dedup keys also stay owned while work is unresolved. Tests cover different-symbol overflow refusal, same-symbol dedup after expiry, provider timeout ownership, actual late settlement and exactly-once terminal outcomes. External-registration expiry and restart/recovery across scheduler instances still require separate review; these tests are not cancellation certification.
 
 The initial checkpoint full-suite run was stopped when this defect was found. Its partial result is not reused as final verification. The initial checkpoint typecheck and build passed; both must be repeated after this repair.
+
+## Hidden waiter and soak reporting findings
+
+A failing regression found expired scheduler candidates retained ungranted semaphore waiters. The repaired terminal boundary removes those waiters without returning a permit held by actual running work. Scheduler-related targeted verification: three files, 30 tests passed.
+
+The short synthetic smoke completed one session in 3.7117 minutes with zero iteration errors and zero session fills; the independent execution-path proof passed five tests. The old report mislabeled nanosecond event-loop samples as milliseconds and marked resource stability PASS merely from zero iteration exceptions. Units are corrected; iteration completion and resource acceptance are now separate, with stability NOT_CERTIFIED until validated bounds exist. The smoke does not prove organic readiness, all providers down or a three-hour soak.

@@ -378,13 +378,13 @@ interface TrackedCandidate {
 class PrioritySemaphore {
   private permits: number;
   private seq = 0;
-  private waiters: Array<{ priority: number; seq: number; resolve: (release: () => void) => void }> = [];
+  private waiters: Array<{ key: string; priority: number; seq: number; resolve: (release: () => void) => void }> = [];
 
   constructor(permits: number) {
     this.permits = Math.max(1, Math.floor(permits));
   }
 
-  acquire(priority: number): Promise<() => void> {
+  acquire(priority: number, key: string): Promise<() => void> {
     // Immediate grant only when nobody is waiting - otherwise a newcomer could jump a
     // queued P0.
     if (this.permits > 0 && this.waiters.length === 0) {
@@ -392,9 +392,16 @@ class PrioritySemaphore {
       return Promise.resolve(this.makeRelease());
     }
     return new Promise((resolve) => {
-      this.waiters.push({ priority, seq: this.seq++, resolve });
+      this.waiters.push({ key, priority, seq: this.seq++, resolve });
       this.waiters.sort((a, b) => a.priority - b.priority || a.seq - b.seq);
     });
+  }
+
+  cancelWaiter(key: string): void {
+    const index = this.waiters.findIndex((waiter) => waiter.key === key);
+    if (index < 0) return; // Already granted work retains its real permit.
+    const [waiter] = this.waiters.splice(index, 1);
+    waiter.resolve(() => {}); // Wake the terminal pipeline without inventing a permit.
   }
 
   private makeRelease(): () => void {
@@ -791,6 +798,8 @@ export class QuantPriorityScheduler {
     rec.terminalState = state;
     rec.reasonCode = reasonCode;
     rec.stages.terminalAtMs = nowMs;
+    this.fetchSem.cancelWaiter(rec.candidateId);
+    this.quantSem.cancelWaiter(rec.candidateId);
     this.tracked.delete(rec.candidateId);
     // A terminal caller outcome is not proof that underlying work has stopped.
     const pending = (rec.stages.dataFetchStartedAtMs != null && rec.stages.dataFetchFinishedAtMs == null)
@@ -947,7 +956,7 @@ export class QuantPriorityScheduler {
    *  computation holds ONLY a quant slot - never the same slot across both. */
   private async processCandidateInner(rec: TrackedCandidate): Promise<void> {
     // ---- DATA ACQUISITION STAGE (bounded data-fetch pool, no quant slot held) ----
-    const fetchRelease = await this.fetchSem.acquire(rec.priority);
+    const fetchRelease = await this.fetchSem.acquire(rec.priority, rec.candidateId);
     try {
       if (rec.terminalState) return;
       // The gateway's reactive 429 backoff is authoritative: while armed, this
@@ -980,7 +989,7 @@ export class QuantPriorityScheduler {
     if (rec.terminalState) return;
 
     // ---- COMPUTATION STAGE (bounded quant pool, priority-ordered handoff) ----
-    const quantRelease = await this.quantSem.acquire(rec.priority);
+    const quantRelease = await this.quantSem.acquire(rec.priority, rec.candidateId);
     try {
       if (rec.terminalState) return;
       rec.stages.quantStartedAtMs = this.now();

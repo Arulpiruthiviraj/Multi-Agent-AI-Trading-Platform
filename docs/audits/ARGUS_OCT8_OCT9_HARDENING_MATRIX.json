@@ -1,7 +1,7 @@
 {
   "scope": "October 8-9 hardening program; audit areas are not all proven defects",
   "createdAt": "2026-10-10T13:02:18.8208039Z",
-  "integrationCheckpoint": "443a61c",
+  "integrationCheckpoint": "45e4fbc",
   "readiness": "NO_GO_UNCERTIFIED",
   "issues": [
     {
@@ -12,16 +12,20 @@
       "category": "AUDIT_AREA",
       "rootCauseConfidence": "UNVERIFIED",
       "sourceFiles": [],
-      "relatedCommits": [],
-      "currentMainStatus": "UNVERIFIED",
-      "repairBranchStatus": "NOT_STARTED",
-      "testStatus": "UNVERIFIED",
+      "relatedCommits": [
+        "b39ff5d",
+        "d2063c7",
+        "45e4fbc"
+      ],
+      "currentMainStatus": "ISOLATED_INTEGRATION_ONLY_NOT_DEPLOYED",
+      "repairBranchStatus": "PARTIAL_VERIFIED_OR_INTEGRATED",
+      "testStatus": "TARGETED_EVIDENCE_SCOPE_ONLY",
       "merged": false,
       "deployed": "UNVERIFIED",
       "productionStateCertified": false,
       "fullSessionCertified": false,
       "resourceSoakCertified": false,
-      "remainingWork": "Inspect source, historical evidence and existing regression scope; reproduce before repair",
+      "remainingWork": "Read-only current policy snapshot: 6 strategies under isolated configuration, 0 authorized; does not reproduce Oct9 runtime flags. No automatic promotion permitted.",
       "finalDisposition": "OPEN"
     },
     {
@@ -72,16 +76,20 @@
       "category": "AUDIT_AREA",
       "rootCauseConfidence": "UNVERIFIED",
       "sourceFiles": [],
-      "relatedCommits": [],
-      "currentMainStatus": "UNVERIFIED",
-      "repairBranchStatus": "NOT_STARTED",
-      "testStatus": "UNVERIFIED",
+      "relatedCommits": [
+        "b39ff5d",
+        "d2063c7",
+        "45e4fbc"
+      ],
+      "currentMainStatus": "ISOLATED_INTEGRATION_ONLY_NOT_DEPLOYED",
+      "repairBranchStatus": "PARTIAL_VERIFIED_OR_INTEGRATED",
+      "testStatus": "TARGETED_EVIDENCE_SCOPE_ONLY",
       "merged": false,
       "deployed": "UNVERIFIED",
       "productionStateCertified": false,
       "fullSessionCertified": false,
       "resourceSoakCertified": false,
-      "remainingWork": "Inspect source, historical evidence and existing regression scope; reproduce before repair",
+      "remainingWork": "Current-main certificationBridge and prior isolated workflow integrated; review of canonical ownership and production callers remains.",
       "finalDisposition": "OPEN"
     },
     {
@@ -192,16 +200,20 @@
       "category": "AUDIT_AREA",
       "rootCauseConfidence": "UNVERIFIED",
       "sourceFiles": [],
-      "relatedCommits": [],
-      "currentMainStatus": "UNVERIFIED",
-      "repairBranchStatus": "NOT_STARTED",
-      "testStatus": "UNVERIFIED",
+      "relatedCommits": [
+        "b39ff5d",
+        "d2063c7",
+        "45e4fbc"
+      ],
+      "currentMainStatus": "ISOLATED_INTEGRATION_ONLY_NOT_DEPLOYED",
+      "repairBranchStatus": "PARTIAL_VERIFIED_OR_INTEGRATED",
+      "testStatus": "TARGETED_EVIDENCE_SCOPE_ONLY",
       "merged": false,
       "deployed": "UNVERIFIED",
       "productionStateCertified": false,
       "fullSessionCertified": false,
       "resourceSoakCertified": false,
-      "remainingWork": "Inspect source, historical evidence and existing regression scope; reproduce before repair",
+      "remainingWork": "Priority scheduler and cooperative compatibility queue integrated, default-off. Actual worker bound regression repaired. Production session latency remains uncertified.",
       "finalDisposition": "OPEN"
     },
     {
@@ -212,16 +224,20 @@
       "category": "AUDIT_AREA",
       "rootCauseConfidence": "UNVERIFIED",
       "sourceFiles": [],
-      "relatedCommits": [],
-      "currentMainStatus": "UNVERIFIED",
-      "repairBranchStatus": "NOT_STARTED",
-      "testStatus": "UNVERIFIED",
+      "relatedCommits": [
+        "b39ff5d",
+        "d2063c7",
+        "45e4fbc"
+      ],
+      "currentMainStatus": "ISOLATED_INTEGRATION_ONLY_NOT_DEPLOYED",
+      "repairBranchStatus": "PARTIAL_VERIFIED_OR_INTEGRATED",
+      "testStatus": "TARGETED_EVIDENCE_SCOPE_ONLY",
       "merged": false,
       "deployed": "UNVERIFIED",
       "productionStateCertified": false,
       "fullSessionCertified": false,
       "resourceSoakCertified": false,
-      "remainingWork": "Inspect source, historical evidence and existing regression scope; reproduce before repair",
+      "remainingWork": "Accelerated three scheduling-hour test exercises mid-cycle admissions; not a wall-clock provider SLA certificate.",
       "finalDisposition": "OPEN"
     },
     {
@@ -272,16 +288,20 @@
       "category": "AUDIT_AREA",
       "rootCauseConfidence": "UNVERIFIED",
       "sourceFiles": [],
-      "relatedCommits": [],
-      "currentMainStatus": "UNVERIFIED",
-      "repairBranchStatus": "NOT_STARTED",
-      "testStatus": "UNVERIFIED",
+      "relatedCommits": [
+        "b39ff5d",
+        "d2063c7",
+        "45e4fbc"
+      ],
+      "currentMainStatus": "ISOLATED_INTEGRATION_ONLY_NOT_DEPLOYED",
+      "repairBranchStatus": "PARTIAL_VERIFIED_OR_INTEGRATED",
+      "testStatus": "TARGETED_EVIDENCE_SCOPE_ONLY",
       "merged": false,
       "deployed": "UNVERIFIED",
       "productionStateCertified": false,
       "fullSessionCertified": false,
       "resourceSoakCertified": false,
-      "remainingWork": "Inspect source, historical evidence and existing regression scope; reproduce before repair",
+      "remainingWork": "Caller timeout and quarantine retain actual Fast Lane slots until settlement; 18 Fast Lane tests pass in merged targeted run.",
       "finalDisposition": "OPEN"
     },
     {
@@ -292,16 +312,20 @@
       "category": "AUDIT_AREA",
       "rootCauseConfidence": "UNVERIFIED",
       "sourceFiles": [],
-      "relatedCommits": [],
-      "currentMainStatus": "UNVERIFIED",
-      "repairBranchStatus": "NOT_STARTED",
-      "testStatus": "UNVERIFIED",
+      "relatedCommits": [
+        "b39ff5d",
+        "d2063c7",
+        "45e4fbc"
+      ],
+      "currentMainStatus": "ISOLATED_INTEGRATION_ONLY_NOT_DEPLOYED",
+      "repairBranchStatus": "PARTIAL_VERIFIED_OR_INTEGRATED",
+      "testStatus": "TARGETED_EVIDENCE_SCOPE_ONLY",
       "merged": false,
       "deployed": "UNVERIFIED",
       "productionStateCertified": false,
       "fullSessionCertified": false,
       "resourceSoakCertified": false,
-      "remainingWork": "Inspect source, historical evidence and existing regression scope; reproduce before repair",
+      "remainingWork": "Hidden-work overflow repaired; permanent-hang cancellation or process recovery remains uncertified.",
       "finalDisposition": "OPEN"
     },
     {
@@ -312,16 +336,20 @@
       "category": "AUDIT_AREA",
       "rootCauseConfidence": "UNVERIFIED",
       "sourceFiles": [],
-      "relatedCommits": [],
-      "currentMainStatus": "UNVERIFIED",
-      "repairBranchStatus": "NOT_STARTED",
-      "testStatus": "UNVERIFIED",
+      "relatedCommits": [
+        "b39ff5d",
+        "d2063c7",
+        "45e4fbc"
+      ],
+      "currentMainStatus": "ISOLATED_INTEGRATION_ONLY_NOT_DEPLOYED",
+      "repairBranchStatus": "PARTIAL_VERIFIED_OR_INTEGRATED",
+      "testStatus": "TARGETED_EVIDENCE_SCOPE_ONLY",
       "merged": false,
       "deployed": "UNVERIFIED",
       "productionStateCertified": false,
       "fullSessionCertified": false,
       "resourceSoakCertified": false,
-      "remainingWork": "Inspect source, historical evidence and existing regression scope; reproduce before repair",
+      "remainingWork": "Stale-tail refresh, DATA_STALE rejection, empty-response handling and exact query result keys integrated; targeted gateway regressions pass.",
       "finalDisposition": "OPEN"
     },
     {
@@ -332,16 +360,20 @@
       "category": "AUDIT_AREA",
       "rootCauseConfidence": "UNVERIFIED",
       "sourceFiles": [],
-      "relatedCommits": [],
-      "currentMainStatus": "UNVERIFIED",
-      "repairBranchStatus": "NOT_STARTED",
-      "testStatus": "UNVERIFIED",
+      "relatedCommits": [
+        "b39ff5d",
+        "d2063c7",
+        "45e4fbc"
+      ],
+      "currentMainStatus": "ISOLATED_INTEGRATION_ONLY_NOT_DEPLOYED",
+      "repairBranchStatus": "PARTIAL_VERIFIED_OR_INTEGRATED",
+      "testStatus": "TARGETED_EVIDENCE_SCOPE_ONLY",
       "merged": false,
       "deployed": "UNVERIFIED",
       "productionStateCertified": false,
       "fullSessionCertified": false,
       "resourceSoakCertified": false,
-      "remainingWork": "Inspect source, historical evidence and existing regression scope; reproduce before repair",
+      "remainingWork": "Cached stale tails fail closed; real provider entitlement/coverage/session freshness still needs runtime certification.",
       "finalDisposition": "OPEN"
     },
     {
@@ -492,16 +524,20 @@
       "category": "AUDIT_AREA",
       "rootCauseConfidence": "UNVERIFIED",
       "sourceFiles": [],
-      "relatedCommits": [],
-      "currentMainStatus": "UNVERIFIED",
-      "repairBranchStatus": "NOT_STARTED",
-      "testStatus": "UNVERIFIED",
+      "relatedCommits": [
+        "b39ff5d",
+        "d2063c7",
+        "45e4fbc"
+      ],
+      "currentMainStatus": "ISOLATED_INTEGRATION_ONLY_NOT_DEPLOYED",
+      "repairBranchStatus": "PARTIAL_VERIFIED_OR_INTEGRATED",
+      "testStatus": "TARGETED_EVIDENCE_SCOPE_ONLY",
       "merged": false,
       "deployed": "UNVERIFIED",
       "productionStateCertified": false,
       "fullSessionCertified": false,
       "resourceSoakCertified": false,
-      "remainingWork": "Inspect source, historical evidence and existing regression scope; reproduce before repair",
+      "remainingWork": "Confirmed exact-window result-cache leak repaired. Provider available-at fidelity and universal lookahead prevention remain unverified.",
       "finalDisposition": "OPEN"
     },
     {
@@ -812,16 +848,20 @@
       "category": "AUDIT_AREA",
       "rootCauseConfidence": "UNVERIFIED",
       "sourceFiles": [],
-      "relatedCommits": [],
-      "currentMainStatus": "UNVERIFIED",
-      "repairBranchStatus": "NOT_STARTED",
-      "testStatus": "UNVERIFIED",
+      "relatedCommits": [
+        "b39ff5d",
+        "d2063c7",
+        "45e4fbc"
+      ],
+      "currentMainStatus": "ISOLATED_INTEGRATION_ONLY_NOT_DEPLOYED",
+      "repairBranchStatus": "PARTIAL_VERIFIED_OR_INTEGRATED",
+      "testStatus": "TARGETED_EVIDENCE_SCOPE_ONLY",
       "merged": false,
       "deployed": "UNVERIFIED",
       "productionStateCertified": false,
       "fullSessionCertified": false,
       "resourceSoakCertified": false,
-      "remainingWork": "Inspect source, historical evidence and existing regression scope; reproduce before repair",
+      "remainingWork": "Priority quant/provider timeout paths retain semaphore slots until settlement. External registration expiry remains an unverified integration risk.",
       "finalDisposition": "OPEN"
     },
     {
@@ -1032,16 +1072,20 @@
       "category": "AUDIT_AREA",
       "rootCauseConfidence": "UNVERIFIED",
       "sourceFiles": [],
-      "relatedCommits": [],
-      "currentMainStatus": "UNVERIFIED",
-      "repairBranchStatus": "NOT_STARTED",
-      "testStatus": "UNVERIFIED",
+      "relatedCommits": [
+        "b39ff5d",
+        "d2063c7",
+        "45e4fbc"
+      ],
+      "currentMainStatus": "ISOLATED_INTEGRATION_ONLY_NOT_DEPLOYED",
+      "repairBranchStatus": "PARTIAL_VERIFIED_OR_INTEGRATED",
+      "testStatus": "TARGETED_EVIDENCE_SCOPE_ONLY",
       "merged": false,
       "deployed": "UNVERIFIED",
       "productionStateCertified": false,
       "fullSessionCertified": false,
       "resourceSoakCertified": false,
-      "remainingWork": "Inspect source, historical evidence and existing regression scope; reproduce before repair",
+      "remainingWork": "Next-session backup uses pinned readonly SQLite view and path.basename cleanup; 2 concurrent snapshot tests pass. Large DB/crash stress remains.",
       "finalDisposition": "OPEN"
     },
     {
@@ -1212,16 +1256,20 @@
       "category": "AUDIT_AREA",
       "rootCauseConfidence": "UNVERIFIED",
       "sourceFiles": [],
-      "relatedCommits": [],
-      "currentMainStatus": "UNVERIFIED",
-      "repairBranchStatus": "NOT_STARTED",
-      "testStatus": "UNVERIFIED",
+      "relatedCommits": [
+        "b39ff5d",
+        "d2063c7",
+        "45e4fbc"
+      ],
+      "currentMainStatus": "ISOLATED_INTEGRATION_ONLY_NOT_DEPLOYED",
+      "repairBranchStatus": "PARTIAL_VERIFIED_OR_INTEGRATED",
+      "testStatus": "TARGETED_EVIDENCE_SCOPE_ONLY",
       "merged": false,
       "deployed": "UNVERIFIED",
       "productionStateCertified": false,
       "fullSessionCertified": false,
       "resourceSoakCertified": false,
-      "remainingWork": "Inspect source, historical evidence and existing regression scope; reproduce before repair",
+      "remainingWork": "Partial next-session probe now always NO_GO with required checks NOT_RUN; full release evidence driver remains unfinished.",
       "finalDisposition": "OPEN"
     },
     {
@@ -1252,16 +1300,20 @@
       "category": "AUDIT_AREA",
       "rootCauseConfidence": "UNVERIFIED",
       "sourceFiles": [],
-      "relatedCommits": [],
-      "currentMainStatus": "UNVERIFIED",
-      "repairBranchStatus": "NOT_STARTED",
-      "testStatus": "UNVERIFIED",
+      "relatedCommits": [
+        "b39ff5d",
+        "d2063c7",
+        "45e4fbc"
+      ],
+      "currentMainStatus": "ISOLATED_INTEGRATION_ONLY_NOT_DEPLOYED",
+      "repairBranchStatus": "PARTIAL_VERIFIED_OR_INTEGRATED",
+      "testStatus": "TARGETED_EVIDENCE_SCOPE_ONLY",
       "merged": false,
       "deployed": "UNVERIFIED",
       "productionStateCertified": false,
       "fullSessionCertified": false,
       "resourceSoakCertified": false,
-      "remainingWork": "Inspect source, historical evidence and existing regression scope; reproduce before repair",
+      "remainingWork": "Source SHA is not executed artifact attestation; release probe explicitly refuses readiness without required evidence.",
       "finalDisposition": "OPEN"
     },
     {
@@ -1503,6 +1555,43 @@
       "resourceSoakCertified": false,
       "remainingWork": "Inspect source, historical evidence and existing regression scope; reproduce before repair",
       "finalDisposition": "OPEN"
+    }
+  ],
+  "validationCheckpoint": {
+    "targetedMergedTests": 67,
+    "schedulerRelatedTests": 29,
+    "gatewayTests": 31,
+    "typecheck": "PASS",
+    "build": "PASS",
+    "fullSuite": "RUNNING",
+    "wallClockSoak": "NOT_CERTIFIED",
+    "deployment": "NOT_DEPLOYED"
+  },
+  "confirmedRegressions": [
+    {
+      "id": "EXACT_QUERY_CACHE_IDENTITY",
+      "evidence": "failing-before / passing-after",
+      "status": "FIXED_ISOLATED"
+    },
+    {
+      "id": "FAST_LANE_HIDDEN_CAPACITY",
+      "evidence": "4 evaluations under cap 3 before fix",
+      "status": "FIXED_ISOLATED"
+    },
+    {
+      "id": "GATEWAY_EXPIRY_OWNERSHIP",
+      "evidence": "failing-before / passing-after ownership regression",
+      "status": "FIXED_ISOLATED"
+    },
+    {
+      "id": "PRIORITY_SCHEDULER_HIDDEN_CAPACITY",
+      "evidence": "2 evaluations under cap 1 before fix",
+      "status": "FIXED_ISOLATED"
+    },
+    {
+      "id": "SQLITE_CERTIFICATION_SNAPSHOT",
+      "evidence": "concurrent WAL writer / pinned view test",
+      "status": "FIXED_ISOLATED"
     }
   ]
 }

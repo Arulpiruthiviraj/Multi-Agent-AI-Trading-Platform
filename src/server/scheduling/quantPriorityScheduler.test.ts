@@ -669,6 +669,24 @@ describe('quantPriorityScheduler', () => {
     expect(h.evaluateCallsBySymbol.get('HANG')).toBe(1);
   });
 
+  it('expired queued candidates release their semaphore waiter without freeing running work', async () => {
+    const h = harness({ quantWorkerPoolSize: 1, maxQueueDepth: 3,
+      quantEvaluationTimeoutMs: 100, quantQuarantineMaxAgeMs: 200,
+      p2DeadlineMs: 100, sweepIntervalMs: 20 });
+    h.seedBars('HANG', 400, 30 * 60_000);
+    h.setEvaluatorHangs('HANG');
+    h.admit({ symbol: 'HANG', priority: P2, source: 'CYCLE' });
+    await sleep(50);
+    for (let i = 0; i < 5; i++) {
+      const symbol = `WAIT${i}`;
+      h.seedBars(symbol, 400, 30 * 60_000);
+      const outcome = await h.admit({ symbol, priority: P2, source: 'CYCLE' }).outcome;
+      expect(outcome.terminalState).toBe('ASSESSMENT_EXPIRED');
+      expect(h.scheduler.getMetrics().quantPoolWaiting).toBe(0);
+    }
+    expect(h.maxConcurrentEvals()).toBe(1);
+  });
+
   it('quant-stage watchdog: a late settle after quarantine is discarded, never presented as current', async () => {
     const h = harness({
       quantWorkerPoolSize: 1,

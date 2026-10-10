@@ -104,7 +104,7 @@ async function main(): Promise<void> {
       else reject(new Error(`End-of-soak proof FAILED: AiOfflineQuantCertification exited with code ${code}`));
     });
   });
-  console.log('=== ARGUS 3-HOUR SOAK complete (stability + execution-path proof) ===');
+  console.log(`=== ARGUS ${wallMinutes}-MINUTE REQUESTED SOAK complete (synthetic iterations + separate execution-path proof; resource stability NOT_CERTIFIED) ===`);
 }
 
 main().catch((e) => {
