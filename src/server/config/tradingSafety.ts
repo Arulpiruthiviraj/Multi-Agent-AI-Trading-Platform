@@ -319,10 +319,19 @@ export interface TradingSafety {
   quantSchedulerMaxQueueDepth: number;
   /** Liveness watchdog for one scheduler-initiated provider fetch -> PROVIDER_TIMEOUT. */
   quantSchedulerDataFetchTimeoutMs: number;
+  /** 2026-10-10 (P2 scheduler review): liveness watchdog for one quant-stage
+   *  evaluateSymbol() call. On expiry the quant slot is quarantined (returned to the
+   *  pool) while the dedup entry is kept - mirrors the fast-lane hung-lease
+   *  quarantine (27e17d3). */
+  quantSchedulerQuantEvaluationTimeoutMs: number;
+  /** 2026-10-10 (P2 scheduler review): max age of a quarantined quant evaluation
+   *  before the sweeper evicts it and releases the dedup entry. */
+  quantSchedulerQuantQuarantineMaxAgeMs: number;
+  /** 2026-10-10 (P2 scheduler review): max age of an external (fast-lane)
+   *  evaluation registration before the sweeper evicts it. */
+  quantSchedulerExternalRegistrationMaxAgeMs: number;
   /** How long a terminal outcome is remembered for singleflight dedup. */
   quantSchedulerDedupWindowMs: number;
-  /** Scheduler routing check: sufficient-count but older-tail cache -> data-fetch queue. */
-  quantSchedulerTailFreshnessToleranceMs: number;
   /** Deadline/expiry sweeper cadence. */
   quantSchedulerSweepIntervalMs: number;
   /** Per-priority assessment deadlines (admission -> terminal). */
@@ -816,8 +825,10 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'quantSchedulerDataFetchPoolSize',
   'quantSchedulerMaxQueueDepth',
   'quantSchedulerDataFetchTimeoutMs',
+  'quantSchedulerQuantEvaluationTimeoutMs',
+  'quantSchedulerQuantQuarantineMaxAgeMs',
+  'quantSchedulerExternalRegistrationMaxAgeMs',
   'quantSchedulerDedupWindowMs',
-  'quantSchedulerTailFreshnessToleranceMs',
   'quantSchedulerSweepIntervalMs',
   'quantSchedulerP0DeadlineMs',
   'quantSchedulerP1DeadlineMs',
@@ -1021,8 +1032,10 @@ function loadTradingSafety(): TradingSafety {
     'quantSchedulerDataFetchPoolSize',
     'quantSchedulerMaxQueueDepth',
     'quantSchedulerDataFetchTimeoutMs',
+    'quantSchedulerQuantEvaluationTimeoutMs',
+    'quantSchedulerQuantQuarantineMaxAgeMs',
+    'quantSchedulerExternalRegistrationMaxAgeMs',
     'quantSchedulerDedupWindowMs',
-    'quantSchedulerTailFreshnessToleranceMs',
     'quantSchedulerSweepIntervalMs',
     'quantSchedulerP0DeadlineMs',
     'quantSchedulerP1DeadlineMs',

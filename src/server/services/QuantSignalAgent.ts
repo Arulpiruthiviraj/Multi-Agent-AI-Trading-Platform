@@ -28,7 +28,7 @@ import { db } from '../db';
 import * as schema from '../db/schema';
 import { marketDataWorker, type RescueRequestClass } from './MarketDataWorker';
 import { getCachedMoverSymbols } from '../continuous/MarketUniverseScanner';
-import { historicalDataGateway, Bar, isDailyBarFinal } from '../engines/backtest/HistoricalDataGateway';
+import { historicalDataGateway, Bar, isDailyBarFinal, expectedBarCountForWindow } from '../engines/backtest/HistoricalDataGateway';
 import { getRegisteredHistoricalBarProvider } from '../engines/backtest/historicalBarProvider';
 import { classifyRegime, RegimeResult } from '../quant/RegimeEngine';
 import { quantCoreBridge } from './QuantCoreBridge';
@@ -53,7 +53,7 @@ import { riskRewardRatio, expectedValue, levelsAreDirectionallyConsistent, MIN_S
 import type { RiskRewardResult } from '../quant/risk/ExpectedValue';
 import { computeLiveStrategyWinRate } from '../quant/risk/LiveStrategyPerformance';
 import { MIN_BARS } from '../quant/RegimeEngine';
-import { tradingSafety, isQuantColdStartBootstrapEnabled, isQuantIndependentQualificationEnabled, isStrategySelectionConfluenceGuardEnabled } from '../config/tradingSafety';
+import { tradingSafety, isQuantColdStartBootstrapEnabled, isQuantIndependentQualificationEnabled, isStrategySelectionConfluenceGuardEnabled, isQuantPrioritySchedulerEnabled } from '../config/tradingSafety';
 import { computeInternalEnsembleQualification, shouldSuppressForConfluenceGuard, resolveEnsembleEvidenceForForecast } from '../quant/internalQuantEnsemble';
 import { buildForecast } from '../research/forecastEngine';
 import { isRuntimeFlagEnabled, resolveRuntimeNumber } from '../config/effectiveRuntimeConfig';
@@ -69,6 +69,18 @@ import { buildEliteTraderDecision } from '../desk/EliteTraderDecision';
 import { isMultiAssetEnabled } from '../config/multiAsset';
 import { classifyAsset } from '../multiAsset/AssetClassifier';
 import { createSingleFlightGuard } from '../core/singleFlightInterval';
+// 2026-10-09 (P2 scheduler mission, Task C): bounded priority quant scheduler. Control-plane
+// only - evaluateSymbol()'s signature and behavior contract are unchanged; the scheduler calls
+// it as a black box. Feature-flagged (QUANT_PRIORITY_SCHEDULER_ENABLED, default off): the
+// legacy runCycle fan-out below is byte-for-byte unchanged when the flag is off.
+import {
+  initQuantPriorityScheduler,
+  getQuantPriorityScheduler,
+  runQuantSchedulerBatch,
+  resolveQuantSchedulerConfig,
+  QuantCandidatePriority,
+  type QuantPriorityScheduler,
+} from '../scheduling/quantPriorityScheduler';
 import { isExperimentalStrategyLive } from '../config/quantExperimentalStrategies';
 import { getTradingDateStr, tradingWallTimeToIso, TRADING_TIMEZONE } from '../core/TradingCalendar';
 import { replaySafety } from '../replay/replaySafety';
@@ -293,6 +305,12 @@ export class QuantSignalAgent {
     }
     if (this.intervalId) return;
     const cycleMs = this.cycleIntervalMs();
+    // 2026-10-09 (P2 scheduler, Task C): opt-in bounded priority scheduling. Default off -
+    // zero behavior change unless the operator explicitly sets QUANT_PRIORITY_SCHEDULER_ENABLED.
+    if (isQuantPrioritySchedulerEnabled()) {
+      this.initPriorityScheduler();
+      console.log('[QuantSignalAgent] QUANT_PRIORITY_SCHEDULER_ENABLED=true - runCycle admits its universe to the bounded priority scheduler (P0 urgent mover / P1 promoted / P2 normal / P3 background) instead of the legacy snapshot fan-out.');
+    }
     console.log(`[QuantSignalAgent] Starting - real regime/market-context evaluation every ${cycleMs / 1000}s for actively-tracked symbols.`);
     void this.cycleGuard.run(() => this.runCycle());
     this.intervalId = setInterval(() => {
@@ -305,6 +323,34 @@ export class QuantSignalAgent {
       clearInterval(this.intervalId);
       this.intervalId = null;
     }
+    // 2026-10-09 (P2 scheduler, Task C): stopping the agent retires the scheduler too -
+    // in-flight candidates settle to explicit terminals (never silently dropped) and the
+    // sweeper stops. A later start() builds a fresh scheduler via initPriorityScheduler().
+    try {
+      getQuantPriorityScheduler()?.stop();
+    } catch {
+      /* scheduler shutdown must never break agent stop */
+    }
+  }
+
+  /**
+   * 2026-10-09 (P2 scheduler, Task C): wires the bounded priority scheduler's
+   * dependencies. evaluateSymbol stays the black-box evaluation entry point - its
+   * signature and behavior contract are unchanged (the task's explicit constraint).
+   * Called from start() when the feature flag is on, and lazily from runCycle as a
+   * defensive fallback.
+   */
+  private initPriorityScheduler(): void {
+    initQuantPriorityScheduler({
+      evaluateSymbol: (symbol, options) => this.evaluateSymbol(symbol, options),
+      getBars: (s, tf, sMs, eMs) => historicalDataGateway.getBars(s, tf, sMs, eMs),
+      ensureBars: (s, tf, sMs, eMs) => historicalDataGateway.ensureBars(s, tf, sMs, eMs),
+      providerRateLimitedUntilMs: () => historicalDataGateway.getBarsRateLimitedUntilMs(),
+      minBars: MIN_BARS_TO_EVALUATE,
+      expectedBarCount: (tf, sMs, eMs) => expectedBarCountForWindow(tf, sMs, eMs),
+      lookbackDays: LOOKBACK_DAYS,
+      timeframe: TIMEFRAME,
+    });
   }
 
   /** Synthetic Market Session Simulator (2026-09-14 mandate, Phase 7): a manual trigger for the
@@ -364,6 +410,26 @@ export class QuantSignalAgent {
       scheduledSymbols: symbols, resumeSymbol: this.nextCycleSymbol,
       providerId: getRegisteredHistoricalBarProvider()?.id ?? null,
     }));
+    // 2026-10-09 (P2 scheduler, Task C): feature-flagged scheduler path. Flag off (the
+    // default) keeps the legacy snapshot+worker-pool fan-out below byte-for-byte - every
+    // existing scheduler test exercises that path. Flag on: the cycle's universe is
+    // admitted to the bounded priority scheduler (priority affects WHEN each symbol is
+    // evaluated, never any gate outcome) and the same QUANT_CYCLE_STARTED ->
+    // QUANT_CYCLE_COMPLETED pair is emitted. Fail-closed: any failure in the scheduler
+    // path falls back to the legacy fan-out rather than skipping the cycle.
+    if (isQuantPrioritySchedulerEnabled()) {
+      try {
+        if (!getQuantPriorityScheduler()) this.initPriorityScheduler();
+        const scheduler = getQuantPriorityScheduler();
+        if (scheduler) {
+          await this.runCycleViaScheduler(scheduler, symbols, { cycleId, scheduledAtMs, cycleStarted });
+          return;
+        }
+        console.error('[QuantSignalAgent] Priority scheduler unavailable after init - falling back to legacy fan-out.');
+      } catch (e) {
+        console.error('[QuantSignalAgent] Priority scheduler path failed - falling back to legacy fan-out', e);
+      }
+    }
     let nextIndex = 0;
     let abortRateLimit = false;
     let anySuccess = false;
@@ -421,6 +487,57 @@ export class QuantSignalAgent {
     if (anySuccess) {
       notePipelineAgentSuccess('QuantEngine');
     } else if (abortRateLimit) {
+      notePipelineAgentGated('QuantEngine');
+    }
+  }
+
+  /**
+   * 2026-10-09 (P2 scheduler, Task C): the feature-flagged scheduler path for runCycle.
+   * Admits the cycle's universe to the bounded priority scheduler and awaits every
+   * candidate's terminal state (bounded by quantSchedulerMaxBatchWaitMs). Priority
+   * affects WHEN each symbol is evaluated, never any gate outcome - evaluateSymbol()
+   * itself is unchanged. Emits the same QUANT_CYCLE_COMPLETED vocabulary as the legacy
+   * path (plus terminalStateCounts and a scheduler:'priority' marker) so the H1
+   * STARTED -> COMPLETED observability invariant holds on both paths.
+   */
+  private async runCycleViaScheduler(
+    scheduler: QuantPriorityScheduler,
+    symbols: string[],
+    ctx: { cycleId: string; scheduledAtMs: number; cycleStarted: number },
+  ): Promise<void> {
+    // P0 for real market movers (urgent), P2 for the normal active universe. P1 is for
+    // externally-promoted dynamic candidates (discovery/fast-lane admissions via the
+    // scheduler's admit API), P3 for background refresh - neither originates here.
+    const movers = new Set(getCachedMoverSymbols().map((s) => s.toUpperCase()));
+    const summary = await runQuantSchedulerBatch(scheduler, symbols, {
+      cycleId: ctx.cycleId,
+      priorityOf: (symbol) =>
+        movers.has(symbol.toUpperCase())
+          ? QuantCandidatePriority.P0_URGENT_MOVER
+          : QuantCandidatePriority.P2_NORMAL,
+      source: 'CYCLE',
+      emitIdeas: true,
+    });
+    // Fairness pointer, same spirit as the legacy path's resume logic: a symbol still
+    // without a terminal state after the bounded batch wait stays tracked by the
+    // scheduler, and next cycle's re-admission dedups onto it via singleflight.
+    this.nextCycleSymbol = summary.notAttemptedSymbols[0] ?? null;
+    const schedulerConfig = resolveQuantSchedulerConfig();
+    observeSafe(() => structuredLogger.info('quant_cycle_completed', {
+      category: 'DISCOVERY', eventType: 'QUANT_CYCLE_COMPLETED',
+      cycleId: ctx.cycleId, durationMs: Date.now() - ctx.cycleStarted,
+      concurrency: schedulerConfig.quantWorkerPoolSize,
+      attemptedSymbols: summary.attemptedSymbols,
+      completedSymbols: summary.completedSymbols,
+      notAttemptedSymbols: summary.notAttemptedSymbols,
+      externallyDedupedSymbols: summary.externallyDedupedSymbols,
+      reason: summary.reason,
+      terminalStateCounts: summary.terminalStateCounts,
+      scheduler: 'priority',
+    }));
+    if (summary.completedSymbols.length > 0) {
+      notePipelineAgentSuccess('QuantEngine');
+    } else if (summary.reason === 'BATCH_WAIT_EXCEEDED') {
       notePipelineAgentGated('QuantEngine');
     }
   }

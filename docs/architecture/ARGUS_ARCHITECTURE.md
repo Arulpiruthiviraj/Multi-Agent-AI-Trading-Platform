@@ -1,5 +1,56 @@
 # Argus Architecture
 
+## 2026-10-09: Bounded priority quant scheduler (P2) — control-plane redesign of quant evaluation scheduling
+
+Forensic driver: the 2026-10-09 audit measured admission→Quant-completion at p50
+12.9min / p95 63.7min / max 193min under the old `QuantSignalAgent.runCycle`
+snapshot+worker-pool model (MRNA admitted 10:27, promoted 10:29, assessed 17:14 —
+after close; CRCL admitted+promoted but never assessed). Late movers waited for the
+next cycle; a cycle's universe snapshot was fixed at cycle top.
+
+**What changed.** New subsystem `src/server/scheduling/quantPriorityScheduler.ts` —
+a scheduling control plane, not a decision plane:
+
+- **Priority queues** P0 urgent mover / P1 promoted dynamic candidate / P2 normal
+  active symbol / P3 background refresh. Priority affects WHEN a candidate is
+  evaluated, NEVER whether Risk approves or any gate outcome. Priority-ordered
+  semaphore handoff lets a P0 admitted mid-cycle jump queued P2/P3 work; in-flight
+  evaluations are never preempted.
+- **Separated data acquisition from computation.** Candidate → data-readiness check
+  (cheap cache read) → missing/stale → bounded data-fetch pool (`ensureBars` with
+  timeout, outside any quant slot) → quant-ready → bounded quant worker pool. A slow
+  provider fetch for symbol A can never hold a quant compute slot needed by B/C/D.
+  Java bridge calls stay bounded at `QuantCoreBridge` (100ms timeout, circuit
+  breaker); AI keeps a fully separate budget (`AICallGovernor` +
+  `quantContradictionMaxWaitMs`) and is never drawn from scheduler pools.
+- **Terminal-state invariant.** Every admitted candidate resolves to exactly one
+  observable outcome: `ASSESSED` / `DATA_UNAVAILABLE` / `PROVIDER_TIMEOUT` /
+  `PROVIDER_BACKOFF` / `EXPIRED` / `EVICTED` / `NOT_ELIGIBLE` / `ERROR` /
+  `ASSESSMENT_EXPIRED`. Nothing silently disappears — not even rejected admissions.
+- **Per-priority assessment deadlines** with a sweeper. Past deadline while queued →
+  `ASSESSMENT_EXPIRED`; settling after deadline in flight → `ASSESSMENT_EXPIRED`
+  with `evaluationSettledLate=true`, never presented as a current assessment.
+- **Singleflight dedup** on symbol+evaluation-fingerprint across discovery, Fast
+  Lane, and scheduler, plus `registerExternalEvaluation()` so the scheduler never
+  duplicates an active Fast Lane evaluation (coordination point with
+  `fastLaneEvaluator.ts`'s lease-held-until-settle dedup, which it does not touch).
+- **Per-stage instrumentation** (`admittedAt` → `queuedAt` → `dataFetchStartedAt` /
+  `FinishedAt` → `quantStartedAt` → `quantFinishedAt` → `terminalAt`) emitted as
+  structured `QUANT_SCHEDULER_*` observability events, so any delay is attributable.
+- **User-endorsed SLA**: HIGH (P0/P1) admission→start ≤30s p95 / →complete ≤60s
+  p95; NORMAL (P2) ≤60s / ≤120s p95 — encoded in
+  `src/server/scheduling/quantPriorityScheduler.test.ts`, values from
+  `config/tradingSafety.json`.
+
+**Safety posture.** Feature-flagged (`QUANT_PRIORITY_SCHEDULER_ENABLED`, default
+off): flag off keeps the legacy `runCycle` fan-out byte-for-byte — all existing
+scheduler certification (`src/server/certification/quantSchedulerSla.test.ts`) still
+exercises that path. No strategy, threshold, lifecycle, consensus, RiskEngine, OMS,
+or broker changes; `evaluateSymbol()`'s signature and behavior contract are
+untouched (the scheduler calls it as a black box). Pool sizes (4/4) are
+conservative starting values, not measured optima — the measurement procedure to
+raise them with evidence is `docs/testing/QUANT_SCHEDULER_CAPACITY.md`.
+
 ## 2026-10-08: Code-only defect repair — lifecycle authorization semantics, worker-thread backups, watchdog hardening, premarket event, quant-readiness diagnostics
 
 Code-only follow-through on the 2026-10-08 live PAPER session's 13 defects. No database
