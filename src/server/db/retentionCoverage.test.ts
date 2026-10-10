@@ -52,6 +52,22 @@ const REQUIRED_RETENTION_TABLES = [
   'consensus_decisions',
   'consensus_evidence',
   'reconciliation_events',
+  // 2026-10-10 defect hunt (Track 1, part 2): twelve more append-only session-path tables
+  // with no prune path (session workers in live configurations). The coverage test failed
+  // by design to catch these - it does now. risk_gate_results is deliberately absent:
+  // per-gate detail of risk_assessments, which is in the permanent decision record.
+  'portfolio_snapshots',
+  'ai_usage',
+  'kronos_predictions',
+  'prediction_outcomes',
+  'prediction_outcome_horizons',
+  'missed_opportunities',
+  'learning_observations',
+  'meta_label_features',
+  'quant_forecasts',
+  'explainability_reports',
+  'training_examples',
+  'learned_rules',
 ];
 
 describe('retention coverage', () => {

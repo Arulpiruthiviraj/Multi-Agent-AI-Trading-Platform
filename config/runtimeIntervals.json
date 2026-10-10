@@ -96,5 +96,18 @@
   "consensusDecisionsRetentionDays": 90,
   "consensusEvidenceRetentionDays": 90,
   "reconciliationEventsRetentionDays": 90,
+  "_soakPathRetention2Comment": "2026-10-10 defect hunt (Track 1, part 2): twelve more append-only session-path tables with no prune path. Fast-decaying artifacts (ai_usage, kronos_predictions, quant_forecasts) 30d; audit/learning records 90d. risk_gate_results deliberately NOT swept: per-gate detail of risk_assessments (permanent decision record).",
+  "portfolioSnapshotsRetentionDays": 90,
+  "aiUsageRetentionDays": 30,
+  "kronosPredictionsRetentionDays": 30,
+  "predictionOutcomesRetentionDays": 90,
+  "predictionOutcomeHorizonsRetentionDays": 90,
+  "missedOpportunitiesRetentionDays": 90,
+  "learningObservationsRetentionDays": 90,
+  "metaLabelFeaturesRetentionDays": 90,
+  "quantForecastsRetentionDays": 30,
+  "explainabilityReportsRetentionDays": 90,
+  "trainingExamplesRetentionDays": 90,
+  "learnedRulesRetentionDays": 90,
   "secEdgarForm4Ms": 21600000
 }

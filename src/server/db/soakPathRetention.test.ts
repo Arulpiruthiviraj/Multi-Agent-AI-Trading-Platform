@@ -181,3 +181,126 @@ describe('soak-path retention sweeps (2026-10-10 defect hunt)', () => {
     await expect(sweepConsensusDebatePredictionsRetention()).resolves.toBe(0);
   });
 });
+
+/**
+ * Table-driven cutoff/idempotency tests for the 12 part-2 sweepers (2026-10-10 defect
+ * hunt, Track 1). Each inserts one old row (must be pruned) and one recent row (must
+ * survive), runs the sweeper, and asserts exactly one deletion plus idempotency.
+ */
+describe('soak-path retention sweepers part 2 (table-driven)', () => {
+  let tmpDbPath: string;
+  let sqliteDb: any;
+  let sweepers: Record<string, (nowMs?: number) => Promise<number>>;
+  let intervals: any;
+
+  const daysAgoIso = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const uid = () => `${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+
+  beforeAll(async () => {
+    tmpDbPath = path.join(os.tmpdir(), `argus_soakpath2_${Date.now()}_${process.pid}.db`);
+    process.env.ARGUS_DB_PATH = tmpDbPath;
+
+    ({ sqliteDb } = await import('../db/index'));
+    const mod = await import('./operationalRetention');
+    sweepers = {
+      portfolio_snapshots: mod.sweepPortfolioSnapshotsRetention,
+      ai_usage: mod.sweepAiUsageRetention,
+      kronos_predictions: mod.sweepKronosPredictionsRetention,
+      prediction_outcomes: mod.sweepPredictionOutcomesRetention,
+      prediction_outcome_horizons: mod.sweepPredictionOutcomeHorizonsRetention,
+      missed_opportunities: mod.sweepMissedOpportunitiesRetention,
+      learning_observations: mod.sweepLearningObservationsRetention,
+      meta_label_features: mod.sweepMetaLabelFeaturesRetention,
+      quant_forecasts: mod.sweepQuantForecastsRetention,
+      explainability_reports: mod.sweepExplainabilityReportsRetention,
+      training_examples: mod.sweepTrainingExamplesRetention,
+      learned_rules: mod.sweepLearnedRulesRetention,
+    };
+    ({ runtimeIntervals: intervals } = await import('../config/runtimeIntervals'));
+  });
+
+  afterAll(() => {
+    try { fs.unlinkSync(tmpDbPath); } catch { /* best effort */ }
+    delete process.env.ARGUS_DB_PATH;
+  });
+
+  const retentionKey: Record<string, string> = {
+    portfolio_snapshots: 'portfolioSnapshotsRetentionDays',
+    ai_usage: 'aiUsageRetentionDays',
+    kronos_predictions: 'kronosPredictionsRetentionDays',
+    prediction_outcomes: 'predictionOutcomesRetentionDays',
+    prediction_outcome_horizons: 'predictionOutcomeHorizonsRetentionDays',
+    missed_opportunities: 'missedOpportunitiesRetentionDays',
+    learning_observations: 'learningObservationsRetentionDays',
+    meta_label_features: 'metaLabelFeaturesRetentionDays',
+    quant_forecasts: 'quantForecastsRetentionDays',
+    explainability_reports: 'explainabilityReportsRetentionDays',
+    training_examples: 'trainingExamplesRetentionDays',
+    learned_rules: 'learnedRulesRetentionDays',
+  };
+  const TABLES = Object.keys(retentionKey);
+
+  beforeEach(() => {
+    for (const t of TABLES) sqliteDb.prepare(`DELETE FROM ${t}`).run();
+  });
+
+  function insert(table: string, old: boolean) {
+    const id = uid();
+    const days = intervals[retentionKey[table]] as number;
+    const iso = old ? daysAgoIso(days + 5) : daysAgoIso(1);
+    switch (table) {
+      case 'portfolio_snapshots':
+        sqliteDb.prepare(`INSERT INTO portfolio_snapshots (symbol, quantity, source, snapshot_at) VALUES ('TST', 10, 'ARGUS', ?)`).run(iso);
+        break;
+      case 'ai_usage':
+        sqliteDb.prepare(`INSERT INTO ai_usage (id, timestamp, provider, model) VALUES (?, ?, 'p', 'm')`).run(id, iso);
+        break;
+      case 'kronos_predictions':
+        sqliteDb.prepare(`INSERT INTO kronos_predictions (symbol, prediction, confidence, forecast_horizon, expected_move, volatility, support, resistance, model, timestamp) VALUES ('TST', 'UP', 0.7, '1h', 0.01, 0.02, 100, 110, 'chronos', ?)`).run(iso);
+        break;
+      case 'prediction_outcomes':
+        sqliteDb.prepare(`INSERT INTO prediction_outcomes (prediction_id, source_table, symbol, outcome, evaluated_at) VALUES (?, 'agent_predictions', 'TST', 'WIN', ?)`).run(id, iso);
+        break;
+      case 'prediction_outcome_horizons':
+        sqliteDb.prepare(`INSERT INTO prediction_outcome_horizons (prediction_id, source_table, symbol, horizon_label, horizon_bars, forward_return, forward_direction, evaluated_at) VALUES (?, 'agent_predictions', 'TST', '1h', 12, 0.01, 'UP', ?)`).run(id, iso);
+        break;
+      case 'missed_opportunities':
+        sqliteDb.prepare(`INSERT INTO missed_opportunities (id, symbol, detected_at, classification, classification_reason, evidence_at_decision_json, evaluation_horizon_minutes, evaluation_status, evaluation_attempts) VALUES (?, 'TST', ?, 'MISSED_ENTRY', 'r', '{}', 60, 'PENDING', 0)`).run(id, iso);
+        break;
+      case 'learning_observations':
+        sqliteDb.prepare(`INSERT INTO learning_observations (id, symbol, observation_type, trust_level, evidence_json, created_at) VALUES (?, 'TST', 'TRADE_OUTCOME', 'EXECUTED', '{}', ?)`).run(id, iso);
+        break;
+      case 'meta_label_features':
+        sqliteDb.prepare(`INSERT INTO meta_label_features (id, strategy_id, symbol, feature_timestamp, schema_version, evidence_source, created_at) VALUES (?, 's', 'TST', ?, 1, 'vote', ?)`).run(id, iso, iso);
+        break;
+      case 'quant_forecasts':
+        sqliteDb.prepare(`INSERT INTO quant_forecasts (forecast_id, symbol, created_at, direction, horizon_label, agent_name, forecast_status, sample_size, model_version, provenance_json) VALUES (?, 'TST', ?, 'UP', '1d', 'a', 'ACTIVE', 10, 'v1', '{}')`).run(id, iso);
+        break;
+      case 'explainability_reports':
+        sqliteDb.prepare(`INSERT INTO explainability_reports (trace_id, symbol, decision, report_text, timestamp) VALUES (?, 'TST', 'BUY', 'r', ?)`).run(id, iso);
+        break;
+      case 'training_examples':
+        sqliteDb.prepare(`INSERT INTO training_examples (id, transaction_id, observed_at, available_at, decision_at, feature_snapshot, label, created_at) VALUES (?, ?, ?, ?, ?, '{}', 'WIN', ?)`).run(id, id, iso, iso, iso, iso);
+        break;
+      case 'learned_rules':
+        sqliteDb.prepare(`INSERT INTO learned_rules (id, agent, cause, rule, confidence, timestamp) VALUES (?, 'ReflectionEngine', 'c', 'r', 0.9, ?)`).run(id, iso);
+        break;
+    }
+  }
+
+  function count(table: string): number {
+    return (sqliteDb.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get() as { c: number }).c;
+  }
+
+  for (const table of TABLES) {
+    it(`${table}: prunes rows older than retention, keeps recent rows, idempotent`, async () => {
+      insert(table, true);   // old: must be pruned
+      insert(table, false);  // recent: must survive
+      const deleted = await sweepers[table]();
+      expect(deleted).toBe(1);
+      expect(count(table)).toBe(1);
+      expect(await sweepers[table]()).toBe(0);
+      expect(count(table)).toBe(1);
+    });
+  }
+});

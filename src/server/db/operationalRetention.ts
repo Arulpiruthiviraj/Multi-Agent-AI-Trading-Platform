@@ -438,6 +438,64 @@ export async function sweepReconciliationEventsRetention(nowMs = Date.now()): Pr
   return sweepIsoTextTable('reconciliation_events', 'checked_at', runtimeIntervals.reconciliationEventsRetentionDays, nowMs);
 }
 
+/**
+ * 2026-10-10 defect hunt (Track 1, soak-path retention, part 2): twelve more append-only
+ * tables on the session path with no prune path. None fired in the all-AI-down probe
+ * iteration, but each is written by a session worker in a live configuration (see the
+ * runtimeIntervals.ts comment for the writer mapping). Same batched + yielding
+ * discipline; failures log loudly, never swallowed.
+ */
+export async function sweepPortfolioSnapshotsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('portfolio_snapshots', 'snapshot_at', runtimeIntervals.portfolioSnapshotsRetentionDays, nowMs);
+}
+
+export async function sweepAiUsageRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('ai_usage', 'timestamp', runtimeIntervals.aiUsageRetentionDays, nowMs);
+}
+
+export async function sweepKronosPredictionsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('kronos_predictions', 'timestamp', runtimeIntervals.kronosPredictionsRetentionDays, nowMs);
+}
+
+export async function sweepPredictionOutcomesRetention(nowMs = Date.now()): Promise<number> {
+  // evaluated_at is the outcome timestamp; the table has no created_at.
+  return sweepIsoTextTable('prediction_outcomes', 'evaluated_at', runtimeIntervals.predictionOutcomesRetentionDays, nowMs);
+}
+
+export async function sweepPredictionOutcomeHorizonsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('prediction_outcome_horizons', 'evaluated_at', runtimeIntervals.predictionOutcomeHorizonsRetentionDays, nowMs);
+}
+
+export async function sweepMissedOpportunitiesRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('missed_opportunities', 'detected_at', runtimeIntervals.missedOpportunitiesRetentionDays, nowMs);
+}
+
+export async function sweepLearningObservationsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('learning_observations', 'created_at', runtimeIntervals.learningObservationsRetentionDays, nowMs);
+}
+
+export async function sweepMetaLabelFeaturesRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('meta_label_features', 'created_at', runtimeIntervals.metaLabelFeaturesRetentionDays, nowMs);
+}
+
+export async function sweepQuantForecastsRetention(nowMs = Date.now()): Promise<number> {
+  // forecast_id is the primary key here, not id.
+  return sweepIsoTextTable('quant_forecasts', 'created_at', runtimeIntervals.quantForecastsRetentionDays, nowMs, 'forecast_id');
+}
+
+export async function sweepExplainabilityReportsRetention(nowMs = Date.now()): Promise<number> {
+  // trace_id is the primary key here, not id.
+  return sweepIsoTextTable('explainability_reports', 'timestamp', runtimeIntervals.explainabilityReportsRetentionDays, nowMs, 'trace_id');
+}
+
+export async function sweepTrainingExamplesRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('training_examples', 'created_at', runtimeIntervals.trainingExamplesRetentionDays, nowMs);
+}
+
+export async function sweepLearnedRulesRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('learned_rules', 'timestamp', runtimeIntervals.learnedRulesRetentionDays, nowMs);
+}
+
 export const RETENTION_SWEEPERS: RetentionSweeper[] = [
   { table: 'candidate_rankings', sweep: sweepCandidateRankingsRetention },
   { table: 'trade_plan_revalidations', sweep: sweepTradePlanRevalidationRetention },
@@ -471,4 +529,20 @@ export const RETENTION_SWEEPERS: RetentionSweeper[] = [
   { table: 'consensus_decisions', sweep: sweepConsensusDecisionsRetention },
   { table: 'consensus_evidence', sweep: sweepConsensusEvidenceRetention },
   { table: 'reconciliation_events', sweep: sweepReconciliationEventsRetention },
+  // 2026-10-10 defect hunt (Track 1, part 2): twelve more append-only session-path tables
+  // with no prune path (not hit in the all-AI-down probe, but written by session workers
+  // in live configurations). Same coverage-test guarantee. risk_gate_results is
+  // deliberately absent: per-gate detail of risk_assessments (permanent record).
+  { table: 'portfolio_snapshots', sweep: sweepPortfolioSnapshotsRetention },
+  { table: 'ai_usage', sweep: sweepAiUsageRetention },
+  { table: 'kronos_predictions', sweep: sweepKronosPredictionsRetention },
+  { table: 'prediction_outcomes', sweep: sweepPredictionOutcomesRetention },
+  { table: 'prediction_outcome_horizons', sweep: sweepPredictionOutcomeHorizonsRetention },
+  { table: 'missed_opportunities', sweep: sweepMissedOpportunitiesRetention },
+  { table: 'learning_observations', sweep: sweepLearningObservationsRetention },
+  { table: 'meta_label_features', sweep: sweepMetaLabelFeaturesRetention },
+  { table: 'quant_forecasts', sweep: sweepQuantForecastsRetention },
+  { table: 'explainability_reports', sweep: sweepExplainabilityReportsRetention },
+  { table: 'training_examples', sweep: sweepTrainingExamplesRetention },
+  { table: 'learned_rules', sweep: sweepLearnedRulesRetention },
 ];
