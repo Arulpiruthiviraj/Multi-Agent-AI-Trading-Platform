@@ -23,8 +23,9 @@ public final class Kama {
      * @param fastPeriod  the short/fast EMA-equivalent period (paper's example: 2).
      * @param slowPeriod  the long/slow EMA-equivalent period (paper's example: 30).
      * @return full KAMA series (same length as {@code prices}); {@code prices[0]} seeds the
-     *         series (matching MovingAverages.ema's own first-price-seeded convention for
-     *         consistency), and every index before {@code adaWin} history exists carries forward
+     *         series (Kaufman's own convention for the adaptive moving average, independent of
+     *         MovingAverages.ema's seeding), and every index before {@code adaWin} history exists
+     *         carries forward
      *         the seed via a slowSC-only step (ER treated as 0 - the honest "not enough history to
      *         judge trend efficiency yet" case, never a fabricated ratio).
      */

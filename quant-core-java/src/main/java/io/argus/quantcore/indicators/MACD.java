@@ -1,8 +1,9 @@
 package io.argus.quantcore.indicators;
 
 /**
- * MACD(12,26,9), ported byte-for-byte from src/server/engines/MACDEngine.ts's {@code calculate()}.
- * Uses {@link MovingAverages#ema} for the same first-price-seeded EMA the TS engine computes.
+ * MACD(12,26,9), ported byte-for-byte from src/server/engines/MACDEngine.ts's {@code calculate()}
+ * as of its 2026-09-22 seeding fix. Uses {@link MovingAverages#ema} for the same SMA-seeded,
+ * backfilled EMA series the TS engine computes (see MovingAverages' own header for the history).
  */
 public final class MACD {
     private final int shortPeriod;

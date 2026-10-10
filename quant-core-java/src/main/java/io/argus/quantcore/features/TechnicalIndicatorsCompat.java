@@ -14,8 +14,9 @@ import io.argus.quantcore.indicators.Volatility;
  *       TechnicalIndicators.ts's {@code calculateSMA} (same "return last price if too short"
  *       fallback, same trailing-window average) - not a second SMA implementation.</li>
  *   <li>{@link #ema} is NEW: {@link MovingAverages#ema} mirrors MACDEngine.ts's private
- *       {@code calcEMA} (seeds with the raw first price, iterates every bar, returns the full
- *       series) for its own CORE-strategy callers. TechnicalIndicators.ts's {@code calculateEMA}
+ *       {@code calcEMA} as of its 2026-09-22 seeding fix (SMA-seeded warmup backfill, iterates
+ *       every bar, returns the full series) for its own CORE-strategy callers.
+ *       TechnicalIndicators.ts's {@code calculateEMA}
  *       is a genuinely different algorithm - seeds with an SMA(period) over the FIRST {@code
  *       period} values, iterates starting at index {@code period}, returns only the final value,
  *       and falls back to the last price when there isn't a full period of history yet. trend.ts's
