@@ -4665,3 +4665,13 @@ and explicit recovery remain necessary. Evaluation remains research-only and can
 emit ideas or orders. No concurrency/timeout threshold was increased. The defect is
 proven by source and controlled regression; its causal contribution to October 9's
 resource stalls is unverified. This repair remains isolated, not deployed.
+
+## 2026-10-10: merged hardening and certification limits
+
+Current-main tracing and the isolated scheduler/cache/Fast Lane repairs are integrated in the repair branch. Scheduler correlation retains one cycle start, one completion and one real evaluation per attempt; diagnostics carry the existing cycle context through the cooperative admission queue. Dynamic scheduling remains default-off. The new quantAdmissionSoak test uses real scheduler, SQLite, gateway and Quant compatibility calculations; only the universe, clock and external provider endpoints are controlled. Its default represents three scheduling hours in accelerated time, not three wall-clock hours or a Java-engine certificate. Optional wall-clock mode is explicitly separate.
+
+A newly reproduced historical cache defect allowed different exact query cutoffs within one hour to collide. Bar result keys now preserve exact start/end times under the existing LRU cap; retry cooldown keys remain hour-coalesced scheduling hints. This prevents that cache-hit future-bar leak, without claiming provider available-at provenance or universal lookahead freedom.
+
+Next-session CLI snapshots use a pinned read-only SQLite backup and refuse a torn main/WAL file-copy fallback. Snapshot failure cannot produce certifiable state. Windows cleanup uses path.basename. A concurrent-WAL regression proves a fixed source snapshot while writer commits continue. The source remains untouched.
+
+The next-session CLI is a partial policy/DB-data probe. Its named test-suite pointers and source SHA do not attest an executed release or successful resource/provider soak. Required release evidence is explicit in config/releaseCertification.json; until those checks actually execute on the candidate release, this command returns NO_GO with NOT_RUN evidence. No lifecycle is fabricated, no trading gate is weakened, and no live engine is restarted by this batch. LIVE_NO_GO remains authoritative.

@@ -50,6 +50,22 @@ describe('HistoricalDataGateway sufficient but old daily cache', () => {
     registerHistoricalBarProvider({ id: 'ibkr_gateway', fetchBars });
   }
 
+  it('does not leak future bars or omit newly eligible bars when exact windows share an hour bucket', async () => {
+    const symbol = 'PIT';
+    const hour = Math.floor(requestedEnd / 3_600_000) * 3_600_000;
+    seed(symbol, hour + 20 * 60_000);
+    const broad = await gateway.getBars(symbol, '1Day', requestedStart, hour + 30 * 60_000);
+    expect(broad.at(-1)?.timestamp).toBe(hour + 20 * 60_000);
+    const earlier = await gateway.getBars(symbol, '1Day', requestedStart, hour + 10 * 60_000);
+    expect(earlier.every(bar => bar.timestamp <= hour + 10 * 60_000)).toBe(true);
+    const later = await gateway.getBars(symbol, '1Day', requestedStart, hour + 40 * 60_000);
+    expect(later.at(-1)?.timestamp).toBe(hour + 20 * 60_000);
+    const narrowedStart = await gateway.getBars(symbol, '1Day', hour + 25 * 60_000, hour + 40 * 60_000);
+    expect(narrowedStart).toEqual([]);
+    const expandedStart = await gateway.getBars(symbol, '1Day', hour + 15 * 60_000, hour + 40 * 60_000);
+    expect(expandedStart).toHaveLength(1);
+  });
+
   it('refreshes a weeks-old cache despite enough samples, then uses the real updated tail', async () => {
     const symbol = 'TAIL';
     seed(symbol, requestedEnd - quantScheduling.dailyCacheTailRefreshGapMs - dayMs);

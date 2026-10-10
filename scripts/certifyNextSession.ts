@@ -1,9 +1,9 @@
 /**
  * certify-next-session (isolated child).
  *
- * Runs the full pre-market release-gate certification against an ISOLATED copy of the
+ * Runs partial pre-market policy/data diagnostics against an ISOLATED copy of the
  * production database. The parent process (argus-cli `certify-next-session`) creates the
- * copy with VACUUM INTO from the live DB; this child never touches the live DB.
+ * copy with a pinned read-only SQLite backup; this child never touches the live DB.
  *
  * Safety:
  * - Read-only with respect to production. Never seeds lifecycle rows, never promotes
@@ -194,6 +194,17 @@ async function main() {
     }
 
     report.conditions = conditions;
+    // Source TS probes cannot attest an executed release binary or exercise the named
+    // runtime suites. Never let positive lifecycle/data probes turn those unknowns green.
+    const releaseConfig = JSON.parse(fs.readFileSync(path.resolve('config/releaseCertification.json'), 'utf8'));
+    if (!Array.isArray(releaseConfig.requiredEvidence) || !releaseConfig.requiredEvidence.length
+      || releaseConfig.requiredEvidence.some((name: unknown) => typeof name !== 'string' || !name)) {
+      throw new Error('INVALID_RELEASE_CERTIFICATION_CONFIG');
+    }
+    report.certificationScope = 'PRODUCTION_STATE_POLICY_AND_DB_DATA_PROBES_ONLY';
+    report.unverifiedReleaseChecks = releaseConfig.requiredEvidence.map((area: string) => ({ area, status: 'NOT_RUN' }));
+    conditions.push('RELEASE_CERTIFICATION_INCOMPLETE: executed artifact and required runtime/soak evidence are not attested by this command.');
+    overall = 'NO_GO';
     report.overallStatus = overall;
 
     closeDb();

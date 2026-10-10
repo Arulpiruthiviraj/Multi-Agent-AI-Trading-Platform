@@ -1,0 +1,4 @@
+{
+  "$comment": "A snapshot policy/data probe is not a release certificate. These required evidence areas must actually be exercised on the candidate artifact and state; naming test files does not count as PASS.",
+  "requiredEvidence": ["executedArtifact", "runtimeConfig", "schemaCompatibility", "freshMarketData", "historicalFreshness", "schedulerSla", "fastLaneRecovery", "aiIndependence", "riskSpine", "omsIdempotency", "reconciliation", "backupStress", "watchdogChaos", "resourceSoak", "pointInTimeReplay", "fullSyntheticSession"]
+}

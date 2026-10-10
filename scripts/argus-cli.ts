@@ -5,7 +5,7 @@
  */
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   clearEnginePid,
@@ -2234,7 +2234,6 @@ const commands: Record<string, () => Promise<void>> = {
     // touches the live DB; nothing here seeds lifecycle, promotes strategies, or arms
     // LIVE. A NO_GO verdict is a certification RESULT (exit 3), not a bug.
     const { parse } = await import('dotenv');
-    const { execFileSync } = await import('node:child_process');
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { resolve } = await import('node:path');
@@ -2252,20 +2251,9 @@ const commands: Record<string, () => Promise<void>> = {
     const snapshotRoot = mkdtempSync(join(tmpdir(), 'argus-certify-next-session-'));
     const snapshotDb = resolve(snapshotRoot, 'snapshot.db');
     try {
-      // Consistent snapshot via the sqlite3 online backup API: works against a live
-      // engine DB, never writes to the source. Falls back to a WAL-aware file copy
-      // (main DB + WAL copied in that order: replay stays consistent, possibly stale).
-      try {
-        execFileSync('sqlite3', [sourcePath, `.backup '${snapshotDb.replace(/'/g, "''")}'`], { stdio: 'pipe' });
-      } catch (backupError: any) {
-        const { copyFileSync } = await import('node:fs');
-        copyFileSync(sourcePath, snapshotDb);
-        for (const suffix of ['-wal', '-shm']) {
-          const sidecar = sourcePath + suffix;
-          if (existsSync(sidecar)) copyFileSync(sidecar, snapshotDb + suffix);
-        }
-        console.error(`certify-next-session: sqlite3 .backup failed (${backupError?.message || backupError}); used file copy instead (snapshot may reflect the last checkpoint).`);
-      }
+      // A failed copy is not certifiable state. No torn main/WAL-file fallback.
+      const { createCertificationSnapshot } = await import('./lib/certificationSnapshot');
+      await createCertificationSnapshot(sourcePath, snapshotDb);
       const code = await new Promise<number>((resolveCode, reject) => {
         const child = spawn(process.execPath, [
           '--use-system-ca', resolve('node_modules/tsx/dist/cli.mjs'),
@@ -2282,7 +2270,7 @@ const commands: Record<string, () => Promise<void>> = {
     } finally {
       // Remove only this freshly-created snapshot directory; never sourcePath.
       if (dirname(snapshotRoot) !== resolve(tmpdir()) ||
-          !snapshotRoot.split('/').pop()!.startsWith('argus-certify-next-session-')) {
+          !basename(snapshotRoot).startsWith('argus-certify-next-session-')) {
         throw new Error('Refusing snapshot cleanup outside the owned temporary directory');
       }
       rmSync(snapshotRoot, { recursive: true, force: true });

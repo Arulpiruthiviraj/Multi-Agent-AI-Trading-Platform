@@ -141,6 +141,13 @@ export class HistoricalDataGateway {
   }
 
   private memoryKey(symbol: string, timeframe: string, startMs: number, endMs: number): string {
+    // Exact query identity: hour buckets can return bars after an earlier cutoff,
+    // or omit bars when the caller expands a window within the same hour.
+    return `${symbol}|${timeframe}|${startMs}|${endMs}`;
+  }
+
+  private refreshCooldownKey(symbol: string, timeframe: string, startMs: number, endMs: number): string {
+    // Retry scheduling deliberately coalesces nearby requests; it does not cache results.
     const startBucket = Math.floor(startMs / 3_600_000);
     const endBucket = Math.floor(endMs / 3_600_000);
     return `${symbol}|${timeframe}|${startBucket}|${endBucket}`;
@@ -222,7 +229,7 @@ export class HistoricalDataGateway {
     const dailyTailNeedsRefresh = (timeframe === '1Day' || timeframe === '1D')
       && latestTimestamp != null
       && endMs - latestTimestamp > quantScheduling.dailyCacheTailRefreshGapMs;
-    const refreshKey = this.memoryKey(symbol, timeframe, startMs, endMs);
+    const refreshKey = this.refreshCooldownKey(symbol, timeframe, startMs, endMs);
     const now = Date.now();
     const lastAttempt = this.staleTailRefreshAttempts.get(refreshKey);
     const retryCoolingDown = lastAttempt != null && now >= lastAttempt
