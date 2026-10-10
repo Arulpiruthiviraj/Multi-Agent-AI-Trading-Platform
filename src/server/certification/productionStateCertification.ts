@@ -90,7 +90,26 @@ const KNOWN_STATES = new Set<string>([
 
 /** Full production-state certification result. All fields are mandatory outputs. */
 export interface ProductionStateCertification {
-  /** Always true: this certification performs no writes. */
+  /**
+   * The legitimate promotion route for the missing-link diagnosis (2026-10-09, Priority 3).
+   * The Oct-9 forensic + the Layer-3 probe found LIFECYCLE_PROMOTION_ROUTE=ABSENT: no
+   * production path existed from research evidence to a recorded VALIDATED/CHAMPION
+   * lifecycle decision. That link is now designed as code in
+   * src/server/lifecycle/certificationBridge.ts: research evidence -> sample-sufficiency
+   * gates -> UNSKIPPABLE operator review -> the existing recordStrategyLifecycleTransition.
+   * Static architectural fact (this certification stays read-only): the bridge exists,
+   * requires a recorded operator review for every transition, never auto-promotes, and
+   * cannot express LIVE authority. When this certification reports missing lifecycle rows
+   * or zero authorized strategies, THIS is the legitimate route to fix it — not a seed,
+   * not a shortcut.
+   */
+  certificationBridge: {
+    kind: 'OPERATOR_REVIEWED_BRIDGE';
+    module: 'src/server/lifecycle/certificationBridge.ts';
+    workflow: 'evaluateCertification -> applyOperatorReview -> executeCertificationTransition';
+    operatorReviewRequired: true;
+    liveAuthorityPossible: false;
+  };  /** Always true: this certification performs no writes. */
   readOnly: true;
   generatedAt: string;
   /** Strategies in the environment's live-evaluation set (canonical registry resolution). */
@@ -165,6 +184,13 @@ export async function certifyProductionState(): Promise<ProductionStateCertifica
   return {
     readOnly: true,
     generatedAt: report.generatedAt,
+    certificationBridge: {
+      kind: 'OPERATOR_REVIEWED_BRIDGE',
+      module: 'src/server/lifecycle/certificationBridge.ts',
+      workflow: 'evaluateCertification -> applyOperatorReview -> executeCertificationTransition',
+      operatorReviewRequired: true,
+      liveAuthorityPossible: false,
+    },
     TOTAL_STRATEGIES: report.summary.total,
     ENABLED_QUANT_STRATEGIES: report.summary.total,
     LIFECYCLE_ROWS: lifecycleRows,

@@ -1,3 +1,4 @@
+// LABEL: UNIT
 import { describe, it, expect } from 'vitest';
 import { convertFastEvaluationToCanonicalIdea, computeEvidenceFingerprint } from './fastCanonicalAdapter';
 import type { FastEvaluationResult, FastOpportunityCandidate } from './FastOpportunityCandidate';

@@ -1,3 +1,4 @@
+// LABEL: POINT_IN_TIME_REPLAY
 import { describe, it, expect } from 'vitest';
 import { runReplay } from './replayRunner';
 import { buildOct05ForensicScenario } from './oct05ForensicScenario';

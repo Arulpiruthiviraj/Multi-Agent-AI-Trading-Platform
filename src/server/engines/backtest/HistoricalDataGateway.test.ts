@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
+// LABEL: COMPONENT / FAULT_INJECTION
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -399,9 +400,13 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
       registerHistoricalBarProvider({ id: 'ibkr_gateway', fetchBars: async () => { throw new Error('IBKR down'); } });
 
       const now = Date.now();
-      const start = now - 90 * 86_400_000;
       // Seed just enough cached bars to clear tradingSafety.regimeMinBars via the existing
       // cache-first check, before ensureBars() ever reaches the IBKR/Alpaca branches at all.
+      // (2026-10-09 stale-tail update: the fixture's newest bar is kept FRESH (within
+      // quantBarsTailFreshnessToleranceMs) so this test still pins the original intent -
+      // "fresh cache wins over a failed provider". A STALE tail with a failed IBKR must now
+      // fall through to Alpaca instead - covered by the stale-tail describe block below.)
+      const start = now - tradingSafety.regimeMinBars * 86_400_000;
       for (let i = 0; i < tradingSafety.regimeMinBars; i++) {
         await seedRawBar('CACHEDENOUGH', '1Day', start + i * 86_400_000, 50 + i);
       }
@@ -461,6 +466,243 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
       expect(selectSpy).toHaveBeenCalledTimes(1);
 
       selectSpy.mockRestore();
+    });
+  });
+
+  // Stale-tail freshness gate (2026-10-09 remediation): ensureBars() used to judge cache
+  // sufficiency on row count/coverage only, so an old-but-large cache suppressed the provider
+  // refresh entirely (Oct-9 missed-opportunity forensic: 508/972 late bar-input records with
+  // a latest timestamp >7 days old). A count/coverage-sufficient cache now also needs a fresh
+  // tail for present-time requests; historical end-date windows stay exempt.
+  describe('stale-tail freshness gate (2026-10-09)', () => {
+    const tol = () => tradingSafety.quantBarsTailFreshnessToleranceMs;
+
+    /** Seeds `count` daily bars ending exactly at `newestTs` (count = regimeMinBars => count/coverage-sufficient regardless of tail age). */
+    async function seedStaleSizedCache(symbol: string, newestTs: number, count: number = tradingSafety.regimeMinBars) {
+      const start = newestTs - (count - 1) * 86_400_000;
+      for (let i = 0; i < count; i++) {
+        await db.insert(schema.ohlcvBars).values({
+          id: `${symbol}:1Day:${start + i * 86_400_000}`, symbol, timeframe: '1Day',
+          timestamp: start + i * 86_400_000,
+          open: 10, high: 11, low: 9, close: 10.5, volume: 1000, source: 'alpaca',
+        }).onConflictDoNothing();
+      }
+      return { start, newestTs };
+    }
+
+    function alpacaBarsAt(timestamps: number[]) {
+      return timestamps.map((ts) => ({
+        t: new Date(ts).toISOString(), o: 10, h: 11, l: 9, c: 10.5, v: 1000,
+      }));
+    }
+
+    beforeEach(() => {
+      historicalDataGateway.clearBarsRateLimitBackoff();
+    });
+
+    it('accepts a fresh tail without calling the provider (existing cache-first behavior preserved)', async () => {
+      const fetchMock = vi.fn(async () => { throw new Error('fetch must not be called - fresh tail'); });
+      vi.stubGlobal('fetch', fetchMock);
+      const now = Date.now();
+      const { start } = await seedStaleSizedCache('FRESHTAIL', now - tol() / 2); // comfortably inside tolerance
+      await historicalDataGateway.ensureBars('FRESHTAIL', '1Day', start, now);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('falls through to a provider refresh when the tail is stale despite sufficient row count', async () => {
+      const now = Date.now();
+      await seedStaleSizedCache('STALETAIL', now - 10 * 86_400_000); // 10-day-old newest bar
+      const freshBarTs = now - 30 * 60_000;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ bars: alpacaBarsAt([now - 86_400_000, freshBarTs]) }),
+      }));
+      vi.stubGlobal('fetch', fetchMock);
+      await historicalDataGateway.ensureBars('STALETAIL', '1Day', now - 90 * 86_400_000, now);
+      expect(fetchMock).toHaveBeenCalled();
+      const after = await historicalDataGateway.getBars('STALETAIL', '1Day', now - 90 * 86_400_000, now);
+      expect(after[after.length - 1].timestamp).toBeGreaterThanOrEqual(now - tol());
+    });
+
+    it('is deterministic at the exact tolerance boundary: just inside accepted, just outside refreshed', async () => {
+      const now = Date.now();
+      const margin = 60_000; // 60s each side - far above any test-vs-code clock skew
+      const inside = await seedStaleSizedCache('BOUNDIN', now - (tol() - margin));
+      const outside = await seedStaleSizedCache('BOUNDOUT', now - (tol() + margin));
+      const fetchMock = vi.fn(async (..._args: unknown[]) => ({
+        ok: true,
+        json: async () => ({ bars: alpacaBarsAt([now - 30 * 60_000]) }),
+      }));
+      vi.stubGlobal('fetch', fetchMock);
+      await historicalDataGateway.ensureBars('BOUNDIN', '1Day', inside.start, now);
+      await historicalDataGateway.ensureBars('BOUNDOUT', '1Day', outside.start, now);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const calledUrls = fetchMock.mock.calls.map((c) => String(c[0]));
+      expect(calledUrls.some((u) => u.includes('BOUNDOUT'))).toBe(true);
+      expect(calledUrls.some((u) => u.includes('BOUNDIN'))).toBe(false);
+    });
+
+    it('exempts historical end-date requests (backtest/replay windows) from the freshness requirement', async () => {
+      const fetchMock = vi.fn(async () => { throw new Error('fetch must not be called - historical window'); });
+      vi.stubGlobal('fetch', fetchMock);
+      const now = Date.now();
+      const endMs = now - 10 * 86_400_000; // clearly before now
+      const { start } = await seedStaleSizedCache('HISTWIN', endMs - 86_400_000);
+      await historicalDataGateway.ensureBars('HISTWIN', '1Day', start, endMs);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('surfaces the provider error honestly when a stale-tail refresh fails - old data is not relabeled fresh', async () => {
+      const now = Date.now();
+      await seedStaleSizedCache('PROVFAIL', now - 10 * 86_400_000);
+      const fetchMock = vi.fn(async () => { throw new Error('alpaca exploded'); });
+      vi.stubGlobal('fetch', fetchMock);
+      await expect(
+        historicalDataGateway.ensureBars('PROVFAIL', '1Day', now - 90 * 86_400_000, now),
+      ).rejects.toThrow(/alpaca exploded/);
+      // The old rows sit untouched in place - never fabricated, never presented as fresh.
+      const after = await historicalDataGateway.getBars('PROVFAIL', '1Day', now - 90 * 86_400_000, now);
+      expect(after).toHaveLength(tradingSafety.regimeMinBars);
+      expect(after[after.length - 1].timestamp).toBeLessThan(now - tol());
+    });
+
+    it('leaves missing data missing when the provider returns empty on a stale tail (DATA_STALE, no fabrication)', async () => {
+      const now = Date.now();
+      await seedStaleSizedCache('EMPTYPROV', now - 10 * 86_400_000);
+      const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ bars: [] }) }));
+      vi.stubGlobal('fetch', fetchMock);
+      await expect(
+        historicalDataGateway.ensureBars('EMPTYPROV', '1Day', now - 90 * 86_400_000, now),
+      ).rejects.toThrow(/DATA_STALE/);
+      expect(fetchMock).toHaveBeenCalled();
+      const after = await historicalDataGateway.getBars('EMPTYPROV', '1Day', now - 90 * 86_400_000, now);
+      expect(after).toHaveLength(tradingSafety.regimeMinBars); // nothing fabricated
+    });
+
+    it('keeps the SYNTHETIC_SIMULATION isolation guard fail-closed: stale cache returns without network, empty cache still refuses', async () => {
+      const fetchMock = vi.fn(async () => { throw new Error('fetch must not be called during synthetic simulation'); });
+      vi.stubGlobal('fetch', fetchMock);
+      process.env.SYNTHETIC_SIMULATION = 'true';
+      try {
+        const now = Date.now();
+        // Stale-but-sufficient cache under synthetic: returns from cache, no real network fetch.
+        await seedStaleSizedCache('SYNTHSTALE', now - 10 * 86_400_000);
+        await historicalDataGateway.ensureBars('SYNTHSTALE', '1Day', now - 90 * 86_400_000, now);
+        expect(fetchMock).not.toHaveBeenCalled();
+        // Empty cache under synthetic: still refuses a real network fetch (existing guard).
+        await expect(
+          historicalDataGateway.ensureBars('SYNTHEMPTY2', '1Day', now - 86_400_000, now),
+        ).rejects.toThrow(/refuses a real network fetch/);
+        expect(fetchMock).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.SYNTHETIC_SIMULATION;
+      }
+    });
+
+    it('coalesces concurrent ensureBars calls for the same window into a single provider fetch', async () => {
+      const now = Date.now();
+      await seedStaleSizedCache('COALESCE', now - 10 * 86_400_000);
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const fetchMock = vi.fn(async () => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 100)); // force overlap of the three callers
+        inFlight--;
+        return { ok: true, json: async () => ({ bars: alpacaBarsAt([now - 30 * 60_000]) }) };
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const start = now - 90 * 86_400_000;
+      await Promise.all([
+        historicalDataGateway.ensureBars('COALESCE', '1Day', start, now),
+        historicalDataGateway.ensureBars('COALESCE', '1Day', start, now),
+        historicalDataGateway.ensureBars('COALESCE', '1Day', start, now),
+      ]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(maxInFlight).toBe(1);
+    });
+
+    it('evicts a wedged coalescing entry after quantBarsCoalesceEntryMaxAgeMs so a stalled provider fetch cannot hang future callers forever', async () => {
+      // 2026-10-10 (defect hunt, Lead 6): the inner provider call has no timeout/cancel
+      // path, so a stalled fetch (never-resolving promise) used to wedge the window's
+      // coalescing entry forever - every later ensureBars for that window awaited the
+      // same dead promise. The entry must be TTL-evicted so a later caller starts fresh.
+      const savedTtl = tradingSafety.quantBarsCoalesceEntryMaxAgeMs;
+      tradingSafety.quantBarsCoalesceEntryMaxAgeMs = 150; // short TTL: test-only override
+      try {
+        const now = Date.now();
+        const start = now - 90 * 86_400_000;
+        // Empty cache + a provider fetch that never settles (stalled TCP: fetch has no timeout).
+        const fetchMock = vi.fn(async () => new Promise(() => {}));
+        vi.stubGlobal('fetch', fetchMock);
+        const p1 = historicalDataGateway.ensureBars('WEDGESYM', '1Day', start, now);
+        p1.catch(() => {}); // never settles; never an unhandled rejection either
+        const key = historicalDataGateway.memoryKey('WEDGESYM', '1Day', start, now);
+        // The entry is admitted synchronously, before the inner's first await.
+        expect(historicalDataGateway.inflightEnsureBars.has(key)).toBe(true);
+        await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+        // TTL eviction fires even though the inner never settled (with the short test
+        // TTL it may fire while the paced fetch is still queued - either way the dead
+        // entry is gone and no future caller can wedge onto it).
+        await vi.waitFor(() => expect(historicalDataGateway.inflightEnsureBars.has(key)).toBe(false));
+        // A later caller is NOT wedged onto the dead promise: it starts a fresh inner fetch.
+        const p2 = historicalDataGateway.ensureBars('WEDGESYM', '1Day', start, now);
+        p2.catch(() => {});
+        // The fresh entry is admitted synchronously (before any await in ensureBars).
+        expect(historicalDataGateway.inflightEnsureBars.has(key)).toBe(true);
+        await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      } finally {
+        tradingSafety.quantBarsCoalesceEntryMaxAgeMs = savedTtl;
+      }
+    });
+
+    it('preserves the 429 retry cooldown: backoff still arms, and a stale tail is surfaced honestly instead of served silently', async () => {
+      const now = Date.now();
+      // Arm the shared backoff with an empty cache (existing preserved behavior).
+      const r429 = vi.fn(async () => ({
+        ok: false, status: 429, statusText: 'Too Many Requests',
+        headers: { get: (k: string) => (k.toLowerCase() === 'retry-after' ? '60' : null) },
+        text: async () => 'rate limited',
+      }));
+      vi.stubGlobal('fetch', r429);
+      await expect(
+        historicalDataGateway.ensureBars('COOLARM', '1Day', now - 86_400_000, now),
+      ).rejects.toThrow(/429 Too Many Requests/);
+      expect(historicalDataGateway.getBarsRateLimitedUntilMs()).toBeGreaterThan(Date.now());
+
+      // With the cooldown armed, a STALE-tail caller gets the honest rate-limit error,
+      // not a silent serve of stale data.
+      await seedStaleSizedCache('COOLSTALE', now - 10 * 86_400_000);
+      const mustNotFetch = vi.fn(async () => { throw new Error('provider must not be hit during backoff'); });
+      vi.stubGlobal('fetch', mustNotFetch);
+      await expect(
+        historicalDataGateway.ensureBars('COOLSTALE', '1Day', now - 90 * 86_400_000, now),
+      ).rejects.toThrow(/rate-limited until/);
+      expect(mustNotFetch).not.toHaveBeenCalled();
+
+      // A FRESH-tail caller during the same backoff still degrades gracefully from cache.
+      const { start } = await seedStaleSizedCache('COOLFRESH', now - tol() / 2);
+      await historicalDataGateway.ensureBars('COOLFRESH', '1Day', start, now);
+      expect(mustNotFetch).not.toHaveBeenCalled();
+    });
+
+    it('falls through to Alpaca (never silent stale cache) when IBKR fails on a stale tail', async () => {
+      const { registerHistoricalBarProvider } = await import('./historicalBarProvider');
+      registerHistoricalBarProvider({ id: 'ibkr_gateway', fetchBars: async () => { throw new Error('IBKR down'); } });
+      try {
+        const now = Date.now();
+        await seedStaleSizedCache('IBKRSTALE', now - 10 * 86_400_000);
+        const fetchMock = vi.fn(async () => ({
+          ok: true, json: async () => ({ bars: alpacaBarsAt([now - 30 * 60_000]) }),
+        }));
+        vi.stubGlobal('fetch', fetchMock);
+        await historicalDataGateway.ensureBars('IBKRSTALE', '1Day', now - 90 * 86_400_000, now);
+        expect(fetchMock).toHaveBeenCalled(); // stale cache was NOT silently served
+        const after = await historicalDataGateway.getBars('IBKRSTALE', '1Day', now - 90 * 86_400_000, now);
+        expect(after[after.length - 1].timestamp).toBeGreaterThanOrEqual(now - tol());
+      } finally {
+        registerHistoricalBarProvider(null);
+      }
     });
   });
 });

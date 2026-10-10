@@ -147,6 +147,55 @@ async function main() {
       note: 'Runtime SLA (cycle completion, per-symbol completeness, late-admission bound) is certified by src/server/certification/quantSchedulerSla.test.ts against the real scheduler with fault injection.',
     };
 
+    // --- Stale cache status: probe the isolated DB's bar tails -------------------
+    // The Oct-9 forensic found 508/972 late bar-input records with a newest bar >7d
+    // old. The gateway's stale-tail gate (f9277c7) now refuses to treat such caches
+    // as sufficient; this probe reports the production snapshot's tail health so a
+    // stale production cache is visible BEFORE open instead of discovered live.
+    try {
+      const tailTolMs = safetyCfg.quantBarsTailFreshnessToleranceMs ?? 259200000;
+      const tailRows = sqliteDb.prepare(`
+        SELECT symbol, MAX(timestamp) AS newestTs, COUNT(*) AS n
+        FROM ohlcv_bars WHERE timeframe = '1Day' GROUP BY symbol
+      `).all() as Array<{ symbol: string; newestTs: number; n: number }>;
+      const nowMs = Date.now();
+      let fresh = 0, stale = 0;
+      const staleSymbols: string[] = [];
+      for (const r of tailRows) {
+        if (r.newestTs >= nowMs - tailTolMs) fresh += 1;
+        else { stale += 1; if (staleSymbols.length < 20) staleSymbols.push(r.symbol); }
+      }
+      report.staleCacheStatus = {
+        symbolsWithDailyBars: tailRows.length,
+        freshTail: fresh,
+        staleTail: stale,
+        staleTailSample: staleSymbols,
+        toleranceMs: tailTolMs,
+        note: 'A stale tail no longer suppresses provider refresh (gateway stale-tail gate); this is visibility, not a block by itself.',
+      };
+    } catch {
+      report.staleCacheStatus = { error: 'probe failed' };
+    }
+
+    // --- PIT replay provenance: is decision_provenance populated? ---------------
+    // The replay-equality itself is suite-owned (PIT replay suite: production calc ==
+    // independent replay calc, no-lookahead enforced). The CLI honestly reports
+    // whether the isolated snapshot carries replayable provenance rows.
+    try {
+      const provCount = (sqliteDb.prepare('SELECT COUNT(*) AS n FROM decision_provenance').get() as any)?.n ?? 0;
+      const provLatest = sqliteDb.prepare('SELECT MAX(decision_time_ms) AS m FROM decision_provenance').get() as any;
+      report.pitReplay = {
+        provenanceRows: provCount,
+        latestProvenanceTime: provLatest?.m ?? null,
+        replayEquality: 'suite-owned: PIT replay suite (production calc == independent replay calc; no-lookahead enforced)',
+        note: provCount > 0
+          ? 'decision_provenance rows present in snapshot; replayability certified by the PIT suite, not this probe.'
+          : 'no decision_provenance rows in snapshot: exact point-in-time replay of recent decisions is not possible from this snapshot.',
+      };
+    } catch {
+      report.pitReplay = { error: 'decision_provenance not observable (table missing or probe failed)' };
+    }
+
     // --- Suites that certify areas this CLI cannot measure directly -----------
     // These are HONEST pointers: the CLI names the exact test file that owns each
     // area, rather than pretending a static probe certifies runtime behavior.
@@ -160,6 +209,9 @@ async function main() {
       queues: 'QUEUE BACKPRESSURE suite (known capacity + rejection behavior)',
       premarket: 'premarket wiring tests (TRADE_PLAN create/refresh/promote/downgrade/expire, PREMARKET_REFRESH_COMPLETED)',
       pitReplay: 'PIT replay suite (production calc == independent replay calc; no-lookahead enforced)',
+      lateAdmissionTest: 'src/server/scheduling/quantSchedulerForensicRegressions.test.ts (MRNA-style: high-priority mover admitted mid-cycle resolves in seconds; CRCL-style: explicit terminal; COMBINED: late admission + stale cache + slow provider + fast lane)',
+      fastLaneLeaseTest: 'src/server/fastlane/fastLaneEvaluator.test.ts (lease held until settle; caller timeout never releases capacity; bounded hung-work quarantine)',
+      quantSchedulerSla: 'src/server/scheduling/quantPriorityScheduler.test.ts (HIGH start<=30s/complete<=60s p95; NORMAL start<=60s/complete<=120s p95; per-symbol completeness invariant)',
     };
 
     // --- Overall verdict -------------------------------------------------------

@@ -40,6 +40,34 @@ const REQUIRED_RETENTION_TABLES = [
   'transaction_traces',
   'session_lifecycle_snapshots',
   'trade_lifecycle_transitions',
+  // 2026-10-09 (certification mission item 1 - OCT9_PIT_PROVENANCE_ESCAPE): per-Quant-decision
+  // PIT replay provenance.
+  'decision_provenance',
+  // 2026-10-10 defect hunt (Track 1, soak-path retention): a 180-sim-minute SOAK_3H
+  // synthetic session wrote to these four tables with no prune path anywhere in the
+  // codebase (27/8/10/1 rows per iteration) - the same defect class as
+  // candidate_rankings/news_articles. The coverage test failed by design to catch these -
+  // it does now.
+  'consensus_debate_predictions',
+  'consensus_decisions',
+  'consensus_evidence',
+  'reconciliation_events',
+  // 2026-10-10 defect hunt (Track 1, part 2): twelve more append-only session-path tables
+  // with no prune path (session workers in live configurations). The coverage test failed
+  // by design to catch these - it does now. risk_gate_results is deliberately absent:
+  // per-gate detail of risk_assessments, which is in the permanent decision record.
+  'portfolio_snapshots',
+  'ai_usage',
+  'kronos_predictions',
+  'prediction_outcomes',
+  'prediction_outcome_horizons',
+  'missed_opportunities',
+  'learning_observations',
+  'meta_label_features',
+  'quant_forecasts',
+  'explainability_reports',
+  'training_examples',
+  'learned_rules',
 ];
 
 describe('retention coverage', () => {

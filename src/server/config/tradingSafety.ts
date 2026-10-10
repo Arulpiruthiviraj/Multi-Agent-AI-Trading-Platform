@@ -23,6 +23,20 @@ export interface TradingSafety {
    *  terminally transitioned and the concurrency slot released. Resource governor, not a trading
    *  threshold. */
   fastLaneEvaluationTimeoutMs: number;
+  /** 2026-10-09 (P1 fast-lane lease fix, hung-work Part 4): consecutive caller-timeouts for ONE
+   *  symbol after which its lease is QUARANTINED - the concurrency slot is returned to the pool
+   *  (capacity recovers) while the dedup entry is kept so no replacement concurrent evaluation
+   *  can start for that symbol. quantSignalAgent.evaluateSymbol() accepts no AbortSignal and
+   *  HistoricalDataGateway's provider fetch has no timeout/cancel path, so a permanently hung
+   *  evaluation cannot be cooperatively cancelled from here - quarantine is the bounded
+   *  alternative. Resource governor, not a trading threshold. */
+  fastLaneHungLeaseMaxConsecutiveTimeouts: number;
+  /** 2026-10-09 (P1 fast-lane lease fix, hung-work Part 4): maximum age of a lease (ms) before it
+   *  is QUARANTINED even without consecutive timeouts - the backstop that guarantees a
+   *  permanently hung task can never hold Fast Lane capacity forever. Same semantics as
+   *  fastLaneHungLeaseMaxConsecutiveTimeouts: slot recovered, dedup entry kept, late settle
+   *  discarded and never double-applied. Resource governor, not a trading threshold. */
+  fastLaneHungLeaseMaxAgeMs: number;
   /** 2026-10-08 (fast-lane D5 defect fix): bound for fastCanonicalDedup.ts's in-memory
    *  evidence-fingerprint idempotency cache. Oldest-first eviction past this size.
    *  Resource governor, not a trading threshold. */
@@ -290,6 +304,48 @@ export interface TradingSafety {
    * rate-limit headroom. Fail-closed on 429 still aborts the remainder of the cycle.
    */
   quantMaxConcurrentSymbols: number;
+  /**
+   * 2026-10-09 (P2 scheduler mission, Task C): env-var name gating the bounded
+   * priority quant scheduler (src/server/scheduling/quantPriorityScheduler.ts). Off by
+   * default - QuantSignalAgent keeps its existing runCycle fan-out unless the operator
+   * explicitly opts in. Control-plane only: no strategy/threshold/gate changes.
+   */
+  quantPrioritySchedulerEnabledEnvVar: string;
+  /** Bounded pool for scheduler-driven evaluateSymbol() calls (see QUANT_SCHEDULER_CAPACITY.md). */
+  quantSchedulerQuantWorkerPoolSize: number;
+  /** Separate bounded pool for scheduler-initiated ensureBars() pre-fetches. */
+  quantSchedulerDataFetchPoolSize: number;
+  /** Admission queue bound; overflow terminally EVICTS (preemption), never drops silently. */
+  quantSchedulerMaxQueueDepth: number;
+  /** Liveness watchdog for one scheduler-initiated provider fetch -> PROVIDER_TIMEOUT. */
+  quantSchedulerDataFetchTimeoutMs: number;
+  /** 2026-10-10 (P2 scheduler review): liveness watchdog for one quant-stage
+   *  evaluateSymbol() call. On expiry the quant slot is quarantined (returned to the
+   *  pool) while the dedup entry is kept - mirrors the fast-lane hung-lease
+   *  quarantine (27e17d3). */
+  quantSchedulerQuantEvaluationTimeoutMs: number;
+  /** 2026-10-10 (P2 scheduler review): max age of a quarantined quant evaluation
+   *  before the sweeper evicts it and releases the dedup entry. */
+  quantSchedulerQuantQuarantineMaxAgeMs: number;
+  /** 2026-10-10 (P2 scheduler review): max age of an external (fast-lane)
+   *  evaluation registration before the sweeper evicts it. */
+  quantSchedulerExternalRegistrationMaxAgeMs: number;
+  /** How long a terminal outcome is remembered for singleflight dedup. */
+  quantSchedulerDedupWindowMs: number;
+  /** Deadline/expiry sweeper cadence. */
+  quantSchedulerSweepIntervalMs: number;
+  /** Per-priority assessment deadlines (admission -> terminal). */
+  quantSchedulerP0DeadlineMs: number;
+  quantSchedulerP1DeadlineMs: number;
+  quantSchedulerP2DeadlineMs: number;
+  quantSchedulerP3DeadlineMs: number;
+  /** User-endorsed certification SLA targets (HIGH = P0/P1, NORMAL = P2). */
+  quantSchedulerHighPriorityAdmissionToStartSlaMs: number;
+  quantSchedulerHighPriorityAdmissionToCompleteSlaMs: number;
+  quantSchedulerNormalAdmissionToStartSlaMs: number;
+  quantSchedulerNormalAdmissionToCompleteSlaMs: number;
+  /** Bounded wait for one scheduler-driven cycle batch. */
+  quantSchedulerMaxBatchWaitMs: number;
   predictionOutcomeIntervalMs: number;
   /**
    * P1-A remediation (2026-09-14): PredictionOutcomeEvaluator.evaluatePending() previously fetched
@@ -333,6 +389,31 @@ export interface TradingSafety {
   manualTradeCoEvalTimeoutMs: number;
   /** Skip Alpaca fetch when cached bars cover at least this fraction of expected trading days. */
   quantBarsCacheMinCoverageRatio: number;
+  /**
+   * Stale-tail remediation (2026-10-09; Oct-9 missed-opportunity forensic found 508/972 late
+   * bar-input records with a latest timestamp >7 days old): HistoricalDataGateway.ensureBars()
+   * used to judge cache sufficiency on row count/coverage only, so an old-but-large cache
+   * suppressed the provider refresh entirely. After the count/coverage gate passes, a
+   * present-time request (endMs at/near now) additionally requires the NEWEST cached bar's
+   * timestamp to be within this tolerance of now; a stale tail falls through to a provider
+   * refresh instead of being accepted. Historical end-date requests (endMs more than this
+   * tolerance before now, e.g. backtest/PIT replay windows) are exempt.
+   * Default 72h = 259,200,000ms: covers a full weekend gap (Friday 16:00 ET close -> Monday
+   * pre-open is ~65h, so a legitimately fresh Friday bar is not flagged stale on a Monday
+   * morning run), while anything older than the last full trading session's data is flagged.
+   * It is a stale-tail tripwire, not per-minute intraday recency - the fetch window itself
+   * (end=endMs) supplies intraday recency once a refresh actually runs.
+   */
+  quantBarsTailFreshnessToleranceMs: number;
+  /**
+   * 2026-10-10 (defect hunt, Lead 6): liveness bound for an ensureBars() in-flight
+   * coalescing entry (inflightEnsureBars). The inner provider call has no
+   * timeout/cancel path, so a stalled fetch would otherwise wedge the window's entry
+   * forever and hang every future caller for that window. Past this age the entry is
+   * evicted with a loud warn; a later caller starts a fresh inner. Generous on
+   * purpose - legitimate multi-page backfills take seconds.
+   */
+  quantBarsCoalesceEntryMaxAgeMs: number;
   /**
    * P1-A remediation Patch B (2026-09-14): bound on HistoricalDataGateway.memoryBars, a real,
    * standalone unbounded-Map defect found while investigating P1-A (not the proven cause of the
@@ -681,6 +762,8 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'fastLaneMaxConcurrentEvaluations',
   'fastLaneSymbolEvaluationCooldownMs',
   'fastLaneEvaluationTimeoutMs',
+  'fastLaneHungLeaseMaxConsecutiveTimeouts',
+  'fastLaneHungLeaseMaxAgeMs',
   'fastLaneCanonicalIdeaCacheMaxEntries',
   'stalePriceThresholdMs',
   'newsPriceWaitTimeoutMs',
@@ -747,6 +830,24 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'quantLookbackDays',
   'quantCycleIntervalMs',
   'quantMaxConcurrentSymbols',
+  'quantSchedulerQuantWorkerPoolSize',
+  'quantSchedulerDataFetchPoolSize',
+  'quantSchedulerMaxQueueDepth',
+  'quantSchedulerDataFetchTimeoutMs',
+  'quantSchedulerQuantEvaluationTimeoutMs',
+  'quantSchedulerQuantQuarantineMaxAgeMs',
+  'quantSchedulerExternalRegistrationMaxAgeMs',
+  'quantSchedulerDedupWindowMs',
+  'quantSchedulerSweepIntervalMs',
+  'quantSchedulerP0DeadlineMs',
+  'quantSchedulerP1DeadlineMs',
+  'quantSchedulerP2DeadlineMs',
+  'quantSchedulerP3DeadlineMs',
+  'quantSchedulerHighPriorityAdmissionToStartSlaMs',
+  'quantSchedulerHighPriorityAdmissionToCompleteSlaMs',
+  'quantSchedulerNormalAdmissionToStartSlaMs',
+  'quantSchedulerNormalAdmissionToCompleteSlaMs',
+  'quantSchedulerMaxBatchWaitMs',
   'predictionOutcomeIntervalMs',
   'predictionOutcomeBatchSize',
   'predictionOutcomeMaxCycleWallClockMs',
@@ -765,6 +866,8 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'consensusAggregationWindowMs',
   'manualTradeCoEvalTimeoutMs',
   'quantBarsCacheMinCoverageRatio',
+  'quantBarsTailFreshnessToleranceMs',
+  'quantBarsCoalesceEntryMaxAgeMs',
   'historicalBarsMemoryCacheMaxEntries',
   'quantBarsRateLimitBaseBackoffMs',
   'quantBarsRateLimitMaxBackoffMs',
@@ -934,6 +1037,33 @@ function loadTradingSafety(): TradingSafety {
   if (typeof raw.minCalibrationSampleSize !== 'number') {
     throw new Error('config/tradingSafety.json missing number field: minCalibrationSampleSize');
   }
+  for (const k of [
+    'quantSchedulerQuantWorkerPoolSize',
+    'quantSchedulerDataFetchPoolSize',
+    'quantSchedulerMaxQueueDepth',
+    'quantSchedulerDataFetchTimeoutMs',
+    'quantSchedulerQuantEvaluationTimeoutMs',
+    'quantSchedulerQuantQuarantineMaxAgeMs',
+    'quantSchedulerExternalRegistrationMaxAgeMs',
+    'quantSchedulerDedupWindowMs',
+    'quantSchedulerSweepIntervalMs',
+    'quantSchedulerP0DeadlineMs',
+    'quantSchedulerP1DeadlineMs',
+    'quantSchedulerP2DeadlineMs',
+    'quantSchedulerP3DeadlineMs',
+    'quantSchedulerHighPriorityAdmissionToStartSlaMs',
+    'quantSchedulerHighPriorityAdmissionToCompleteSlaMs',
+    'quantSchedulerNormalAdmissionToStartSlaMs',
+    'quantSchedulerNormalAdmissionToCompleteSlaMs',
+    'quantSchedulerMaxBatchWaitMs',
+  ] as const) {
+    if (typeof raw[k] !== 'number') {
+      throw new Error(`config/tradingSafety.json missing number field: ${k}`);
+    }
+  }
+  if (typeof raw.quantPrioritySchedulerEnabledEnvVar !== 'string' || !raw.quantPrioritySchedulerEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: quantPrioritySchedulerEnabledEnvVar');
+  }
   if (typeof raw.javaQuantVoteEnabledEnvVar !== 'string' || !raw.javaQuantVoteEnabledEnvVar) {
     throw new Error('config/tradingSafety.json missing string field: javaQuantVoteEnabledEnvVar');
   }
@@ -964,6 +1094,15 @@ export function isExtendedHoursExecutionEnabled(): boolean {
 /** Off unless the operator has explicitly set this env var to 'true'. See quantColdStartBootstrapEnabledEnvVar's doc comment above. */
 export function isQuantColdStartBootstrapEnabled(): boolean {
   return isRuntimeFlagEnabled(tradingSafety.quantColdStartBootstrapEnabledEnvVar);
+}
+
+/**
+ * 2026-10-09 (P2 scheduler mission, Task C): off unless the operator explicitly opts in.
+ * When true, QuantSignalAgent.runCycle admits its universe to the bounded priority
+ * scheduler instead of the legacy snapshot+worker-pool fan-out. Control-plane only.
+ */
+export function isQuantPrioritySchedulerEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.quantPrioritySchedulerEnabledEnvVar);
 }
 
 /** Off unless the operator has explicitly set this env var to 'true'. See consensusModerateTierEnabledEnvVar's doc comment above. */

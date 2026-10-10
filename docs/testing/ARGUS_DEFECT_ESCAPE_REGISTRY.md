@@ -118,6 +118,57 @@ on it. This is a testing-mission Phase 1 document; it records history, it does n
 - **NEW_RELEASE_INVARIANT:** `PIT_REPLAY` — provenance retained and replay-verified for the
   exact build under certification.
 - **Responsible layer:** LAYER 3 (production state retains provenance) + LAYER 5 checklist.
+- **IMPLEMENTED 2026-10-09 (certification mission item 1):** `decision_provenance` table
+  (drizzle 0099) + `src/server/replay/provenance/decisionProvenance.ts` — emission on the real
+  QuantSignalAgent decision path (never blocking, never a gate), no-lookahead enforced at
+  write AND replay time (future-dated provenance is REJECTED), replay through the REAL
+  `evaluateAll()` path with byte-for-byte evaluation equality gated on identical build SHA +
+  strategy-spec config versions, byte caps + per-decision row cap + registered retention
+  sweeper (90d, in RETENTION_SWEEPERS / retentionCoverage.test.ts). Regression:
+  `decisionProvenance.test.ts` (POINT_IN_TIME_REPLAY) and
+  `decisionProvenanceRetention.test.ts`.
+
+### OCT9_STALE_CACHE_TAIL_ESCAPE
+
+- **What happened (2026-10-09):** `HistoricalDataGateway.ensureBars()` judged cache
+  sufficiency on row count/coverage only. An old-but-large cache suppressed the provider
+  refresh entirely — the Oct-9 forensic found 508/972 late bar-input records with a newest
+  bar more than 7 days old. Strategies evaluated on stale inputs while the cache looked
+  "sufficient".
+- **OLD_TEST_GAP:** Gateway tests seeded caches with sufficient row counts and asserted
+  the fetch was skipped; no test seeded a sufficient-count cache with a STALE tail and
+  asserted a refresh was attempted. Fixture `CACHEDENOUGH` itself carried a 31-day-old
+  newest bar — the defect, disguised as the happy path.
+- **NEW_TEST:** Stale-tail gate tests in `HistoricalDataGateway.test.ts` (fresh tail ->
+  accept; stale tail -> refresh attempted; exact tolerance boundary +/-60s deterministic;
+  historical end-date exemption; provider failure -> old data not relabeled fresh; empty
+  provider -> missing stays missing; concurrency coalescing; 429 cooldown preserved).
+- **NEW_RELEASE_INVARIANT:** `STALE_CACHE_STATUS` — `certify-next-session` probes the
+  production snapshot's bar tails; the gateway refuses to treat a stale tail as sufficient.
+- **Responsible layer:** LAYER 1 (gateway contract) + LAYER 5 (`certify-next-session`).
+- **IMPLEMENTED 2026-10-10:** commit `f9277c7` (tail-freshness gate on `ensureBars()` cache
+  acceptance + in-flight refresh coalescing).
+
+### OCT9_FAST_LANE_LEASE_ESCAPE
+
+- **What happened (2026-10-09):** `fastLaneEvaluator.ts` released its concurrency slot AND
+  its per-symbol dedup entry on caller timeout while `evaluateSymbol()` could still be
+  running. The governor believed a slot was free while work continued (invisible
+  concurrency), and a replacement evaluation for the same symbol could start, defeating
+  the dedup guard (duplicate concurrent work).
+- **OLD_TEST_GAP:** Evaluator tests awaited the evaluator promise normally; no test timed
+  out the caller while the underlying work was still in flight and then asserted the slot
+  stayed held and no duplicate evaluation started.
+- **NEW_TEST:** Lease tests in `fastLaneEvaluator.test.ts` (caller timeout -> lease held in
+  CALLER_TIMED_OUT; late settle discarded via generation guard; replacement refused via
+  PRIOR_EVALUATION_STILL_IN_FLIGHT; bounded quarantine after N consecutive timeouts / T ms
+  age returns the slot while keeping dedup; lease-book observability).
+- **NEW_RELEASE_INVARIANT:** `FAST_LANE_LEASE_TEST` — `certify-next-session` points at the
+  lease suite; a caller timeout must never release active capacity.
+- **Responsible layer:** LAYER 1 (evaluator contract) + LAYER 2 (concurrency invariant).
+- **IMPLEMENTED 2026-10-10:** commit `27e17d3` (lease-held-until-settle + bounded hung-work
+  quarantine). The bounded priority scheduler (`quantPriorityScheduler.ts`) applies the same
+  pattern to its quant stage (watchdog -> quarantine -> age-bounded eviction).
 
 ### OCT9_ZERO_AUTHORIZED_STRATEGIES_ESCAPE
 
@@ -136,6 +187,38 @@ on it. This is a testing-mission Phase 1 document; it records history, it does n
   as gating on it.
 - **Responsible layer:** LAYER 5 (release certification) — this entry exists to record that
   a known defect re-escaped because the gate was not yet wired.
+
+### OCT9_PROMOTION_ROUTE_GAP
+
+- **What happened (found 2026-10-09):** The deeper root cause behind
+  `OCT8_LIFECYCLE_AUTHORITY_ESCAPE` / `OCT9_ZERO_AUTHORIZED_STRATEGIES_ESCAPE`: a static
+  probe of production (non-test) sources found **LIFECYCLE_PROMOTION_ROUTE=ABSENT** — no
+  production code path ever recorded a `VALIDATED`/`CHAMPION` lifecycle decision into
+  `learning_versions`. The research side (`promotionEngine.deriveLifecycleStatus()`) could
+  derive a research-vocabulary VALIDATED from evidence, but the operator/review decision
+  point between research evidence and the runtime lifecycle table did not exist as code.
+  Zero authorized strategies was not a threshold problem or an engine problem; it was a
+  missing workflow.
+- **OLD_TEST_GAP:** Tests proved the authorization mechanism by seeding lifecycle rows
+  into isolated DBs. Nothing tested — or even specified — the legitimate route by which a
+  real strategy could EARN a VALIDATED row. The gap was invisible because no test asked
+  "how does a strategy legitimately get here?"
+- **NEW_TEST:** `src/server/lifecycle/certificationBridge.test.ts` (10/10) — the designed
+  bridge workflow against isolated DBs: insufficient evidence / bad OOS / poor
+  walk-forward → no authority; RETIRED PULLBACK_CONTINUATION stays retired; legitimate
+  reviewed qualification → VALIDATED recorded by the workflow itself →
+  AUTHORIZED_QUANT_POLICY via the real resolver; missing operator review → no transition
+  (type-level brand + runtime gate); LIVE authority impossible (inexpressible in the
+  bridge vocabulary + paper-only env lock). Plus a static test asserting the bridge
+  module holds exactly one `recordStrategyLifecycleTransition` call site.
+- **NEW_RELEASE_INVARIANT:** The promotion route is no longer absent: research evidence →
+  sample-sufficiency gates → UNSKIPPABLE operator review →
+  `executeCertificationTransition()` → `learning_versions`. The Layer-3 certification
+  output now names this route (`certificationBridge` field) whenever it reports missing
+  lifecycle rows — the legitimate fix is documented at the point of diagnosis, not left
+  as tribal knowledge.
+- **Responsible layer:** LAYER 3 (production-state certification) + operator runbook
+  (`docs/testing/LIFECYCLE_CERTIFICATION_BRIDGE.md`).
 
 ---
 
@@ -247,6 +330,34 @@ on it. This is a testing-mission Phase 1 document; it records history, it does n
   gate; a broken sweeper registry is a red gate, not a silent skip.
 - **Responsible layer:** LAYER 2 (architecture invariant — module graph integrity) +
   LAYER 5 checklist.
+
+### OCT10_SOAK_PATH_RETENTION_ESCAPE
+
+- **What happened (found 2026-10-10):** A 180-sim-minute SOAK_3H synthetic session (the
+  soak profile from `scripts/soak/threeHourSoakChild.ts`) wrote rows to
+  **16 append-only tables with no prune path anywhere in the codebase**:
+  `consensus_debate_predictions` (27/iter), `consensus_decisions` (8/iter),
+  `consensus_evidence` (10/iter), `reconciliation_events` (1/iter) — confirmed by row
+  counts against an isolated synthetic DB — plus 12 more on the session path in live
+  configurations (`portfolio_snapshots`, `ai_usage`, `kronos_predictions`,
+  `prediction_outcomes`, `prediction_outcome_horizons`, `missed_opportunities`,
+  `learning_observations`, `meta_label_features`, `quant_forecasts`,
+  `explainability_reports`, `training_examples`, `learned_rules`). At soak cadence
+  (hundreds of iterations per run) these grow unbounded — the same defect class as
+  `candidate_rankings` (2026-09-22) and `news_articles` (2026-10-08).
+- **OLD_TEST_GAP:** The 2026-10-08 session guard ran a 6-minute QUIET_OPEN session and
+  asserted every written table had a retention story — but the soak profile (news shock,
+  8 symbols, 180 sim-minutes, reconciliation worker, outcome evaluators) writes tables
+  the 6-minute session never touches. No test enumerated the soak profile's write set.
+- **NEW_TEST:** `src/server/db/soakPathRetention.test.ts` — per-table cutoff/idempotency
+  for all 16 sweepers, consensus_evidence join/orphan semantics, event-loop heartbeat,
+  never-throws; `retentionCoverage.test.ts` extended with all 16 tables (fails by design
+  if any lacks a sweeper). Bonus: the new tests caught `prepare()` outside the try block
+  violating the sweeper "never throws" contract, and wrong key/time columns for
+  `quant_forecasts` (PK is `forecast_id`) and `prediction_outcomes` (no `created_at`).
+- **NEW_RELEASE_INVARIANT:** `RETENTION_COVERAGE` — the coverage test runs in the
+  pre-market gate; any append-only table without a registered sweeper is a red gate.
+- **Responsible layer:** LAYER 4 (soak) + LAYER 5 checklist.
 
 ---
 

@@ -1,5 +1,61 @@
 # Argus Architecture
 
+## 2026-10-09: Bounded priority quant scheduler (P2) — control-plane redesign of quant evaluation scheduling
+
+Forensic driver: the 2026-10-09 audit measured admission→Quant-completion at p50
+12.9min / p95 63.7min / max 193min under the old `QuantSignalAgent.runCycle`
+snapshot+worker-pool model (MRNA admitted 10:27, promoted 10:29, assessed 17:14 —
+after close; CRCL admitted+promoted but never assessed). Late movers waited for the
+next cycle; a cycle's universe snapshot was fixed at cycle top.
+
+**What changed.** New subsystem `src/server/scheduling/quantPriorityScheduler.ts` —
+a scheduling control plane, not a decision plane:
+
+- **Priority queues** P0 urgent mover / P1 promoted dynamic candidate / P2 normal
+  active symbol / P3 background refresh. Priority affects WHEN a candidate is
+  evaluated, NEVER whether Risk approves or any gate outcome. Priority-ordered
+  semaphore handoff lets a P0 admitted mid-cycle jump queued P2/P3 work; in-flight
+  evaluations are never preempted.
+- **Separated data acquisition from computation.** Candidate → data-readiness check
+  (cheap cache read) → missing/stale → bounded data-fetch pool (`ensureBars` with
+  timeout, outside any quant slot) → quant-ready → bounded quant worker pool. A slow
+  provider fetch for symbol A can never hold a quant compute slot needed by B/C/D.
+  Java bridge calls stay bounded at `QuantCoreBridge` (100ms timeout, circuit
+  breaker); AI keeps a fully separate budget (`AICallGovernor` +
+  `quantContradictionMaxWaitMs`) and is never drawn from scheduler pools.
+- **Terminal-state invariant.** Every admitted candidate resolves to exactly one
+  observable outcome: `ASSESSED` / `DATA_UNAVAILABLE` / `PROVIDER_TIMEOUT` /
+  `PROVIDER_BACKOFF` / `EXPIRED` / `EVICTED` / `NOT_ELIGIBLE` / `ERROR` /
+  `ASSESSMENT_EXPIRED`. Nothing silently disappears — not even rejected admissions.
+- **Per-priority assessment deadlines** with a sweeper. Past deadline while queued →
+  `ASSESSMENT_EXPIRED`; settling after deadline in flight → `ASSESSMENT_EXPIRED`
+  with `evaluationSettledLate=true`, never presented as a current assessment.
+- **Singleflight dedup** on symbol+evaluation-fingerprint across discovery, Fast
+  Lane, and scheduler, plus `registerExternalEvaluation()` so the scheduler never
+  duplicates an active Fast Lane evaluation (coordination point with
+  `fastLaneEvaluator.ts`'s lease-held-until-settle dedup, which it does not touch).
+- **Per-stage instrumentation** (`admittedAt` → `queuedAt` → `dataFetchStartedAt` /
+  `FinishedAt` → `quantStartedAt` → `quantFinishedAt` → `terminalAt`) emitted as
+  structured `QUANT_SCHEDULER_*` observability events, so any delay is attributable.
+- **User-endorsed SLA**: HIGH (P0/P1) admission→start ≤30s p95 / →complete ≤60s
+  p95; NORMAL (P2) ≤60s / ≤120s p95 — encoded in
+  `src/server/scheduling/quantPriorityScheduler.test.ts`, values from
+  `config/tradingSafety.json`.
+
+**Safety posture.** Feature-flagged (`QUANT_PRIORITY_SCHEDULER_ENABLED`, default
+off): flag off keeps the legacy `runCycle` fan-out byte-for-byte — all existing
+scheduler certification (`src/server/certification/quantSchedulerSla.test.ts`) still
+exercises that path. Split-brain guard (2026-10-10): the scheduler's singleflight
+dedup only coordinates within itself, so `runCycle` retires the scheduler singleton
+(`stop()` → in-flights terminally `EVICTED`/`SCHEDULER_STOPPED`, late settles
+discarded) before running the legacy fan-out — on a flag on→off transition between
+cycles and on any scheduler-path failure that falls back to legacy — so the two
+paths never evaluate the same symbol concurrently. No strategy, threshold, lifecycle, consensus, RiskEngine, OMS,
+or broker changes; `evaluateSymbol()`'s signature and behavior contract are
+untouched (the scheduler calls it as a black box). Pool sizes (4/4) are
+conservative starting values, not measured optima — the measurement procedure to
+raise them with evidence is `docs/testing/QUANT_SCHEDULER_CAPACITY.md`.
+
 ## 2026-10-08: Code-only defect repair — lifecycle authorization semantics, worker-thread backups, watchdog hardening, premarket event, quant-readiness diagnostics
 
 Code-only follow-through on the 2026-10-08 live PAPER session's 13 defects. No database
@@ -4606,3 +4662,58 @@ QuantSignalAgent retains the same strategy, authorization and execution path. Ad
 Optional `quantInputEvidenceEnabled` in `config/observability.json` is OFF by default. It emits a manifest and bounded base64 chunks of redacted actual StrategyContext and bars through the existing bounded observability queue/retention, not a new database or order path. Limits are 128KiB total serialized evidence and 3KiB raw chunks; oversized input is labeled SIZE_LIMIT, never truncated as complete. Reconstruction requires all ordered chunks and a matching SHA-256 digest. Queue drops, log-level filtering or interrupted writes can leave incomplete evidence; a manifest alone is not a certificate. Capture size limits bound durable output, not the pre-serialization allocation; upstream historical inputs remain the existing bounded fetch window. Enabled resource overhead and soak remain unverified.
 
 Replay scope is CONTEXT_REPLAY_ONLY: this preserves existing calculation inputs but does not independently certify feature derivation or point-in-time provider availability. `quoteAfterContext` explicitly labels a later diagnostic observation, not the quote used for currentPrice. Upstream benchmark bars, config/build version and historical availability times are not captured. No promotion, strategy calculation, consensus/Risk/OMS change, default runtime flag activation or organic readiness claim accompanies this extension. The research promotion ladder remains distinct from runtime `learning_versions` strategyEligibility records; missing records never grant authorization.
+### October 9 — PIT replay provenance: `decision_provenance` + replay equality (certification mission item 1)
+
+Closes OCT9_PIT_PROVENANCE_ESCAPE: before this, exact point-in-time replay of a Quant
+decision was impossible — input bar IDs, observed/available-at timestamps, quote timestamps,
+and StrategyContext inputs were not retained, so a past decision could not be replayed
+identically and its inputs could not be audited.
+
+`src/server/replay/provenance/decisionProvenance.ts` is the new subsystem (persistence +
+replay scaffolding only — no strategy formula or indicator changes; new quant math still
+belongs in `quant-core-java/`, never here). One row per Quant assessment decision in the new
+`decision_provenance` table (drizzle 0099): input bar IDs + bar timestamps + per-bar
+available-at timestamps, the quote used + its observation timestamp, bid/ask + their
+observation timestamps, the resolved currentPrice + its observation time, the bounded +
+redacted StrategyContext (long strings truncated; numbers never altered — replay equality
+depends on numeric fidelity), regime, per-strategy versions via the existing
+freezeStrategyVersion mechanism, strategy-spec config hash, build SHA (git HEAD or
+ARGUS_BUILD_SHA), lifecycle states at decision time (read-only
+getStrategyLifecycleStatus — a missing row is recorded as-is, never seeded), and the
+produced strategyEvaluations + its sha256 fingerprint.
+
+Emission is wired on the real decision path (QuantSignalAgent.evaluateSymbolInternal, next
+to the quant_assessments persist). recordDecisionProvenance() is synchronous, never throws,
+and never awaits — a single-row INSERT fire-and-forget — so it adds negligible latency and
+can never block or fail a trading decision. Provenance is telemetry, never a gate.
+
+No-lookahead is enforced twice: emission REFUSES to persist a row whose evidence claims
+data available after the decision time (fail closed, logged loudly), and
+replayQuantDecision() re-validates on load, throwing ProvenanceLookaheadViolation for any
+hand-inserted future-dated row. Replay reconstructs the StrategyContext solely from the
+persisted row (real SQLite read + JSON.parse, never the in-memory object) and runs the
+REAL StrategyEngine.evaluateAll() — the same modules and call path production uses, never
+a reimplementation. equal=true iff the full evaluation arrays match under canonical JSON
+and the sha256 fingerprints agree. Equality is only claimable on the identical build SHA
+and identical strategy-spec config versions; a different build raises
+ProvenanceVersionMismatch (the comparison is invalid, not silently passed), a truncated
+context raises ProvenanceContextTruncated (honest "cannot replay", never fabricated
+inputs), and a missing row raises ProvenanceNotFound.
+
+Boundedness: per-payload byte caps enforced in code (strategy context 64KB, evaluations
+32KB, whole row 256KB — measured real sizes are ~7KB/~5KB), per-decision row cap (8),
+and a registered retention sweeper (sweepDecisionProvenanceRetention, 90 days aligned with
+pitDecisionLedgerRetentionDays, in RETENTION_SWEEPERS — retentionCoverage.test.ts covers the
+table). POINT_IN_TIME_REPLAY regression: decisionProvenance.test.ts (replay equality
+through the real path on seeded real-indicator contexts, deliberate future-data injection
+rejected at both write and replay time, byte-cap redaction, row cap, version mismatch) and
+decisionProvenanceRetention.test.ts (cutoff, idempotency, event-loop heartbeat, never-throws).
+This changes no thresholds, no lifecycle state, no LIVE paths; PAPER/telemetry only.
+
+## October 9, 2026: Lifecycle certification bridge — the legitimate promotion route (P3)
+
+Closes the precise gap the Oct-9 forensic exposed: 755 NO_LIFECYCLE_RECORD authorization events, 0 privileged PAPER Quant strategies, and the Layer-3 probe's LIFECYCLE_PROMOTION_ROUTE=ABSENT finding — no production code path ever recorded a VALIDATED/CHAMPION lifecycle decision into learning_versions, even though promotionEngine could derive a research-vocabulary VALIDATED from evidence. The traced chain (research evidence -> StrategyEvidence accumulation -> promotionEngine.deriveLifecycleStatus (read-only, research-side) -> ??? -> recordStrategyLifecycleTransition -> strategyEligibility -> QuantStrategyAuthorization -> QuantExecutionPolicy) had exactly one absent link: the operator/review decision point. `src/server/lifecycle/certificationBridge.ts` IS that link, designed as a workflow, never as an auto-promoter.
+
+Three stages, each with a structural guarantee: evaluateCertification() is PURE over (StrategyEvidence, CertificationSamples, CertificationProvenance) — it reads config/researchSafety.json minimums (minOosTrades 30 for backtest/OOS samples, minWalkForwardWindows 3, the full paper minimum set), treats any "pass" on an insufficient sample as a FAIL, and returns an assessment with a ladder (VALIDATED only on the full gate set; ACTIVE_EXPLORATION when research is complete but paper is accumulating — consensus path, never AI-independent authority; CANDIDATE/SHADOW/UNTESTED below; NONE fail-closed on retired/degraded evidence or unknown strategy). It cannot write: a static test asserts the module holds exactly one recordStrategyLifecycleTransition call site. applyOperatorReview() mints the branded ReviewedCertification only after runtime-validating reviewer identity, decidedAt timestamp, written rationale, and targetStatus == assessed eligibleTarget (the operator may not approve a status the evidence does not support) — the type-level half of "review cannot be skipped". executeCertificationTransition() re-validates brand + review, refuses RETIRED/DEGRADED current status (reversal is the existing reinstateStrategyForEmission -> ROLLED_BACK path, never this bridge), requires current VALIDATED for CHAMPION (comparative promotion only), rejects any target outside the closed runtime vocabulary (the research-side LIVE_CANDIDATE/LIVE_APPROVED statuses are inexpressible here — LIVE authority cannot be produced), then records via the EXISTING recordStrategyLifecycleTransition with a full audit payload (strategyId, old/new status, evidence IDs, scope, sample size, OOS/walk-forward results, gate failures, reason, reviewer provenance, timestamps, build version).
+
+Tested in certificationBridge.test.ts (10/10, isolated temp DB, synthetic CERTIFICATION_FIXTURE_ONLY evidence): insufficient evidence / bad OOS / poor walk-forward -> no authority; RETIRED PULLBACK_CONTINUATION stays retired (assessment fail-closed on retired evidence AND execution refused on terminal current status); legitimate reviewed qualification -> VALIDATED recorded by the workflow itself -> AUTHORIZED_QUANT_POLICY via the real resolver; missing review -> no transition (empty reviewer, bad timestamp, missing rationale, target mismatch, forged unbranded object all throw); LIVE authority impossible (LIVE_APPROVED rejected at review, and the recorded VALIDATED row grants nothing with the paper-only env lock off). No production caller and no schedule: the bridge runs only when an operator deliberately invokes it. productionStateCertification.ts now surfaces the route in its certificationBridge field so the pre-market output names the legitimate path when it reports missing rows. Full operator runbook: docs/testing/LIFECYCLE_CERTIFICATION_BRIDGE.md. No threshold lowered, no alpha/strategy changes, PAPER-only, control-plane code (Java 26 Engine Authority untouched).

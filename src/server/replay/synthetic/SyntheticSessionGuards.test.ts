@@ -30,11 +30,15 @@ import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
 import { SyntheticSessionEngine } from './SyntheticSessionEngine';
 
-/** Tables deliberately never pruned: the permanent decision record. */
+/** Tables deliberately never pruned: the permanent decision record. risk_gate_results is
+ *  the per-gate detail of risk_assessments (written in the same transaction, RiskEngine) -
+ *  pruning it while keeping risk_assessments would break the audit trail, so it shares
+ *  risk_assessments' permanent status. */
 const PERMANENT_TABLES = new Set([
   'trades',
   'fills',
   'risk_assessments',
+  'risk_gate_results',
   'event_traces',
   'transactions',
 ]);
@@ -52,6 +56,14 @@ const BOUNDED_TABLES = new Set([
   'settings',
   'agent_performance_stats', // PK agent_name: one row per agent
   'crypto_paper_broker_state', // PK literal 'singleton': one row
+  // 2026-10-10 defect hunt (Track 1): verified bounded-by-construction during the
+  // soak-path retention audit - ReflectionEngine upserts agent_confidence_calibration
+  // by (agent_name, bucket) on a ~60s cycle (never appends); learning_versions gets one
+  // row per lifecycle transition (rare, operator/research-driven, not per-cycle);
+  // portfolio is upserted per symbol.
+  'agent_confidence_calibration',
+  'learning_versions',
+  'portfolio',
 ]);
 
 /** Generous: a healthy session never approaches this; the backup defect hit minutes. */
