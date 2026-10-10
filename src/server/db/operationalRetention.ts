@@ -26,11 +26,13 @@ export async function sweepCandidateRankingsRetention(nowMs = Date.now()): Promi
   const cutoffIso = new Date(nowMs - runtimeIntervals.candidateRankingsRetentionDays * 24 * 60 * 60 * 1000).toISOString();
   const batchSize = runtimeIntervals.candidateRankingsRetentionSweepBatchSize;
   const maxBatches = runtimeIntervals.candidateRankingsRetentionSweepMaxBatchesPerCall;
-  const deleteBatch = sqliteDb.prepare(
-    'DELETE FROM candidate_rankings WHERE id IN (SELECT id FROM candidate_rankings WHERE cycle_at < ? LIMIT ?)'
-  );
   let totalDeleted = 0;
   try {
+    // 2026-10-10: prepare() inside the try - a missing/corrupt table must not violate the
+    // "never throws" contract (same fix as sweepIsoTextTable).
+    const deleteBatch = sqliteDb.prepare(
+      'DELETE FROM candidate_rankings WHERE id IN (SELECT id FROM candidate_rankings WHERE cycle_at < ? LIMIT ?)'
+    );
     for (let i = 0; i < maxBatches; i++) {
       const result = deleteBatch.run(cutoffIso, batchSize);
       totalDeleted += result.changes;
@@ -159,11 +161,12 @@ export async function sweepNewsClustersRetention(nowMs = Date.now()): Promise<nu
   const cutoffIso = new Date(nowMs - runtimeIntervals.newsClustersRetentionDays * 24 * 60 * 60 * 1000).toISOString();
   const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
   const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
-  const deleteBatch = sqliteDb.prepare(
-    'DELETE FROM news_clusters WHERE id IN (SELECT id FROM news_clusters WHERE updated_at < ? LIMIT ?)'
-  );
   let totalDeleted = 0;
   try {
+    // 2026-10-10: prepare() inside the try - "never throws" contract (see sweepIsoTextTable).
+    const deleteBatch = sqliteDb.prepare(
+      'DELETE FROM news_clusters WHERE id IN (SELECT id FROM news_clusters WHERE updated_at < ? LIMIT ?)'
+    );
     for (let i = 0; i < maxBatches; i++) {
       const result = deleteBatch.run(cutoffIso, batchSize);
       totalDeleted += result.changes;
@@ -197,21 +200,28 @@ export interface RetentionSweeper {
  * 2026-10-08 defect hunt (news D2 / infra P2-R1/P2-R3): four more append-only tables plus
  * ai_calls, all growing unbounded with no prune path. Same batched + yielding discipline as
  * the news sweeps; failures log loudly (P2-R4), never swallowed.
+ *
+ * 2026-10-10 defect hunt (Track 1): the prepare() call moved INSIDE the try block. A missing
+ * or corrupt table made prepare() throw outside the try, violating this module's own
+ * "never throws (returns partial count)" contract (RetentionSweeper) - caught by the
+ * soakPathRetention test's never-throws case. keyColumn covers tables whose primary key
+ * is not `id` (consensus_decisions uses transaction_id).
  */
 async function sweepIsoTextTable(
   table: string,
   column: string,
   retentionDays: number,
   nowMs: number,
+  keyColumn = 'id',
 ): Promise<number> {
   const cutoffIso = new Date(nowMs - retentionDays * 24 * 60 * 60 * 1000).toISOString();
   const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
   const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
-  const deleteBatch = sqliteDb.prepare(
-    `DELETE FROM ${table} WHERE id IN (SELECT id FROM ${table} WHERE ${column} < ? LIMIT ?)`
-  );
   let totalDeleted = 0;
   try {
+    const deleteBatch = sqliteDb.prepare(
+      `DELETE FROM ${table} WHERE ${keyColumn} IN (SELECT ${keyColumn} FROM ${table} WHERE ${column} < ? LIMIT ?)`
+    );
     for (let i = 0; i < maxBatches; i++) {
       const result = deleteBatch.run(cutoffIso, batchSize);
       totalDeleted += result.changes;
@@ -257,11 +267,12 @@ async function sweepEpochMsTable(
   const cutoffMs = nowMs - retentionDays * 24 * 60 * 60 * 1000;
   const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
   const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
-  const deleteBatch = sqliteDb.prepare(
-    `DELETE FROM ${table} WHERE ${keyColumn} IN (SELECT ${keyColumn} FROM ${table} WHERE ${timeColumn} < ? LIMIT ?)`
-  );
   let totalDeleted = 0;
   try {
+    // 2026-10-10: prepare() inside the try - "never throws" contract (see sweepIsoTextTable).
+    const deleteBatch = sqliteDb.prepare(
+      `DELETE FROM ${table} WHERE ${keyColumn} IN (SELECT ${keyColumn} FROM ${table} WHERE ${timeColumn} < ? LIMIT ?)`
+    );
     for (let i = 0; i < maxBatches; i++) {
       const result = deleteBatch.run(cutoffMs, batchSize);
       totalDeleted += result.changes;
@@ -300,25 +311,7 @@ export async function sweepAgentReasoningLogsRetention(nowMs = Date.now()): Prom
 
 export async function sweepTransactionTracesRetention(nowMs = Date.now()): Promise<number> {
   // trace_id is the primary key here, not id.
-  const cutoffIso = new Date(nowMs - runtimeIntervals.transactionTracesRetentionDays * 24 * 60 * 60 * 1000).toISOString();
-  const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
-  const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
-  const deleteBatch = sqliteDb.prepare(
-    `DELETE FROM transaction_traces WHERE trace_id IN (SELECT trace_id FROM transaction_traces WHERE created_at < ? LIMIT ?)`
-  );
-  let totalDeleted = 0;
-  try {
-    for (let i = 0; i < maxBatches; i++) {
-      const result = deleteBatch.run(cutoffIso, batchSize);
-      totalDeleted += result.changes;
-      if (result.changes < batchSize) break;
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
-    return totalDeleted;
-  } catch (e) {
-    console.error('[operationalRetention] sweep transaction_traces failed:', e instanceof Error ? e.message : String(e));
-    return totalDeleted;
-  }
+  return sweepIsoTextTable('transaction_traces', 'created_at', runtimeIntervals.transactionTracesRetentionDays, nowMs, 'trace_id');
 }
 
 /** One row per session; 90d of session history is plenty. */
@@ -337,11 +330,12 @@ export async function sweepStagedNewsCatalystsTerminalRetention(nowMs = Date.now
   const cutoffMs = nowMs - runtimeIntervals.stagedNewsCatalystsTerminalRetentionDays * 24 * 60 * 60 * 1000;
   const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
   const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
-  const deleteBatch = sqliteDb.prepare(
-    `DELETE FROM staged_news_catalysts WHERE trace_id IN (SELECT trace_id FROM staged_news_catalysts WHERE status IN ('CONSUMED','EXPIRED') AND updated_at_ms < ? LIMIT ?)`
-  );
   let totalDeleted = 0;
   try {
+    // 2026-10-10: prepare() inside the try - "never throws" contract (see sweepIsoTextTable).
+    const deleteBatch = sqliteDb.prepare(
+      `DELETE FROM staged_news_catalysts WHERE trace_id IN (SELECT trace_id FROM staged_news_catalysts WHERE status IN ('CONSUMED','EXPIRED') AND updated_at_ms < ? LIMIT ?)`
+    );
     for (let i = 0; i < maxBatches; i++) {
       const result = deleteBatch.run(cutoffMs, batchSize);
       totalDeleted += result.changes;
@@ -374,6 +368,76 @@ export async function sweepDecisionProvenanceRetention(nowMs = Date.now()): Prom
   }
 }
 
+/**
+ * 2026-10-10 defect hunt (Track 1, soak-path retention): a 180-sim-minute SOAK_3H synthetic
+ * session (same profile as scripts/soak/threeHourSoakChild.ts) wrote rows to these four
+ * tables with no prune path anywhere in the codebase — the same defect class as
+ * candidate_rankings (2026-09-22) and news_articles (2026-10-08). Per-iteration writes:
+ * consensus_debate_predictions 27, consensus_decisions 8, consensus_evidence 10,
+ * reconciliation_events 1. At soak cadence (hundreds of iterations per 8h run) these grow
+ * unbounded. Same batched + yielding discipline as every sweeper above; failures log
+ * loudly (P2-R4), never swallowed.
+ */
+export async function sweepConsensusDebatePredictionsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('consensus_debate_predictions', 'created_at', runtimeIntervals.consensusDebatePredictionsRetentionDays, nowMs);
+}
+
+export async function sweepConsensusDecisionsRetention(nowMs = Date.now()): Promise<number> {
+  // transaction_id is the primary key here, not id.
+  return sweepIsoTextTable('consensus_decisions', 'created_at', runtimeIntervals.consensusDecisionsRetentionDays, nowMs, 'transaction_id');
+}
+
+/**
+ * consensus_evidence has no timestamp of its own; rows are written in the SAME transaction
+ * as their parent consensus_decisions row (TransactionRegistry), so the parent's created_at
+ * is the correct prune boundary. Two batched + yielding steps: (1) prune evidence whose
+ * parent decision is older than the cutoff; (2) prune orphan evidence whose parent decision
+ * is already gone (sweep-ordering artifact — the decisions sweeper may run first in the
+ * same cycle). Step 2's NOT IN subquery is bounded because consensus_decisions itself is
+ * retention-bounded.
+ */
+export async function sweepConsensusEvidenceRetention(nowMs = Date.now()): Promise<number> {
+  const cutoffIso = new Date(nowMs - runtimeIntervals.consensusEvidenceRetentionDays * 24 * 60 * 60 * 1000).toISOString();
+  const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
+  const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
+  let totalDeleted = 0;
+  try {
+    // 2026-10-10: prepare() calls inside the try - "never throws" contract (see sweepIsoTextTable).
+    const deleteByParentAge = sqliteDb.prepare(
+      `DELETE FROM consensus_evidence WHERE id IN (
+         SELECT ce.id FROM consensus_evidence ce
+         JOIN consensus_decisions cd ON cd.transaction_id = ce.transaction_id
+         WHERE cd.created_at < ? LIMIT ?)`
+    );
+    const deleteOrphans = sqliteDb.prepare(
+      `DELETE FROM consensus_evidence WHERE id IN (
+         SELECT id FROM consensus_evidence
+         WHERE transaction_id NOT IN (SELECT transaction_id FROM consensus_decisions)
+         LIMIT ?)`
+    );
+    for (let i = 0; i < maxBatches; i++) {
+      const result = deleteByParentAge.run(cutoffIso, batchSize);
+      totalDeleted += result.changes;
+      if (result.changes < batchSize) break;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    for (let i = 0; i < maxBatches; i++) {
+      const result = deleteOrphans.run(batchSize);
+      totalDeleted += result.changes;
+      if (result.changes < batchSize) break;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    return totalDeleted;
+  } catch (e) {
+    console.error('[operationalRetention] sweep consensus_evidence failed:', e instanceof Error ? e.message : String(e));
+    return totalDeleted;
+  }
+}
+
+export async function sweepReconciliationEventsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('reconciliation_events', 'checked_at', runtimeIntervals.reconciliationEventsRetentionDays, nowMs);
+}
+
 export const RETENTION_SWEEPERS: RetentionSweeper[] = [
   { table: 'candidate_rankings', sweep: sweepCandidateRankingsRetention },
   { table: 'trade_plan_revalidations', sweep: sweepTradePlanRevalidationRetention },
@@ -401,4 +465,10 @@ export const RETENTION_SWEEPERS: RetentionSweeper[] = [
   // 2026-10-09 (certification mission item 1 - OCT9_PIT_PROVENANCE_ESCAPE): per-Quant-decision
   // PIT replay provenance. Same coverage-test guarantee as every table above.
   { table: 'decision_provenance', sweep: sweepDecisionProvenanceRetention },
+  // 2026-10-10 defect hunt (Track 1, soak-path retention): the 180-sim-minute SOAK_3H
+  // session wrote to these four tables with no prune path. Same coverage-test guarantee.
+  { table: 'consensus_debate_predictions', sweep: sweepConsensusDebatePredictionsRetention },
+  { table: 'consensus_decisions', sweep: sweepConsensusDecisionsRetention },
+  { table: 'consensus_evidence', sweep: sweepConsensusEvidenceRetention },
+  { table: 'reconciliation_events', sweep: sweepReconciliationEventsRetention },
 ];

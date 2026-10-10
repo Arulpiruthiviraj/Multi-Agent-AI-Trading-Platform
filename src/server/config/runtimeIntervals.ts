@@ -143,6 +143,18 @@ export interface RuntimeIntervals {
    *  aligned with pitDecisionLedgerRetentionDays — both are decision-audit records; the
    *  provenance row is what lets a past decision be replayed identically. */
   decisionProvenanceRetentionDays: number;
+  /** 2026-10-10 defect hunt (Track 1, soak-path retention): a 180-sim-minute SOAK_3H
+   *  synthetic session wrote rows to consensus_debate_predictions (27), consensus_decisions
+   *  (8), consensus_evidence (10) and reconciliation_events (1) with no prune path anywhere
+   *  in the codebase — the same defect class as candidate_rankings/news_articles. These are
+   *  decision-audit records (90d, aligned with pitDecisionLedger/decisionProvenance), not the
+   *  permanent decision record (event_traces/trades/fills/risk_assessments stay unpruned).
+   *  consensus_evidence has no timestamp of its own; its sweeper prunes via the parent
+   *  consensus_decisions row (same transaction, TransactionRegistry). */
+  consensusDebatePredictionsRetentionDays: number;
+  consensusDecisionsRetentionDays: number;
+  consensusEvidenceRetentionDays: number;
+  reconciliationEventsRetentionDays: number;
   /** 2026-10-08 (defect A1): how long an aiProviders.health='Offline' quarantine must age
    *  (measured from the row's last_failure) before AIProviderHealthCheck's real re-probe may
    *  restore the provider to 'Degraded' on success. A failed re-probe keeps it Offline. */
@@ -177,6 +189,8 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'agentReasoningLogsRetentionDays', 'transactionTracesRetentionDays',
   'sessionLifecycleSnapshotsRetentionDays', 'tradeLifecycleTransitionsRetentionDays',
   'decisionProvenanceRetentionDays',
+  'consensusDebatePredictionsRetentionDays', 'consensusDecisionsRetentionDays',
+  'consensusEvidenceRetentionDays', 'reconciliationEventsRetentionDays',
   'aiProviderQuarantineCooldownMs',
 ];
 
