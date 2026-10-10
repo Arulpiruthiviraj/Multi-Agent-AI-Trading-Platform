@@ -385,8 +385,7 @@ public final class QuantCoreServer {
             sendJson(exchange, 405, Map.of("error", "method not allowed"));
             return;
         }
-        String path = exchange.getRequestURI().getPath();
-        String symbol = path.substring(path.lastIndexOf('/') + 1);
+        String symbol = extractTrailingSymbol(exchange);
         String traceId = resolveTraceId(exchange);
         TraceContext.bind(traceId, symbol);
         try {
@@ -460,7 +459,7 @@ public final class QuantCoreServer {
             return;
         }
         String path = exchange.getRequestURI().getPath();
-        String[] parts = path.substring("/api/v1/quant/strategy/".length()).split("/");
+        String[] parts = path.substring("/api/v1/quant/strategy/".length()).split("/", 2);
         if (parts.length != 2 || parts[0].isBlank() || parts[1].isBlank()) {
             sendJson(exchange, 400, Map.of("ok", false, "error", "path must be /api/v1/quant/strategy/{strategyId}/{symbol}"));
             return;
@@ -614,8 +613,7 @@ public final class QuantCoreServer {
             sendJson(exchange, 405, Map.of("error", "method not allowed - POST a JSON body of bars"));
             return;
         }
-        String path = exchange.getRequestURI().getPath();
-        String symbol = path.substring(path.lastIndexOf('/') + 1);
+        String symbol = extractTrailingSymbol(exchange);
         String traceId = resolveTraceId(exchange);
         TraceContext.bind(traceId, symbol);
         try {
@@ -696,8 +694,7 @@ public final class QuantCoreServer {
             sendJson(exchange, 405, Map.of("error", "method not allowed - POST a JSON body of bars"));
             return;
         }
-        String path = exchange.getRequestURI().getPath();
-        String symbol = path.substring(path.lastIndexOf('/') + 1);
+        String symbol = extractTrailingSymbol(exchange);
         String traceId = resolveTraceId(exchange);
         TraceContext.bind(traceId, symbol);
         try {
@@ -751,8 +748,7 @@ public final class QuantCoreServer {
             sendJson(exchange, 405, Map.of("error", "method not allowed - POST a JSON body of bars"));
             return;
         }
-        String path = exchange.getRequestURI().getPath();
-        String symbol = path.substring(path.lastIndexOf('/') + 1);
+        String symbol = extractTrailingSymbol(exchange);
         String traceId = resolveTraceId(exchange);
         TraceContext.bind(traceId, symbol);
         try {
@@ -806,8 +802,7 @@ public final class QuantCoreServer {
             sendJson(exchange, 405, Map.of("error", "method not allowed - POST a JSON body of bars"));
             return;
         }
-        String path = exchange.getRequestURI().getPath();
-        String symbol = path.substring(path.lastIndexOf('/') + 1);
+        String symbol = extractTrailingSymbol(exchange);
         String traceId = resolveTraceId(exchange);
         TraceContext.bind(traceId, symbol);
         try {
@@ -853,8 +848,7 @@ public final class QuantCoreServer {
             sendJson(exchange, 405, Map.of("error", "method not allowed - POST a JSON body of bars"));
             return;
         }
-        String path = exchange.getRequestURI().getPath();
-        String symbol = path.substring(path.lastIndexOf('/') + 1);
+        String symbol = extractTrailingSymbol(exchange);
         String traceId = resolveTraceId(exchange);
         TraceContext.bind(traceId, symbol);
         try {
@@ -1803,6 +1797,32 @@ public final class QuantCoreServer {
             return header;
         }
         return "quantcore-" + System.nanoTime();
+    }
+
+    /**
+     * 2026-10-10 (Java defect hunt): extracts the trailing path segment as a symbol, splitting
+     * on the RAW (still percent-encoded) path and decoding only afterward. The JDK's built-in
+     * HttpServer decodes a URL-encoded slash ({@code %2F}) BEFORE {@code getPath()} returns it
+     * — the same root cause as the 2026-09-21 {@code handleInstitutionalStrategy} fix — so the
+     * old {@code getPath().substring(lastIndexOf('/') + 1)} pattern silently truncated any symbol
+     * containing a slash (e.g. crypto {@code "BTC/USD"}, correctly sent by the TS bridge as
+     * {@code BTC%2FUSD}, arrived as {@code ".../BTC/USD"} and was read as just {@code "USD"}).
+     * Splitting the raw path keeps {@code "BTC%2FUSD"} as one segment; decoding it yields the
+     * real symbol. Plain equity symbols (no encoding) behave exactly as before.
+     */
+    private static String extractTrailingSymbol(HttpExchange exchange) {
+        return trailingSymbolFromRawPath(exchange.getRequestURI().getRawPath());
+    }
+
+    /**
+     * Pure, unit-testable core of {@link #extractTrailingSymbol(HttpExchange)}: split the
+     * still-encoded path on slashes FIRST, then decode the trailing segment. Package-private
+     * for the regression test — production callers go through {@code extractTrailingSymbol}.
+     */
+    static String trailingSymbolFromRawPath(String rawPath) {
+        int slash = rawPath.lastIndexOf('/');
+        String encoded = slash < 0 ? rawPath : rawPath.substring(slash + 1);
+        return java.net.URLDecoder.decode(encoded, StandardCharsets.UTF_8);
     }
 
     private static Map<String, Object> indicatorSnapshotToJson(IndicatorSnapshot s) {
