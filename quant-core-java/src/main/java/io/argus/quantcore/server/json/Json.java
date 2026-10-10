@@ -39,7 +39,11 @@ public final class Json {
         } else if (value instanceof Double d) {
             if (d.isNaN() || d.isInfinite()) {
                 sb.append("null"); // JSON has no NaN/Infinity - never fabricate a number
-            } else if (d == Math.floor(d) && !d.isInfinite()) {
+            } else if (d == Math.floor(d) && Math.abs(d) < 9.223372036854776E18) {
+                // Integral and exactly convertible to long - emit without ".0". The 2^63 bound
+                // matters: Double.longValue() SATURATES beyond it, so a huge integral double
+                // like 1e21 would otherwise serialize as 9223372036854775807 (a wrong number).
+                // Beyond the bound we fall through to Double.toString ("1.0E21" - valid JSON).
                 sb.append(d.longValue());
             } else {
                 sb.append(d);

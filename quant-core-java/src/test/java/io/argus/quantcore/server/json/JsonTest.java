@@ -85,6 +85,20 @@ class JsonTest {
         org.junit.jupiter.api.Assertions.assertThrows(Json.JsonParseException.class, () -> Json.parse("[\"abc\\u\"]"));
     }
 
+    /**
+     * Java defect hunt 2026-10-10: integral doubles at/above 2^63 used to serialize as
+     * 9223372036854775807 (Double.longValue() saturation) - a wrong number, not a big one.
+     */
+    @Test
+    void writesHugeIntegralDoublesWithoutLongSaturation() {
+        assertThat(Json.write(1e21)).isEqualTo("1.0E21");
+        assertThat(Json.write(-1e21)).isEqualTo("-1.0E21");
+        // Ordinary integral values still emit without ".0", and round-trip exactly.
+        assertThat(Json.write(1791686400000.0)).isEqualTo("1791686400000");
+        Object parsed = Json.parse(Json.write(1e21));
+        assertThat(Json.asDouble(parsed)).isEqualTo(1e21);
+    }
+
     @Test
     void stillParsesValidUnicodeAndExponentNumbers() {
         Object parsed = Json.parse("[\"\\u0041\", 1e3, -2.5e-2]");
