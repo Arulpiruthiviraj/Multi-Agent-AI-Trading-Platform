@@ -1,3 +1,4 @@
+// LABEL: COMPONENT / FAULT_INJECTION
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';

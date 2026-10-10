@@ -63,7 +63,7 @@ describe('fastLaneEvaluator (research/paper only, no execution authority)', () =
     expect(result.confidence).toBeUndefined();
   });
 
-  it('candidate + a real triggered strategy -> VALID_STRATEGY_EVIDENCE, with the real strategy/side/confidence carried through', async () => {
+  it('candidate + triggered strategy evaluation -> VALID_STRATEGY_EVIDENCE, strategy/side/confidence carried through unchanged', async () => {
     const c = inject('BBBBB');
     vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockResolvedValue(fakeEvaluation([
       { strategy: 'MOMENTUM_BREAKOUT', side: 'BUY', triggerMet: true, confidence: 0.82 },
@@ -109,7 +109,7 @@ describe('fastLaneEvaluator (research/paper only, no execution authority)', () =
     expect(result.bestStrategy).toBeUndefined();
   });
 
-  it('duplicate concurrent calls for the SAME candidate/symbol coalesce onto one evaluation, never running the real strategy pipeline twice', async () => {
+  it('duplicate concurrent calls for the SAME candidate/symbol coalesce onto one evaluation, never invoking evaluateSymbol twice', async () => {
     const c = inject('EEEEE');
     const spy = vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockImplementation(async () => {
       await new Promise((r) => setTimeout(r, 20));
