@@ -236,8 +236,20 @@ public final class Json {
                         case 'b' -> sb.append('\b');
                         case 'f' -> sb.append('\f');
                         case 'u' -> {
+                            // A truncated/non-hex unicode escape is malformed input, not an
+                            // internal error: map the raw StringIndexOutOfBounds/NumberFormat
+                            // exceptions to JsonParseException so callers answer 400, never 500.
+                            if (pos + 4 > src.length()) {
+                                throw new JsonParseException("Truncated unicode escape at position " + pos);
+                            }
                             String hex = src.substring(pos, pos + 4);
-                            sb.append((char) Integer.parseInt(hex, 16));
+                            int codePoint;
+                            try {
+                                codePoint = Integer.parseInt(hex, 16);
+                            } catch (NumberFormatException e) {
+                                throw new JsonParseException("Invalid unicode escape at position " + pos);
+                            }
+                            sb.append((char) codePoint);
                             pos += 4;
                         }
                         default -> throw new JsonParseException("Invalid escape at position " + pos);
@@ -283,7 +295,14 @@ public final class Json {
             if (numStr.isEmpty()) {
                 throw new JsonParseException("Invalid number at position " + pos);
             }
-            return Double.parseDouble(numStr);
+            // Inputs like "1e", "+", or "-" reach Double.parseDouble with an unparseable
+            // string - map that to JsonParseException (callers answer 400 "malformed request
+            // body") rather than letting a raw NumberFormatException escape as a 500.
+            try {
+                return Double.parseDouble(numStr);
+            } catch (NumberFormatException e) {
+                throw new JsonParseException("Invalid number '" + numStr + "' at position " + start);
+            }
         }
     }
 

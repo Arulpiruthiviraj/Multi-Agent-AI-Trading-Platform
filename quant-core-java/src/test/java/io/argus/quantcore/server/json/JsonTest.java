@@ -64,4 +64,34 @@ class JsonTest {
     void throwsOnMalformedJson() {
         org.junit.jupiter.api.Assertions.assertThrows(Json.JsonParseException.class, () -> Json.parse("{\"a\": }"));
     }
+
+    /**
+     * Java defect hunt 2026-10-10: these inputs used to leak raw NumberFormatException /
+     * StringIndexOutOfBoundsException out of the parser (HTTP 500 from the handlers), instead
+     * of the documented JsonParseException (HTTP 400 "malformed request body").
+     */
+    @Test
+    void mapsUnparseableNumbersToJsonParseException() {
+        org.junit.jupiter.api.Assertions.assertThrows(Json.JsonParseException.class, () -> Json.parse("[1e]"));
+        org.junit.jupiter.api.Assertions.assertThrows(Json.JsonParseException.class, () -> Json.parse("[1.2.3]"));
+        org.junit.jupiter.api.Assertions.assertThrows(Json.JsonParseException.class, () -> Json.parse("[+]"));
+        org.junit.jupiter.api.Assertions.assertThrows(Json.JsonParseException.class, () -> Json.parse("[-]"));
+    }
+
+    @Test
+    void mapsTruncatedAndInvalidUnicodeEscapesToJsonParseException() {
+        org.junit.jupiter.api.Assertions.assertThrows(Json.JsonParseException.class, () -> Json.parse("[\"abc\\u12\"]"));
+        org.junit.jupiter.api.Assertions.assertThrows(Json.JsonParseException.class, () -> Json.parse("[\"abc\\u12XY\"]"));
+        org.junit.jupiter.api.Assertions.assertThrows(Json.JsonParseException.class, () -> Json.parse("[\"abc\\u\"]"));
+    }
+
+    @Test
+    void stillParsesValidUnicodeAndExponentNumbers() {
+        Object parsed = Json.parse("[\"\\u0041\", 1e3, -2.5e-2]");
+        @SuppressWarnings("unchecked")
+        List<Object> arr = (List<Object>) parsed;
+        assertThat(Json.asString(arr.get(0))).isEqualTo("A");
+        assertThat(Json.asDouble(arr.get(1))).isEqualTo(1000.0);
+        assertThat(Json.asDouble(arr.get(2))).isCloseTo(-0.025, org.assertj.core.api.Assertions.within(1e-12));
+    }
 }
