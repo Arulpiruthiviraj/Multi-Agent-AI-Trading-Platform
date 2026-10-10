@@ -320,7 +320,17 @@ export class InteractiveBrokersWebApiAdapter implements BrokerPlugin {
   }
 
   async orders(): Promise<Order[]> {
-    const raw: any[] = await this.request('/iserver/account/orders').catch(() => []);
+    // 2026-10-10 (backend defect hunt): this used to `.catch(() => [])` the request,
+    // turning EVERY failure (auth loss, timeout, connection error, HTTP 4xx/5xx) into
+    // an empty order list - indistinguishable from "the broker genuinely has no
+    // orders". OMS follow-up, pollForFill, and the reconciliation orphan scan then
+    // proceeded as if every tracked order had vanished from the broker. Throw
+    // instead: every caller already treats an orders() throw as "broker state
+    // unknown" (pollForFill warns+retries, follow-up skips the broker, the
+    // orchestration snapshot falls back to local pending buys). Same throw-on-
+    // ambiguity discipline as this adapter's own getOrderByClientOrderId (2026-10-08
+    // D1): never fabricate an answer from a failed read.
+    const raw: any[] = await this.request('/iserver/account/orders');
     return (raw || []).map((o: any) => this.mapOrder(o));
   }
 
