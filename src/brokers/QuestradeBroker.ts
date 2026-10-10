@@ -228,20 +228,36 @@ export class QuestradeBroker implements BrokerPlugin {
   async orders(): Promise<Order[]> {
     if (!this.accountNumber) return [];
     const res = await this.fetchQuestrade(`v1/accounts/${this.accountNumber}/orders`);
-    return (res?.orders ?? []).map((o: any) => ({
-      id: String(o.id),
-      symbol: o.symbol,
-      side: (o.side ?? '').toUpperCase() === 'SELL' ? 'SELL' : 'BUY',
-      type: mapQuestradeOrderType(o.orderType),
-      status: mapQuestradeOrderState(o.state),
-      quantity: o.totalQuantity ?? 0,
-      filledQuantity: o.filledQuantity ?? 0,
-      price: o.limitPrice ?? undefined,
-      stopPrice: o.stopPrice ?? undefined,
-      averageFillPrice: o.avgExecPrice ?? undefined,
-      createdAt: o.creationTime ? new Date(o.creationTime) : new Date(),
-      updatedAt: o.updateTime ? new Date(o.updateTime) : new Date(),
-    }));
+    const rows: any[] = res?.orders ?? [];
+    const orders: Order[] = [];
+    for (const o of rows) {
+      const side = mapQuestradeOrderSide(o.side);
+      if (!side) {
+        // 2026-10-10 (cross-cutting defect hunt): NEVER fabricate a side. Questrade's
+        // documented order sides are Buy/Sell/Short/Cov/BTO/STC/STO/BTC - the old
+        // `(o.side ?? '').toUpperCase() === 'SELL' ? 'SELL' : 'BUY'` mislabeled every
+        // sell-family side except literal "Sell" (STC/STO/Short) as BUY, and invented
+        // BUY for a missing side. Skip the row loudly instead (sanctioned per-row
+        // skip pattern, same as AlpacaBroker 1856513).
+        console.warn(`[QuestradeBroker] skipping order row with missing/unrecognized side: id=${o?.id} side=${JSON.stringify(o?.side)}`);
+        continue;
+      }
+      orders.push({
+        id: String(o.id),
+        symbol: o.symbol,
+        side,
+        type: mapQuestradeOrderType(o.orderType),
+        status: mapQuestradeOrderState(o.state),
+        quantity: o.totalQuantity ?? 0,
+        filledQuantity: o.filledQuantity ?? 0,
+        price: o.limitPrice ?? undefined,
+        stopPrice: o.stopPrice ?? undefined,
+        averageFillPrice: o.avgExecPrice ?? undefined,
+        createdAt: o.creationTime ? new Date(o.creationTime) : new Date(),
+        updatedAt: o.updateTime ? new Date(o.updateTime) : new Date(),
+      });
+    }
+    return orders;
   }
 
   async placeOrder(order: Partial<Order>): Promise<Order> {
@@ -334,6 +350,29 @@ function mapQuestradeOrderType(t: string | undefined): Order['type'] {
     case 'stopmarket': return 'STOP';
     case 'stoplimit': return 'STOP_LIMIT';
     default: return 'MARKET';
+  }
+}
+
+/**
+ * Questrade's documented order sides (GET accounts/{id}/orders): Buy, Sell, Short,
+ * Cov, BTO, STC, STO, BTC ("client view of the order side", e.g. "Buy-To-Open").
+ * Returns null for a missing/unrecognized side so the caller skips the row loudly
+ * instead of fabricating BUY (2026-10-10 cross-cutting defect hunt).
+ */
+function mapQuestradeOrderSide(s: unknown): 'BUY' | 'SELL' | null {
+  switch (String(s ?? '').toUpperCase()) {
+    case 'BUY':
+    case 'BTO': // Buy-To-Open
+    case 'BTC': // Buy-To-Close
+    case 'COV': // Cover (buy to cover a short)
+      return 'BUY';
+    case 'SELL':
+    case 'STC': // Sell-To-Close
+    case 'STO': // Sell-To-Open
+    case 'SHORT': // Short sale
+      return 'SELL';
+    default:
+      return null;
   }
 }
 
