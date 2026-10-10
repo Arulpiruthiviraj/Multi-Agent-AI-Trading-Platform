@@ -138,6 +138,48 @@ export interface RuntimeIntervals {
   transactionTracesRetentionDays: number;
   sessionLifecycleSnapshotsRetentionDays: number;
   tradeLifecycleTransitionsRetentionDays: number;
+  /** 2026-10-09 (certification mission item 1 - OCT9_PIT_PROVENANCE_ESCAPE): retention for
+   *  the decision_provenance table (per-Quant-decision PIT replay provenance). 90 days,
+   *  aligned with pitDecisionLedgerRetentionDays — both are decision-audit records; the
+   *  provenance row is what lets a past decision be replayed identically. */
+  decisionProvenanceRetentionDays: number;
+  /** 2026-10-10 defect hunt (Track 1, soak-path retention): a 180-sim-minute SOAK_3H
+   *  synthetic session wrote rows to consensus_debate_predictions (27), consensus_decisions
+   *  (8), consensus_evidence (10) and reconciliation_events (1) with no prune path anywhere
+   *  in the codebase — the same defect class as candidate_rankings/news_articles. These are
+   *  decision-audit records (90d, aligned with pitDecisionLedger/decisionProvenance), not the
+   *  permanent decision record (event_traces/trades/fills/risk_assessments stay unpruned).
+   *  consensus_evidence has no timestamp of its own; its sweeper prunes via the parent
+   *  consensus_decisions row (same transaction, TransactionRegistry). */
+  consensusDebatePredictionsRetentionDays: number;
+  consensusDecisionsRetentionDays: number;
+  consensusEvidenceRetentionDays: number;
+  reconciliationEventsRetentionDays: number;
+  /** 2026-10-10 defect hunt (Track 1, soak-path retention, part 2): twelve more
+   *  append-only tables on the session path with no prune path. None fired in the
+   *  all-AI-down probe iteration (AI/Kronos down, no fills, no misses), but each is
+   *  written by a session worker in a live configuration: portfolio_snapshots (per
+   *  reconciliation check with holdings), ai_usage (per AI call), kronos_predictions
+   *  (per Kronos forecast), prediction_outcomes + prediction_outcome_horizons (outcome
+   *  evaluators on timers), missed_opportunities (detector), learning_observations (on
+   *  closed trades), meta_label_features (vote path), quant_forecasts (forecastEngine),
+   *  explainability_reports (per decision), training_examples (builder timer),
+   *  learned_rules (ReflectionEngine). Fast-decaying artifacts (usage, forecasts,
+   *  kronos predictions) get 30d; audit/learning records get 90d. risk_gate_results
+   *  is deliberately NOT swept: it is the per-gate detail of risk_assessments, which
+   *  is in the permanent decision record by design. */
+  portfolioSnapshotsRetentionDays: number;
+  aiUsageRetentionDays: number;
+  kronosPredictionsRetentionDays: number;
+  predictionOutcomesRetentionDays: number;
+  predictionOutcomeHorizonsRetentionDays: number;
+  missedOpportunitiesRetentionDays: number;
+  learningObservationsRetentionDays: number;
+  metaLabelFeaturesRetentionDays: number;
+  quantForecastsRetentionDays: number;
+  explainabilityReportsRetentionDays: number;
+  trainingExamplesRetentionDays: number;
+  learnedRulesRetentionDays: number;
   /** 2026-10-08 (defect A1): how long an aiProviders.health='Offline' quarantine must age
    *  (measured from the row's last_failure) before AIProviderHealthCheck's real re-probe may
    *  restore the provider to 'Degraded' on success. A failed re-probe keeps it Offline. */
@@ -171,6 +213,15 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'quantAssessmentsRetentionDays', 'pitDecisionLedgerRetentionDays',
   'agentReasoningLogsRetentionDays', 'transactionTracesRetentionDays',
   'sessionLifecycleSnapshotsRetentionDays', 'tradeLifecycleTransitionsRetentionDays',
+  'decisionProvenanceRetentionDays',
+  'consensusDebatePredictionsRetentionDays', 'consensusDecisionsRetentionDays',
+  'consensusEvidenceRetentionDays', 'reconciliationEventsRetentionDays',
+  'portfolioSnapshotsRetentionDays', 'aiUsageRetentionDays',
+  'kronosPredictionsRetentionDays', 'predictionOutcomesRetentionDays',
+  'predictionOutcomeHorizonsRetentionDays', 'missedOpportunitiesRetentionDays',
+  'learningObservationsRetentionDays', 'metaLabelFeaturesRetentionDays',
+  'quantForecastsRetentionDays', 'explainabilityReportsRetentionDays',
+  'trainingExamplesRetentionDays', 'learnedRulesRetentionDays',
   'aiProviderQuarantineCooldownMs',
 ];
 

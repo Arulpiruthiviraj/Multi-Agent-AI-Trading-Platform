@@ -1,3 +1,4 @@
+// LABEL: COMPONENT
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';

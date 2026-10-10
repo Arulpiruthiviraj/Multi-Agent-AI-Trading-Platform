@@ -1,3 +1,4 @@
+// LABEL: COMPONENT
 import { describe, it, expect, afterEach } from 'vitest';
 import {
   registerHistoricalBarProvider,

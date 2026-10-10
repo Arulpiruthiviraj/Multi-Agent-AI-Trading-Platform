@@ -26,11 +26,13 @@ export async function sweepCandidateRankingsRetention(nowMs = Date.now()): Promi
   const cutoffIso = new Date(nowMs - runtimeIntervals.candidateRankingsRetentionDays * 24 * 60 * 60 * 1000).toISOString();
   const batchSize = runtimeIntervals.candidateRankingsRetentionSweepBatchSize;
   const maxBatches = runtimeIntervals.candidateRankingsRetentionSweepMaxBatchesPerCall;
-  const deleteBatch = sqliteDb.prepare(
-    'DELETE FROM candidate_rankings WHERE id IN (SELECT id FROM candidate_rankings WHERE cycle_at < ? LIMIT ?)'
-  );
   let totalDeleted = 0;
   try {
+    // 2026-10-10: prepare() inside the try - a missing/corrupt table must not violate the
+    // "never throws" contract (same fix as sweepIsoTextTable).
+    const deleteBatch = sqliteDb.prepare(
+      'DELETE FROM candidate_rankings WHERE id IN (SELECT id FROM candidate_rankings WHERE cycle_at < ? LIMIT ?)'
+    );
     for (let i = 0; i < maxBatches; i++) {
       const result = deleteBatch.run(cutoffIso, batchSize);
       totalDeleted += result.changes;
@@ -159,11 +161,12 @@ export async function sweepNewsClustersRetention(nowMs = Date.now()): Promise<nu
   const cutoffIso = new Date(nowMs - runtimeIntervals.newsClustersRetentionDays * 24 * 60 * 60 * 1000).toISOString();
   const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
   const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
-  const deleteBatch = sqliteDb.prepare(
-    'DELETE FROM news_clusters WHERE id IN (SELECT id FROM news_clusters WHERE updated_at < ? LIMIT ?)'
-  );
   let totalDeleted = 0;
   try {
+    // 2026-10-10: prepare() inside the try - "never throws" contract (see sweepIsoTextTable).
+    const deleteBatch = sqliteDb.prepare(
+      'DELETE FROM news_clusters WHERE id IN (SELECT id FROM news_clusters WHERE updated_at < ? LIMIT ?)'
+    );
     for (let i = 0; i < maxBatches; i++) {
       const result = deleteBatch.run(cutoffIso, batchSize);
       totalDeleted += result.changes;
@@ -197,21 +200,28 @@ export interface RetentionSweeper {
  * 2026-10-08 defect hunt (news D2 / infra P2-R1/P2-R3): four more append-only tables plus
  * ai_calls, all growing unbounded with no prune path. Same batched + yielding discipline as
  * the news sweeps; failures log loudly (P2-R4), never swallowed.
+ *
+ * 2026-10-10 defect hunt (Track 1): the prepare() call moved INSIDE the try block. A missing
+ * or corrupt table made prepare() throw outside the try, violating this module's own
+ * "never throws (returns partial count)" contract (RetentionSweeper) - caught by the
+ * soakPathRetention test's never-throws case. keyColumn covers tables whose primary key
+ * is not `id` (consensus_decisions uses transaction_id).
  */
 async function sweepIsoTextTable(
   table: string,
   column: string,
   retentionDays: number,
   nowMs: number,
+  keyColumn = 'id',
 ): Promise<number> {
   const cutoffIso = new Date(nowMs - retentionDays * 24 * 60 * 60 * 1000).toISOString();
   const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
   const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
-  const deleteBatch = sqliteDb.prepare(
-    `DELETE FROM ${table} WHERE id IN (SELECT id FROM ${table} WHERE ${column} < ? LIMIT ?)`
-  );
   let totalDeleted = 0;
   try {
+    const deleteBatch = sqliteDb.prepare(
+      `DELETE FROM ${table} WHERE ${keyColumn} IN (SELECT ${keyColumn} FROM ${table} WHERE ${column} < ? LIMIT ?)`
+    );
     for (let i = 0; i < maxBatches; i++) {
       const result = deleteBatch.run(cutoffIso, batchSize);
       totalDeleted += result.changes;
@@ -257,11 +267,12 @@ async function sweepEpochMsTable(
   const cutoffMs = nowMs - retentionDays * 24 * 60 * 60 * 1000;
   const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
   const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
-  const deleteBatch = sqliteDb.prepare(
-    `DELETE FROM ${table} WHERE ${keyColumn} IN (SELECT ${keyColumn} FROM ${table} WHERE ${timeColumn} < ? LIMIT ?)`
-  );
   let totalDeleted = 0;
   try {
+    // 2026-10-10: prepare() inside the try - "never throws" contract (see sweepIsoTextTable).
+    const deleteBatch = sqliteDb.prepare(
+      `DELETE FROM ${table} WHERE ${keyColumn} IN (SELECT ${keyColumn} FROM ${table} WHERE ${timeColumn} < ? LIMIT ?)`
+    );
     for (let i = 0; i < maxBatches; i++) {
       const result = deleteBatch.run(cutoffMs, batchSize);
       totalDeleted += result.changes;
@@ -300,25 +311,7 @@ export async function sweepAgentReasoningLogsRetention(nowMs = Date.now()): Prom
 
 export async function sweepTransactionTracesRetention(nowMs = Date.now()): Promise<number> {
   // trace_id is the primary key here, not id.
-  const cutoffIso = new Date(nowMs - runtimeIntervals.transactionTracesRetentionDays * 24 * 60 * 60 * 1000).toISOString();
-  const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
-  const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
-  const deleteBatch = sqliteDb.prepare(
-    `DELETE FROM transaction_traces WHERE trace_id IN (SELECT trace_id FROM transaction_traces WHERE created_at < ? LIMIT ?)`
-  );
-  let totalDeleted = 0;
-  try {
-    for (let i = 0; i < maxBatches; i++) {
-      const result = deleteBatch.run(cutoffIso, batchSize);
-      totalDeleted += result.changes;
-      if (result.changes < batchSize) break;
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
-    return totalDeleted;
-  } catch (e) {
-    console.error('[operationalRetention] sweep transaction_traces failed:', e instanceof Error ? e.message : String(e));
-    return totalDeleted;
-  }
+  return sweepIsoTextTable('transaction_traces', 'created_at', runtimeIntervals.transactionTracesRetentionDays, nowMs, 'trace_id');
 }
 
 /** One row per session; 90d of session history is plenty. */
@@ -337,11 +330,12 @@ export async function sweepStagedNewsCatalystsTerminalRetention(nowMs = Date.now
   const cutoffMs = nowMs - runtimeIntervals.stagedNewsCatalystsTerminalRetentionDays * 24 * 60 * 60 * 1000;
   const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
   const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
-  const deleteBatch = sqliteDb.prepare(
-    `DELETE FROM staged_news_catalysts WHERE trace_id IN (SELECT trace_id FROM staged_news_catalysts WHERE status IN ('CONSUMED','EXPIRED') AND updated_at_ms < ? LIMIT ?)`
-  );
   let totalDeleted = 0;
   try {
+    // 2026-10-10: prepare() inside the try - "never throws" contract (see sweepIsoTextTable).
+    const deleteBatch = sqliteDb.prepare(
+      `DELETE FROM staged_news_catalysts WHERE trace_id IN (SELECT trace_id FROM staged_news_catalysts WHERE status IN ('CONSUMED','EXPIRED') AND updated_at_ms < ? LIMIT ?)`
+    );
     for (let i = 0; i < maxBatches; i++) {
       const result = deleteBatch.run(cutoffMs, batchSize);
       totalDeleted += result.changes;
@@ -353,6 +347,153 @@ export async function sweepStagedNewsCatalystsTerminalRetention(nowMs = Date.now
     console.error('[operationalRetention] sweep staged_news_catalysts failed:', e instanceof Error ? e.message : String(e));
     return totalDeleted;
   }
+}
+
+/**
+ * 2026-10-09 (certification mission item 1 - OCT9_PIT_PROVENANCE_ESCAPE): retention sweep
+ * for the decision_provenance table (per-Quant-decision PIT replay provenance). Lazy
+ * dynamic import: the provenance module pulls in StrategyEngine (the real evaluation path
+ * replay uses), which must never be in this module's static import set — same import-cycle
+ * discipline as the two sweepers above (the 2026-10-09 defect hunt fixed a TDZ crash from
+ * exactly this class of static import). The SQL itself is trivial; only the module load is
+ * deferred, and it is the leaf provenance module, not the agent that emits the rows.
+ */
+export async function sweepDecisionProvenanceRetention(nowMs = Date.now()): Promise<number> {
+  try {
+    const { sweepDecisionProvenanceRetention: sweep } = await import('../replay/provenance/decisionProvenance');
+    return sweep(nowMs);
+  } catch (e) {
+    console.error('[operationalRetention] sweepDecisionProvenanceRetention failed:', e instanceof Error ? e.message : String(e));
+    return 0;
+  }
+}
+
+/**
+ * 2026-10-10 defect hunt (Track 1, soak-path retention): a 180-sim-minute SOAK_3H synthetic
+ * session (same profile as scripts/soak/threeHourSoakChild.ts) wrote rows to these four
+ * tables with no prune path anywhere in the codebase — the same defect class as
+ * candidate_rankings (2026-09-22) and news_articles (2026-10-08). Per-iteration writes:
+ * consensus_debate_predictions 27, consensus_decisions 8, consensus_evidence 10,
+ * reconciliation_events 1. At soak cadence (hundreds of iterations per 8h run) these grow
+ * unbounded. Same batched + yielding discipline as every sweeper above; failures log
+ * loudly (P2-R4), never swallowed.
+ */
+export async function sweepConsensusDebatePredictionsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('consensus_debate_predictions', 'created_at', runtimeIntervals.consensusDebatePredictionsRetentionDays, nowMs);
+}
+
+export async function sweepConsensusDecisionsRetention(nowMs = Date.now()): Promise<number> {
+  // transaction_id is the primary key here, not id.
+  return sweepIsoTextTable('consensus_decisions', 'created_at', runtimeIntervals.consensusDecisionsRetentionDays, nowMs, 'transaction_id');
+}
+
+/**
+ * consensus_evidence has no timestamp of its own; rows are written in the SAME transaction
+ * as their parent consensus_decisions row (TransactionRegistry), so the parent's created_at
+ * is the correct prune boundary. Two batched + yielding steps: (1) prune evidence whose
+ * parent decision is older than the cutoff; (2) prune orphan evidence whose parent decision
+ * is already gone (sweep-ordering artifact — the decisions sweeper may run first in the
+ * same cycle). Step 2's NOT IN subquery is bounded because consensus_decisions itself is
+ * retention-bounded.
+ */
+export async function sweepConsensusEvidenceRetention(nowMs = Date.now()): Promise<number> {
+  const cutoffIso = new Date(nowMs - runtimeIntervals.consensusEvidenceRetentionDays * 24 * 60 * 60 * 1000).toISOString();
+  const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
+  const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
+  let totalDeleted = 0;
+  try {
+    // 2026-10-10: prepare() calls inside the try - "never throws" contract (see sweepIsoTextTable).
+    const deleteByParentAge = sqliteDb.prepare(
+      `DELETE FROM consensus_evidence WHERE id IN (
+         SELECT ce.id FROM consensus_evidence ce
+         JOIN consensus_decisions cd ON cd.transaction_id = ce.transaction_id
+         WHERE cd.created_at < ? LIMIT ?)`
+    );
+    const deleteOrphans = sqliteDb.prepare(
+      `DELETE FROM consensus_evidence WHERE id IN (
+         SELECT id FROM consensus_evidence
+         WHERE transaction_id NOT IN (SELECT transaction_id FROM consensus_decisions)
+         LIMIT ?)`
+    );
+    for (let i = 0; i < maxBatches; i++) {
+      const result = deleteByParentAge.run(cutoffIso, batchSize);
+      totalDeleted += result.changes;
+      if (result.changes < batchSize) break;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    for (let i = 0; i < maxBatches; i++) {
+      const result = deleteOrphans.run(batchSize);
+      totalDeleted += result.changes;
+      if (result.changes < batchSize) break;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    return totalDeleted;
+  } catch (e) {
+    console.error('[operationalRetention] sweep consensus_evidence failed:', e instanceof Error ? e.message : String(e));
+    return totalDeleted;
+  }
+}
+
+export async function sweepReconciliationEventsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('reconciliation_events', 'checked_at', runtimeIntervals.reconciliationEventsRetentionDays, nowMs);
+}
+
+/**
+ * 2026-10-10 defect hunt (Track 1, soak-path retention, part 2): twelve more append-only
+ * tables on the session path with no prune path. None fired in the all-AI-down probe
+ * iteration, but each is written by a session worker in a live configuration (see the
+ * runtimeIntervals.ts comment for the writer mapping). Same batched + yielding
+ * discipline; failures log loudly, never swallowed.
+ */
+export async function sweepPortfolioSnapshotsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('portfolio_snapshots', 'snapshot_at', runtimeIntervals.portfolioSnapshotsRetentionDays, nowMs);
+}
+
+export async function sweepAiUsageRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('ai_usage', 'timestamp', runtimeIntervals.aiUsageRetentionDays, nowMs);
+}
+
+export async function sweepKronosPredictionsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('kronos_predictions', 'timestamp', runtimeIntervals.kronosPredictionsRetentionDays, nowMs);
+}
+
+export async function sweepPredictionOutcomesRetention(nowMs = Date.now()): Promise<number> {
+  // evaluated_at is the outcome timestamp; the table has no created_at.
+  return sweepIsoTextTable('prediction_outcomes', 'evaluated_at', runtimeIntervals.predictionOutcomesRetentionDays, nowMs);
+}
+
+export async function sweepPredictionOutcomeHorizonsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('prediction_outcome_horizons', 'evaluated_at', runtimeIntervals.predictionOutcomeHorizonsRetentionDays, nowMs);
+}
+
+export async function sweepMissedOpportunitiesRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('missed_opportunities', 'detected_at', runtimeIntervals.missedOpportunitiesRetentionDays, nowMs);
+}
+
+export async function sweepLearningObservationsRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('learning_observations', 'created_at', runtimeIntervals.learningObservationsRetentionDays, nowMs);
+}
+
+export async function sweepMetaLabelFeaturesRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('meta_label_features', 'created_at', runtimeIntervals.metaLabelFeaturesRetentionDays, nowMs);
+}
+
+export async function sweepQuantForecastsRetention(nowMs = Date.now()): Promise<number> {
+  // forecast_id is the primary key here, not id.
+  return sweepIsoTextTable('quant_forecasts', 'created_at', runtimeIntervals.quantForecastsRetentionDays, nowMs, 'forecast_id');
+}
+
+export async function sweepExplainabilityReportsRetention(nowMs = Date.now()): Promise<number> {
+  // trace_id is the primary key here, not id.
+  return sweepIsoTextTable('explainability_reports', 'timestamp', runtimeIntervals.explainabilityReportsRetentionDays, nowMs, 'trace_id');
+}
+
+export async function sweepTrainingExamplesRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('training_examples', 'created_at', runtimeIntervals.trainingExamplesRetentionDays, nowMs);
+}
+
+export async function sweepLearnedRulesRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('learned_rules', 'timestamp', runtimeIntervals.learnedRulesRetentionDays, nowMs);
 }
 
 export const RETENTION_SWEEPERS: RetentionSweeper[] = [
@@ -379,4 +520,29 @@ export const RETENTION_SWEEPERS: RetentionSweeper[] = [
   { table: 'transaction_traces', sweep: sweepTransactionTracesRetention },
   { table: 'session_lifecycle_snapshots', sweep: sweepSessionLifecycleSnapshotsRetention },
   { table: 'trade_lifecycle_transitions', sweep: sweepTradeLifecycleTransitionsRetention },
+  // 2026-10-09 (certification mission item 1 - OCT9_PIT_PROVENANCE_ESCAPE): per-Quant-decision
+  // PIT replay provenance. Same coverage-test guarantee as every table above.
+  { table: 'decision_provenance', sweep: sweepDecisionProvenanceRetention },
+  // 2026-10-10 defect hunt (Track 1, soak-path retention): the 180-sim-minute SOAK_3H
+  // session wrote to these four tables with no prune path. Same coverage-test guarantee.
+  { table: 'consensus_debate_predictions', sweep: sweepConsensusDebatePredictionsRetention },
+  { table: 'consensus_decisions', sweep: sweepConsensusDecisionsRetention },
+  { table: 'consensus_evidence', sweep: sweepConsensusEvidenceRetention },
+  { table: 'reconciliation_events', sweep: sweepReconciliationEventsRetention },
+  // 2026-10-10 defect hunt (Track 1, part 2): twelve more append-only session-path tables
+  // with no prune path (not hit in the all-AI-down probe, but written by session workers
+  // in live configurations). Same coverage-test guarantee. risk_gate_results is
+  // deliberately absent: per-gate detail of risk_assessments (permanent record).
+  { table: 'portfolio_snapshots', sweep: sweepPortfolioSnapshotsRetention },
+  { table: 'ai_usage', sweep: sweepAiUsageRetention },
+  { table: 'kronos_predictions', sweep: sweepKronosPredictionsRetention },
+  { table: 'prediction_outcomes', sweep: sweepPredictionOutcomesRetention },
+  { table: 'prediction_outcome_horizons', sweep: sweepPredictionOutcomeHorizonsRetention },
+  { table: 'missed_opportunities', sweep: sweepMissedOpportunitiesRetention },
+  { table: 'learning_observations', sweep: sweepLearningObservationsRetention },
+  { table: 'meta_label_features', sweep: sweepMetaLabelFeaturesRetention },
+  { table: 'quant_forecasts', sweep: sweepQuantForecastsRetention },
+  { table: 'explainability_reports', sweep: sweepExplainabilityReportsRetention },
+  { table: 'training_examples', sweep: sweepTrainingExamplesRetention },
+  { table: 'learned_rules', sweep: sweepLearnedRulesRetention },
 ];

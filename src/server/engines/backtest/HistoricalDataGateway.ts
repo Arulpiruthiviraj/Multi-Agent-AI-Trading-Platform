@@ -125,6 +125,62 @@ export class HistoricalDataGateway {
   private lastAlpacaFetchAtMs = 0;
   private alpacaPaceChain: Promise<void> = Promise.resolve();
 
+  /**
+   * In-flight provider-refresh coalescing, keyed by symbol|timeframe|exact query window.
+   * paceAlpacaFetch() already serializes provider REST calls (no simultaneous bursts), but
+   * without coalescing every concurrent caller for the same window would still fire its OWN
+   * redundant fetch back-to-back - a self-inflicted mini-storm when, e.g., QuantSignalAgent,
+   * RiskEngine and MissedOpportunityEvaluator evaluate the same symbol in the same cycle.
+   * The public ensureBars() below is a thin wrapper that shares one in-flight
+   * ensureBarsInner() promise per window. Bounded two ways: the entry is removed on settle,
+   * and an age deadline (quantBarsCoalesceEntryMaxAgeMs) reports overdue work.
+   * The entry remains owned until settlement; releasing it while a stalled fetch
+   * would wedge the window forever. A shared rejection is shared
+   * honestly - every coalesced caller sees the same error; none gets silent stale data.
+   */
+  private inflightEnsureBars = new Map<string, Promise<void>>();
+
+  /**
+   * A request is "present-time" when its window ends at/near now - i.e. endMs is not
+   * clearly before now. quantBarsTailFreshnessToleranceMs doubles as the "clearly before"
+   * boundary: backtest/PIT-replay windows ending more than the tolerance ago are
+   * historical and must never be held to today's freshness.
+   */
+  private isPresentTimeRequest(endMs: number, nowMs: number): boolean {
+    return endMs >= nowMs - tradingSafety.quantBarsTailFreshnessToleranceMs;
+  }
+
+  /**
+   * Stale-tail check (2026-10-09 remediation): the newest cached bar's timestamp must be
+   * within quantBarsTailFreshnessToleranceMs of now for a present-time request. `bars`
+   * must be timestamp-ascending (as getBars() returns). Historical end-date requests are
+   * exempt - asking for data "as of" a past date must not demand today's freshness.
+   */
+  private isCacheTailFresh(bars: Bar[], endMs: number, nowMs: number): boolean {
+    if (bars.length === 0) return false;
+    if (!this.isPresentTimeRequest(endMs, nowMs)) return true;
+    return bars[bars.length - 1].timestamp >= nowMs - tradingSafety.quantBarsTailFreshnessToleranceMs;
+  }
+
+  /**
+   * Stale-tail honesty check: after a provider refresh triggered by a stale tail, the
+   * newest cached bar must actually be fresh now. A provider failure, an empty provider
+   * response, or old-only bars surface as a loud DATA_STALE error - the old rows stay
+   * as-is in ohlcv_bars (missing stays missing; nothing is fabricated) but are never
+   * presented as fresh.
+   */
+  private async verifyStaleTailMoved(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<void> {
+    const after = await this.getBars(symbol, timeframe, startMs, endMs);
+    if (this.isCacheTailFresh(after, endMs, Date.now())) {
+      this.consecutiveRateLimits = 0;
+      return;
+    }
+    const tailTs = after.length > 0 ? after[after.length - 1].timestamp : NaN;
+    throw new Error(
+      `DATA_STALE: ${symbol} (${timeframe}) - provider refresh did not move a stale cache tail (newest cached bar: ${Number.isFinite(tailTs) ? new Date(tailTs).toISOString() : 'none'}, tolerance quantBarsTailFreshnessToleranceMs=${tradingSafety.quantBarsTailFreshnessToleranceMs}ms). Old data is not relabeled fresh.`,
+    );
+  }
+
   public static getInstance(): HistoricalDataGateway {
     if (!HistoricalDataGateway.instance) HistoricalDataGateway.instance = new HistoricalDataGateway();
     return HistoricalDataGateway.instance;
@@ -214,9 +270,47 @@ export class HistoricalDataGateway {
    * Ensures real bars for [startMs, endMs] are cached locally.
    * When IBKR Gateway is active (registered provider), uses reqHistoricalData — never Alpaca.
    * When Alpaca is the provider path, paces REST (≤150/min) and uses SQLite cache-first.
+   * Concurrent calls for the same symbol/timeframe/window share one in-flight provider
+   * fetch (inflightEnsureBars) instead of each firing a redundant one back-to-back.
    * Never fabricates bars.
    */
   async ensureBars(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<void> {
+    const coalesceKey = this.memoryKey(symbol, timeframe, startMs, endMs);
+    const inFlight = this.inflightEnsureBars.get(coalesceKey);
+    if (inFlight) return inFlight;
+    const run = this.ensureBarsInner(symbol, timeframe, startMs, endMs);
+    this.inflightEnsureBars.set(coalesceKey, run);
+    // An elapsed deadline does not establish cancellation. Keep ownership until
+    // settlement so later callers cannot start overlapping provider work.
+    const maxAgeMs = tradingSafety.quantBarsCoalesceEntryMaxAgeMs;
+    const evictTimer = setTimeout(() => {
+      if (this.inflightEnsureBars.get(coalesceKey) === run) {
+        console.warn(
+          `[HistoricalDataGateway] COALESCE_ENTRY_OVERDUE for ${symbol} (${timeframe}): ` +
+          `in-flight ensureBars exceeded ${maxAgeMs}ms; ownership retained until settlement.`,
+        );
+      }
+    }, maxAgeMs);
+    if (typeof (evictTimer as unknown as { unref?: unknown }).unref === 'function') {
+      (evictTimer as unknown as { unref: () => void }).unref();
+    }
+    try {
+      await run;
+    } finally {
+      clearTimeout(evictTimer);
+      // Identity-guarded: release only the work that actually settled.
+      if (this.inflightEnsureBars.get(coalesceKey) === run) {
+        this.inflightEnsureBars.delete(coalesceKey);
+      }
+    }
+  }
+
+  /**
+   * The real ensureBars() body. See the stale-tail gate below: a count/coverage-sufficient
+   * cache whose newest bar is older than quantBarsTailFreshnessToleranceMs (present-time
+   * request only) falls through to a provider refresh instead of returning early.
+   */
+  private async ensureBarsInner(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<void> {
     const existing = await this.getBars(symbol, timeframe, startMs, endMs);
     const expected = expectedBarCountForWindow(timeframe, startMs, endMs);
     const coverage = existing.length / expected;
@@ -238,9 +332,19 @@ export class HistoricalDataGateway {
     // Minimum sample count says nothing about whether the requested tail was fetched.
     // October 9 telemetry contained hundreds of sufficiently large but weeks-old caches.
     // Never refresh against today's date for a historical window; use its requested end.
-    if (sufficient && (!dailyTailNeedsRefresh || retryCoolingDown)) {
+    const staleTail = sufficient && !this.isCacheTailFresh(existing, endMs, now);
+    if (sufficient && retryCoolingDown && staleTail) {
+      throw new Error('DATA_STALE: provider retry cooldown active; old cache is not current');
+    }
+    if (sufficient && !staleTail && (!dailyTailNeedsRefresh || retryCoolingDown)) {
+
       this.consecutiveRateLimits = 0;
       return;
+    }
+    if (staleTail) {
+      console.warn(
+        `[HistoricalDataGateway] STALE_TAIL for ${symbol} (${timeframe}): ${existing.length} cached bars pass count/coverage but newest bar is ${new Date(existing[existing.length - 1].timestamp).toISOString()} - older than quantBarsTailFreshnessToleranceMs=${tradingSafety.quantBarsTailFreshnessToleranceMs}ms. Falling through to provider refresh; old data will not be relabeled fresh.`,
+      );
     }
 
     // Isolation fix (2026-09-15, same-day follow-up to the synthetic certification mandate): a
@@ -273,7 +377,7 @@ export class HistoricalDataGateway {
       );
     }
 
-    if (dailyTailNeedsRefresh) {
+    if (dailyTailNeedsRefresh || staleTail) {
       this.staleTailRefreshAttempts.delete(refreshKey);
       this.staleTailRefreshAttempts.set(refreshKey, now);
       while (this.staleTailRefreshAttempts.size > tradingSafety.historicalBarsMemoryCacheMaxEntries) {
@@ -289,10 +393,13 @@ export class HistoricalDataGateway {
         const fetched = await provider.fetchBars(symbol, timeframe, startMs, endMs);
         if (fetched.length > 0) {
           await this.persistBars(symbol, timeframe, fetched, 'ibkr', startMs, endMs);
-          this.consecutiveRateLimits = 0;
+          // Stale-tail path: the IBKR bars must actually have moved the tail - verify
+          // instead of assuming. Old bars returned by the provider are not relabeled fresh.
+          if (staleTail) await this.verifyStaleTailMoved(symbol, timeframe, startMs, endMs);
+          else this.consecutiveRateLimits = 0;
           return;
         }
-        if (existing.length > 0) return;
+        if (existing.length > 0 && !staleTail) return;
         // Real root cause (2026-09-10, missed-opportunity-evaluation forensic pass): confirmed
         // live that IBKR's historical-bar API returns empty for many real, liquid US symbols on
         // this account (same market-data-entitlement gap - code 354 "not subscribed" - already
@@ -308,7 +415,10 @@ export class HistoricalDataGateway {
         // no-data throw below still fires.
         console.warn(`[HistoricalDataGateway] IBKR historical bars empty for ${symbol} (${timeframe}) - falling back to Alpaca.`);
       } catch (e: any) {
-        if (existing.length > 0) {
+        // Stale-tail path: never silently fall back to stale cached bars when the provider
+        // failed - fall through to the next provider instead, and the DATA_STALE check at
+        // the bottom still applies if nothing fresh ever arrives.
+        if (existing.length > 0 && !staleTail) {
           console.warn(
             `[HistoricalDataGateway] IBKR hist failed for ${symbol} — using ${existing.length} cached bars: ${e?.message || e}`,
           );
@@ -319,14 +429,17 @@ export class HistoricalDataGateway {
     }
 
     if (Date.now() < this.rateLimitedUntilMs) {
-      if (existing.length > 0) return;
+      // Stale-tail path: a provider-side cooldown is not a provider-side success - surface
+      // the rate limit honestly rather than quietly serving stale data as if it were fine.
+      if (existing.length > 0 && !staleTail) return;
       throw new Error(
         `Alpaca bars request rate-limited until ${new Date(this.rateLimitedUntilMs).toISOString()} - failing closed, no fabricated bars.`,
       );
     }
 
     if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) {
-      if (existing.length > 0) return;
+      if (existing.length > 0 && !staleTail) return;
+      if (staleTail) throw new Error('DATA_STALE: refresh failed and no alternative provider credentials are available');
       throw new Error('Historical backfill requires ALPACA_API_KEY/ALPACA_SECRET_KEY - no other real historical data source is wired into Argus.');
     }
 
@@ -361,7 +474,10 @@ export class HistoricalDataGateway {
         const body = await res.text().catch(() => '');
         if (res.status === 429) {
           this.armBarsRateLimitBackoff(res.headers.get('Retry-After'));
-          if (existing.length > 0) {
+          // Stale-tail path: the 429 cooldown is a provider failure, not a reason to
+          // quietly keep serving the stale tail - surface it (callers already handle this
+          // throw for the empty-cache case, so nothing new can break on it).
+          if (existing.length > 0 && !staleTail) {
             console.warn(
               `[HistoricalDataGateway] 429 for ${symbol} — using ${existing.length} cached bars; backoff until ${new Date(this.rateLimitedUntilMs).toISOString()}`,
             );
@@ -396,6 +512,14 @@ export class HistoricalDataGateway {
     } while (pageToken);
 
     this.memoryBars.delete(this.memoryKey(symbol, timeframe, startMs, endMs));
+
+    // Stale-tail path: the provider refresh must have actually moved the tail. An empty
+    // provider response leaves "missing" missing - no bar is fabricated - and the loud
+    // DATA_STALE error below surfaces instead of a silent "sufficient" return.
+    if (staleTail) {
+      await this.verifyStaleTailMoved(symbol, timeframe, startMs, endMs);
+      return;
+    }
 
     if (!fetchedAny) {
       const after = await this.getBars(symbol, timeframe, startMs, endMs);

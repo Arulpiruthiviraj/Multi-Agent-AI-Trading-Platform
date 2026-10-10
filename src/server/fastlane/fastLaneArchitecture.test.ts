@@ -1,3 +1,4 @@
+// LABEL: ARCHITECTURE_INVARIANT
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';

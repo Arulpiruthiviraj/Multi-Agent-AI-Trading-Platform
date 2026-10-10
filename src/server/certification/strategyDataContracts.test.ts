@@ -1,3 +1,4 @@
+// LABEL: UNIT / COMPONENT
 /**
  * ==========================================================
  * Test: certification/strategyDataContracts

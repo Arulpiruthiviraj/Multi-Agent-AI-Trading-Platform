@@ -1,3 +1,4 @@
+// LABEL: COMPONENT / FAULT_INJECTION
 /**
  * ==========================================================
  * Phase 3 certification — Quant scheduler SLA / completeness / late-admission tests

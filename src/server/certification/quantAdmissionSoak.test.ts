@@ -10,7 +10,7 @@ import { structuredLogger } from '../observability/StructuredLogger';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { QuantSignalAgent, quantSignalAgent } from '../services/QuantSignalAgent';
 import { fastLaneManager } from '../fastlane/FastLaneManager';
-import { evaluateFastCandidate, getFastLaneEvaluatorDiagnostics, resetFastLaneEvaluatorForTests } from '../fastlane/fastLaneEvaluator';
+import { evaluateFastCandidate, getFastLaneLeaseSnapshot, resetFastLaneEvaluatorForTests } from '../fastlane/fastLaneEvaluator';
 import { sqliteDb } from '../db';
 
 const day = 86_400_000;
@@ -127,13 +127,13 @@ it('slow real provider outlives caller timeout without replacement fan-out or re
   expect(fetchBars).toHaveBeenCalledTimes(1);
   await vi.advanceTimersByTimeAsync(tradingSafety.fastLaneEvaluationTimeoutMs);
   expect((await response).reasonCodes).toContain('EVALUATION_TIMEOUT');
-  expect(getFastLaneEvaluatorDiagnostics().activeWorkCount).toBe(1);
-  expect((await evaluateFastCandidate(candidate.id)).reasonCodes).toContain('SYMBOL_EVALUATION_STILL_RUNNING');
+  expect(getFastLaneLeaseSnapshot().slotsHeld).toBe(1);
+  expect((await evaluateFastCandidate(candidate.id)).reasonCodes).toContain('PRIOR_EVALUATION_STILL_IN_FLIGHT');
   expect(evaluation).toHaveBeenCalledTimes(1);
   vi.useRealTimers(); release();
   await evaluation.mock.results[0].value;
   await new Promise<void>(resolve => setImmediate(resolve));
-  expect(getFastLaneEvaluatorDiagnostics().activeWorkCount).toBe(0);
+  expect(getFastLaneLeaseSnapshot().slotsHeld).toBe(0);
   expect(fastLaneManager.getCandidate(candidate.id)?.state).toBe('NO_SETUP');
   registerHistoricalBarProvider(null); vi.restoreAllMocks(); resetFastLaneEvaluatorForTests();
   delete process.env.FAST_OPPORTUNITY_LANE_ENABLED;

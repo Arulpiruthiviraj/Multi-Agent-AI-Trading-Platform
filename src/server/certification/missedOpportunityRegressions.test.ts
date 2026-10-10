@@ -1,4 +1,4 @@
-// LABEL: REGRESSION
+// LABEL: COMPONENT
 /**
  * Missed-opportunity regressions from the Oct-9 forensic audit.
  *

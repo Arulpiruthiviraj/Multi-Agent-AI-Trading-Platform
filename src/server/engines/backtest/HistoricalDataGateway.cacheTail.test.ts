@@ -81,7 +81,8 @@ describe('HistoricalDataGateway sufficient but old daily cache', () => {
   });
 
   it('does not refresh a sufficient tail exactly at the configured tolerance', async () => {
-    seed('EDGE', requestedEnd - quantScheduling.dailyCacheTailRefreshGapMs);
+    vi.spyOn(Date, 'now').mockReturnValue(requestedEnd);
+    seed('EDGE', requestedEnd - Math.min(quantScheduling.dailyCacheTailRefreshGapMs, tradingSafety.quantBarsTailFreshnessToleranceMs));
     const fetchBars = vi.fn();
     useProvider(fetchBars);
     await gateway.ensureBars('EDGE', '1Day', requestedStart, requestedEnd);
@@ -104,12 +105,12 @@ describe('HistoricalDataGateway sufficient but old daily cache', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => now);
     const fetchBars = vi.fn().mockRejectedValue(new Error('provider unavailable'));
     useProvider(fetchBars);
-    await gateway.ensureBars('FAIL', '1Day', requestedStart, requestedEnd);
-    await gateway.ensureBars('FAIL', '1Day', requestedStart, requestedEnd);
+    await expect(gateway.ensureBars('FAIL', '1Day', requestedStart, requestedEnd)).rejects.toThrow('DATA_STALE');
+    await expect(gateway.ensureBars('FAIL', '1Day', requestedStart, requestedEnd)).rejects.toThrow('DATA_STALE');
     expect(fetchBars).toHaveBeenCalledTimes(1);
     expect((await gateway.getBars('FAIL', '1Day', requestedStart, requestedEnd)).at(-1)?.timestamp).toBe(latest);
     now += quantScheduling.staleCacheRefreshCooldownMs;
-    await gateway.ensureBars('FAIL', '1Day', requestedStart, requestedEnd);
+    await expect(gateway.ensureBars('FAIL', '1Day', requestedStart, requestedEnd)).rejects.toThrow('DATA_STALE');
     expect(fetchBars).toHaveBeenCalledTimes(2);
   });
 
@@ -127,8 +128,8 @@ describe('HistoricalDataGateway sufficient but old daily cache', () => {
     seed('NONE', latest);
     const fetchBars = vi.fn().mockResolvedValue([]);
     useProvider(fetchBars);
-    await gateway.ensureBars('NONE', '1Day', requestedStart, requestedEnd);
-    await gateway.ensureBars('NONE', '1Day', requestedStart, requestedEnd);
+    await expect(gateway.ensureBars('NONE', '1Day', requestedStart, requestedEnd)).rejects.toThrow('DATA_STALE');
+    await expect(gateway.ensureBars('NONE', '1Day', requestedStart, requestedEnd)).rejects.toThrow('DATA_STALE');
     expect(fetchBars).toHaveBeenCalledTimes(1);
     expect((await gateway.getBars('NONE', '1Day', requestedStart, requestedEnd)).at(-1)?.timestamp).toBe(latest);
   });
