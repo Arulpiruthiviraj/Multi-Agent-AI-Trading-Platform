@@ -53,6 +53,13 @@ describe('PredictionOutcomeEvaluator (Phase 4)', () => {
       await db.insert(schema.ohlcvBars).values({ id: `UPTEST:1Min:${timestamp}`,
         symbol: 'UPTEST', timeframe: '1Min', timestamp,
         open: 110, high: 110, low: 110, close: 110, volume: 1000, source: 'test' });
+      // The backlog tests shift prediction time a few milliseconds for ordering.
+      // Their exact windows exclude the bar at the unshifted horizon. Provide a
+      // legitimate prior minute endpoint; never rely on a cached future bar.
+      const priorMinute = timestamp - 60_000;
+      await db.insert(schema.ohlcvBars).values({ id: `UPTEST:1Min:${priorMinute}`,
+        symbol: 'UPTEST', timeframe: '1Min', timestamp: priorMinute,
+        open: 110, high: 110, low: 110, close: 110, volume: 1000, source: 'test' });
     }
   });
 
@@ -103,6 +110,17 @@ describe('PredictionOutcomeEvaluator (Phase 4)', () => {
   it('returns null (never fabricates) when no real bars exist for the symbol/window', async () => {
     const result = await evaluatePrediction('pred-4', 'agent_predictions', 'NOBARSYMBOL', 'BUY', PRED_TIME);
     expect(result).toBeNull();
+  });
+
+  it('does not grade an earlier cutoff using a future endpoint cached by a wider query', async () => {
+    await db.insert(schema.ohlcvBars).values([
+      { id: 'CUTOW:start', symbol: 'CUTOW', timeframe: '1Min', timestamp: PRED_TIME,
+        open: 100, high: 100, low: 100, close: 100, volume: 1000, source: 'CERTIFICATION_FIXTURE_ONLY' },
+      { id: 'CUTOW:end', symbol: 'CUTOW', timeframe: '1Min', timestamp: PRED_TIME + EVALUATION_HORIZON_MS,
+        open: 110, high: 110, low: 110, close: 110, volume: 1000, source: 'CERTIFICATION_FIXTURE_ONLY' },
+    ]);
+    expect(await evaluatePrediction('cutoff-wide', 'agent_predictions', 'CUTOW', 'BUY', PRED_TIME)).not.toBeNull();
+    expect(await evaluatePrediction('cutoff-early', 'agent_predictions', 'CUTOW', 'BUY', PRED_TIME - 2)).toBeNull();
   });
 
   it.each(['missing-end', 'missing-start'])('leaves %s evidence ungraded and requests the missing endpoint', async kind => {
