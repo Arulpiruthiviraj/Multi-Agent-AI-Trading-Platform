@@ -46,7 +46,12 @@ export interface Order {
   type: 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT' | 'TRAILING_STOP' | 'BRACKET' | 'OCO' | 'ICEBERG' | 'TWAP' | 'VWAP';
   status: 'PENDING' | 'FILLED' | 'PARTIALLY_FILLED' | 'CANCELED' | 'REJECTED';
   quantity: number;
-  filledQuantity: number;
+  /** Filled quantity reported by the broker. Optional because a broker row can be
+   * genuinely missing it (2026-10-10 AlpacaBroker hardening): unparseable/missing
+   * maps to undefined - the F26 "genuinely unavailable" - never NaN. Every consumer
+   * (OMS recordFillProgress -> insertIncrementalFill, follow-up watermark math)
+   * already treats undefined as no-evidence and fails closed. */
+  filledQuantity?: number;
   price?: number;
   stopPrice?: number;
   averageFillPrice?: number;

@@ -112,6 +112,58 @@ export function mapAlpacaOrderStatus(rawStatus: string): Order['status'] {
   }
 }
 
+/**
+ * 2026-10-10 (backend defect hunt): per-row hardening for Alpaca order payloads,
+ * mirroring the 2026-10-05 P1 positions fix in portfolio(). orders() used to map
+ * every row with o.side.toUpperCase() / o.order_type.toUpperCase() and
+ * parseFloat(o.qty) inline - ONE malformed row (missing side, missing order_type)
+ * threw a TypeError that killed the ENTIRE orders() call, so OMS follow-up, the
+ * reconciliation orphan scan, and the orchestration/capital snapshot all lost every
+ * order, not one. A malformed qty produced NaN, violating the Order contract
+ * (F26: quantity is always a real number) and poisoning downstream math.
+ *
+ * Rules: a row missing id/side/order_type, with an unrecognized side, or with an
+ * unparseable qty is SKIPPED with a loud log (it cannot be interpreted or measured;
+ * OMS's existing "broker no longer reports order" path already handles a vanished
+ * row honestly). Unparseable OPTIONAL numerics (filled_qty, prices) map to
+ * undefined - the F26-sanctioned "genuinely unavailable" - never NaN. Every
+ * downstream consumer (OMS recordFillProgress -> insertIncrementalFill,
+ * follow-up watermark math) already treats undefined as no-evidence and fails
+ * closed to RECONCILIATION_REQUIRED rather than inventing a fill.
+ */
+function numOrNull(v: unknown): number | null {
+  const n = typeof v === 'number' ? v : Number.parseFloat(String(v ?? ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Maps one raw Alpaca order row to the Order contract, or null when the row is
+ * uninterpretable and must be skipped (logged by the caller). Never throws for
+ * malformed fields and never emits NaN. */
+function mapAlpacaOrderRow(o: any): Order | null {
+  const id = typeof o?.id === 'string' && o.id ? o.id : null;
+  const sideRaw = typeof o?.side === 'string' ? o.side.toLowerCase() : '';
+  const side = sideRaw === 'buy' ? 'BUY' : sideRaw === 'sell' ? 'SELL' : null;
+  const typeRaw = typeof o?.order_type === 'string' && o.order_type ? o.order_type.toUpperCase() : null;
+  const quantity = numOrNull(o?.qty);
+  if (!id || !side || !typeRaw || quantity === null) return null;
+  return {
+    id,
+    symbol: o.symbol,
+    side,
+    type: typeRaw as Order['type'],
+    status: mapAlpacaOrderStatus(o.status),
+    quantity,
+    filledQuantity: numOrNull(o.filled_qty) ?? undefined,
+    price: numOrNull(o.limit_price) ?? undefined,
+    stopPrice: numOrNull(o.stop_price) ?? undefined,
+    averageFillPrice: numOrNull(o.filled_avg_price) ?? undefined,
+    // Required for OMS inbound reconcile — without this, Argus fills look EXTERNAL_MANUAL.
+    clientOrderId: o.client_order_id || undefined,
+    createdAt: new Date(o.created_at),
+    updatedAt: new Date(o.updated_at),
+  };
+}
+
 export class AlpacaBroker implements BrokerPlugin {
   id = 'alpaca';
   name = 'Alpaca';
@@ -357,23 +409,30 @@ export class AlpacaBroker implements BrokerPlugin {
   }
 
   async orders(): Promise<Order[]> {
-    const orders = await this.fetchAlpaca('/v2/orders?status=all', { idempotentRetrySafe: true });
-    return orders.map((o: any) => ({
-      id: o.id,
-      symbol: o.symbol,
-      side: o.side.toUpperCase(),
-      type: o.order_type.toUpperCase(),
-      status: mapAlpacaOrderStatus(o.status),
-      quantity: parseFloat(o.qty),
-      filledQuantity: parseFloat(o.filled_qty),
-      price: o.limit_price ? parseFloat(o.limit_price) : undefined,
-      stopPrice: o.stop_price ? parseFloat(o.stop_price) : undefined,
-      averageFillPrice: o.filled_avg_price ? parseFloat(o.filled_avg_price) : undefined,
-      // Required for OMS inbound reconcile — without this, Argus fills look EXTERNAL_MANUAL.
-      clientOrderId: o.client_order_id || undefined,
-      createdAt: new Date(o.created_at),
-      updatedAt: new Date(o.updated_at)
-    }));
+    const raw = await this.fetchAlpaca('/v2/orders?status=all', { idempotentRetrySafe: true });
+    // 2026-10-10 (backend defect hunt): a non-array payload (e.g. an error object that
+    // slipped past fetchAlpaca's own checks) used to die as a bare TypeError inside
+    // .map - fail loudly with a diagnosable message instead; every caller already
+    // treats an orders() throw as "broker unavailable" and degrades honestly.
+    if (!Array.isArray(raw)) {
+      throw new Error(`[AlpacaBroker] orders(): expected an array from /v2/orders, got ${typeof raw}`);
+    }
+    const mapped: Order[] = [];
+    for (const o of raw) {
+      const order = mapAlpacaOrderRow(o);
+      if (!order) {
+        // 2026-10-10 (backend defect hunt): skip the uninterpretable row loudly instead
+        // of throwing away the whole order list (see mapAlpacaOrderRow's contract).
+        console.error(
+          `[AlpacaBroker] orders(): dropping malformed order row id='${o?.id ?? 'unknown'}' ` +
+            `(side='${o?.side}', order_type='${o?.order_type}', qty='${o?.qty}') — refusing to ` +
+            `emit a partial/NaN Order into OMS/reconciliation.`,
+        );
+        continue;
+      }
+      mapped.push(order);
+    }
+    return mapped;
   }
 
   async placeOrder(orderData: Partial<Order>): Promise<Order> {
@@ -493,19 +552,20 @@ export class AlpacaBroker implements BrokerPlugin {
     );
     const match = Array.isArray(results) ? results[0] : results;
     if (!match || !match.id) return null;
-    return {
-      id: match.id,
-      clientOrderId: match.client_order_id || undefined,
-      symbol: match.symbol,
-      side: match.side.toUpperCase(),
-      type: match.order_type.toUpperCase(),
-      status: mapAlpacaOrderStatus(match.status),
-      quantity: parseFloat(match.qty),
-      filledQuantity: parseFloat(match.filled_qty),
-      averageFillPrice: match.filled_avg_price ? parseFloat(match.filled_avg_price) : undefined,
-      createdAt: new Date(match.created_at),
-      updatedAt: new Date(match.updated_at),
-    };
+    // 2026-10-10 (backend defect hunt): the matched row can be malformed the same
+    // way orders() rows can (missing side/order_type, unparseable qty). Throwing
+    // here would break reconcileStaleOrders for every order; return null (loudly)
+    // so the caller treats it as "no usable broker record", same as a genuine miss.
+    const mapped = mapAlpacaOrderRow(match);
+    if (!mapped) {
+      console.error(
+        `[AlpacaBroker] getOrderByClientOrderId('${clientOrderId}'): matched row is malformed ` +
+          `(side='${match?.side}', order_type='${match?.order_type}', qty='${match?.qty}') — ` +
+          `returning null instead of emitting a partial/NaN Order.`,
+      );
+      return null;
+    }
+    return mapped;
   }
 
   async positions(): Promise<Position[]> {
