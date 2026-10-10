@@ -1,3 +1,4 @@
+// LABEL: PRODUCTION_STATE
 /**
  * PRODUCTION_STATE certification tests (Layer 3), 2026-10-09.
  *

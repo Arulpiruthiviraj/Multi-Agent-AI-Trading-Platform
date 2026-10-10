@@ -1,3 +1,4 @@
+// LABEL: UNIT
 import { describe, it, expect, afterEach } from 'vitest';
 import {
   processFastEvaluationForCanonicalIdea,

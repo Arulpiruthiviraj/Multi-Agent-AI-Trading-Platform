@@ -1,3 +1,4 @@
+// LABEL: UNIT
 /**
  * Retention tests for decision_provenance (2026-10-09, certification mission item 1).
  * Per-Quant-decision PIT replay provenance must not grow unbounded. Proves, following the

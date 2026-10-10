@@ -1,3 +1,4 @@
+// LABEL: COMPONENT
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { fastLaneManager } from './FastLaneManager';
 import { structuredLogger } from '../observability/StructuredLogger';

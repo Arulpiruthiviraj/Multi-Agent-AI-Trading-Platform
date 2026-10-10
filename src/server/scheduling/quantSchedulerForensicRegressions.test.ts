@@ -1,3 +1,4 @@
+// LABEL: COMPONENT / FAULT_INJECTION
 /**
  * ==========================================================
  * quantSchedulerForensicRegressions.test.ts — forensic regression scenarios for

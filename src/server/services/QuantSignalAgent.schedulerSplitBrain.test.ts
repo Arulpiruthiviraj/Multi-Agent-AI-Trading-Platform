@@ -1,3 +1,4 @@
+// LABEL: COMPONENT
 /**
  * ==========================================================
  * QuantSignalAgent.schedulerSplitBrain.test.ts — split-brain regression tests

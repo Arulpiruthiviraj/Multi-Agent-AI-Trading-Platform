@@ -1,3 +1,4 @@
+// LABEL: COMPONENT
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fastLaneManager } from './FastLaneManager';
 import { quantSignalAgent } from '../services/QuantSignalAgent';
