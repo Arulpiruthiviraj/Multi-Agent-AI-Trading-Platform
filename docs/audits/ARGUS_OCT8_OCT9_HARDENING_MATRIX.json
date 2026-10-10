@@ -1,7 +1,7 @@
 {
   "scope": "October 8-9 hardening program; audit areas are not all proven defects",
   "createdAt": "2026-10-10T13:02:18.8208039Z",
-  "integrationCheckpoint": "45e4fbc",
+  "integrationCheckpoint": "1bc3992_FOLLOWUP_UNCOMMITTED",
   "readiness": "NO_GO_UNCERTIFIED",
   "issues": [
     {
@@ -1563,8 +1563,8 @@
     "gatewayTests": 31,
     "typecheck": "PASS",
     "build": "PASS",
-    "fullSuite": "RUNNING",
-    "wallClockSoak": "NOT_CERTIFIED",
+    "fullSuite": "BASELINE_1bc3992_PASS_793_FILES_6565_TESTS_FOLLOWUP_NOT_YET_RUN",
+    "wallClockSoak": "182.774_MIN_63_ITERATIONS_RESOURCE_NOT_CERTIFIED",
     "deployment": "NOT_DEPLOYED"
   },
   "confirmedRegressions": [
@@ -1591,6 +1591,21 @@
     {
       "id": "SQLITE_CERTIFICATION_SNAPSHOT",
       "evidence": "concurrent WAL writer / pinned view test",
+      "status": "FIXED_ISOLATED"
+    },
+    {
+      "id": "EXTERNAL_EVALUATION_OWNERSHIP",
+      "evidence": "failing-before overdue/early-unregister regression",
+      "status": "FIXED_ISOLATED"
+    },
+    {
+      "id": "STOP_FALLBACK_AND_RESTART_OVERLAP",
+      "evidence": "two failing-before hanging evaluator fallback regressions",
+      "status": "FIXED_ISOLATED"
+    },
+    {
+      "id": "PROVENANCE_FUTURE_TIMESTAMP_CLAMP",
+      "evidence": "failing-before construction-to-validator regression",
       "status": "FIXED_ISOLATED"
     }
   ]

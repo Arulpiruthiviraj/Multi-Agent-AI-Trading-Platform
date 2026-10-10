@@ -28,6 +28,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { AvailableData } from '../src/server/certification/strategyDataContracts';
+import { summarizeReleaseEvidence } from '../src/server/certification/releaseEvidence';
 
 function sha256Hex(data: string): string {
   return createHash('sha256').update(data, 'utf8').digest('hex');
@@ -254,7 +255,7 @@ async function main() {
       throw new Error('INVALID_RELEASE_CERTIFICATION_CONFIG');
     }
     report.certificationScope = 'PRODUCTION_STATE_POLICY_AND_DB_DATA_PROBES_ONLY';
-    report.unverifiedReleaseChecks = releaseConfig.requiredEvidence.map((area: string) => ({ area, status: 'NOT_RUN' }));
+    report.unverifiedReleaseChecks = summarizeReleaseEvidence(releaseConfig.requiredEvidence, []).checks;
     conditions.push('RELEASE_CERTIFICATION_INCOMPLETE: executed artifact and required runtime/soak evidence are not attested by this command.');
     overall = 'NO_GO';
     report.overallStatus = overall;

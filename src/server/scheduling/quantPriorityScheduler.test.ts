@@ -732,27 +732,52 @@ describe('quantPriorityScheduler', () => {
     expect(h.ensureCalls.filter((s) => s === 'COV')).toHaveLength(0);
   });
 
-  it('external registration: a stale registration is evicted by the sweeper (no permanent block)', async () => {
-    // Defect found in review: externalInflight registrations were only removed by
-    // the external system's unregister call. A crashed external system would block
-    // the symbol's scheduler evaluation forever.
+  it('external registration: overdue and early unregister retain ownership until actual settlement', async () => {
+    // Timeout and caller abandonment cannot prove that an external worker stopped.
     const h = harness({ externalRegistrationMaxAgeMs: 200, sweepIntervalMs: 50 });
     h.seedBars('STALE', 400, 30 * 60_000);
-    const neverSettles = new Promise<unknown>(() => {});
+    let settle!: (v: unknown) => void;
+    const neverSettles = new Promise<unknown>((resolve) => { settle = resolve; });
     const unregister = h.scheduler.registerExternalEvaluation('STALE', 'fp', neverSettles);
     const blocked = h.scheduler.admit({ symbol: 'STALE', priority: P0, source: 'MOVER', evaluationFingerprint: 'fp' });
     expect('externalInFlight' in blocked).toBe(true);
 
-    // The external system never unregisters (simulated crash). After max age + sweep
-    // the registration is evicted and the scheduler evaluates normally.
+    // Overdue work stays owned; only real settlement permits another evaluation.
     await sleep(350);
     h.scheduler.sweepForTests();
+    unregister(); // Caller abandonment is not confirmation of worker termination.
     const admitted = h.scheduler.admit({ symbol: 'STALE', priority: P0, source: 'MOVER', evaluationFingerprint: 'fp' });
-    expect('externalInFlight' in admitted).toBe(false);
-    if ('externalInFlight' in admitted) throw new Error('unreachable');
-    expect((await admitted.outcome).terminalState).toBe('ASSESSED');
-    expect(h.events.some((e) => e.type === 'QUANT_SCHEDULER_EXTERNAL_REGISTRATION_EVICTED')).toBe(true);
-    unregister(); // no-op cleanup
+    expect('externalInFlight' in admitted).toBe(true);
+    expect(h.evaluateCallsBySymbol.get('STALE') ?? 0).toBe(0);
+    expect(h.events.filter((e) => e.type === 'QUANT_SCHEDULER_EXTERNAL_REGISTRATION_OVERDUE')).toHaveLength(1);
+    settle(undefined);
+    await sleep(20);
+    const recovered = h.scheduler.admit({ symbol: 'STALE', priority: P0, source: 'MOVER', evaluationFingerprint: 'fp' });
+    if ('externalInFlight' in recovered) throw new Error('settled ownership was not released');
+    expect((await recovered.outcome).terminalState).toBe('ASSESSED');
+  });
+
+  it('external ownership rejects replacement, releases rejected work, and ignores obsolete unregister', async () => {
+    const h = harness();
+    h.seedBars('EXT', 400, 30 * 60_000);
+    let reject!: (reason: Error) => void;
+    const done = new Promise<unknown>((_resolve, fail) => { reject = fail; });
+    const oldUnregister = h.scheduler.registerExternalEvaluation('EXT', 'fp', done);
+    expect(() => h.scheduler.registerExternalEvaluation('EXT', 'fp', Promise.resolve())).toThrow(/already owns/);
+    reject(new Error('worker failed'));
+    await sleep(20);
+    let finish!: () => void;
+    const replacement = new Promise<void>((resolve) => { finish = resolve; });
+    h.scheduler.registerExternalEvaluation('EXT', 'fp', replacement);
+    oldUnregister();
+    const blocked = h.scheduler.admit({ symbol: 'EXT', priority: P0, source: 'MOVER', evaluationFingerprint: 'fp' });
+    expect('externalInFlight' in blocked).toBe(true);
+    expect(h.evaluateCallsBySymbol.get('EXT') ?? 0).toBe(0);
+    finish();
+    await sleep(20);
+    const recovered = h.scheduler.admit({ symbol: 'EXT', priority: P0, source: 'MOVER', evaluationFingerprint: 'fp' });
+    if ('externalInFlight' in recovered) throw new Error('settled replacement still owns key');
+    expect((await recovered.outcome).terminalState).toBe('ASSESSED');
   });
 
   it('runQuantSchedulerBatch honors the scheduler\'s own maxBatchWaitMs', async () => {

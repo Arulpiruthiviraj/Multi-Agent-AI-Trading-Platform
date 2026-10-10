@@ -252,6 +252,9 @@ export function findLookaheadViolations(input: DecisionProvenanceInput): string[
   const t = input.decisionTimeMs;
   const violations: string[] = [];
   for (const bar of input.bars) {
+    if (bar.barTimestamp > t) {
+      violations.push(`bar ${bar.barId}: barTimestamp=${bar.barTimestamp} > decisionTimeMs=${t}`);
+    }
     if (bar.availableAtMs > t) {
       violations.push(`bar ${bar.barId}: availableAtMs=${bar.availableAtMs} > decisionTimeMs=${t}`);
     }
@@ -288,23 +291,22 @@ export function assertNoLookahead(input: DecisionProvenanceInput): void {
  *
  *  - barId follows the ohlcv_bars id format (`${symbol}:${timeframe}:${timestamp}`) so the
  *    evidence joins back to the stored bars.
- *  - availableAtMs is the honest "when this bar's data was observable": a completed bar is
- *    observable at its close (bar open + duration); the still-forming (provisional) bar is
- *    observable only when it was fetched (observedAtMs). Either way it can never exceed
- *    the observation time, so availableAtMs <= decisionTimeMs holds by construction —
- *    the no-lookahead check then guards against anything that violates it anyway.
+ *  - Without versioned provider publication evidence, the only known availability is
+ *    the caller's observation time. A bar close does not prove publication of this
+ *    exact version. This is observation provenance, not a historical publication certificate.
+ *  - Future bar timestamps remain intact and are independently rejected by the validator.
  */
 export function buildBarEvidence(
   symbol: string,
   timeframe: string,
   bars: Array<{ timestamp: number }>,
   observedAtMs: number,
-  barDurationMs: number,
+  _barDurationMs: number,
 ): BarEvidence[] {
   return bars.map((bar) => ({
     barId: `${symbol}:${timeframe}:${bar.timestamp}`,
     barTimestamp: bar.timestamp,
-    availableAtMs: Math.min(bar.timestamp + barDurationMs, observedAtMs),
+    availableAtMs: observedAtMs,
   }));
 }
 

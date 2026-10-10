@@ -432,8 +432,11 @@ export interface QuantSchedulerMetrics {
   dataFetchPoolWaiting: number;
   tracked: number;
   /** Quant-stage watchdog quarantines currently outstanding (slot retained, dedup
-   *  kept, orphan unsettled). Bounded by the sweeper's quantQuarantineMaxAgeMs. */
+   *  kept, orphan unsettled). Age expiry does not release underlying work. */
   quantQuarantined: number;
+  ownedWork: number;
+  externalOwnedWork: number;
+  externalOverdueWork: number;
 }
 
 export class QuantPriorityScheduler {
@@ -452,7 +455,7 @@ export class QuantPriorityScheduler {
   /** Recently-terminal outcomes, for dedupWindowMs after settle. */
   private recentTerminal = new Map<string, { outcome: CandidateOutcome; terminalAtMs: number }>();
   /** External evaluations (fast lane) registered for coordination. */
-  private externalInflight = new Map<string, { promise: Promise<unknown>; registeredAtMs: number }>();
+  private externalInflight = new Map<string, { promise: Promise<unknown>; registeredAtMs: number; overdueReported: boolean }>();
   private sweepTimer: NodeJS.Timeout | null = null;
   private started = false;
   private stopped = false;
@@ -527,6 +530,9 @@ export class QuantPriorityScheduler {
       dataFetchPoolWaiting: this.fetchSem.waitingCount(),
       tracked: this.tracked.size,
       quantQuarantined,
+      ownedWork: this.inflight.size + this.externalInflight.size,
+      externalOwnedWork: this.externalInflight.size,
+      externalOverdueWork: [...this.externalInflight.values()].filter(entry => entry.overdueReported).length,
     };
   }
 
@@ -544,6 +550,11 @@ export class QuantPriorityScheduler {
   /** True after stop(). A stopped scheduler rejects new admissions (NOT_ELIGIBLE). */
   isStopped(): boolean {
     return this.stopped;
+  }
+
+  /** Includes terminal caller outcomes whose underlying fetch/evaluation still runs. */
+  hasOutstandingWork(): boolean {
+    return this.inflight.size > 0 || this.externalInflight.size > 0;
   }
 
   private dedupKey(symbol: string, fingerprint: string): string {
@@ -699,9 +710,10 @@ export class QuantPriorityScheduler {
    * Coordination point for the Fast Lane (fastLaneEvaluator.ts keeps its own
    * inFlightBySymbol dedup - this module never touches it). While registered, the
    * scheduler will not start a duplicate evaluation for the same symbol+fingerprint;
-   * admissions coalesce (deduped: true). Returns an unregister function the external
-   * system calls when its evaluation settles; the optional outcome is remembered for
-   * the dedup window so immediate re-admission does not re-evaluate.
+   * admissions coalesce (deduped: true). Ownership is automatically released only
+   * when done settles, including rejection. The returned notification is retained
+   * for compatibility and cannot release unsettled work. The optional outcome is
+   * remembered for the dedup window after actual settlement.
    */
   registerExternalEvaluation(
     symbol: string,
@@ -710,16 +722,23 @@ export class QuantPriorityScheduler {
     outcome?: CandidateOutcome,
   ): () => void {
     const key = this.dedupKey(symbol, fingerprint);
-    this.externalInflight.set(key, { promise: done, registeredAtMs: this.now() });
-    let unregistered = false;
-    return () => {
-      if (unregistered) return;
-      unregistered = true;
+    // A replacement registration must not silently overwrite a still-running owner.
+    if (this.externalInflight.has(key)) throw new Error('External evaluation already owns this fingerprint');
+    const entry = { promise: done, registeredAtMs: this.now(), overdueReported: false };
+    this.externalInflight.set(key, entry);
+    const releaseSettled = () => {
+      if (this.externalInflight.get(key) !== entry) return;
       this.externalInflight.delete(key);
       if (outcome) {
         this.recentTerminal.set(key, { outcome, terminalAtMs: this.now() });
       }
     };
+    // Observe both success and failure, without creating an unhandled rejection.
+    // Only this promise's settlement confirms that underlying work has stopped.
+    void done.then(releaseSettled, releaseSettled);
+    // Compatibility notification only: calling unregister early cannot release work.
+    // Automatic settlement cleanup also protects against a forgotten notification.
+    return () => {};
   }
 
   /** Immediate terminal at admit time (NOT_ELIGIBLE / EVICTED): emitted, never silent. */
@@ -831,18 +850,14 @@ export class QuantPriorityScheduler {
   /** Deadline/expiry sweeper. Queued candidates past expiresAt -> EXPIRED; past the
    *  per-priority assessment deadline -> ASSESSMENT_EXPIRED. In-flight candidates past
    *  deadline are flagged; their settle path records ASSESSMENT_EXPIRED (the late
-   *  result is never presented as current). Quarantined quant evaluations older than
-   *  quantQuarantineMaxAgeMs are evicted (dedup entry released - hung work must not
-   *  pin a symbol forever). External registrations older than
-   *  externalRegistrationMaxAgeMs are evicted (a crashed external system must not
-   *  block a symbol forever). Also evicts stale dedup-window entries. */
+   *  result is never presented as current). Quarantine age can expire the caller
+   *  outcome, but never underlying ownership. Overdue external work is reported
+   *  once and remains owned until settlement. Also expires settled dedup history. */
   private sweep(): void {
     const nowMs = this.now();
     for (const rec of [...this.tracked.values()]) {
       if (rec.terminalState) continue;
-      // Quarantine-age bound: a watchdog-timed-out quant evaluation that never
-      // settled must not hold its dedup key forever. Evict terminally; if the
-      // orphan later settles, its discard path is a harmless no-op (exactly-once).
+      // Expire the caller's outcome without claiming the worker has terminated.
       if (
         rec.quantQuarantinedAtMs != null &&
         nowMs - rec.quantQuarantinedAtMs > this.config.quantQuarantineMaxAgeMs
@@ -877,9 +892,9 @@ export class QuantPriorityScheduler {
       if (nowMs - entry.terminalAtMs > this.config.dedupWindowMs) this.recentTerminal.delete(key);
     }
     for (const [key, entry] of [...this.externalInflight.entries()]) {
-      if (nowMs - entry.registeredAtMs > this.config.externalRegistrationMaxAgeMs) {
-        this.externalInflight.delete(key);
-        this.emit('QUANT_SCHEDULER_EXTERNAL_REGISTRATION_EVICTED', {
+      if (!entry.overdueReported && nowMs - entry.registeredAtMs > this.config.externalRegistrationMaxAgeMs) {
+        entry.overdueReported = true;
+        this.emit('QUANT_SCHEDULER_EXTERNAL_REGISTRATION_OVERDUE', {
           dedupKey: key,
           ageMs: nowMs - entry.registeredAtMs,
           maxAgeMs: this.config.externalRegistrationMaxAgeMs,
@@ -1191,9 +1206,9 @@ export class QuantPriorityScheduler {
 let singleton: QuantPriorityScheduler | null = null;
 
 export function initQuantPriorityScheduler(deps: QuantSchedulerDeps): QuantPriorityScheduler {
-  // A stopped singleton is fully retired (its tracked candidates were terminally EVICTED
-  // by stop()); a fresh one is built so start()->stop()->start() cycles revive cleanly.
-  if (singleton && singleton.isStopped()) {
+  // A stopped instance is replaceable only after actual work drains. Caller terminal
+  // outcomes alone do not retire its workers, semaphores or fingerprint ownership.
+  if (singleton && singleton.isStopped() && !singleton.hasOutstandingWork()) {
     singleton = null;
   }
   if (singleton) return singleton;

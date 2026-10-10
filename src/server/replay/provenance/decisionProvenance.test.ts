@@ -290,16 +290,22 @@ describe('decision provenance: point-in-time replay', () => {
     expect(outcome).toBe('skipped_row_cap');
   });
 
-  it('buildBarEvidence never claims availability after the observation time', () => {
+  it('buildBarEvidence records actual observation instead of assuming historical publication', () => {
     const observedAt = 1_700_000_000_000;
     const bars = [{ timestamp: observedAt - 10 * DAY_MS }, { timestamp: observedAt - 60_000 }];
     const evidence = mod.buildBarEvidence('SYM', '1Day', bars, observedAt, DAY_MS);
     expect(evidence[0].barId).toBe(`SYM:1Day:${bars[0].timestamp}`);
-    // Completed bar: available at its close.
-    expect(evidence[0].availableAtMs).toBe(bars[0].timestamp + DAY_MS);
+    // A completed bar's close is not evidence of when this version was published.
+    expect(evidence[0].availableAtMs).toBe(observedAt);
     // Still-forming bar: available only when observed (clamped to observedAt).
     expect(evidence[1].availableAtMs).toBe(observedAt);
     for (const b of evidence) expect(b.availableAtMs).toBeLessThanOrEqual(observedAt);
+  });
+
+  it('buildBarEvidence preserves future timestamps so construction cannot hide lookahead', () => {
+    const input = provenanceInput('future-construction', 'SYM', seededBars(120, 21), {} as any, [], Date.now());
+    input.bars = mod.buildBarEvidence('SYM', '1Day', [{ timestamp: input.decisionTimeMs + DAY_MS }], input.decisionTimeMs, DAY_MS);
+    expect(mod.findLookaheadViolations(input)).not.toHaveLength(0);
   });
 
   it('recordDecisionProvenance never throws and never blocks the caller', () => {

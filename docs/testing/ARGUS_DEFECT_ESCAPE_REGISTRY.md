@@ -378,3 +378,9 @@ on it. This is a testing-mission Phase 1 document; it records history, it does n
 - OLD_TEST_GAP: prior tests asserted capacity/entry release as successful recovery without proving cancellation.
 - NEW_TEST: fastLaneEvaluator.test.ts checks underlying running evaluation count after quarantine; HistoricalDataGateway.test.ts checks ownership remains beyond age expiry and releases only on settlement.
 - NEW_RELEASE_INVARIANT: no slot or coalescing ownership may be released solely because a caller or age deadline elapsed. Cancellation/recovery certification remains required; passing these regressions alone is not a release certificate.
+
+## October 10 ownership escape
+
+Prior stop/fallback tests asserted terminal-event ordering, but never proved the hanging evaluator ended. Corrected negative tests reproduced concurrent fallback evaluation after terminal EVICTED. External expiry tests also explicitly permitted replacement of unsettled work. Terminal outcomes, timeout clocks and unregister notifications must never stand in for settlement/cancellation evidence. New regressions cover overdue retention, early unregister, rejection cleanup, replacement refusal, obsolete notification, flag-off/failure fallback, and in-process restart followed by real recovery.
+
+The provenance constructor similarly hid future timestamps by clamping availability to observation time; direct construction-to-validator coverage now rejects that input. No historical provider publication certificate is inferred.

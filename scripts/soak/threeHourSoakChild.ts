@@ -12,17 +12,17 @@
  * against the SAME isolated DB. The process, DB, timers, and event loop stay live the
  * entire time; the metric sampler runs every 60s throughout. This exercises exactly what
  * a soak is for: memory stability, event-loop health, DB/WAL growth, timer hygiene,
- * and provider-health behavior over 3h of continuous operation.
+ * and DB growth over the requested duration. Resource acceptance is not certified.
  *
  * Each iteration gets a unique sessionStartMs (offset by iteration) so per-iteration
  * activity is distinguishable in the shared DB. All seeded authorization is labeled
  * SOAK_FIXTURE / SYNTHETIC_SEEDED / NON_ORGANIC / CERTIFICATION_FIXTURE_ONLY.
  *
- * AI posture: this environment has no AI provider keys — the entire soak runs all-AI-down
- * (the hardest case for quant-first; Parts 46/51). Provider "recovery" is N/A here.
+ * AI posture: external provider calls are not exercised. Missing environment keys
+ * do not prove real provider outage/recovery behavior.
  *
- * End-of-soak proof: the FINAL iteration must close at least one BUY-fill → SELL-fill
- * round trip on the authorized-quant path. A missing proof is reported as FAIL, never faked.
+ * End-of-soak execution-path proof is a separate parent-run suite, not a claim
+ * that this child's last synthetic session generated a round trip.
  *
  * Isolation: SYNTHETIC_SIMULATION=true, isolated ARGUS_DB_PATH, HistoricalReplayBroker —
  * structurally incapable of LIVE trading, never the production DB.
@@ -43,8 +43,11 @@ interface MetricSample {
   iteration: number;
   rssMb: number;
   heapUsedMb: number;
+    externalMb: number;
+    arrayBuffersMb: number;
   eventLoopP50Ms: number;
   eventLoopP95Ms: number;
+    eventLoopP99Ms: number;
   eventLoopMaxMs: number;
   dbBytes: number;
   walBytes: number;
@@ -175,8 +178,11 @@ async function main(): Promise<void> {
       iteration: currentIteration,
       rssMb: mu.rss / 1048576,
       heapUsedMb: mu.heapUsed / 1048576,
+        externalMb: mu.external / 1048576,
+        arrayBuffersMb: mu.arrayBuffers / 1048576,
       eventLoopP50Ms: eld.percentile(50) / 1_000_000,
       eventLoopP95Ms: eld.percentile(95) / 1_000_000,
+        eventLoopP99Ms: eld.percentile(99) / 1_000_000,
       eventLoopMaxMs: eld.max / 1_000_000,
       dbBytes,
       walBytes,
@@ -267,9 +273,12 @@ async function main(): Promise<void> {
       maxRssMb: Math.max(...samples.map((s) => s.rssMb)),
       rssDeltaMb: (last?.rssMb ?? 0) - (first?.rssMb ?? 0),
       endHeapMb: last?.heapUsedMb,
+      maxExternalMb: Math.max(...samples.map((s) => s.externalMb)),
+      maxArrayBuffersMb: Math.max(...samples.map((s) => s.arrayBuffersMb)),
     },
     eventLoop: {
       maxP95Ms: Math.max(...samples.map((s) => s.eventLoopP95Ms)),
+      maxP99Ms: Math.max(...samples.map((s) => s.eventLoopP99Ms)),
       finalP50Ms: last?.eventLoopP50Ms, finalMaxMs: last?.eventLoopMaxMs,
     },
     db: {
@@ -277,7 +286,7 @@ async function main(): Promise<void> {
       growthBytes: (last?.dbBytes ?? 0) - (first?.dbBytes ?? 0),
       maxWalBytes: Math.max(...samples.map((s) => s.walBytes)),
     },
-    aiPosture: 'ALL_AI_DOWN_THROUGHOUT (no provider keys in this environment — hardest case for quant-first)',
+    aiPosture: 'SYNTHETIC_EXTERNAL_AI_NOT_EXERCISED; provider availability was not probed',
     activity: {
       iterationsCompleted: iterations.length,
       totalNonFixtureFills: totalFills,

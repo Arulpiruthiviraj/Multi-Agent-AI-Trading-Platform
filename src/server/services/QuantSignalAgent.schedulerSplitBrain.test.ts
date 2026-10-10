@@ -19,9 +19,8 @@
  *     admitting candidates; the catch falls through to the legacy fan-out while
  *     the scheduler's in-flight evaluations keep running.
  *
- * The fix: retirePriorityScheduler() stops the scheduler singleton (in-flights
- * terminally EVICTED/SCHEDULER_STOPPED, late settles discarded) before the
- * legacy fan-out runs in both windows - exactly one path evaluates each symbol.
+ * The fix: stop new admissions, retain actual work ownership, and defer legacy
+ * fan-out until the stopped scheduler drains. A terminal outcome is not cancellation.
  *
  * PAPER-only control-plane tests: no orders, no thresholds, no lifecycle.
  * ==========================================================
@@ -132,8 +131,7 @@ describe('QuantSignalAgent scheduler/legacy split-brain guard', () => {
     const terminalIdx = order.findIndex((e) => e === 'terminal:AAA:EVICTED');
     const legacyIdx = order.findIndex((e) => e === 'legacy-eval:AAA');
     expect(terminalIdx).toBeGreaterThanOrEqual(0);
-    expect(legacyIdx).toBeGreaterThanOrEqual(0);
-    expect(terminalIdx).toBeLessThan(legacyIdx);
+    expect(legacyIdx).toBe(-1); // Terminal caller state did not terminate the hanging evaluator.
     expect(scheduler.getMetrics().tracked).toBe(0);
   });
 
@@ -170,7 +168,27 @@ describe('QuantSignalAgent scheduler/legacy split-brain guard', () => {
     const terminalIdx = order.findIndex((e) => e === 'terminal:AAA:EVICTED');
     const legacyIdx = order.findIndex((e) => e === 'legacy-eval:AAA');
     expect(terminalIdx).toBeGreaterThanOrEqual(0);
-    expect(legacyIdx).toBeGreaterThanOrEqual(0);
-    expect(terminalIdx).toBeLessThan(legacyIdx);
+    expect(legacyIdx).toBe(-1);
+  });
+
+  it('in-process restart cannot replace an unsettled owner and recovers after settlement', async () => {
+    const order: string[] = [];
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const deps = makeStubSchedulerDeps(order, new Set());
+    deps.evaluateSymbol = async () => { order.push('running'); await pending; return {}; };
+    const original = initQuantPriorityScheduler(deps);
+    const admission = original.admit({ symbol: 'AAA', priority: QuantCandidatePriority.P2_NORMAL, source: 'TEST' });
+    await waitFor(() => order.includes('running'));
+    original.stop();
+    expect(original.hasOutstandingWork()).toBe(true);
+    expect(initQuantPriorityScheduler(deps)).toBe(original);
+    expect(original.isStopped()).toBe(true);
+    finish();
+    await admission.outcome;
+    await waitFor(() => !original.hasOutstandingWork());
+    const replacement = initQuantPriorityScheduler(deps);
+    expect(replacement).not.toBe(original);
+    expect(replacement.isStopped()).toBe(false);
   });
 });

@@ -443,11 +443,10 @@ export class QuantSignalAgent {
 
   /**
    * 2026-10-10 (defect hunt, Lead 5 split-brain fix): retires the priority
-   * scheduler singleton so the legacy sequential fan-out is the ONLY active
-   * evaluation path. stop() terminally transitions every tracked candidate to
+   * scheduler singleton's admissions. stop() terminally transitions callers to
    * EVICTED/SCHEDULER_STOPPED (explicit, never silent) and late-settling
    * evaluateSymbol() continuations are discarded by the scheduler's own
-   * exactly-once terminal guard - no duplicate transitions, no stuck symbols.
+   * exactly-once terminal guard. Unsettled workers retain ownership and defer fallback.
    * Called when the feature flag is off (it may have been on for an earlier
    * cycle) and when the scheduler path fails mid-cycle before falling back to
    * the legacy fan-out. Idempotent; a no-op when the scheduler was never
@@ -458,7 +457,7 @@ export class QuantSignalAgent {
     if (!scheduler || scheduler.isStopped()) return;
     try {
       scheduler.stop();
-      console.log(`[QuantSignalAgent] Priority scheduler retired (${reason}) - in-flight candidates evicted to explicit terminals; the legacy fan-out is now the only evaluation path.`);
+      console.log(`[QuantSignalAgent] Priority scheduler stopped (${reason}); outstanding work retains ownership until settlement.`);
     } catch {
       /* scheduler shutdown must never break the cycle */
     }
@@ -531,7 +530,7 @@ export class QuantSignalAgent {
     // path falls back to the legacy fan-out rather than skipping the cycle.
     if (isQuantPrioritySchedulerEnabled()) {
       try {
-        if (!getQuantPriorityScheduler()) this.initPriorityScheduler();
+        if (!getQuantPriorityScheduler() || getQuantPriorityScheduler()?.isStopped()) this.initPriorityScheduler();
         const scheduler = getQuantPriorityScheduler();
         if (scheduler) {
           await this.runCycleViaScheduler(scheduler, symbols, { cycleId, scheduledAtMs, cycleStarted });
@@ -556,6 +555,18 @@ export class QuantSignalAgent {
       // same symbol concurrently. Idempotent and a no-op when the scheduler was never
       // created or is already stopped.
       this.retirePriorityScheduler('flag-off');
+    }
+    // stop() and terminal outcomes do not cancel underlying work. Starting legacy
+    // workers here would duplicate evaluations and exceed the old pool's capacity.
+    if (getQuantPriorityScheduler()?.hasOutstandingWork()) {
+      observeSafe(() => structuredLogger.info('quant_cycle_completed', {
+        category: 'DISCOVERY', eventType: 'QUANT_CYCLE_COMPLETED', cycleId,
+        durationMs: Date.now() - cycleStarted, concurrency,
+        attemptedSymbols: [], completedSymbols: [], notAttemptedSymbols: symbols,
+        reason: 'SCHEDULER_DRAIN_PENDING',
+      }));
+      notePipelineAgentGated('QuantEngine');
+      return;
     }
     let nextIndex = 0;
     let abortRateLimit = false;

@@ -4814,3 +4814,13 @@ The synthetic wall-clock soak converts Node event-loop histogram nanoseconds to 
 ### October 10 — outcome fixtures cannot rely on a future cache endpoint
 
 Full-suite failures revealed restart/backfill test fixtures whose shifted prediction windows excluded their only horizon endpoint. They previously passed through the hour-bucket cache leak. The fixtures now supply a legitimate prior-minute endpoint, and a production-evaluator regression refuses earlier-cutoff grading after a wider query warmed the cache. No grading horizon, endpoint tolerance, calculation or production outcome record is changed. Any effect on historical grading would require separately scoped evidence/replay review; this batch does not rewrite historical calibration.
+
+### October 10 follow-up — actual work survives caller timeout and stop
+
+External scheduler registrations now remain owned until the registered promise actually settles (success or failure); early unregister is only a compatibility notification. Duplicate registrations cannot overwrite an owner. Age expiry reports QUANT_SCHEDULER_EXTERNAL_REGISTRATION_OVERDUE once, without dropping dedup. Metrics expose ownedWork, externalOwnedWork and externalOverdueWork. No production consumer of this external registration API is currently found.
+
+In-process scheduler replacement requires a stopped instance with no outstanding work. Legacy QuantSignalAgent fallback defers with SCHEDULER_DRAIN_PENDING while that stopped scheduler still owns work. Terminal caller events are not termination evidence. This preserves capacity and avoids overlap; it does not implement cancellation of never-settling evaluations. A process crash/restart is a separate lifecycle boundary, not certified by these tests.
+
+Bar provenance records actual observation time instead of inferring provider publication of the current bar version from its nominal close. Future bar timestamps are independently rejected. This is observation provenance; historical publication/version fidelity remains uncertified. The soak sampler additionally records external/array-buffer memory and p99 event-loop delay; no resource acceptance bound was introduced.
+
+Release evidence aggregation now uses one typed status contract: PASS/FAIL/NOT_RUN/NOT_APPLICABLE/NOT_CERTIFIED/UNKNOWN. Only explicit PASS satisfies a required gate. Missing observations remain NOT_RUN; duplicate or malformed observations become UNKNOWN. Eight unit cases verify these semantics, and the partial CLI consumes the same aggregation. This helper is not an executed-artifact attestation or a complete release driver; no submitted manifest is accepted as certification.
