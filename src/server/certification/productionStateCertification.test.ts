@@ -220,8 +220,16 @@ describe('lifecycle promotion route probe (PRODUCTION_STATE — honest finding, 
         // Argument window: the next 600 source chars after the call. A genuine
         // promotion call passes the status literal right there; doc mentions of
         // 'VALIDATED' elsewhere in the file do not count.
+        // 2026-10-09 (P3 lifecycle bridge): the certification bridge passes a
+        // *variable* target drawn from a closed, reviewed vocabulary, so the
+        // literal is not in the argument window. Widen to the whole file: a
+        // production module that both CALLS the recorder AND names
+        // VALIDATED/CHAMPION as recordable targets is a genuine promotion route
+        // (the bridge's BRIDGE_TARGETS set); a file that merely mentions the
+        // words without a call site still does not count.
         const window = code.slice(m.index, m.index + 600);
-        if (/['"]VALIDATED['"]/.test(window) || /['"]CHAMPION['"]/.test(window)) {
+        const namesTarget = (s: string) => /['"]VALIDATED['"]/.test(s) || /['"]CHAMPION['"]/.test(s);
+        if (namesTarget(window) || namesTarget(code)) {
           hits.push(path.relative(ROOT, f).split(path.sep).join('/'));
           break;
         }
@@ -233,10 +241,14 @@ describe('lifecycle promotion route probe (PRODUCTION_STATE — honest finding, 
     // never auto-promotes or seeds anything to change the answer.
     const finding = hits.length === 0 ? 'ABSENT' : 'PRESENT';
     expect(['ABSENT', 'PRESENT']).toContain(finding);
+    const bridgeHit = hits.includes('src/server/lifecycle/certificationBridge.ts');
     // eslint-disable-next-line no-console
     console.log(
       `[production-state-certification] LIFECYCLE_PROMOTION_ROUTE=${finding}` +
         (hits.length > 0 ? ` callers=${JSON.stringify(hits)}` : ' (no production call site records VALIDATED/CHAMPION)') +
+        (bridgeHit
+          ? ' | route=OPERATOR_REVIEWED_BRIDGE (research evidence -> sample-sufficiency gates -> unskippable operator review -> learning_versions; never auto-promotes; LIVE authority inexpressible)'
+          : '') +
         ' | note: scripts/soak/threeHourSoakChild.ts contains a labeled SOAK_FIXTURE VALIDATED call (test tooling, not production authority)',
     );
   });

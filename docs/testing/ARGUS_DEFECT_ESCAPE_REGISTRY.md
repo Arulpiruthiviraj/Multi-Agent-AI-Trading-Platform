@@ -146,6 +146,38 @@ on it. This is a testing-mission Phase 1 document; it records history, it does n
 - **Responsible layer:** LAYER 5 (release certification) — this entry exists to record that
   a known defect re-escaped because the gate was not yet wired.
 
+### OCT9_PROMOTION_ROUTE_GAP
+
+- **What happened (found 2026-10-09):** The deeper root cause behind
+  `OCT8_LIFECYCLE_AUTHORITY_ESCAPE` / `OCT9_ZERO_AUTHORIZED_STRATEGIES_ESCAPE`: a static
+  probe of production (non-test) sources found **LIFECYCLE_PROMOTION_ROUTE=ABSENT** — no
+  production code path ever recorded a `VALIDATED`/`CHAMPION` lifecycle decision into
+  `learning_versions`. The research side (`promotionEngine.deriveLifecycleStatus()`) could
+  derive a research-vocabulary VALIDATED from evidence, but the operator/review decision
+  point between research evidence and the runtime lifecycle table did not exist as code.
+  Zero authorized strategies was not a threshold problem or an engine problem; it was a
+  missing workflow.
+- **OLD_TEST_GAP:** Tests proved the authorization mechanism by seeding lifecycle rows
+  into isolated DBs. Nothing tested — or even specified — the legitimate route by which a
+  real strategy could EARN a VALIDATED row. The gap was invisible because no test asked
+  "how does a strategy legitimately get here?"
+- **NEW_TEST:** `src/server/lifecycle/certificationBridge.test.ts` (10/10) — the designed
+  bridge workflow against isolated DBs: insufficient evidence / bad OOS / poor
+  walk-forward → no authority; RETIRED PULLBACK_CONTINUATION stays retired; legitimate
+  reviewed qualification → VALIDATED recorded by the workflow itself →
+  AUTHORIZED_QUANT_POLICY via the real resolver; missing operator review → no transition
+  (type-level brand + runtime gate); LIVE authority impossible (inexpressible in the
+  bridge vocabulary + paper-only env lock). Plus a static test asserting the bridge
+  module holds exactly one `recordStrategyLifecycleTransition` call site.
+- **NEW_RELEASE_INVARIANT:** The promotion route is no longer absent: research evidence →
+  sample-sufficiency gates → UNSKIPPABLE operator review →
+  `executeCertificationTransition()` → `learning_versions`. The Layer-3 certification
+  output now names this route (`certificationBridge` field) whenever it reports missing
+  lifecycle rows — the legitimate fix is documented at the point of diagnosis, not left
+  as tribal knowledge.
+- **Responsible layer:** LAYER 3 (production-state certification) + operator runbook
+  (`docs/testing/LIFECYCLE_CERTIFICATION_BRIDGE.md`).
+
 ---
 
 ## Oct 8/9 defect-hunt entries
