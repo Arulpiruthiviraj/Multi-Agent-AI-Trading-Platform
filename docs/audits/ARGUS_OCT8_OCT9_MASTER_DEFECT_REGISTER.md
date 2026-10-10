@@ -31,3 +31,9 @@ The scheduling stress test represents three accelerated scheduling hours. It doe
 - Integrate to main only after verification; deploy only after required certification. Keep unsupported readiness NO_GO.
 
 Historical audits remain immutable. This document does not replace docs/architecture/ARGUS_ARCHITECTURE.md or the operational contract in AGENTS.md.
+
+## Subsequent scheduler repair
+
+The priority scheduler repeated the in-flight ownership defect: a new regression measured two underlying quant evaluations under a pool cap of one. Quant and data-fetch semaphore capacity now stays held until actual settlement, even after caller timeout/terminal expiry. Dedup keys also stay owned while work is unresolved. Tests cover different-symbol overflow refusal, same-symbol dedup after expiry, provider timeout ownership, actual late settlement and exactly-once terminal outcomes. External-registration expiry and restart/recovery across scheduler instances still require separate review; these tests are not cancellation certification.
+
+The initial checkpoint full-suite run was stopped when this defect was found. Its partial result is not reused as final verification. The initial checkpoint typecheck and build passed; both must be repeated after this repair.

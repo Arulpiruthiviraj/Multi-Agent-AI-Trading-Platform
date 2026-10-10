@@ -132,10 +132,10 @@ export class HistoricalDataGateway {
    * redundant fetch back-to-back - a self-inflicted mini-storm when, e.g., QuantSignalAgent,
    * RiskEngine and MissedOpportunityEvaluator evaluate the same symbol in the same cycle.
    * The public ensureBars() below is a thin wrapper that shares one in-flight
-   * ensureBarsInner() promise per window. Bounded two ways: the entry is removed on settle,
+   * ensureBarsInner() promise per window. The entry is removed on settlement,
    * and an age deadline (quantBarsCoalesceEntryMaxAgeMs) reports overdue work.
    * The entry remains owned until settlement; releasing it while a stalled fetch
-   * would wedge the window forever. A shared rejection is shared
+   * still runs would permit replacement requests. A shared rejection is shared
    * honestly - every coalesced caller sees the same error; none gets silent stale data.
    */
   private inflightEnsureBars = new Map<string, Promise<void>>();

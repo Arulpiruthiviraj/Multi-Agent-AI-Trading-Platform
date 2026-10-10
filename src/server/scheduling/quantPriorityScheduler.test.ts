@@ -626,40 +626,47 @@ describe('quantPriorityScheduler', () => {
     expect(process.env['QUANT_PRIORITY_SCHEDULER_ENABLED']).not.toBe('true');
   });
 
-  it('quant-stage watchdog: a hung evaluation is quarantined - slot recovered, dedup kept, no duplicate', async () => {
-    // Defect found in review: the quant stage had no liveness watchdog, so a hung
-    // evaluateSymbol() would hold its quant slot forever; pool-size hangs would wedge
-    // quant throughput permanently. The watchdog quarantines: slot released, dedup kept.
-    const h = harness({
-      quantWorkerPoolSize: 1,
-      dataFetchPoolSize: 4,
-      quantEvaluationTimeoutMs: 200,
-      quantQuarantineMaxAgeMs: 60_000,
-      sweepIntervalMs: 50,
-    });
+  it('provider timeout retains its slot and dedup ownership until actual settlement', async () => {
+    const h = harness({ dataFetchPoolSize: 1, dataFetchTimeoutMs: 100, dedupWindowMs: 50 });
+    h.setFetchBehavior('HANG', 'hang');
+    const timedOut = await h.admit({ symbol: 'HANG', priority: P2, source: 'CYCLE' }).outcome;
+    expect(timedOut.terminalState).toBe('PROVIDER_TIMEOUT');
+    h.admit({ symbol: 'OTHER', priority: P2, source: 'CYCLE' });
+    await sleep(200);
+    expect(h.ensureCalls).toEqual(['HANG']);
+    const again = h.admit({ symbol: 'HANG', priority: P2, source: 'CYCLE' });
+    expect(again.accepted && again.deduped).toBe(true);
+    expect(await again.outcome).toEqual(timedOut);
+  });
+
+  it('a timed-out provider releases capacity after its actual late settlement', async () => {
+    const h = harness({ dataFetchPoolSize: 1, dataFetchTimeoutMs: 100 });
+    h.setFetchDelayMs(250);
+    const first = h.admit({ symbol: 'LATE', priority: P2, source: 'CYCLE' });
+    expect((await first.outcome).terminalState).toBe('PROVIDER_TIMEOUT');
+    h.setFetchDelayMs(0);
+    const second = h.admit({ symbol: 'OTHER', priority: P2, source: 'CYCLE' });
+    expect((await second.outcome).terminalState).toBe('ASSESSED');
+    expect(h.ensureCalls).toEqual(['LATE', 'OTHER']);
+    expect(h.terminalEvents().filter((e) => e.fields.symbol === 'LATE')).toHaveLength(1);
+  });
+
+  it('quant-stage timeout retains the actual worker bound across different symbols', async () => {
+    const h = harness({ quantWorkerPoolSize: 1, dataFetchPoolSize: 4,
+      quantEvaluationTimeoutMs: 150, quantQuarantineMaxAgeMs: 250,
+      dedupWindowMs: 100, sweepIntervalMs: 25 });
     h.seedBars('HANG', 400, 30 * 60_000);
-    h.seedBars('OK2', 400, 30 * 60_000);
+    h.seedBars('OTHER', 400, 30 * 60_000);
     h.setEvaluatorHangs('HANG');
-    h.setEvaluatorDelay(50);
-
-    const hangAdmission = h.admit({ symbol: 'HANG', priority: P2, source: 'CYCLE' });
-    await sleep(100); // HANG is in flight, holding the only quant slot.
-    // While HANG is hung, a re-admission dedups - no duplicate evaluation starts.
-    const dupe = h.admit({ symbol: 'HANG', priority: P0, source: 'MOVER' });
-    expect(dupe.accepted).toBe(true);
-    if (!dupe.accepted) throw new Error('unreachable');
-    expect(dupe.deduped).toBe(true);
-
-    // The watchdog fires at 200ms: the slot is quarantined (released to the pool)
-    // while the dedup entry is kept. OK2 is evaluated despite HANG never settling.
-    const ok2Outcome = await h.admit({ symbol: 'OK2', priority: P2, source: 'CYCLE' }).outcome;
-    expect(ok2Outcome.terminalState).toBe('ASSESSED');
-    expect(h.scheduler.getMetrics().quantQuarantined).toBe(1);
-    expect(h.evaluateCallsBySymbol.get('HANG')).toBe(1); // exactly one evaluation, never duplicated
-    expect(h.events.some((e) => e.type === 'QUANT_SCHEDULER_QUANT_QUARANTINED')).toBe(true);
-    // HANG's outcome is still pending (orphan unsettled) - the quarantine is honest,
-    // and the afterEach stop() will terminally EVICT it. Awaiting it here would hang.
-    expect(hangAdmission.accepted).toBe(true);
+    h.admit({ symbol: 'HANG', priority: P2, source: 'CYCLE' });
+    await sleep(200);
+    h.admit({ symbol: 'OTHER', priority: P2, source: 'CYCLE' });
+    await sleep(400);
+    expect(h.maxConcurrentEvals()).toBeLessThanOrEqual(1);
+    expect(h.evaluateCallsBySymbol.get('OTHER') ?? 0).toBe(0);
+    const again = h.admit({ symbol: 'HANG', priority: P2, source: 'CYCLE' });
+    expect(again.accepted && again.deduped).toBe(true);
+    expect(h.evaluateCallsBySymbol.get('HANG')).toBe(1);
   });
 
   it('quant-stage watchdog: a late settle after quarantine is discarded, never presented as current', async () => {
@@ -678,41 +685,6 @@ describe('quantPriorityScheduler', () => {
     expect(o.evaluationSettledLate).toBe(true);
     expect(h.evaluateCallsBySymbol.get('LATE')).toBe(1);
     expect(h.events.some((e) => e.type === 'QUANT_SCHEDULER_QUANT_LATE_SETTLE_DISCARDED')).toBe(true);
-  });
-
-  it('quant-stage watchdog: a never-settling quarantine is evicted by age and the dedup entry released', async () => {
-    const h = harness({
-      quantWorkerPoolSize: 1,
-      dataFetchPoolSize: 4,
-      quantEvaluationTimeoutMs: 150,
-      quantQuarantineMaxAgeMs: 400,
-      dedupWindowMs: 200,
-      sweepIntervalMs: 50,
-    });
-    h.seedBars('HANG', 400, 30 * 60_000);
-    h.seedBars('HANG2', 400, 30 * 60_000);
-    h.setEvaluatorHangs('HANG');
-    h.setEvaluatorHangs('HANG2');
-
-    // Watchdog fires at 150ms -> quarantined; sweeper evicts at 400ms quarantine age.
-    const o = await h.admit({ symbol: 'HANG', priority: P2, source: 'CYCLE' }).outcome;
-    expect(o.terminalState).toBe('ASSESSMENT_EXPIRED');
-    expect(o.reasonCode).toBe('QUANT_QUARANTINE_AGE_EXCEEDED');
-    expect(h.evaluateCallsBySymbol.get('HANG')).toBe(1);
-    expect(h.scheduler.getMetrics().quantQuarantined).toBe(0);
-
-    // The dedup entry was released and the dedup window has passed: a fresh admission
-    // re-evaluates instead of being pinned forever by hung work.
-    await sleep(300); // past the 200ms dedup window
-    const readmit = h.admit({ symbol: 'HANG', priority: P2, source: 'CYCLE' });
-    expect(readmit.accepted).toBe(true);
-    if (!readmit.accepted) throw new Error('unreachable');
-    expect(readmit.deduped).toBe(false);
-    // HANG2 proves the pool itself recovered: it is evaluated despite HANG's orphan.
-    const o2 = await h.admit({ symbol: 'HANG2', priority: P2, source: 'CYCLE' }).outcome;
-    expect(h.evaluateCallsBySymbol.get('HANG2')).toBe(1);
-    expect(o2.terminalState).toBe('ASSESSMENT_EXPIRED'); // hangs again -> quarantined -> evicted
-    expect(o2.reasonCode).toBe('QUANT_QUARANTINE_AGE_EXCEEDED');
   });
 
   it('pipeline guard: a throwing deps call terminally transitions the candidate to ERROR', async () => {

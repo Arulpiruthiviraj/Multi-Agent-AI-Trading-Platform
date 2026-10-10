@@ -4798,3 +4798,9 @@ The historical gateway also refuses a stale cached tail after an empty provider 
 ### October 10 — in-flight cache ownership regression
 
 HistoricalDataGateway's age deadline now reports COALESCE_ENTRY_OVERDUE without deleting the active work entry. The permanent regression fails on the prior expiry implementation and passes with ownership retained until settlement. A provider timeout is not assumed to cancel a non-cooperative provider. Safe stuck-worker recovery remains a certification gap, rather than creating replacement work over an unresolved request.
+
+### October 10 — priority scheduler owns work beyond caller deadlines
+
+An adversarial scheduler regression reproduced two concurrent evaluations under a pool size of one after the quant watchdog returned its slot. Both provider and quant stages now retain semaphore capacity and dedup ownership until underlying work actually settles. Caller timeout/expiry remains observable and terminal outcomes remain exactly-once; a terminal caller outcome cannot authorize a duplicate unresolved evaluation. Quarantined-work diagnostics include unresolved terminal records. Late settlement releases capacity without relabeling the timed-out result as current. This supersedes prior claims that watchdog quarantine or age expiry alone safely restores capacity. Permanent hangs require verified cancellation or worker recovery, still uncertified.
+
+The isolated soak launcher uses the existing Node executable and installed Vitest entry point for its final proof rather than spawning an npx shell shim, allowing the same path on Windows. The soak remains explicitly synthetic, seeded, non-organic and separate from production-state authority.

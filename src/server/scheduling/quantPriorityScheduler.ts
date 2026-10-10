@@ -85,9 +85,9 @@
  * (quantSchedulerSweepIntervalMs) transitions overdue queued candidates; in-flight
  * overruns are marked at settle time (see ASSESSMENT_EXPIRED above). Separately, the
  * quant STAGE has its own liveness watchdog (quantSchedulerQuantEvaluationTimeoutMs):
- * a hung evaluateSymbol() is quarantined - its slot returns to the pool while the
- * dedup entry is kept, so pool-size hangs cannot wedge throughput; the sweeper
- * evicts quarantines older than quantSchedulerQuantQuarantineMaxAgeMs.
+ * a hung evaluateSymbol() is quarantined with its slot and dedup entry retained
+ * until actual settlement. The sweeper reports expired outcomes, without treating
+ * their unresolved underlying work as cancelled. Verified stuck-worker recovery remains required.
  *
  * Feature flag: QUANT_PRIORITY_SCHEDULER_ENABLED (default off). QuantSignalAgent keeps
  * its existing runCycle fan-out unless the flag is on - default path is byte-for-byte
@@ -224,8 +224,8 @@ export interface QuantSchedulerConfig {
   maxQueueDepth: number;
   dataFetchTimeoutMs: number;
   /** Liveness watchdog for a single quant-stage evaluateSymbol() call. On expiry the
-   *  quant slot is QUARANTINED (returned to the pool) while the dedup entry is kept:
-   *  capacity recovers, duplicate work is impossible, and a late settle is discarded.
+   *  quant slot and dedup entry are retained while underlying work is quarantined:
+   *  new work cannot silently exceed the pool bound; late results are discarded.
    *  evaluateSymbol() has no safe cancellation, so holding the slot forever would let
    *  pool-size hangs wedge quant throughput permanently. Mirrors the fast-lane
    *  hung-lease quarantine (27e17d3). Generous on purpose: the data-fetch leg already
@@ -424,7 +424,7 @@ export interface QuantSchedulerMetrics {
   quantPoolWaiting: number;
   dataFetchPoolWaiting: number;
   tracked: number;
-  /** Quant-stage watchdog quarantines currently outstanding (slot released, dedup
+  /** Quant-stage watchdog quarantines currently outstanding (slot retained, dedup
    *  kept, orphan unsettled). Bounded by the sweeper's quantQuarantineMaxAgeMs. */
   quantQuarantined: number;
 }
@@ -509,8 +509,8 @@ export class QuantPriorityScheduler {
 
   getMetrics(): QuantSchedulerMetrics {
     let quantQuarantined = 0;
-    for (const rec of this.tracked.values()) {
-      if (!rec.terminalState && rec.quantQuarantinedAtMs != null) quantQuarantined += 1;
+    for (const rec of this.inflight.values()) {
+      if (rec.quantQuarantinedAtMs != null && rec.stages.quantFinishedAtMs == null) quantQuarantined += 1;
     }
     return {
       admitted: this.metrics.admitted,
@@ -579,7 +579,7 @@ export class QuantPriorityScheduler {
 
     // 1. Coalesce onto an in-flight scheduler evaluation.
     const inflightRec = this.inflight.get(key);
-    if (inflightRec && !inflightRec.terminalState) {
+    if (inflightRec) {
       this.metrics.deduped += 1;
       return { accepted: true, candidateId: inflightRec.candidateId, deduped: true, outcome: inflightRec.outcomePromise };
     }
@@ -792,7 +792,11 @@ export class QuantPriorityScheduler {
     rec.reasonCode = reasonCode;
     rec.stages.terminalAtMs = nowMs;
     this.tracked.delete(rec.candidateId);
-    this.inflight.delete(this.dedupKey(rec.symbol, rec.fingerprint));
+    // A terminal caller outcome is not proof that underlying work has stopped.
+    const pending = (rec.stages.dataFetchStartedAtMs != null && rec.stages.dataFetchFinishedAtMs == null)
+      || (rec.stages.quantStartedAtMs != null && rec.stages.quantFinishedAtMs == null);
+    const key = this.dedupKey(rec.symbol, rec.fingerprint);
+    if (!pending && this.inflight.get(key) === rec) this.inflight.delete(key);
     const outcome: CandidateOutcome = {
       candidateId: rec.candidateId,
       symbol: rec.symbol,
@@ -969,6 +973,8 @@ export class QuantPriorityScheduler {
         return;
       }
     } finally {
+      if (rec.stages.dataFetchStartedAtMs != null) rec.stages.dataFetchFinishedAtMs = this.now();
+      this.releaseSettledOwnership(rec);
       fetchRelease();
     }
     if (rec.terminalState) return;
@@ -983,9 +989,8 @@ export class QuantPriorityScheduler {
         queueWaitMs: (rec.stages.quantStartedAtMs ?? 0) - rec.stages.admittedAtMs,
       });
       const quantOutcome = await this.runQuantStageWithWatchdog(rec);
-      // Quarantined: the watchdog fired, the quant slot was already returned to the
-      // pool, and the candidate stays tracked until its late settle is discarded or
-      // the sweeper evicts the quarantine by age. Nothing further to do here.
+      // A timed-out result was discarded after real settlement. The finally below
+      // releases the slot only now, never when the deadline alone elapsed.
       if (quantOutcome.quarantined) return;
       if (rec.terminalState) return;
       rec.stages.quantFinishedAtMs = this.now();
@@ -1028,8 +1033,15 @@ export class QuantPriorityScheduler {
         this.setTerminal(rec, 'DATA_UNAVAILABLE', 'INSUFFICIENT_BARS_AT_EVALUATION');
       }
     } finally {
+      if (rec.stages.quantStartedAtMs != null) rec.stages.quantFinishedAtMs = this.now();
+      this.releaseSettledOwnership(rec);
       quantRelease();
     }
+  }
+
+  private releaseSettledOwnership(rec: TrackedCandidate): void {
+    const key = this.dedupKey(rec.symbol, rec.fingerprint);
+    if (rec.terminalState && this.inflight.get(key) === rec) this.inflight.delete(key);
   }
 
   /**
@@ -1038,16 +1050,11 @@ export class QuantPriorityScheduler {
    * pool-size hangs would wedge quant throughput permanently (queued candidates would
    * still expire via the deadline sweeper, but no new work would run).
    *
-   * On watchdog expiry the candidate is QUARANTINED: the caller releases the quant
-   * slot via its normal finally (capacity recovers immediately) while the inflight
-   * dedup entry is KEPT, so no duplicate evaluation can start for the same
-   * symbol+fingerprint. The candidate stays tracked; when the orphaned evaluation
-   * eventually settles its result is discarded (never presented as current) and the
-   * candidate terminally transitions to ASSESSMENT_EXPIRED. If the orphan never
-   * settles, the sweeper evicts the quarantine after quantQuarantineMaxAgeMs and
-   * releases the dedup entry. This mirrors the fast-lane hung-lease quarantine
-   * (27e17d3): capacity recovery without reintroducing invisible concurrency for
-   * duplicate work.
+   * On watchdog expiry the candidate is quarantined while its semaphore and dedup
+   * ownership stay retained. The age sweeper may report an expired caller outcome,
+   * but cannot authorize replacement work over an unresolved evaluation. A late
+   * settlement is discarded and then releases the actual capacity. Permanent hangs
+   * require verified cancellation or process recovery; this code does not claim either.
    */
   private async runQuantStageWithWatchdog(
     rec: TrackedCandidate,
@@ -1081,7 +1088,9 @@ export class QuantPriorityScheduler {
         });
         // Discard the late settle deterministically. setTerminal is exactly-once: if
         // the sweeper already evicted the quarantine by age, this is a harmless no-op.
-        void evalPromise.then((settled) => {
+        // Await actual settlement while the outer pipeline retains its semaphore.
+        const settled = await evalPromise;
+        {
           rec.evaluationSettledLate = true;
           this.emit('QUANT_SCHEDULER_QUANT_LATE_SETTLE_DISCARDED', {
             candidateId: rec.candidateId,
@@ -1089,7 +1098,7 @@ export class QuantPriorityScheduler {
             settled: 'error' in settled ? 'threw' : 'resolved',
           });
           this.setTerminal(rec, 'ASSESSMENT_EXPIRED', 'QUANT_EVALUATION_TIMED_OUT_LATE_SETTLE');
-        });
+        }
         return { quarantined: true };
       }
       const settled = result as { value: unknown } | { error: unknown };
@@ -1120,10 +1129,9 @@ export class QuantPriorityScheduler {
     }
     if (readiness.sufficient) return 'SUFFICIENT';
 
-    // Missing/stale -> bounded provider fetch. The timeout race mirrors the fast-lane
-    // D4 liveness watchdog: a hung fetch must never wedge the data-fetch pool. The
-    // underlying promise is left to settle on its own (gateway coalescing cleans up);
-    // its late result is discarded, never applied.
+    // Missing/stale -> bounded provider fetch. Report the caller deadline promptly,
+    // but keep the underlying-work semaphore and dedup entry until settlement.
+    // A late gateway cache write may occur; it is not a current scheduler assessment.
     let timedOut = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -1140,6 +1148,8 @@ export class QuantPriorityScheduler {
       const result = await Promise.race([fetchPromise, timeoutPromise]);
       if (timedOut || result === 'timeout') {
         this.setTerminal(rec, 'PROVIDER_TIMEOUT', `DATA_FETCH_EXCEEDED_${this.config.dataFetchTimeoutMs}MS`);
+        // Report the deadline promptly, but retain the provider slot and dedup key.
+        await fetchPromise;
         return 'TERMINAL_SET';
       }
       if (typeof result === 'object' && 'fetchError' in result) {
