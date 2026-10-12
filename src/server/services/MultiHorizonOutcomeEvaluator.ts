@@ -68,14 +68,24 @@ export async function evaluateMultiHorizonOutcomesForPrediction(
   }
   if (bars.length < 2) return [];
 
-  const entryPrice = bars[0].close;
+  // 2026-10-11 (#16): entry-endpoint guard. bars[0] must be at or just after
+  // predictionTimeMs (same ≤ predictionTimeMs+60s bound the single-horizon path
+  // enforces). Without this, a stale first bar would corrupt the entry price.
+  const entryBar = bars[0];
+  if (entryBar.timestamp > predictionTimeMs + 60_000) return [];
+  const entryPrice = entryBar.close;
   if (entryPrice <= 0) return [];
   const isLong = side === 'BUY';
 
   const results: MultiHorizonOutcomeResult[] = [];
   for (const h of missing) {
-    if (bars.length <= h.bars) continue; // insufficient real bars for this horizon yet - retry next cycle
-    const barAtHorizon = bars[h.bars];
+    // 2026-10-11 (#16): select the horizon bar by TIMESTAMP, not position.
+    // bars[h.bars] assumes dense minute bars — wrong with sparse data. The horizon
+    // bar is the first bar at or after predictionTimeMs + h.bars*60000; skip the
+    // horizon if no such bar exists yet.
+    const horizonTimeMs = predictionTimeMs + h.bars * 60_000;
+    const barAtHorizon = bars.find((b) => b.timestamp >= horizonTimeMs);
+    if (!barAtHorizon) continue; // insufficient real bars for this horizon yet - retry next cycle
     const rawReturn = (barAtHorizon.close - entryPrice) / entryPrice;
     const forwardDirection: 'UP' | 'DOWN' | 'FLAT' =
       barAtHorizon.close > entryPrice ? 'UP' : barAtHorizon.close < entryPrice ? 'DOWN' : 'FLAT';
