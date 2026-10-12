@@ -283,7 +283,13 @@ function probeAvailableData(db: any): { available: AvailableData; probeDetails: 
     relativeStrengthVsSpy: false,
   };
   const details: Record<string, string> = {};
-  const sessionStartMs = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00.000Z').getTime();
+  // 2026-10-11: session boundary is the market-timezone trading day start
+  // (America/New_York, DST-correct via TradingCalendar.getTradingDayStartMs), not UTC
+  // midnight. The old UTC-midnight boundary was wrong for several hours around each
+  // exchange midnight (e.g. 21:00 EDT Oct 11 is already Oct 12 in UTC, so the probe
+  // looked for "today's" intraday bars in the wrong UTC day).
+  const { getTradingDayStartMs } = await import('../src/server/core/TradingCalendar');
+  const sessionStartMs = getTradingDayStartMs(new Date());
 
   try {
     const intraday = db.prepare(
