@@ -219,4 +219,35 @@ describe('R1 — risk exit completes with a hanging AI debate', () => {
     // exit completed immediately via the no-routable-providers path.
     expect(routeConsensusSpy).not.toHaveBeenCalled();
   }, 60000);
+
+  // 2026-10-12: the protective-exit seal (core/protectiveExitSeal.ts) must travel from the genuine
+  // PortfolioMonitor exit idea onto its CHIEF_APPROVED_IDEA, and ONLY from there.
+  it('propagates the protective-exit seal of the exit idea onto the approval (genuine risk exit only)', async () => {
+    const symbol = 'NVDA';
+    routeConsensusSpy.mockRestore();
+    routeConsensusSpy = vi.spyOn(AIRouter.getInstance(), 'routeConsensus');
+    AIRouter.getInstance().clearProviders();
+
+    const exitTraceId = generateTraceId(symbol);
+    await chiefTrader.reviewIdea({ ...riskExitIdea(symbol, exitTraceId), protectiveExitSeal: 'seal-for-genuine-exit' });
+    await waitFor(() => sellApprovalFor(symbol) !== undefined, 15000, 'risk-exit approval carrying its seal');
+    expect(sellApprovalFor(symbol).protectiveExitSeal).toBe('seal-for-genuine-exit');
+  }, 60000);
+
+  it('never propagates a seal attached to a discretionary SELL (wrong agent/origin) or to an entry', async () => {
+    const symbol = 'AMD';
+    routeConsensusSpy.mockRestore();
+    routeConsensusSpy = vi.spyOn(AIRouter.getInstance(), 'routeConsensus');
+    AIRouter.getInstance().clearProviders();
+
+    // A discretionary-shaped SELL (not the risk-exit agent / origin) and a BUY, both smuggling a seal.
+    await chiefTrader.reviewIdea({
+      traceId: generateTraceId(symbol), symbol, side: 'SELL', confidence: 0.9, currentPrice: 150,
+      reasoning: 'SPOOF_FIXTURE: discretionary SELL smuggling a seal', agent: 'TechnicalAgent', origin: 'TECHNICAL_SIGNAL',
+      protectiveExitSeal: 'smuggled-seal-1',
+    });
+    await chiefTrader.reviewIdea({ ...entryIdea(symbol, generateTraceId(symbol)), protectiveExitSeal: 'smuggled-seal-2' });
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(approvals.filter((a) => a.symbol === symbol).every((a) => a.protectiveExitSeal === undefined)).toBe(true);
+  }, 60000);
 });

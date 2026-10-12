@@ -70,6 +70,20 @@ export interface ObservabilityConfig {
    *  comment. Bounds how long a caller waits on a heavy report, not the underlying synchronous
    *  SQLite work itself. */
   heavyReportTimeoutMs: number;
+  /** 2026-10-12 pre-market perfection mission (item 1, event-loop stall forensic): continuous
+   *  setInterval-drift event-loop lag monitor (eventLoopLagMonitor.ts). Provisional thresholds,
+   *  not calibrated - see config/observability.json's own comment for the evidence and the
+   *  recalibration requirement. */
+  eventLoopLagSampleIntervalMs: number;
+  eventLoopLagWarnMs: number;
+  eventLoopLagCriticalMs: number;
+  /** Cooldown between repeated warn/critical observations+alerts so a prolonged stall does not
+   *  spam the alert channel. */
+  eventLoopLagAlertCooldownMs: number;
+  /** 2026-10-12 pre-market perfection mission (item 1): warn threshold for a single synchronous
+   *  persist's main-thread block (syncPersistTiming.ts). Deliberately below the measured
+   *  persistAssessment p95 (1,369ms) - see config/observability.json's own comment. */
+  syncPersistWarnMs: number;
   marketDataPersist: boolean;
   maxPayloadChars: number;
   quantInputEvidenceEnabled: boolean;
@@ -97,6 +111,8 @@ const REQUIRED_NUMBERS: (keyof ObservabilityConfig)[] = [
   'heapSnapshotBaselineDelayMs', 'heapSnapshotCooldownMs', 'heapSnapshotFollowUpDelayMs',
   'heapSnapshotMaxPerProcessLifetime', 'heapSnapshotMaxFilesOnDisk', 'heapSnapshotMaxTotalMb',
   'heavyReportTimeoutMs',
+  'eventLoopLagSampleIntervalMs', 'eventLoopLagWarnMs', 'eventLoopLagCriticalMs',
+  'eventLoopLagAlertCooldownMs', 'syncPersistWarnMs',
 ];
 
 function loadObservabilityConfig(): ObservabilityConfig {

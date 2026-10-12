@@ -160,6 +160,70 @@ export interface QuantEvaluateSymbolOptions {
 }
 
 /**
+ * 2026-10-12 (pre-market perfection mission, item 1): cooperative cancellation for superseded
+ * on-demand Quant evaluations. The 486d51f generation-token fence guarantees a replaced run
+ * never EMITS, but without cancellation the run still burns bar fetches, Java HTTP calls,
+ * ensemble compute, AI review, and SQLite writes before being fenced at the end.
+ *
+ * What is NOT cancelled: in-flight provider fetches. HistoricalDataGateway's provider calls
+ * (IBKR histChain / Alpaca fetch) have no native AbortSignal support, and awaitWithinDeadline()
+ * deliberately never cancels the underlying work - a superseded evaluation already inside a
+ * provider fetch still rides that fetch out. What IS cancelled: everything after each await
+ * settles. Re-checking the generation token at each major await point throws
+ * QuantEvalSupersededError, aborting before the next expensive stage (no ensemble compute, no
+ * AI review, no quant_assessments/provenance writes, no emission).
+ *
+ * Callers that predate isLiveCheck (legacy fan-out, scheduler cycle without a predicate) pass no
+ * predicate and are completely unaffected - the check is a no-op without one.
+ */
+export class QuantEvalSupersededError extends Error {
+  readonly symbol: string;
+  readonly stage: string;
+  constructor(symbol: string, stage: string) {
+    super(`Quant evaluation for ${symbol} superseded at stage ${stage} - cancelling cooperatively`);
+    this.name = 'QuantEvalSupersededError';
+    this.symbol = symbol;
+    this.stage = stage;
+  }
+}
+
+/**
+ * Generation-token re-check for cooperative cancellation. Throws QuantEvalSupersededError (and
+ * emits QUANT_EVAL_CANCELLED_SUPERSEDED) when the caller's isLiveCheck predicate reports this
+ * evaluation no longer owns its symbol's slot. A no-op when no predicate was supplied.
+ */
+export function throwIfSuperseded(
+  options: QuantEvaluateSymbolOptions | undefined,
+  symbol: string,
+  traceId: string,
+  stage: string,
+): void {
+  if (!options?.isLiveCheck) return;
+  let live = true;
+  try {
+    live = options.isLiveCheck();
+  } catch {
+    live = true; // a broken predicate must never cancel a live evaluation - fail open
+  }
+  if (live) return;
+  observeSafe(() =>
+    structuredLogger.info('quant_eval_cancelled_superseded', {
+      category: 'DISCOVERY',
+      eventType: 'QUANT_EVAL_CANCELLED_SUPERSEDED',
+      symbol,
+      traceId,
+      stage,
+      reasoning:
+        `On-demand Quant evaluation for ${symbol} was superseded (its generation token no ` +
+        `longer owns the symbol's slot) while at stage ${stage}; aborting cooperatively before ` +
+        `the next expensive stage instead of burning it and withholding emission at the end ` +
+        `(486d51f fence remains as defense-in-depth at emission).`,
+    }),
+  );
+  throw new QuantEvalSupersededError(symbol, stage);
+}
+
+/**
  * 2026-09-29 (intraday-bars-for-opening-range fix): pure window math, extracted from
  * evaluateSymbol() so it's directly unit-testable without mocking historicalDataGateway. Bounded to
  * today's real regular session (America/New_York, DST-correct via TradingCalendar.ts) - never more
@@ -678,7 +742,7 @@ export class QuantSignalAgent {
       category: 'DISCOVERY', eventType: 'QUANT_SYMBOL_EVAL_STARTED',
       cycleId, traceId, symbol, scheduledIndex,
     }));
-    let outcome: 'ASSESSED' | 'INSUFFICIENT_BARS' | 'RATE_LIMITED' | 'ERROR' = 'ERROR';
+    let outcome: 'ASSESSED' | 'INSUFFICIENT_BARS' | 'RATE_LIMITED' | 'SUPERSEDED_CANCELLED' | 'ERROR' = 'ERROR';
     // 2026-10-12: stage timing + bounded error code (observability only; see evalStageTiming.ts).
     const stageTimer = createQuantEvalStageTimer();
     let errorCode: string | null = null;
@@ -689,6 +753,18 @@ export class QuantSignalAgent {
       outcome = result === null ? 'INSUFFICIENT_BARS' : 'ASSESSED';
       return result;
     } catch (e: any) {
+      // 2026-10-12 (cooperative cancellation): a superseded evaluation is not an error - the
+      // run was replaced by a newer one for the same symbol. The QUANT_EVAL_CANCELLED_SUPERSEDED
+      // event (emitted at the throw site) plus this FINISHED marker keep it traceable; no
+      // quant_assessments row is written because the evaluation never completed, and no idea is
+      // emitted. errorCode stays null (classifyQuantEvalError is for real failures), and the
+      // error is NOT rethrown - null is the established "no evaluation" return (same as the
+      // insufficient-bars path), which the scheduler's and coordinator's continuations already
+      // handle.
+      if (e instanceof QuantEvalSupersededError) {
+        outcome = 'SUPERSEDED_CANCELLED';
+        return null;
+      }
       // Same 429 wording the runCycle fan-out guard already uses to arm provider backoff.
       outcome = /429|rate-limited|Too Many Requests/i.test(String(e?.message || e)) ? 'RATE_LIMITED' : 'ERROR';
       errorCode = classifyQuantEvalError(e);
@@ -726,7 +802,12 @@ export class QuantSignalAgent {
       if (!/429|rate-limited|Too Many Requests/i.test(msg)) throw e;
       console.warn(`[QuantSignalAgent] ${symbol}: ensureBars rate-limited — attempting SQLite cache only`);
     }
+    // 2026-10-12 (cooperative cancellation): a superseded evaluation still inside a provider
+    // fetch rides that fetch out (no AbortSignal plumbing in HistoricalDataGateway), but burns
+    // nothing further - abort before the next expensive stage.
+    throwIfSuperseded(options, symbol, traceId, 'postEnsureBars');
     const bars: Bar[] = await historicalDataGateway.getBars(symbol, TIMEFRAME, startMs, endMs);
+    throwIfSuperseded(options, symbol, traceId, 'primaryBars');
     stageTimer?.mark('primaryBars');
     observeSafe(() => structuredLogger.info('quant_bar_input_availability', {
       category: 'DISCOVERY', eventType: 'QUANT_BAR_INPUT_AVAILABILITY', symbol, traceId,
@@ -810,6 +891,10 @@ export class QuantSignalAgent {
     }
 
     stageTimer?.mark('intradayFetch');
+    // 2026-10-12 (cooperative cancellation): the intraday fetch above is already deadline-bounded
+    // (awaitWithinDeadline never cancels the underlying fetch - it keeps running underneath for a
+    // later evaluation); a superseded run aborts here instead of continuing into feature compute.
+    throwIfSuperseded(options, symbol, traceId, 'intradayFetch');
     const regime = classifyRegime(bars);
     stageTimer?.mark('classifyRegime');
     // SHADOW-ONLY Java parity check (docs/architecture/ARGUS_ARCHITECTURE.md (Java Quant Core section) Phase
@@ -828,6 +913,8 @@ export class QuantSignalAgent {
     }
     const marketContext = await getMarketContext(symbol, bars, TIMEFRAME, startMs, endMs);
     stageTimer?.mark('marketContext');
+    // 2026-10-12 (cooperative cancellation).
+    throwIfSuperseded(options, symbol, traceId, 'marketContext');
     const liveQuotePriceUsed = marketDataWorker.getLatestPrice(symbol);
     const currentPrice = resolveQuantCurrentPrice(bars[bars.length - 1], liveQuotePriceUsed, Date.now());
 
@@ -947,6 +1034,8 @@ export class QuantSignalAgent {
     stageTimer?.mark('adaptiveSelection');
     const emissionEligibleEvaluations = await filterQuarantinedStrategies(adaptedEvaluations);
     stageTimer?.mark('lifecycleFilter');
+    // 2026-10-12 (cooperative cancellation).
+    throwIfSuperseded(options, symbol, traceId, 'lifecycleFilter');
     observeSafe(() => structuredLogger.info('quant_selection_pool', {
       category: 'DISCOVERY', eventType: 'QUANT_SELECTION_POOL', symbol, traceId, focusId,
       evaluatedStrategies: strategyEvaluations.map(e => e.strategy),
@@ -1059,6 +1148,8 @@ export class QuantSignalAgent {
       // direction-agnostic |distance| ratio through the EV gate.
       const rr = computeEvGateRiskReward(strategyIdea.side, currentPrice, stopPrice, targetPrice);
       const liveWinRate = await computeLiveStrategyWinRate(matchedStrategyEvaluation.strategy);
+      // 2026-10-12 (cooperative cancellation).
+      throwIfSuperseded(options, symbol, traceId, 'evGate');
       // Real defect fixed this pass: a strategy with e.g. 1 closed trade (100% or 0% win rate) used
       // to be treated as a fully-trusted EV estimate here - the exact same MIN_SAMPLE_SIZE_FOR_KELLY
       // bar that fractionalKelly() already refuses under (this file's own prior comment claimed this
@@ -1182,9 +1273,17 @@ export class QuantSignalAgent {
     // with the same honest available:false degradation instead.
     let aiContradictionAnalysis: ContradictionAnalysisResult | null = null;
     if (idea) {
+      // 2026-10-12 (cooperative cancellation): the AI review below is an expensive awaited
+      // stage (LLM provider call, deadline-bounded) - a superseded evaluation must not run it
+      // at all, so check before entering it.
+      throwIfSuperseded(options, symbol, traceId, 'preAiReview');
       aiContradictionAnalysis = await analyzeContradictionsBounded({
         symbol, side: idea.side, regime, strategyEvaluation: matchedStrategyEvaluation, groupedScores: groupedScores[idea.side],
       }, traceId);
+      // 2026-10-12 (cooperative cancellation): the predicate may have flipped while the AI
+      // review was in flight - abort before the internal-ensemble Java call, emission, and
+      // persistence instead of continuing with a stale evaluation.
+      throwIfSuperseded(options, symbol, traceId, 'aiContradiction');
     }
 
     stageTimer?.mark('aiContradiction');
@@ -1261,6 +1360,9 @@ export class QuantSignalAgent {
       const internalEnsemble = (isQuantIndependentQualificationEnabled() || confluenceGuardOn) && (idea.side === 'BUY' || idea.side === 'SELL')
         ? await computeInternalEnsembleQualification(symbol, bars, emissionEligibleEvaluations, idea.side)
         : null;
+      // 2026-10-12 (cooperative cancellation): the internal-ensemble qualification above is a
+      // Java HTTP call - a superseded run aborts here instead of emitting or persisting.
+      throwIfSuperseded(options, symbol, traceId, 'internalEnsemble');
       // 2026-09-10, real observability gap closed (see InternalEnsembleQualification.sideMismatch's
       // own doc comment): when the broader correlation-adjusted ensemble disagrees with
       // bestStrategyIdea()'s picked side, this used to be indistinguishable from "agreed but
@@ -1432,6 +1534,11 @@ export class QuantSignalAgent {
     }
 
     stageTimer?.mark('ideaEmission');
+    // 2026-10-12 (cooperative cancellation): a superseded evaluation must not write a
+    // quant_assessments row that looks like a completed evaluation, and must not emit
+    // QUANT_ASSESSMENT_COMPLETED for work that never finished. The QUANT_EVAL_CANCELLED_SUPERSEDED
+    // event plus QUANT_SYMBOL_EVAL_FINISHED (SUPERSEDED_CANCELLED) keep it traceable.
+    throwIfSuperseded(options, symbol, traceId, 'prePersist');
     eventBus.emit(EVENTS.QUANT_ASSESSMENT_COMPLETED, { traceId, symbol, regime, marketContext, strategyEvaluations, groupedScores, aiContradictionAnalysis, timestamp: new Date().toISOString(), emittedTradeIdea });
     observeSafe(() => structuredLogger.info('quant_quote_evidence', {
       category: 'DISCOVERY', eventType: 'QUANT_QUOTE_EVIDENCE', traceId, symbol,

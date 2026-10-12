@@ -31,7 +31,7 @@ export class RiskValidationAgent {
     });
   }
 
-  assessRisk(approval: { traceId: string, transactionId?: string, symbol: string, side: string, confidence: number, reasoning: string, agentsContext: string, currentPrice?: number, newsDetails?: any, supportingQuantDetail?: any, closePositionIntent?: boolean, decisionPolicy?: string }) {
+  assessRisk(approval: { traceId: string, transactionId?: string, symbol: string, side: string, confidence: number, reasoning: string, agentsContext: string, currentPrice?: number, newsDetails?: any, supportingQuantDetail?: any, closePositionIntent?: boolean, decisionPolicy?: string, protectiveExitSeal?: string }) {
      console.log(`[RiskManager] Validating ${approval.side} on ${approval.symbol}`);
 
      const request: any = {
@@ -66,6 +66,9 @@ export class RiskValidationAgent {
         // consensus path for approvals that predate the field). Observability only — RiskAgent
         // stays policy-agnostic and its safety behavior is identical either way.
         decisionPolicy: approval.decisionPolicy ?? 'CONSENSUS',
+        // 2026-10-12: forwarded verbatim; RiskEngine verifies it against the seal registry (a missing or
+        // forged value simply means no exemption). RiskAgent never interprets it.
+        ...(typeof approval.protectiveExitSeal === 'string' ? { protectiveExitSeal: approval.protectiveExitSeal } : {}),
      };
 
      riskEngine.evaluateRisk(request);

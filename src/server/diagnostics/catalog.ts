@@ -437,7 +437,7 @@ export const GATE_FIX: Record<string, string> = {
   order_rate_limit: 'Wait until fewer than maxOrdersPerMinute proposals hit RiskEngine.',
   market_hours: 'Wait for the regular session. If the Alpaca clock request failed, restore API connectivity — an outage fail-closes this gate. Unconfigured keys skip the check.',
   data_freshness: 'Restore the market-data WebSocket so quotes are newer than 5 minutes.',
-  news_veto: 'A high-impact news cluster in the last 4 hours vetoed this symbol (direction-blind).',
+  news_veto: 'A high-impact news cluster in the last 4 hours vetoed this symbol. Verified protective SELL liquidations (sealed via PortfolioMonitor.emitRiskExit) are exempt; all discretionary ideas stay vetoed.',
   price_validity: 'A finite live price is required. No fabricated price will be used.',
   open_positions_cap: 'Close or reduce an existing position before opening a new symbol.',
   sufficient_size: 'Buying power, maxTradeSize, or concentration caps produced zero shares.',

@@ -48,6 +48,16 @@ function sha256Hex(data: string): string {
 async function main() {
   const asJson = process.argv.includes('--json');
   const withSuites = process.argv.includes('--with-suites');
+  // Phase 2 (2026-10-12): synthetic market-open session stage, reusing the
+  // scripts/sim/marketOpen.ts --certify infrastructure (the same command as
+  // package.json test:certification). Opt-in like --with-suites: it is a
+  // minutes-long stage and the release gate stays fast by default.
+  const withSim = process.argv.includes('--with-sim');
+  const simSpeedArg = process.argv.find(a => a.startsWith('--sim-speed='));
+  const simSpeed = simSpeedArg ? Number(simSpeedArg.slice('--sim-speed='.length)) : 400; // 400 = test:certification
+  if (simSpeedArg && (!Number.isFinite(simSpeed) || simSpeed <= 0)) {
+    throw new Error('certifyNextSession: --sim-speed=<n> must be a positive number');
+  }
   const engineUrlArg = process.argv.find(a => a.startsWith('--engine-url='));
   const dbArg = process.argv.find(a => a.startsWith('--isolated-db='));
   if (!dbArg) {
@@ -138,6 +148,18 @@ async function main() {
     report.dataReadiness.notReadyAuthorized = readiness.filter(
       r => r.readiness === 'NOT_READY' && authorizedIds.has(r.strategyId),
     ).map(r => ({ strategyId: r.strategyId, missingRequired: r.missingRequired }));
+
+    // --- Real lifecycle-state summary (Phase 2): the canonical pre-market inputs,
+    // read-only. Authorized strategies, the PAPER allocation profile, existing
+    // positions (SELECT-only on the isolated snapshot), and the key trading-safety
+    // numbers as actually configured. Never writes, never seeds, never promotes.
+    const { buildRealStateSummary } = await import('../src/server/certification/nextSessionCertExtras');
+    report.realState = buildRealStateSummary({
+      productionState,
+      safetyConfig: safetyCfg,
+      db: sqliteDb,
+      repoRoot: path.resolve('.'),
+    });
 
     const schemaVersionRaw: any = (() => {
       try { return sqliteDb.prepare('PRAGMA user_version').get(); } catch { return null; }
@@ -263,6 +285,36 @@ async function main() {
       engineBaseUrl: engineUrlArg ? engineUrlArg.slice('--engine-url='.length) : null,
     });
     report.releaseCertification = driverReport;
+
+    // --- Simulated market-open session (Phase 2, --with-sim) -----------------------
+    // Reuses the mandatory marketOpen --certify infrastructure (Test A QUIET_OPEN
+    // no-trade safety + Test B VALIDATED_CONVERGENCE_CONTROL), labeled
+    // SYNTHETIC_SEEDED / NON_ORGANIC / CERTIFICATION_FIXTURE_ONLY. It never
+    // forces a strategy signal, a Chief/Risk approval, or a fill above the broker
+    // boundary — the sim's own HistoricalReplayBroker is the only "broker", in
+    // the sim's own isolated tmp DBs. A FAIL here fails the verdict closed
+    // (NO_GO); it can never manufacture a GO.
+    const { runMarketOpenCertify, computeGoNoGo } = await import('../src/server/certification/nextSessionCertExtras');
+    if (withSim) {
+      report.simulatedSession = await runMarketOpenCertify({ repoRoot: path.resolve('.'), speed: simSpeed });
+    } else {
+      report.simulatedSession = null;
+    }
+
+    // --- GO / NO-GO verdict (Phase 2): fail-closed mapping of the release driver
+    // plus the simulated session. GO requires driver READY and (when run) a
+    // passing sim. A correct, explainable NO-GO is a valid certification
+    // result, never a bug.
+    const goNoGo = computeGoNoGo({
+      driverOverallStatus: driverReport.overallStatus,
+      driverBlockingChecks: driverReport.blockingChecks ?? [],
+      simStage: report.simulatedSession
+        ? { ran: true, pass: report.simulatedSession.pass === true, summary: report.simulatedSession.summary ?? '' }
+        : { ran: false, pass: false, summary: 'not run (pass --with-sim to include a synthetic market-open session)' },
+    });
+    report.goNoGo = goNoGo.goNoGo;
+    report.goNoGoReasons = goNoGo.reasons;
+
     // The required CLI fields, flat: every mandatory check by field name.
     report.fields = Object.fromEntries(
       driverReport.checks.map((c: ReleaseCheck) => [c.field, { state: c.state, value: c.value, evidence: c.evidence }]),
@@ -376,6 +428,53 @@ function scanForPriorDayLevels(context: any): boolean {
   return /previousDay|priorDay|prior_day/i.test(seen);
 }
 
+/** Phase 2: read-only real lifecycle-state summary (JSON report already carries the full object). */
+function printRealState(rs: any) {
+  if (!rs) {
+    console.log('REAL LIFECYCLE STATE: unavailable');
+    return;
+  }
+  console.log('REAL LIFECYCLE STATE (read-only: isolated snapshot + config/*.json — no writes, no seeding, no promotion)');
+  console.log(`  authorized PAPER quant strategies : ${rs.authorizedPaperQuantStrategies ?? 'n/a'}` +
+    (rs.quantVerdict ? `  [${rs.quantVerdict}]` : ''));
+  const alloc = rs.allocationProfile ?? {};
+  console.log(`  allocation profile                : ${alloc.budget != null ? `$${alloc.budget}` : 'n/a'}` +
+    `  (${alloc.source ?? 'config/paperAllocationProfile.json'})` +
+    (alloc.error ? `  ERROR: ${alloc.error}` : ''));
+  const pos = rs.positions ?? {};
+  console.log(`  open positions                    : ${pos.count ?? 'n/a'}` +
+    (pos.error ? `  ERROR: ${pos.error}` : ''));
+  if (Array.isArray(pos.rows) && pos.rows.length > 0) {
+    for (const p of pos.rows.slice(0, 10)) {
+      console.log(`    - ${p.symbol} qty=${p.quantity} avg=${p.averagePrice ?? '?'} px=${p.currentPrice ?? '?'} uPnL=${p.unrealizedPnL ?? '?'}`);
+    }
+    if (pos.rows.length > 10) console.log(`    ... (${pos.rows.length - 10} more)`);
+  }
+  const safety = rs.tradingSafety ?? {};
+  const safetyLine = Object.entries(safety).map(([k, v]) => `${k}=${v ?? 'n/a'}`).join('  ');
+  console.log(`  trading safety                    : ${safetyLine}  (${rs.tradingSafetySource ?? 'config/tradingSafety.json'})`);
+}
+
+/** Phase 2: simulated-session stage (JSON report already carries the full object). */
+function printSimStage(sim: any) {
+  if (!sim) {
+    console.log('SIMULATED SESSION: not run — pass --with-sim to include a synthetic market-open session (marketOpen --certify).');
+    return;
+  }
+  console.log('SIMULATED SESSION (--with-sim; scripts/sim/marketOpen.ts --certify infra)');
+  console.log(`  classification: ${(sim.classification ?? []).join(' / ')}`);
+  console.log(`  command: ${sim.command}   exit=${sim.exitCode ?? 'n/a'}${sim.timedOut ? ' (TIMED OUT)' : ''}   ${sim.durationMs}ms`);
+  for (const r of sim.parsed?.testA ?? []) {
+    console.log(`  TEST A (no-trade safety) [seed=${r.seed}]: ${r.certification} (tradeObserved=${r.tradeObserved}, ${r.detail ?? 'n/a'})`);
+  }
+  for (const r of sim.parsed?.testB ?? []) {
+    console.log(`  TEST B (tradeable scenario) [seed=${r.seed}]: ${r.certification} (tradeObserved=${r.tradeObserved}, calibrationSeeded=${r.calibrationSeeded ?? 'n/a'})`);
+  }
+  if (sim.error) console.log(`  stage error: ${sim.error}`);
+  if (sim.evidenceNote) console.log(`  ${sim.evidenceNote}`);
+  console.log(`  sim verdict: ${sim.pass ? 'PASS' : 'FAIL'}`);
+}
+
 function printHuman(report: any) {
   console.log('CERTIFY NEXT SESSION — pre-market release gate (release certification driver)');
   console.log(`generated: ${report.generatedAt}   build: ${String(report.buildSha).slice(0, 12)}   config: ${String(report.configHash).slice(0, 12)}`);
@@ -407,6 +506,16 @@ function printHuman(report: any) {
   }
   console.log(`READY: ${report.ready}`);
   console.log(`OVERALL_STATUS: ${report.overallStatus}`);
+  console.log('');
+  printRealState(report.realState);
+  console.log('');
+  printSimStage(report.simulatedSession);
+  console.log('');
+  // Phase 2: fail-closed GO / NO-GO with the evidence behind it (JSON report
+  // carries the same in goNoGo / goNoGoReasons). A NO-GO is a valid,
+  // explainable certification result, never a bug.
+  console.log(`VERDICT: ${report.goNoGo}`);
+  for (const reason of report.goNoGoReasons ?? []) console.log(`  reason: ${reason}`);
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

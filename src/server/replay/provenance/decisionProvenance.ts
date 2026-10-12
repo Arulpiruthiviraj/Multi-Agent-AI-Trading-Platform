@@ -70,6 +70,7 @@ import { evaluateAll } from '../../quant/strategies/StrategyEngine';
 import type { StrategyContext, StrategyEvaluation } from '../../quant/strategies/types';
 import { getStrategyLifecycleStatus } from '../../quant/strategies/StrategyEmissionEligibility';
 import { freezeStrategyVersion } from '../../research/strategySpecs';
+import { timeSyncPersist } from '../../observability/syncPersistTiming';
 
 /** Table name — kept as a literal so the retention sweeper and tests share one source. */
 export const DECISION_PROVENANCE_TABLE = 'decision_provenance';
@@ -438,12 +439,17 @@ export async function persistDecisionProvenance(input: DecisionProvenanceInput):
       return 'rejected_oversize';
     }
 
-    insertProvenanceStmt().run(
-      row.id, row.decisionId, row.symbol, row.timeframe, row.decisionTimeMs,
-      row.barEvidenceJson, row.quoteJson, row.bidAskJson, row.currentPrice, row.priceObservedAtMs,
-      row.strategyContextJson, row.contextTruncated, row.regime, row.strategyVersionsJson,
-      row.configVersion, row.buildSha, row.lifecycleStatesJson, row.strategyId,
-      row.evaluationsJson, row.evaluationFingerprint, row.dataSource, row.createdAt,
+    // 2026-10-12 (pre-market perfection mission, item 1): warn-level timing around this
+    // synchronous commit - a disk-level stall here blocks the event loop (SYNC_PERSIST_SLOW at
+    // WARN). Fail-open: timeSyncPersist never throws, and the outer try/catch below is unchanged.
+    timeSyncPersist('decisionProvenance.persistDecisionProvenance', () =>
+      insertProvenanceStmt().run(
+        row.id, row.decisionId, row.symbol, row.timeframe, row.decisionTimeMs,
+        row.barEvidenceJson, row.quoteJson, row.bidAskJson, row.currentPrice, row.priceObservedAtMs,
+        row.strategyContextJson, row.contextTruncated, row.regime, row.strategyVersionsJson,
+        row.configVersion, row.buildSha, row.lifecycleStatesJson, row.strategyId,
+        row.evaluationsJson, row.evaluationFingerprint, row.dataSource, row.createdAt,
+      ),
     );
     return 'written';
   } catch (e) {

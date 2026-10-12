@@ -40,6 +40,13 @@
   "heapSnapshotMaxTotalMb": 2048,
   "_heavyReportGuardComment": "Trading/research-plane isolation (2026-09-14, item #25 / mandate Phase 2). Real incident: a heavy diagnostic HTTP call (argus-cli strategy-fairness) against the live engine is the leading suspected trigger for that same day's process crash - no proof of exact mechanism, but real enough to require a structural guard, not just caution. Applies to the heaviest read-only observability reports (agent-edge, strategy-fairness, strategy-scorecard - each does a real, non-trivial scan over potentially tens of thousands of rows). Two real protections: (1) serialized - only one heavy report may run at a time, preventing exactly the pile-up pattern the incident showed; (2) a memory circuit breaker reusing memoryTelemetryWarningRssMb (no new duplicate threshold) - refuses to even start a heavy report while RSS is already at/above WARNING, the exact precondition present during the incident. heavyReportTimeoutMs bounds how long a CALLER waits, not the underlying synchronous SQLite work itself (Node cannot forcibly cancel that once started) - the guard's mutex stays held until the real work actually finishes, honestly modeling this limitation rather than pretending to cancel it.",
   "heavyReportTimeoutMs": 30000,
+  "_eventLoopLagComment": "2026-10-12 pre-market perfection mission (item 1), event-loop stall forensic: the production engine froze ~3 minutes 13:32-13:35 ET (event-loop stall, /health timeouts, CPU ~10%, self-recovered, cause UNKNOWN; the WAL-shrink lead was REFUTED). The remaining candidates are (a) v8.writeHeapSnapshot()'s synchronous heap walk (best signature match, but heapSnapshotEnabled=false in the shipped config - needs a deploy-side check, NOT a code fix) and (b) a synchronous better-sqlite3 commit tail (forensic: persistAssessment p95 1,369ms, proving main-thread commit stalls are real; a disk-level stall could stretch to minutes). processTelemetry already samples event-loop delay every 15s into an in-memory ring, but nothing WATCHES it continuously, nothing persists a stall record, and nothing alerts. This monitor measures setInterval drift continuously so the next stall is observed, persisted (STALL_DETECTED), and alerted - never silent. Thresholds are provisional, not calibrated: WARN=5000ms flags degraded-but-recovered stalls; CRITICAL=30000ms sits well under the observed ~180s incident but far above any healthy 1s-interval tick (healthy drift is low single-digit ms). Cooldown (10min) bounds alert spam during a prolonged stall. Recalibrate all three against a real RTH session's drift curve once it exists.",
+  "eventLoopLagSampleIntervalMs": 1000,
+  "eventLoopLagWarnMs": 5000,
+  "eventLoopLagCriticalMs": 30000,
+  "eventLoopLagAlertCooldownMs": 600000,
+  "_syncPersistWarnComment": "2026-10-12 pre-market perfection mission (item 1): warn-level timing instrumentation around the synchronous persist points (RiskEngine.persistAssessment, decisionProvenance.persistDecisionProvenance, ObservabilityStore.defaultPersist). Forensic showed persistAssessment p95 1,369ms - every one of these commits runs on the main thread, so a slow disk turns them into event-loop stalls. 250ms is deliberately far below the 1,369ms measured p95 (this WILL fire on slow commits - that is the point: evidence, not silence). Log-only (SYNC_PERSIST_SLOW at WARN); never throws, never gates.",
+  "syncPersistWarnMs": 250,
   "marketDataPersist": false,
   "maxPayloadChars": 8000,
   "_quantInputEvidenceComment": "Optional bounded context-replay evidence. OFF by default pending supervised resource validation. 128KiB total and 3KiB raw chunks keep base64 envelopes below the existing 8KiB payload cap. Dropped chunks make the capture incomplete; never certify feature recomputation or trading authority from this telemetry.",
@@ -108,6 +115,10 @@
     "DESK_NO_TRADE": { "category": "AGENT", "defaultLevel": "INFO" },
     "TRADE_LIFECYCLE": { "category": "ORDER", "defaultLevel": "INFO" },
     "QUANT_EVIDENCE_PRODUCED": { "category": "AGENT", "defaultLevel": "INFO", "sampled": false },
-    "QUANT_EVIDENCE_VALIDATION_FAILED": { "category": "AGENT", "defaultLevel": "WARN", "sampled": false }
+    "QUANT_EVIDENCE_VALIDATION_FAILED": { "category": "AGENT", "defaultLevel": "WARN", "sampled": false },
+    "STALL_DETECTED": { "category": "SYSTEM", "defaultLevel": "ERROR", "sampled": false },
+    "EVENT_LOOP_LAG_WARN": { "category": "SYSTEM", "defaultLevel": "WARN", "sampled": false },
+    "SYNC_PERSIST_SLOW": { "category": "SYSTEM", "defaultLevel": "WARN", "sampled": false },
+    "QUANT_EVAL_CANCELLED_SUPERSEDED": { "category": "DISCOVERY", "defaultLevel": "INFO", "sampled": false }
   }
 }

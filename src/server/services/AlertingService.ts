@@ -82,6 +82,36 @@ export class AlertingService {
     });
   }
 
+  /**
+   * 2026-10-12 (pre-market perfection mission, item 1): the event-loop lag monitor's alerting
+   * hook. Fires on a CRITICAL lag crossing (STALL_DETECTED persisted separately by the monitor).
+   * Cooldown-guarded (own key, not shared with other alert kinds) so a prolonged stall does not
+   * spam the channel. Deliberately a public method rather than an eventBus subscription: the
+   * monitor already has the measured payload, and this keeps the stall path independent of
+   * eventBus delivery timing. Safe to call even if start() was never called.
+   */
+  alertEventLoopStall(details: {
+    lagMs: number;
+    sampleIntervalMs: number;
+    criticalMs: number;
+    stallCount: number;
+    rssMb?: number | null;
+    heapUsedMb?: number | null;
+  }) {
+    if (!this.shouldAlert('event_loop_stall')) return;
+    this.send({
+      type: 'event_loop_stall',
+      title: 'Event loop stall detected',
+      message:
+        `Event loop lag ${Math.round(details.lagMs)}ms exceeded the critical threshold ` +
+        `(${details.criticalMs}ms) - stall #${details.stallCount} this process. ` +
+        `RSS ${details.rssMb ?? 'n/a'}MB, heap ${details.heapUsedMb ?? 'n/a'}MB. ` +
+        `Check /health and the persisted STALL_DETECTED event; the engine may still be stalled ` +
+        `or may have self-recovered.`,
+      details: { pid: process.pid, ...details },
+    });
+  }
+
   start() {
     if (this.started) return;
     this.started = true;

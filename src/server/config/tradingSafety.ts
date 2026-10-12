@@ -231,6 +231,8 @@ export interface TradingSafety {
   workCycleSlowWarnMs: number;
   /** 2026-10-12: rows per page when CalibrationCandidateBuilder loads prediction history. Each page is one synchronous SQLite call, so this bounds the longest event-loop block of the 15-minute calibration cycle (which previously held the whole engine for ~3.5-4 min as one uninterrupted task). A latency/safety bound, not a trading threshold. */
   calibrationFetchPageRows: number;
+  /** 2026-10-12: lifetime of a single-use protective-exit seal (see core/protectiveExitSeal.ts). Must cover PortfolioMonitor emit -> ChiefTrader risk-exit approval -> RiskEngine evaluation, including serialization behind other evaluations and a worst-case multi-minute event-loop pause; an expired seal fails CLOSED (news_veto then applies as before). Also bounds the in-memory registry. */
+  protectiveExitSealTtlMs: number;
   /**
    * 2026-10-12: LIVENESS BOUND for ConfluenceCoordinator's per-symbol on-demand Quant in-flight
    * guard. A re-trigger is skipped while the previous on-demand evaluation for that symbol is
@@ -845,6 +847,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'quantIntradayFetchMaxWaitMs',
   'workCycleSlowWarnMs',
   'calibrationFetchPageRows',
+  'protectiveExitSealTtlMs',
   'quantOnDemandInflightMaxAgeMs',
   'aiProviderAuthFailureCooldownMs',
   'aiProviderUnreachableCooldownMs',

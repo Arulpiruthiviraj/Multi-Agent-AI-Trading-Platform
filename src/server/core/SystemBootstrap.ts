@@ -64,6 +64,7 @@ import { installObservabilityEventBridge } from '../observability/instrumentEven
 import { startObservabilityRetentionSweep, stopObservabilityRetentionSweep } from '../observability/ObservabilityStore';
 import { startOperationalRetentionSweep, stopOperationalRetentionSweep } from '../db/operationalRetention';
 import { startProcessTelemetry, stopProcessTelemetry } from '../observability/processTelemetry';
+import { startEventLoopLagMonitor, stopEventLoopLagMonitor } from '../observability/eventLoopLagMonitor';
 import { transactionLifecycleTracker } from '../services/TransactionLifecycleTracker';
 import { marketDataCrossChecker } from '../services/MarketDataCrossChecker';
 import { alertingService } from '../services/AlertingService';
@@ -94,11 +95,20 @@ export class SystemBootstrap {
     startObservabilityRetentionSweep();
     startOperationalRetentionSweep();
     startProcessTelemetry();
+    // 2026-10-12 (pre-market perfection mission, item 1): continuous event-loop lag monitor -
+    // same start/stop lifecycle as processTelemetry above, no parallel lifecycle. Watches for
+    // the ~3-minute-stall class seen 13:32-13:35 ET; persists STALL_DETECTED and alerts on
+    // critical crossings.
+    startEventLoopLagMonitor();
     advancedQuantEngines.start();
     
     authorizeMarketDataWebSocket('SystemBootstrap');
     marketDataWorker.start();
     portfolioMonitor.start();
+    // 2026-10-12: the mission branch referenced a broker-native ProtectiveOrderService that was never
+    // committed (the import did not resolve, so that branch could not compile). Broker-resident protective
+    // orders are a NEW ORDER MECHANISM and need a separate architecture review; they are intentionally NOT
+    // started here. Exit protection remains PortfolioMonitor (software, timer-driven) until that review.
     // Portfolio reconciliation is started at ArgusCoreBoot (independent of Autobot) so an
     // interrupted-session entry hold can clear on in-process RECONCILIATION_MATCH without
     // requiring Autobot on. Idempotent if already started.
@@ -210,6 +220,7 @@ export class SystemBootstrap {
     stopObservabilityRetentionSweep();
     stopOperationalRetentionSweep();
     stopProcessTelemetry();
+    stopEventLoopLagMonitor();
 
     this.isRunning = false;
     console.log("[Argus System] Shutdown complete.");
