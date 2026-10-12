@@ -41,6 +41,7 @@ import { marketDataWorker } from '../services/MarketDataWorker';
 import { cryptoMarketDataIngestionWorker } from '../services/CryptoMarketDataIngestion';
 import { authorizeMarketDataWebSocket } from './marketDataWsOwnership';
 import { portfolioMonitor } from '../services/PortfolioMonitor';
+import { protectiveOrderService } from '../services/ProtectiveOrderService';
 import { oms } from '../services/OrderManagement'; 
 import { riskAgent } from '../services/RiskAgent'; 
 import { newsEngine } from '../news/NewsEngine';
@@ -64,6 +65,7 @@ import { installObservabilityEventBridge } from '../observability/instrumentEven
 import { startObservabilityRetentionSweep, stopObservabilityRetentionSweep } from '../observability/ObservabilityStore';
 import { startOperationalRetentionSweep, stopOperationalRetentionSweep } from '../db/operationalRetention';
 import { startProcessTelemetry, stopProcessTelemetry } from '../observability/processTelemetry';
+import { startEventLoopLagMonitor, stopEventLoopLagMonitor } from '../observability/eventLoopLagMonitor';
 import { transactionLifecycleTracker } from '../services/TransactionLifecycleTracker';
 import { marketDataCrossChecker } from '../services/MarketDataCrossChecker';
 import { alertingService } from '../services/AlertingService';
@@ -94,11 +96,21 @@ export class SystemBootstrap {
     startObservabilityRetentionSweep();
     startOperationalRetentionSweep();
     startProcessTelemetry();
+    // 2026-10-12 (pre-market perfection mission, item 1): continuous event-loop lag monitor -
+    // same start/stop lifecycle as processTelemetry above, no parallel lifecycle. Watches for
+    // the ~3-minute-stall class seen 13:32-13:35 ET; persists STALL_DETECTED and alerts on
+    // critical crossings.
+    startEventLoopLagMonitor();
     advancedQuantEngines.start();
     
     authorizeMarketDataWebSocket('SystemBootstrap');
     marketDataWorker.start();
     portfolioMonitor.start();
+    // Pre-market perfection mission (2026-10-12): broker-native protective stops.
+    // No-ops unless ARGUS_PROTECTIVE_STOPS_ENABLED=true (default false) - the service's
+    // own start() is safe to call unconditionally; every fill handler re-checks the
+    // flag, and the OMS funnel it submits through keeps all existing guards.
+    protectiveOrderService.start();
     // Portfolio reconciliation is started at ArgusCoreBoot (independent of Autobot) so an
     // interrupted-session entry hold can clear on in-process RECONCILIATION_MATCH without
     // requiring Autobot on. Idempotent if already started.
@@ -174,6 +186,7 @@ export class SystemBootstrap {
     // were set. marketDataWorker.stop() remains available for process shutdown.
     oms.stop();
     portfolioMonitor.stop();
+    protectiveOrderService.stop();
     // Recon stays up when Autobot is off (same pattern as MarketDataWorker / NewsEngine) so
     // RECONCILIATION_MATCH can release the interrupted-session *entry* hold without enabling
     // Autobot. portfolioReconciliationWorker.stop() remains for process shutdown drain.
@@ -210,6 +223,7 @@ export class SystemBootstrap {
     stopObservabilityRetentionSweep();
     stopOperationalRetentionSweep();
     stopProcessTelemetry();
+    stopEventLoopLagMonitor();
 
     this.isRunning = false;
     console.log("[Argus System] Shutdown complete.");
