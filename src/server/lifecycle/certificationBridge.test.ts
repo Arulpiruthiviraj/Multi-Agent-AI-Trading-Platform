@@ -17,12 +17,11 @@
  *
  *  1. insufficient evidence        -> no authority (only an UNTESTED baseline is recordable)
  *  2. bad OOS                      -> no authority (SHADOW at most)
- *  3. backtest + OOS pass, poor walk-forward -> ACTIVE_EXPLORATION (entry bar, operator
- *     decision 2026-10-12): PAPER-only AI-independent authority, but NOT VALIDATED
+ *  3. good backtest + poor walk-forward -> no authority (CANDIDATE at most)
  *  4. RETIRED strategy             -> no authority; PULLBACK_CONTINUATION stays retired
  *  5. legitimate reviewed qualification -> VALIDATED recorded by the workflow itself
  *     (isolated DB only) -> AUTHORIZED_QUANT_POLICY via the REAL resolver
- *  6. ACTIVE_EXPLORATION           -> AUTHORIZED_QUANT_POLICY, PAPER-only (bounded exploration tier)
+ *  6. ACTIVE_EXPLORATION           -> REQUIRES_CONSENSUS (emission eligibility != authority)
  *  7. missing operator review      -> no transition, no authority (type + runtime gate)
  *  8. LIVE authority               -> impossible: inexpressible in the bridge vocabulary,
  *     and the paper-only env lock denies even a recorded VALIDATED row
@@ -180,21 +179,17 @@ describe('lifecycle certification bridge', () => {
     expect(r.reason).toBe('STRATEGY_SHADOW');
   });
 
-  it('backtest + OOS pass but poor walk-forward -> ACTIVE_EXPLORATION entry bar met, never VALIDATED (operator decision 2026-10-12)', async () => {
+  it('good backtest + poor walk-forward -> no authority (CANDIDATE at most)', async () => {
     const evidence = { ...qualifyingEvidence(POOR_WF_ID), walkForwardPass: false };
     const a = bridge.evaluateCertification(POOR_WF_ID, evidence, sufficientSamples(), provenance('poor-wf'));
-    expect(a.eligibleTarget).toBe('ACTIVE_EXPLORATION');
-    expect(a.eligibleTarget).not.toBe('VALIDATED');
+    expect(a.eligibleTarget).toBe('CANDIDATE');
     expect(a.gates.find((g) => g.gate === 'WALK_FORWARD_SUFFICIENT')?.pass).toBe(false);
-    // The operator may not approve the higher rung the evidence does not support.
-    expect(() => bridge.applyOperatorReview(a, review('VALIDATED'))).toThrow();
 
-    const reviewed = bridge.applyOperatorReview(a, review('ACTIVE_EXPLORATION'));
+    const reviewed = bridge.applyOperatorReview(a, review('CANDIDATE'));
     await bridge.executeCertificationTransition(reviewed);
     const r = await authz.resolveQuantStrategyAuthorization(quantIdea(POOR_WF_ID));
-    expect(r.authority).toBe('AUTHORIZED_QUANT_POLICY');
-    expect(r.reason).toBe('STRATEGY_ACTIVE_EXPLORATION');
-    expect(r.paperOnlyEnforced).toBe(true);
+    expect(r.authority).toBe('REQUIRES_CONSENSUS');
+    expect(r.reason).toBe('STRATEGY_CANDIDATE');
   });
 
   it('RETIRED strategy -> no authority; PULLBACK_CONTINUATION stays retired', async () => {
@@ -274,7 +269,7 @@ describe('lifecycle certification bridge', () => {
     expect(r.lifecycleStatus).toBe('VALIDATED');
   });
 
-  it('ACTIVE_EXPLORATION (research complete, paper accumulating) grants PAPER-only AI-independent authority', async () => {
+  it('ACTIVE_EXPLORATION keeps the consensus path (emission eligibility != execution authority)', async () => {
     // Research side fully green, but organic paper evidence still accumulating.
     const evidence = {
       ...qualifyingEvidence(EXPLORATION_ID),
@@ -289,9 +284,8 @@ describe('lifecycle certification bridge', () => {
     const reviewed = bridge.applyOperatorReview(a, review('ACTIVE_EXPLORATION'));
     await bridge.executeCertificationTransition(reviewed);
     const r = await authz.resolveQuantStrategyAuthorization(quantIdea(EXPLORATION_ID));
-    expect(r.authority).toBe('AUTHORIZED_QUANT_POLICY');
+    expect(r.authority).toBe('REQUIRES_CONSENSUS');
     expect(r.reason).toBe('STRATEGY_ACTIVE_EXPLORATION');
-    expect(r.paperOnlyEnforced).toBe(true);
   });
 
   it('missing operator review -> no transition, no authority (type-level + runtime gate)', async () => {

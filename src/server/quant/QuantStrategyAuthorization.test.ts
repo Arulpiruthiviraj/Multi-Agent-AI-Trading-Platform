@@ -1,13 +1,11 @@
-// LABEL: UNIT - proves the authorization rule (only VALIDATED/CHAMPION/ACTIVE_EXPLORATION lifecycle authorizes, PAPER only; emitters cannot self-grant) against a temp DB. Tests the logic itself; seeded rows ARE the test subject, not production authority.
+// LABEL: UNIT - proves the authorization rule (only VALIDATED/CHAMPION lifecycle authorizes; emitters cannot self-grant) against a temp DB. Tests the logic itself; seeded rows ARE the test subject, not production authority.
 /**
  * QuantStrategyAuthorization tests (Quant-First Decision Architecture, Phase 16).
  *
  * Proves the central authorization rule: provenance is descriptive, authority is verified.
  * - No emitter can self-grant quant authority via origin/strategyId metadata.
- * - Only VALIDATED/CHAMPION/ACTIVE_EXPLORATION lifecycle (DB-backed, explicit operator decision)
- *   authorizes - ACTIVE_EXPLORATION since the operator's 2026-10-12 decision (bounded PAPER
- *   exploration tier; PAPER-only because the env lock fails first for every status).
- * - UNTESTED/SHADOW/CANDIDATE/ROLLED_BACK keep the consensus path.
+ * - Only VALIDATED/CHAMPION lifecycle (DB-backed, explicit operator decision) authorizes.
+ * - UNTESTED/SHADOW/CANDIDATE/ACTIVE_EXPLORATION/ROLLED_BACK keep the consensus path.
  * - DEGRADED/RETIRED are terminally NOT_ELIGIBLE; LIVE env is NOT_ELIGIBLE.
  *
  * Strategy ids are derived from the production registry (CORE_STRATEGIES), never literals.
@@ -149,6 +147,7 @@ describe('QuantStrategyAuthorization', () => {
   it.each([
     ['SHADOW', 'STRATEGY_SHADOW'],
     ['CANDIDATE', 'STRATEGY_CANDIDATE'],
+    ['ACTIVE_EXPLORATION', 'STRATEGY_ACTIVE_EXPLORATION'],
     ['ROLLED_BACK', 'STRATEGY_ROLLED_BACK'],
   ] as const)('%s lifecycle keeps the consensus path', async (status, reason) => {
     await eligibility.recordStrategyLifecycleTransition(OTHER_STRATEGY_ID, status, 'test', null, 5);
@@ -173,38 +172,19 @@ describe('QuantStrategyAuthorization', () => {
     expect(r.reason).toBe('STRATEGY_CHAMPION');
   });
 
-  it('ACTIVE_EXPLORATION + PAPER: bounded exploration tier grants AUTHORIZED_QUANT_POLICY (operator decision 2026-10-12)', async () => {
-    // Before 2026-10-12 ACTIVE_EXPLORATION was emission eligibility only (consensus intake).
-    // The operator chose the bounded PAPER exploration tier to break the VALIDATED <-> organic
-    // paper evidence circularity: an operator-signed ACTIVE_EXPLORATION strategy may use the
-    // quant policy without AI, in PAPER only. The record must also be a real, explicit row.
+  it('ACTIVE_EXPLORATION + PAPER: emission-eligible but never execution-authorized (the two predicates differ)', async () => {
+    // Defect #1 evidence conclusion: ACTIVE_EXPLORATION was designed as "bounded, monitored
+    // real exposure while evidence accumulates" — eligibility for the real-selection pool,
+    // not AI-independent execution authority. The two named concepts must disagree here.
     await eligibility.recordStrategyLifecycleTransition(EXPLORATION_STRATEGY_ID, 'ACTIVE_EXPLORATION', 'bounded exploration test', null, 5);
-    expect(await authz.mayEmitStrategyIdea(EXPLORATION_STRATEGY_ID)).toBe(true); // emission eligibility
+    // Named concept 1 — emission eligibility: "may emit an idea" is true.
+    expect(await authz.mayEmitStrategyIdea(EXPLORATION_STRATEGY_ID)).toBe(true);
+    // Named concept 2 — execution authority: PAPER keeps the consensus path, never the quant policy.
     const r = await authz.resolveQuantStrategyAuthorization(quantIdea({ strategyId: EXPLORATION_STRATEGY_ID }));
-    expect(r.authority).toBe('AUTHORIZED_QUANT_POLICY');
+    expect(r.authority).toBe('REQUIRES_CONSENSUS');
     expect(r.reason).toBe('STRATEGY_ACTIVE_EXPLORATION');
     expect(r.lifecycleStatus).toBe('ACTIVE_EXPLORATION');
-    expect(r.paperOnlyEnforced).toBe(true);
-  });
-
-  it.each(['DEGRADED', 'RETIRED'] as const)(
-    'a later %s decision revokes ACTIVE_EXPLORATION authority immediately (latest decision wins, terminal)',
-    async (status) => {
-      await eligibility.recordStrategyLifecycleTransition(EXPLORATION_STRATEGY_ID, 'ACTIVE_EXPLORATION', 'enter exploration', null, 5);
-      expect((await authz.resolveQuantStrategyAuthorization(quantIdea({ strategyId: EXPLORATION_STRATEGY_ID }))).authority)
-        .toBe('AUTHORIZED_QUANT_POLICY');
-      await eligibility.recordStrategyLifecycleTransition(EXPLORATION_STRATEGY_ID, status, 'negative paper evidence', { winRate: 0.2 }, 30);
-      const r = await authz.resolveQuantStrategyAuthorization(quantIdea({ strategyId: EXPLORATION_STRATEGY_ID }));
-      expect(r.authority).toBe('NOT_ELIGIBLE');
-      expect(r.lifecycleStatus).toBe(status);
-    },
-  );
-
-  it('exploration authority needs the registered quant producer: a non-producer agent still falls back to consensus', async () => {
-    await eligibility.recordStrategyLifecycleTransition(EXPLORATION_STRATEGY_ID, 'ACTIVE_EXPLORATION', 'enter exploration', null, 5);
-    const r = await authz.resolveQuantStrategyAuthorization(quantIdea({ strategyId: EXPLORATION_STRATEGY_ID, agent: 'NewsAgent' }));
-    expect(r.authority).toBe('REQUIRES_CONSENSUS');
-    expect(r.reason).toBe('PRODUCER_NOT_QUANT');
+    expect(r.authority).not.toBe('AUTHORIZED_QUANT_POLICY');
   });
 
   it.each([

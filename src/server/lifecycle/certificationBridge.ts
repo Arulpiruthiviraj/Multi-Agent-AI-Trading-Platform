@@ -307,19 +307,12 @@ export function evaluateCertification(
   if (quarantineOk && backtestOk && oosOk && walkForwardOk && robustnessOk && paperOk) {
     eligibleTarget = 'VALIDATED';
     reason = 'full gate set holds: quarantine + backtest + OOS + walk-forward + robustness + organic paper evidence';
-  } else if (quarantineOk && backtestOk && oosOk) {
-    // OPERATOR DECISION 2026-10-12: the ACTIVE_EXPLORATION entry bar is sample-sufficient
-    // backtest + OOS (plus the quarantine gates), NOT the full research set. ACTIVE_EXPLORATION
-    // now grants PAPER-only AI-independent execution authority (QuantStrategyAuthorization), so
-    // its trades can produce the organic paper evidence VALIDATED requires - VALIDATED itself
-    // still needs walk-forward + robustness + organic paper and is unchanged above. The
-    // operator-review gate is unchanged and still unskippable. The CANDIDATE rung is no longer
-    // produced by this bridge (it remains a valid status for other flows): backtest + OOS is
-    // exactly the evidence that used to map to it.
+  } else if (quarantineOk && backtestOk && oosOk && walkForwardOk && robustnessOk) {
     eligibleTarget = 'ACTIVE_EXPLORATION';
-    reason = walkForwardOk && robustnessOk
-      ? 'research evidence complete; organic paper evidence still accumulating - PAPER-only exploration (AI-independent) while it accumulates'
-      : 'entry bar met: sample-sufficient backtest + OOS pass (operator decision 2026-10-12); walk-forward/robustness not yet demonstrated - PAPER-only exploration (AI-independent), VALIDATED still requires the full set';
+    reason = 'research evidence complete; organic paper evidence still accumulating — bounded, monitored exposure via the consensus path while evidence accumulates (never AI-independent authority)';
+  } else if (quarantineOk && backtestOk && oosOk) {
+    eligibleTarget = 'CANDIDATE';
+    reason = 'backtest + OOS pass with sufficient samples; walk-forward not yet demonstrated';
   } else if (quarantineOk && backtestOk) {
     // 2026-10-11 (#22): SHADOW is intentionally backtest-qualifiable. SHADOW is the
     // lifecycle's observation entry point — a strategy that passes backtest gates with

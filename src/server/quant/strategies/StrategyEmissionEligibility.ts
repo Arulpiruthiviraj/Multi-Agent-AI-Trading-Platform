@@ -33,14 +33,14 @@
  * EMISSION ELIGIBILITY ≠ EXECUTION AUTHORITY (2026-10-08, defect #1). This module decides
  * only EMISSION ELIGIBILITY - which strategies may have their evaluated ideas emitted into
  * ChiefTrader intake (the "real selection" pool bestStrategyIdea() picks from). Every
- * "Eligible" label above means exactly that and nothing more. EXECUTION AUTHORITY ("may skip
- * consensus via QuantExecutionPolicy") is decided solely by
- * QuantStrategyAuthorization.resolveQuantStrategyAuthorization(), which requires a real
- * lifecycle record in this table whose latest status is VALIDATED, CHAMPION, or - by operator
- * decision 2026-10-12 - ACTIVE_EXPLORATION (the bounded PAPER-only exploration tier; before that
- * date ACTIVE_EXPLORATION was exposure via the unchanged consensus intake only). Never read
- * "Eligible" here as quant-policy authorization: SHADOW/CANDIDATE/UNTESTED/ROLLED_BACK are
- * eligible for emission and still require consensus.
+ * "Eligible" label above means exactly that and nothing more. In particular,
+ * ACTIVE_EXPLORATION's "bounded, monitored real exposure while evidence accumulates" is
+ * exposure via the normal, unchanged consensus intake - the strategy's ideas still face
+ * debate, the 0.75 consensus bar, and every downstream gate; it is NOT AI-independent
+ * execution authority. EXECUTION AUTHORITY ("may skip consensus via QuantExecutionPolicy")
+ * is decided solely by QuantStrategyAuthorization.resolveQuantStrategyAuthorization(),
+ * which requires an explicit VALIDATED/CHAMPION lifecycle decision AND a real lifecycle
+ * record in this table. Never read "Eligible" here as quant-policy authorization.
  *
  * Only RETIRED and DEGRADED remove real-selection exposure. Every other status (including the
  * UNTESTED default when no row exists at all) leaves a strategy exactly as eligible as it always
