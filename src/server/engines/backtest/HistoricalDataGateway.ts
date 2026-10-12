@@ -477,11 +477,15 @@ export class HistoricalDataGateway {
       url.searchParams.set('feed', 'iex');
       if (pageToken) url.searchParams.set('page_token', pageToken);
 
+      // 2026-10-11 (#20): the pagination loop had NO timeout — a stalled connection
+      // hangs forever and wedges the fast-lane/scheduler work it feeds. Use the
+      // existing alpacaRequestTimeoutMs convention.
       const res = await fetch(url.toString(), {
         headers: {
           'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
           'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY,
-        }
+        },
+        signal: AbortSignal.timeout(tradingSafety.alpacaRequestTimeoutMs),
       });
       if (!res.ok) {
         const body = await res.text().catch(() => '');
@@ -575,8 +579,10 @@ export class HistoricalDataGateway {
         url.searchParams.set('feed', 'iex');
         if (pageToken) url.searchParams.set('page_token', pageToken);
 
+        // 2026-10-11 (#20): timeout for the pagination loop (see above).
         const res = await fetch(url.toString(), {
-          headers: { 'APCA-API-KEY-ID': process.env.ALPACA_API_KEY, 'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY }
+          headers: { 'APCA-API-KEY-ID': process.env.ALPACA_API_KEY, 'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY },
+          signal: AbortSignal.timeout(tradingSafety.alpacaRequestTimeoutMs),
         });
         if (!res.ok) return { clean: true, checked: false, issues: [`Could not verify - split-adjusted comparison fetch failed: ${res.status}`] };
         const data = await res.json();
