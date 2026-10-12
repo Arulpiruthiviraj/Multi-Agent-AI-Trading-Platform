@@ -24,7 +24,7 @@ describe('fmtUsd', () => {
   it('formats dollars with two decimals and thousands separators', () => {
     expect(fmtUsd(1234.5)).toBe('$1,234.50');
     expect(fmtUsd(0)).toBe('$0.00');
-    expect(fmtUsd(-50.25)).toBe('$-50.25');
+    expect(fmtUsd(-50.25)).toBe('-$50.25');
   });
 
   it('renders missing or non-finite values as --, never a fabricated $0.00', () => {

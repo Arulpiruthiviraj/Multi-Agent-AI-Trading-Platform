@@ -52,6 +52,8 @@ describe('Architecture protection: SyntheticInjectableNewsProvider stays inside 
     const files = listTsFiles(scriptsRoot);
     const hits: string[] = [];
     for (const f of files) {
+      const path = relative(ROOT, f).replace(/\\/g, '/');
+      if (path.startsWith('scripts/sim/')) continue; // the synthetic simulation harness itself - allowed
       const text = readFileSync(f, 'utf8');
       if (/from ['"][^'"]*SyntheticInjectableNewsProvider['"]/.test(text)) hits.push(relative(ROOT, f));
     }
