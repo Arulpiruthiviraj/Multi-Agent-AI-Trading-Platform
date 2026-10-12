@@ -193,13 +193,17 @@ export class HistoricalDataGateway {
   }
 
   private memoryKey(symbol: string, timeframe: string, startMs: number, endMs: number): string {
-    // 2026-10-11 (#10): key on the EXACT (startMs, endMs), not hour buckets. The old
-    // hour-bucketing (Math.floor(ms/3_600_000)) collided: a wider query warming the
-    // bucket + a narrower same-bucket query returned post-cutoff bars. DB identity
-    // suffices for the key (no source dimension): getBars()'s DB query does not
-    // filter by source, so the cache is a faithful mirror of exactly what the DB
-    // would return for this (symbol, timeframe, range).
-    return `${symbol}|${timeframe}|${startMs}|${endMs}`;
+    // 2026-10-12 (D1): hour-bucketed keys to bound memory. 2026-10-11 (#10) used exact
+    // (startMs,endMs) keys to fix a collision bug, but sliding-window callers (quant
+    // path) generated a unique key per call, filling the 5000-entry LRU with ~1.25GB
+    // and OOMing the soak (Worker F D1). Hour bucketing bounds the key space; the
+    // hit-path filter in getBars() preserves #10's correctness — cached bars are
+    // always filtered to the requested [startMs, endMs], so a wider-warmed bucket
+    // never leaks post-cutoff bars to a narrower query. On miss, getBars() fetches
+    // the FULL bucket range so any sub-range query hits.
+    const startBucket = Math.floor(startMs / 3_600_000);
+    const endBucket = Math.floor(endMs / 3_600_000);
+    return `${symbol}|${timeframe}|${startBucket}|${endBucket}`;
   }
 
   private armBarsRateLimitBackoff(retryAfterHeader: string | null): void {
@@ -718,12 +722,17 @@ export class HistoricalDataGateway {
       // earlier wider query); returning it unfiltered would leak post-cutoff bars.
       return hit.bars.filter((b) => b.timestamp >= startMs && b.timestamp <= endMs);
     }
+    // 2026-10-12 (D1): fetch the FULL hour-bucket range on miss, so the cached entry
+    // covers any sub-range query within these buckets. The hit-path filter above
+    // narrows to the requested [startMs, endMs].
+    const bucketStartMs = Math.floor(startMs / 3_600_000) * 3_600_000;
+    const bucketEndMs = (Math.floor(endMs / 3_600_000) + 1) * 3_600_000 - 1;
     const rows = await db.select().from(schema.ohlcvBars)
       .where(and(
         eq(schema.ohlcvBars.symbol, symbol),
         eq(schema.ohlcvBars.timeframe, timeframe),
-        gte(schema.ohlcvBars.timestamp, startMs),
-        lte(schema.ohlcvBars.timestamp, endMs)
+        gte(schema.ohlcvBars.timestamp, bucketStartMs),
+        lte(schema.ohlcvBars.timestamp, bucketEndMs)
       ))
       .orderBy(asc(schema.ohlcvBars.timestamp));
     const bars = rows.map(r => ({ timestamp: r.timestamp, open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume }));
