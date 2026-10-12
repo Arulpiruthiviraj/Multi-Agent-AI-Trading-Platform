@@ -392,13 +392,18 @@ interface TrackedCandidate {
 class PrioritySemaphore {
   private permits: number;
   private seq = 0;
-  private waiters: Array<{ priority: number; seq: number; resolve: (release: () => void) => void }> = [];
+  private waiters: Array<{
+    priority: number;
+    seq: number;
+    resolve: (release: () => void) => void;
+    isCancelled?: () => boolean;
+  }> = [];
 
   constructor(permits: number) {
     this.permits = Math.max(1, Math.floor(permits));
   }
 
-  acquire(priority: number): Promise<() => void> {
+  acquire(priority: number, isCancelled?: () => boolean): Promise<() => void> {
     // Immediate grant only when nobody is waiting - otherwise a newcomer could jump a
     // queued P0.
     if (this.permits > 0 && this.waiters.length === 0) {
@@ -406,7 +411,7 @@ class PrioritySemaphore {
       return Promise.resolve(this.makeRelease());
     }
     return new Promise((resolve) => {
-      this.waiters.push({ priority, seq: this.seq++, resolve });
+      this.waiters.push({ priority, seq: this.seq++, resolve, isCancelled });
       this.waiters.sort((a, b) => a.priority - b.priority || a.seq - b.seq);
     });
   }
@@ -416,7 +421,14 @@ class PrioritySemaphore {
     return () => {
       if (released) return;
       released = true;
-      const next = this.waiters.shift();
+      // 2026-10-11 (#17): shift past cancelled waiters WITHOUT consuming the handoff.
+      // A terminally-transitioned (EXPIRED/EVICTED) candidate parked in waiters must
+      // not receive a permit (wasted handoff); the permit goes to the next live waiter,
+      // or back to the pool if none. Never touch a running task's permit.
+      let next = this.waiters.shift();
+      while (next && next.isCancelled?.()) {
+        next = this.waiters.shift();
+      }
       if (next) {
         next.resolve(this.makeRelease());
       } else {
@@ -965,7 +977,9 @@ export class QuantPriorityScheduler {
    *  computation holds ONLY a quant slot - never the same slot across both. */
   private async processCandidateInner(rec: TrackedCandidate): Promise<void> {
     // ---- DATA ACQUISITION STAGE (bounded data-fetch pool, no quant slot held) ----
-    const fetchRelease = await this.fetchSem.acquire(rec.priority);
+    // 2026-10-11 (#17): pass isCancelled so a terminally-transitioned candidate parked
+    // in the waiter queue is skipped at handoff (no wasted permit).
+    const fetchRelease = await this.fetchSem.acquire(rec.priority, () => rec.terminalState != null);
     try {
       if (rec.terminalState) return;
       // The gateway's reactive 429 backoff is authoritative: while armed, this
@@ -996,7 +1010,9 @@ export class QuantPriorityScheduler {
     if (rec.terminalState) return;
 
     // ---- COMPUTATION STAGE (bounded quant pool, priority-ordered handoff) ----
-    const quantRelease = await this.quantSem.acquire(rec.priority);
+    // 2026-10-11 (#17): pass isCancelled so a terminally-transitioned candidate parked
+    // in the waiter queue is skipped at handoff (no wasted permit).
+    const quantRelease = await this.quantSem.acquire(rec.priority, () => rec.terminalState != null);
     try {
       if (rec.terminalState) return;
       rec.stages.quantStartedAtMs = this.now();
