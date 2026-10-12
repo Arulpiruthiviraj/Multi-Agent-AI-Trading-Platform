@@ -135,10 +135,24 @@ export class OrderManagementService {
 
   constructor() {
     eventBus.on('RISK_ASSESSMENT_COMPLETED', async (assessment) => {
-      // Digital Twin telemetry pulse — never placeOrder from synthetic risk pass.
-      if (isTelemetryPulsePayload(assessment)) return;
-      if (assessment.approved && assessment.maxQuantity > 0) {
-        await this.executeOrder(assessment.symbol, assessment.side, assessment.maxQuantity, assessment.reasoning, assessment.traceId, assessment.newsDetails, assessment.transactionId, assessment.selectedQuantStrategy, assessment.quantStopPrice, assessment.quantTargetPrice, assessment.quantInvalidationJson, assessment.currentPrice);
+      // 2026-10-12 defect hunt (L4): this listener body is async - a throw from
+      // executeOrder() (broker/DB outage) previously rejected unhandled and the order was
+      // silently dropped. Never reject: log via structuredLogger and continue listening.
+      try {
+        // Digital Twin telemetry pulse — never placeOrder from synthetic risk pass.
+        if (isTelemetryPulsePayload(assessment)) return;
+        if (assessment.approved && assessment.maxQuantity > 0) {
+          await this.executeOrder(assessment.symbol, assessment.side, assessment.maxQuantity, assessment.reasoning, assessment.traceId, assessment.newsDetails, assessment.transactionId, assessment.selectedQuantStrategy, assessment.quantStopPrice, assessment.quantTargetPrice, assessment.quantInvalidationJson, assessment.currentPrice);
+        }
+      } catch (e) {
+        observeSafe(() => structuredLogger.error('oms_risk_assessment_listener_failed', {
+          category: 'ORDERS',
+          component: 'OMS',
+          eventType: 'OMS_RISK_ASSESSMENT_LISTENER_FAILED',
+          symbol: assessment?.symbol,
+          traceId: assessment?.traceId,
+          error: String((e as { message?: unknown })?.message ?? e),
+        }));
       }
     });
   }

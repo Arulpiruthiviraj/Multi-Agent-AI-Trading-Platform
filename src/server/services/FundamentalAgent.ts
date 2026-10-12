@@ -25,6 +25,7 @@ import { waitForFreshMarketData } from '../core/waitForFreshMarketData';
 import { selectPriorityRoundRobinSymbol } from '../core/agentRoundRobin';
 import { getRecentCandidates } from '../core/recentCandidateRegistry';
 import { tradingSafety } from '../config/tradingSafety';
+import { aiModels } from '../config/aiModels';
 import {
   notePipelineAgentFailure,
   notePipelineAgentGated,
@@ -79,6 +80,35 @@ const FUNDAMENTALS_CACHE_MAX_AGE_MS = runtimeIntervals.fundamentalsCacheMaxAgeMs
 // misses the cache and gets a fresh, real LLM call. Never outlives the raw-data cache itself.
 const AI_ANALYSIS_PROMPT_VERSION = 'v1';
 const AI_ANALYSIS_CACHE_MAX_AGE_MS = FUNDAMENTALS_CACHE_MAX_AGE_MS;
+
+/**
+ * 2026-10-12 (coverage #18): raw fetch() calls with no timeout - a stalled provider hung the
+ * agent interval loop forever. AbortSignal-based timeout matching AIRouter.withTimeout's exact
+ * pattern (AbortController + setTimeout that aborts and rejects with a named timeout error +
+ * clearTimeout on settle). Default is aiModels.researchTimeoutMs (8000ms) - the same default
+ * AIRouter uses - since this agent defines no fetch timeout of its own. A timeout rejects into
+ * the caller's existing catch, which fails closed to the honest RATE_LIMITED/UNKNOWN HOLD.
+ */
+class DataFetchTimeoutError extends Error {
+  constructor(source: string, ms: number) {
+    super(`Data provider '${source}' did not respond within ${ms}ms`);
+    this.name = 'DataFetchTimeoutError';
+  }
+}
+
+function fetchWithTimeout(url: string, source: string, ms: number = aiModels.researchTimeoutMs): Promise<Response> {
+  const controller = new AbortController();
+  return new Promise<Response>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      controller.abort();
+      reject(new DataFetchTimeoutError(source, ms));
+    }, ms);
+    fetch(url, { signal: controller.signal }).then(
+      (response) => { clearTimeout(timer); resolve(response); },
+      (err) => { clearTimeout(timer); controller.abort(); reject(err); },
+    );
+  });
+}
 
 interface CachedAnalysis { recommendation: string; confidence: number; reasoning: string; }
 
@@ -137,7 +167,7 @@ export class FundamentalAnalysisAgent {
     if (!process.env.FMP_API_KEY) return null;
     if (!(await FmpBudget.tryConsume(1))) return null;
     try {
-      const response = await fetch(`${networkEndpoints.marketData.fmpBaseUrl}/ratios-ttm/${symbol}?apikey=${process.env.FMP_API_KEY}`);
+      const response = await fetchWithTimeout(`${networkEndpoints.marketData.fmpBaseUrl}/ratios-ttm/${symbol}?apikey=${process.env.FMP_API_KEY}`, 'FMP');
       if (!response.ok) return null;
       const rows = await response.json() as any;
       const row = Array.isArray(rows) ? rows[0] : null;
@@ -148,7 +178,7 @@ export class FundamentalAnalysisAgent {
 
       let epsGrowth = 'UNKNOWN';
       try {
-        const growthRes = await fetch(`${networkEndpoints.marketData.fmpBaseUrl}/income-statement-growth/${symbol}?limit=1&apikey=${process.env.FMP_API_KEY}`);
+        const growthRes = await fetchWithTimeout(`${networkEndpoints.marketData.fmpBaseUrl}/income-statement-growth/${symbol}?limit=1&apikey=${process.env.FMP_API_KEY}`, 'FMP');
         if (growthRes.ok) {
           const growthRows = await growthRes.json() as any;
           const growthRow = Array.isArray(growthRows) ? growthRows[0] : null;
@@ -203,7 +233,7 @@ export class FundamentalAnalysisAgent {
     }
 
     try {
-      const response = await fetch(`${networkEndpoints.marketData.alphaVantageBaseUrl}?function=OVERVIEW&symbol=${symbol}&apikey=${process.env.ALPHAVANTAGE_API_KEY}`);
+      const response = await fetchWithTimeout(`${networkEndpoints.marketData.alphaVantageBaseUrl}?function=OVERVIEW&symbol=${symbol}&apikey=${process.env.ALPHAVANTAGE_API_KEY}`, 'AlphaVantage');
       if (response.status === 429) {
         console.warn(`[FundamentalAgent] AlphaVantage rate limit hit for ${symbol} - backing off for 24h.`);
         await ExternalDataCache.markRateLimited('alphavantage', 'fundamentals', symbol);

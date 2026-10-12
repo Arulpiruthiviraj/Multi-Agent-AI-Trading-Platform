@@ -67,7 +67,7 @@ describe('NEWS memory bounds', () => {
       // Warmup: 25k unique
       for (let i = 0; i < 25000; i++) dedup.isDuplicate(normalizer.normalize(synthRaw(i)));
       const heapWarm = settledHeapMB();
-      const sizesWarm = [(dedup as unknown as { seenIds: Set<string> }).seenIds.size];
+      const sizesWarm = [(dedup as unknown as { seenComposite: Set<string> }).seenComposite.size];
 
       // Phase 2: 25k duplicates (must all be detected)
       let dupHits = 0;
@@ -77,13 +77,12 @@ describe('NEWS memory bounds', () => {
       // Phase 3: 25k new unique (forces repeated naive-clear evictions)
       for (let i = 25000; i < 50000; i++) dedup.isDuplicate(normalizer.normalize(synthRaw(i)));
       const heapEnd = settledHeapMB();
-      const inner = dedup as unknown as { seenIds: Set<string>; seenFingerprints: Set<string> };
+      const inner = dedup as unknown as { seenComposite: Set<string> };
 
       // The naive clear() resets the cache periodically, so duplicates re-pass after a
       // clear — duplicates detected is >= 0 by design; the bound is what matters here.
       expect(dupHits).toBeGreaterThanOrEqual(0);
-      expect(inner.seenIds.size).toBeLessThanOrEqual(10000);
-      expect(inner.seenFingerprints.size).toBeLessThanOrEqual(10000);
+      expect(inner.seenComposite.size).toBeLessThanOrEqual(10000);
       // Bound proof: sets never hold more than maxSeenCache entries...
       expect(sizesWarm[0]).toBeLessThanOrEqual(10000);
       // ...and retained heap stops growing after warmup (generous 10MB margin for GC noise).

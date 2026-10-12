@@ -63,37 +63,60 @@ describe('AlphaVantageBudget (DEF-13)', () => {
     expect(await AlphaVantageBudget.remaining()).toBe(0);
   });
 
-  it('2026-08-18 forensic fix: a permanently-hung enqueued call times out instead of starving every later caller forever (both agents share this one queue)', async () => {
-    // Simulate the failure mode found live: something inside one tryConsume() call never
-    // settles. Before the lock-timeout fix, every subsequent enqueue() (from either
-    // FundamentalAgent or MacroAgent) would queue behind it and never resolve either.
-    const originalGetStale = (await import('./ExternalDataCache')).ExternalDataCache.getStale;
+  it('2026-10-12 (M4): lock-timeout releases the CALLER but the chain still serializes on the real fn() settlement - no lost-update race on the budget counter', async () => {
+    // 2026-10-12 contract change (M4): advancing the shared chain on the CALLER's
+    // lock-timeout rejection let the next enqueued operation's read-modify-write run
+    // concurrently with the still-running write - both read the same `used`, both write
+    // `used + count`, one increment is silently lost. The chain now advances only on the
+    // UNDERLYING fn()'s real settlement, so the counter reflects actual fn() outcomes
+    // only. Stated tradeoff: an fn() that NEVER settles now holds the chain (the old
+    // 2026-08-18 starvation mode) instead of being skipped past - but the timed-out
+    // caller still gets its loud error immediately.
     const ExternalDataCacheMod = await import('./ExternalDataCache');
-    let hungCallSeen = false;
+    const originalGetStale = (ExternalDataCacheMod.ExternalDataCache as any).getStale;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((res) => { releaseFirst = res; });
+    let firstCallSeen = false;
     (ExternalDataCacheMod.ExternalDataCache as any).getStale = async (...args: any[]) => {
-      if (!hungCallSeen) {
-        hungCallSeen = true;
-        return new Promise(() => { /* never resolves - the hang under test */ });
+      if (!firstCallSeen) {
+        firstCallSeen = true;
+        await firstGate; // stall fn #1 past the lock timeout, then let it finish for real
       }
       return originalGetStale.apply(ExternalDataCacheMod.ExternalDataCache, args as any);
     };
 
     vi.useFakeTimers();
     try {
-      // Fires the hung call; do not await it - it would never settle on its own.
-      const hungPromise = AlphaVantageBudget.tryConsume(1);
-      let hungRejected = false;
-      hungPromise.catch(() => { hungRejected = true; });
+      const p1 = AlphaVantageBudget.tryConsume(1);
+      let p1Error: any = null;
+      p1.catch((e) => { p1Error = e; });
+      const p2 = AlphaVantageBudget.tryConsume(1);
+      let p2Outcome: string | null = null;
+      p2.then(
+        (v) => { p2Outcome = `resolved:${v}`; },
+        (e) => { p2Outcome = `rejected:${e?.message}`; },
+      );
 
-      // A later, real call must still resolve (queued behind the hang, but the shared lock
-      // self-releases via the timeout instead of blocking this forever).
-      const laterPromise = AlphaVantageBudget.tryConsume(1);
-
+      // Past the lock timeout: caller #1 is released immediately with the loud error...
       await vi.advanceTimersByTimeAsync(tradingSafety.alphaVantageBudgetLockTimeoutMs + 100);
+      expect(p1Error).toBeInstanceOf(Error);
+      expect(p1Error.message).toMatch(/exceeded \d+ms/);
 
-      const laterResult = await laterPromise;
-      expect(typeof laterResult).toBe('boolean');
-      expect(hungRejected).toBe(true);
+      // ...but caller #2 must NOT have run yet: the chain waits for fn #1's real
+      // settlement, so the two read-modify-writes can never overlap. (On the old code
+      // the chain advanced on p1's rejection and p2 would already be resolved here.)
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(p2Outcome).toBeNull();
+
+      // fn #1's real write lands (used=1); only then does the chain advance and fn #2 run.
+      releaseFirst();
+      vi.useRealTimers();
+      expect(await p2).toBe(true);
+      expect(p2Outcome).toBe('resolved:true');
+
+      // Both real outcomes are reflected: used=2, not a lost update of used=1.
+      const cap = tradingSafety.alphaVantageDailyRequestBudget;
+      expect(await AlphaVantageBudget.remaining()).toBe(cap - 2);
     } finally {
       vi.useRealTimers();
       (ExternalDataCacheMod.ExternalDataCache as any).getStale = originalGetStale;

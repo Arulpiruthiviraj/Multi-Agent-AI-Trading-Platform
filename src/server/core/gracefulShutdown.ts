@@ -248,6 +248,22 @@ async function performDrain(handles: ShutdownHandles): Promise<void> {
     )) drainFailed = true;
   }
   try {
+    // 2026-10-12 (L6): the two async-batched forensic sinks ran batch-flush timers that were
+    // never cleared - stop() clears each timer AND performs a final flush so pending rows are
+    // persisted before the SQLite checkpoint/close below instead of being dropped on shutdown.
+    // Follows this function's existing stop-each-worker-before-the-DB-closes pattern.
+    const { tracingService } = await import('../services/TracingService');
+    await tracingService.stop();
+  } catch (e) {
+    failed('[gracefulShutdown] Failed to stop TracingService', e);
+  }
+  try {
+    const { stopObservabilityStore } = await import('../observability/ObservabilityStore');
+    await stopObservabilityStore();
+  } catch (e) {
+    failed('[gracefulShutdown] Failed to stop ObservabilityStore', e);
+  }
+  try {
     const { sqliteDb } = await import('../db');
     sqliteDb.pragma('wal_checkpoint(TRUNCATE)');
     sqliteDb.close();

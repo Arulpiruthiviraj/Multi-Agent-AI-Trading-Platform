@@ -21,22 +21,47 @@ function utcDateKey(nowMs: number): string {
 
 let chain: Promise<unknown> = Promise.resolve();
 
-function withLockTimeout<T>(fn: () => Promise<T>, ms: number): () => Promise<T> {
-  return () => new Promise<T>((resolve, reject) => {
+// 2026-10-12 (M4): caller release is decoupled from chain advancement. On lock-timeout
+// the CALLER's promise rejects immediately (loud per-cycle error, as before), but the
+// internal `chain` advances only when the UNDERLYING fn()'s real promise settles (resolve
+// or reject). Advancing the chain on the caller's timeout rejection let the NEXT enqueued
+// operation's read-modify-write run concurrently with this one's still-running write - a
+// lost-update race on the persisted budget counter (two writers read the same `used`,
+// both write `used + count`, one increment is silently lost). Serializing on real
+// settlement means the counter reflects actual fn() outcomes only. Tradeoff, stated
+// plainly: an fn() that NEVER settles now holds the chain (the 2026-08-18 starvation
+// mode) instead of being skipped past - but the timed-out caller still gets its loud
+// error, and no counter write is ever silently lost to concurrency.
+function withLockTimeout<T>(fn: () => Promise<T>, ms: number): { guarded: () => Promise<T>; settled: Promise<void> } {
+  let resolveSettled!: () => void;
+  const settled = new Promise<void>((res) => { resolveSettled = res; });
+  const guarded = () => new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
+      // Caller release: reject NOW. `settled` still only resolves when fn()'s real
+      // promise settles below, so the chain cannot advance past a still-running write.
       reject(new Error(`FmpBudget: enqueued operation exceeded ${ms}ms - releasing shared lock`));
     }, ms);
-    fn().then(
-      (v) => { clearTimeout(timer); resolve(v); },
-      (e) => { clearTimeout(timer); reject(e); },
+    let underlying: Promise<T>;
+    try {
+      underlying = fn();
+    } catch (e) {
+      clearTimeout(timer);
+      resolveSettled();
+      reject(e);
+      return;
+    }
+    underlying.then(
+      (v) => { clearTimeout(timer); resolveSettled(); resolve(v); },
+      (e) => { clearTimeout(timer); resolveSettled(); reject(e); },
     );
   });
+  return { guarded, settled };
 }
 
 function enqueue<T>(fn: () => Promise<T>): Promise<T> {
-  const guarded = withLockTimeout(fn, tradingSafety.fmpBudgetLockTimeoutMs);
+  const { guarded, settled } = withLockTimeout(fn, tradingSafety.fmpBudgetLockTimeoutMs);
   const run = chain.then(guarded, guarded);
-  chain = run.then(() => undefined, () => undefined);
+  chain = settled.then(() => undefined, () => undefined);
   return run;
 }
 

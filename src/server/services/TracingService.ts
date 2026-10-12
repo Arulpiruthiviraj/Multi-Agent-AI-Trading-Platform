@@ -94,6 +94,20 @@ class TracingService {
     return this.queue.length;
   }
 
+  /**
+   * 2026-10-12 (L6): the batch-flush timer was never cleared. Called during the
+   * graceful-shutdown drain BEFORE the SQLite checkpoint/close - clears the timer and performs
+   * a final flush of any pending batches so forensic rows queued in memory are persisted
+   * instead of being dropped on shutdown. Safe to call when the queue is empty.
+   */
+  async stop(): Promise<void> {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    await this.flush();
+  }
+
   logAgentThought(input: AgentThoughtInput): void {
     if (!input.traceId) return;
     this.logAgentReasoningRow(input);
