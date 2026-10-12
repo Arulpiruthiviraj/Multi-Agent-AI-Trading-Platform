@@ -281,6 +281,18 @@ export function evaluateCertification(
     && evidence.paperProfitFactorPass === true && evidence.organicPaperOnly === true;
 
   // --- Ladder: the highest rung whose every gate holds ---
+  // 2026-10-11: note the ladder deliberately has NO branch targeting 'CHAMPION' —
+  // the CHAMPION rung is unreachable through this bridge, and that is fail-closed by
+  // design, not an omission. CHAMPION is comparative ("proven current best among live
+  // strategies"), not an absolute research-evidence grade: this bridge assesses ONE
+  // strategy's research evidence at a time and cannot make a comparative "best" claim.
+  // Making it reachable here would manufacture a promotion — forbidden. The legitimate
+  // path to CHAMPION is the continuous champion/challenger flow (live comparative
+  // evidence promoting an already-VALIDATED strategy), never research evidence alone.
+  // Any operator review targeting CHAMPION fails closed in validateReviewedCertification
+  // (TARGET_MISMATCH — the assessment's eligibleTarget can never be 'CHAMPION'), and
+  // executeCertificationTransition additionally refuses CHAMPION from any status but
+  // VALIDATED.
   let eligibleTarget: BridgeTargetStatus = 'UNTESTED';
   let reason = 'evidence does not support promotion past an explicit UNTESTED baseline';
   if (quarantineOk && backtestOk && oosOk && walkForwardOk && robustnessOk && paperOk) {
