@@ -200,9 +200,23 @@ export class ConfluenceCoordinator {
         } else {
           triggered.push('QuantEngine');
           const token = Symbol(symbol);
+          if (inFlight) {
+            // Replacing an evaluation that is STILL RUNNING (never cancellable). Observable, and the
+            // superseded run is fenced below: its isLiveCheck turns false, so evaluateSymbol withholds
+            // its emission (DESK_NO_TRADE SCHEDULER_EVALUATION_NOT_LIVE) and a late result can never
+            // reach ChiefTrader as if current. Post-restart evidence (Oct 12): CAT was re-evaluated 11.5
+            // min after a still-running 25 min evaluation.
+            observeSafe(() => structuredLogger.info('confluence_quant_inflight_replaced', {
+              category: 'DISCOVERY', eventType: 'CONFLUENCE_QUANT_INFLIGHT_REPLACED', symbol,
+              reasoning: `Previous on-demand Quant evaluation for ${symbol} still unsettled after ${now - inFlight.startedAt}ms (bound ${tradingSafety.quantOnDemandInflightMaxAgeMs}ms); replaced, superseded run fenced.`,
+            }));
+          }
           this.quantEvaluationsInFlight.set(symbol, { startedAt: now, token });
           jobs.push(
-            quantSignalAgent.evaluateSymbol(symbol).then(
+            quantSignalAgent.evaluateSymbol(symbol, {
+              // Generation fence: live only while this evaluation still owns the symbol's slot.
+              isLiveCheck: () => this.quantEvaluationsInFlight.get(symbol)?.token === token,
+            }).then(
               () => undefined,
               (e: unknown) => {
                 console.warn(`[ConfluenceCoordinator] QuantEngine on-demand evaluation failed for ${symbol}`, e);

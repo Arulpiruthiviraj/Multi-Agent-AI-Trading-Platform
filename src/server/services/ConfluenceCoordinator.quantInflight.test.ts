@@ -155,8 +155,8 @@ describe('ConfluenceCoordinator on-demand Quant in-flight guard (Oct-12 live for
     fakeEventBus.emit('TRADE_IDEA_GENERATED', technicalIdea({ symbol: 'MSFT', traceId: 't3' }));
     await flush();
     expect(evaluateSymbol).toHaveBeenCalledTimes(2);
-    expect(evaluateSymbol).toHaveBeenCalledWith('AAPL');
-    expect(evaluateSymbol).toHaveBeenCalledWith('MSFT');
+    expect(evaluateSymbol).toHaveBeenCalledWith('AAPL', { isLiveCheck: expect.any(Function) }); // symbol + generation fence ONLY: no side/confidence channel
+    expect(evaluateSymbol).toHaveBeenCalledWith('MSFT', { isLiveCheck: expect.any(Function) }); // symbol + generation fence ONLY: no side/confidence channel
   });
 
   it('does not alter other on-demand agents: Kronos still triggers while Quant is in flight', async () => {
@@ -224,6 +224,51 @@ describe('ConfluenceCoordinator on-demand Quant in-flight guard (Oct-12 live for
     } finally {
       Date.now = realNow;
     }
+  });
+
+  // 2026-10-12 post-restart audit: CAT was evaluated twice 11.5 min apart while the first run was
+  // still alive (25 min) - the 10-minute expiry replaced a running evaluation. Replacement is only
+  // safe if the superseded run is FENCED: its emission gate (isLiveCheck) must turn false so a late
+  // result cannot reach ChiefTrader as if current.
+  it('fences a superseded evaluation: its isLiveCheck turns false once replaced, the replacement stays live', async () => {
+    const realNow = Date.now;
+    let clock = realNow.call(Date);
+    Date.now = () => clock;
+    try {
+      const liveChecks: Array<() => boolean> = [];
+      evaluateSymbol.mockImplementation((_s: string, opts?: { isLiveCheck?: () => boolean }) => {
+        if (opts?.isLiveCheck) liveChecks.push(opts.isLiveCheck);
+        return new Promise<void>(() => { /* never settles */ });
+      });
+      fakeEventBus.emit('TRADE_IDEA_GENERATED', technicalIdea());
+      await flush();
+      expect(liveChecks).toHaveLength(1); // the coordinator MUST pass a fence
+      expect(liveChecks[0]()).toBe(true); // current owner is live
+
+      clock += tradingSafety.quantOnDemandInflightMaxAgeMs + 1;
+      coordinator.resetCooldownForTests('AAPL');
+      fakeEventBus.emit('TRADE_IDEA_GENERATED', technicalIdea({ traceId: 't2' }));
+      await flush();
+      expect(liveChecks).toHaveLength(2);
+      expect(liveChecks[0]()).toBe(false); // A is fenced: a late result cannot emit
+      expect(liveChecks[1]()).toBe(true);  // B is the live owner
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  it('a normally completing evaluation remains live through its own emission window (no self-fencing)', async () => {
+    let check: (() => boolean) | undefined;
+    let release!: () => void;
+    evaluateSymbol.mockImplementation((_s: string, opts?: { isLiveCheck?: () => boolean }) => {
+      check = opts?.isLiveCheck;
+      return new Promise<void>((r) => { release = r; });
+    });
+    fakeEventBus.emit('TRADE_IDEA_GENERATED', technicalIdea());
+    await flush();
+    expect(check?.()).toBe(true);
+    release();
+    await flush();
   });
 });
 
