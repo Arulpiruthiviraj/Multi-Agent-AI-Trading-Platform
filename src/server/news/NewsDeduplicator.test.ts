@@ -33,7 +33,7 @@ describe('NewsDeduplicator bounded eviction (D1)', () => {
     expect(dedup.isDuplicate(article(`a-${N - 1}`))).toBe(true);
     expect(dedup.isDuplicate(article(`a-${N - 100}`))).toBe(true);
     // Size stays bounded near the cap, not reset to ~0 and not growing unbounded.
-    const size = (dedup as any).seenIds.size as number;
+    const size = (dedup as any).seenComposite.size as number;
     expect(size).toBeLessThanOrEqual(10_500);
     expect(size).toBeGreaterThan(9_000);
   });
@@ -46,5 +46,52 @@ describe('NewsDeduplicator bounded eviction (D1)', () => {
     // b-0..b-~1000 were the oldest and should be evicted; b-9000 must survive.
     expect(dedup.isDuplicate(article('b-0'))).toBe(false); // re-added as "new" (evicted)
     expect(dedup.isDuplicate(article('b-9000'))).toBe(true);
+  });
+});
+
+/**
+ * 2026-10-12 defect hunt (news L13): the dedup key is the (id, content-fingerprint)
+ * composite. A corrected re-issued article under the SAME id must be reprocessed when
+ * its fingerprint changes; an identical re-issue must stay deduped.
+ */
+describe('NewsDeduplicator corrected re-issue (L13)', () => {
+  const mk = (id: string, fingerprint: string) => ({
+    id,
+    title: `title ${id}`,
+    content: `content ${id}`,
+    url: `https://x/${id}`,
+    source: 'test',
+    author: 'a',
+    publishedAt: new Date().toISOString(),
+    symbols: [],
+    fingerprint,
+  });
+
+  it('reprocesses the same article id when the content fingerprint changes (correction)', () => {
+    const dedup = new NewsDeduplicator();
+    expect(dedup.isDuplicate(mk('a-1', 'fp-v1'))).toBe(false); // first sighting: new
+    expect(dedup.isDuplicate(mk('a-1', 'fp-v1'))).toBe(true); // identical re-issue: dup
+    expect(dedup.isDuplicate(mk('a-1', 'fp-v2'))).toBe(false); // corrected re-issue: reprocessed
+    expect(dedup.isDuplicate(mk('a-1', 'fp-v2'))).toBe(true); // now the correction is known
+  });
+
+  it('still dedupes an identical re-issue under the same id', () => {
+    const dedup = new NewsDeduplicator();
+    expect(dedup.isDuplicate(mk('a-2', 'fp-same'))).toBe(false);
+    expect(dedup.isDuplicate(mk('a-2', 'fp-same'))).toBe(true);
+    expect(dedup.isDuplicate(mk('a-2', 'fp-same'))).toBe(true);
+  });
+
+  it('does not cross-dedupe: same fingerprint under a different id is a different article', () => {
+    const dedup = new NewsDeduplicator();
+    expect(dedup.isDuplicate(mk('a-3', 'fp-x'))).toBe(false);
+    expect(dedup.isDuplicate(mk('a-4', 'fp-x'))).toBe(false);
+  });
+
+  it('does not cross-dedupe: same id with different fingerprints are distinct versions', () => {
+    const dedup = new NewsDeduplicator();
+    expect(dedup.isDuplicate(mk('a-5', 'fp-1'))).toBe(false);
+    // A second, different content version is new work, not a repeat of fp-1.
+    expect(dedup.isDuplicate(mk('a-5', 'fp-2'))).toBe(false);
   });
 });
