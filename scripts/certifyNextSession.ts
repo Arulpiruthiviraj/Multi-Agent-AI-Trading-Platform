@@ -28,6 +28,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { AvailableData } from '../src/server/certification/strategyDataContracts';
+import { getTradingDayStartMs } from '../src/server/core/TradingCalendar';
 
 function sha256Hex(data: string): string {
   return createHash('sha256').update(data, 'utf8').digest('hex');
@@ -288,7 +289,6 @@ function probeAvailableData(db: any): { available: AvailableData; probeDetails: 
   // midnight. The old UTC-midnight boundary was wrong for several hours around each
   // exchange midnight (e.g. 21:00 EDT Oct 11 is already Oct 12 in UTC, so the probe
   // looked for "today's" intraday bars in the wrong UTC day).
-  const { getTradingDayStartMs } = await import('../src/server/core/TradingCalendar');
   const sessionStartMs = getTradingDayStartMs(new Date());
 
   try {
