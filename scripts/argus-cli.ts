@@ -1033,7 +1033,7 @@ export const COMMAND_HELP: Record<string, string> = {
   'pipeline-ready': 'Usage: argus pipeline-ready\nPipeline readiness check.',
   'readiness': 'Usage: argus readiness\nPre-session checklist: per-check PASS/WARN/FAIL with READY / READY_WITH_WARNINGS / NOT_READY verdict. Read-only; AI checks are advisory only.',
   'quant-readiness': 'Usage: argus quant-readiness [--json]\nProduction-state diagnostic: per-strategy authorization verdicts (AUTHORIZED_QUANT_POLICY / REQUIRES_CONSENSUS / NOT_ELIGIBLE / NOT_AUTHORIZED) computed by the real resolver against the live runtime DB. Read-only; requires the engine API.',
-  'certify-next-session': 'Usage: argus certify-next-session [--db=<path>] [--json] [--with-suites] [--engine-url=<url>]\nPre-market release gate: snapshots the production DB read-only into an isolated copy, runs canonical authorization + data-readiness + build/config/schema provenance + the release certification driver (ALL mandatory checks; only PASS satisfies - a partial probe never reports READY), and emits OVERALL_STATUS (READY / READY_WITH_CONDITIONS / NO_GO) plus every required field (BUILD_SHA, ARTIFACT_HASH, CONFIG_HASH, SCHEMA_VERSION, JAVA_ARTIFACT_HASH, STRATEGY_REGISTRY_HASH, DB_SNAPSHOT_ID, PRODUCTION_CONFIG_EQUIVALENT, LIFECYCLE_SUMMARY, AUTHORIZED_PAPER_QUANT_STRATEGIES, QUANT_POLICY_REACHABILITY, JEV_*, ALL_AI_DOWN_QUANT, HISTORICAL_DATA_FRESHNESS, INTRADAY_DATA_READINESS, MARKET_DATA_HEALTH, SUBSCRIPTION_HEALTH, SCHEDULER_P50/P95/P99/MAX, MRNA/CRCL_SCENARIO, FAST_LANE, ASYNC_OWNERSHIP, PIT_REPLAY, NO_LOOKAHEAD, PREMARKET, RISK_SPINE, OMS, RECONCILIATION, BACKUP, WATCHDOG, MEMORY, QUEUES, LISTENERS, TIMERS, WORKERS, FULL_SESSION, WALL_CLOCK_SOAK). --with-suites executes the suite-delegated checks (slow); --engine-url enables live market/subscription/scheduler probes. Never seeds lifecycle, never promotes strategies, never arms LIVE.',
+  'certify-next-session': 'Usage: argus certify-next-session [--db=<path>] [--json] [--with-suites] [--engine-url=<url>] [--with-sim] [--sim-speed=N]\nPre-market release gate: snapshots the production DB read-only into an isolated copy, reports the real lifecycle state read-only (authorized PAPER quant strategies, the PAPER allocation profile, open positions, key trading-safety numbers from config), runs canonical authorization + data-readiness + build/config/schema provenance + the release certification driver (ALL mandatory checks; only PASS satisfies - a partial probe never reports READY), and emits a fail-closed GO / NO-GO verdict with the evidence behind it (driver OVERALL_STATUS READY / READY_WITH_CONDITIONS / NO_GO plus goNoGoReasons). --with-suites executes the suite-delegated checks (slow); --engine-url enables live market/subscription/scheduler probes; --with-sim runs a synthetic market-open session via the scripts/sim/marketOpen.ts --certify infrastructure (Test A no-trade safety + Test B tradeable scenario; results labeled SYNTHETIC_SEEDED / NON_ORGANIC / CERTIFICATION_FIXTURE_ONLY and folded into the verdict — never organic evidence); --sim-speed overrides the sim clock speed (default 400, as in npm run test:certification). Never seeds lifecycle, never promotes strategies, never forces a signal/approval/fill, never arms LIVE.',
   'session-checkpoint': 'Usage: argus session-checkpoint\nEarly-warning inactivity check: classifies the session HEALTHY_ZERO_TRADE / SUSPICIOUS_ZERO_TRADE (or TRADING). Run at 09:35/10:00/11:00/13:00/15:00 ET during PAPER sessions.',
   'session-report': 'Usage: argus session-report\nSession report.',
   'research': 'Usage: argus research <subcommand> [args]\nResearch intelligence (advisory only, never a trade). Run `argus research --help` for subcommands.',
@@ -2223,6 +2223,10 @@ const commands: Record<string, () => Promise<void>> = {
     const withSuites = process.argv.slice(3).includes('--with-suites');
     const engineUrlFlag = process.argv.slice(3).find(a => a.startsWith('--engine-url='));
     const asJson = process.argv.slice(3).includes('--json');
+    // Phase 2 (2026-10-12): pass the synthetic market-open session stage through
+    // to the cert child (scripts/certifyNextSession.ts --with-sim).
+    const withSim = process.argv.slice(3).includes('--with-sim');
+    const simSpeedFlag = process.argv.slice(3).find(a => a.startsWith('--sim-speed='));
     const envFile = existsSync('.env') ? parse(readFileSync('.env')) : {};
     const env = { ...envFile, ...process.env };
     const sourcePath = resolve(dbFlag ? dbFlag.slice('--db='.length) : (env.ARGUS_DB_PATH || 'data/argus.db'));
@@ -2254,6 +2258,8 @@ const commands: Record<string, () => Promise<void>> = {
           ...(asJson ? ['--json'] : []),
           ...(withSuites ? ['--with-suites'] : []),
           ...(engineUrlFlag ? [engineUrlFlag] : []),
+          ...(withSim ? ['--with-sim'] : []),
+          ...(simSpeedFlag ? [simSpeedFlag] : []),
         ], {
           env: {
             ...env, SYNTHETIC_SIMULATION: 'false', ARGUS_DISABLE_MARKET_DATA_WS: 'true',
