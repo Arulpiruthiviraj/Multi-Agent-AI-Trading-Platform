@@ -10,6 +10,8 @@
   "fastLaneHungLeaseMaxConsecutiveTimeouts": 3,
   "_fastLaneHungLeaseMaxAgeMsComment": "2026-10-09 (P1 fast-lane lease fix, hung-work Part 4): maximum lease age (ms) before quarantine even without consecutive timeouts - the backstop guaranteeing a permanently hung task can never hold Fast Lane capacity forever. Same quarantine semantics: slot recovered, dedup entry kept, late settle discarded and never double-applied. Resource governor, not a trading threshold.",
   "fastLaneHungLeaseMaxAgeMs": 600000,
+  "_fastLaneQuarantineMaxAgeMsComment": "2026-10-11 (#15): maximum age (ms) for a QUARANTINED lease before bounded eviction. Without this, a never-settling evaluation pins the symbol with FAST_LANE_SYMBOL_QUARANTINED until process restart. Eviction releases the dedup entry with a loud log; late settle stays discarded via the generation guard. Resource governor, not a trading threshold.",
+  "fastLaneQuarantineMaxAgeMs": 3600000,
   "_fastLaneCanonicalIdeaCacheMaxEntriesComment": "2026-10-08 (fast-lane D5 defect fix): bound for the in-memory evidence-fingerprint idempotency cache in fastCanonicalDedup.ts, whose own header claimed 'bounded' while the Map only ever grew. Oldest-first eviction past this size. Not a trading threshold.",
   "fastLaneCanonicalIdeaCacheMaxEntries": 1000,
   "stalePriceThresholdMs": 300000,

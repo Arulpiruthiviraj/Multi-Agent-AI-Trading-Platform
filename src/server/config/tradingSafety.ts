@@ -37,6 +37,9 @@ export interface TradingSafety {
    *  fastLaneHungLeaseMaxConsecutiveTimeouts: slot recovered, dedup entry kept, late settle
    *  discarded and never double-applied. Resource governor, not a trading threshold. */
   fastLaneHungLeaseMaxAgeMs: number;
+  /** 2026-10-11 (#15): maximum age (ms) for a QUARANTINED lease before bounded eviction.
+   *  Resource governor, not a trading threshold. */
+  fastLaneQuarantineMaxAgeMs: number;
   /** 2026-10-08 (fast-lane D5 defect fix): bound for fastCanonicalDedup.ts's in-memory
    *  evidence-fingerprint idempotency cache. Oldest-first eviction past this size.
    *  Resource governor, not a trading threshold. */
@@ -764,6 +767,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'fastLaneEvaluationTimeoutMs',
   'fastLaneHungLeaseMaxConsecutiveTimeouts',
   'fastLaneHungLeaseMaxAgeMs',
+  'fastLaneQuarantineMaxAgeMs',
   'fastLaneCanonicalIdeaCacheMaxEntries',
   'stalePriceThresholdMs',
   'newsPriceWaitTimeoutMs',

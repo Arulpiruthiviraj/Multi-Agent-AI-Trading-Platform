@@ -504,3 +504,39 @@ describe('fastLaneEvaluator coalesced-caller watchdog (2026-10-11 defect 4)', ()
     void primaryPromise.catch(() => {});
   });
 });
+
+describe('fastLaneEvaluator quarantine eviction (2026-10-11 #15)', () => {
+  it('quarantined lease older than fastLaneQuarantineMaxAgeMs is evicted with loud log', async () => {
+    const origQuarantineMaxAge = (tradingSafety as any).fastLaneQuarantineMaxAgeMs;
+    const origTimeout = tradingSafety.fastLaneEvaluationTimeoutMs;
+    const origMaxTimeouts = (tradingSafety as any).fastLaneHungLeaseMaxConsecutiveTimeouts;
+    (tradingSafety as any).fastLaneQuarantineMaxAgeMs = 100;
+    (tradingSafety as any).fastLaneEvaluationTimeoutMs = 50;
+    (tradingSafety as any).fastLaneHungLeaseMaxConsecutiveTimeouts = 1;
+    try {
+      const c = inject('RRRRR');
+      // Hung evaluation: will timeout once, then quarantine (1 consecutive timeout).
+      vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockImplementation(() => new Promise(() => {}) as any);
+      const result = await evaluateFastCandidate(c.id);
+      expect(result.status).toBe('ERROR');
+      // Lease is quarantined (slot returned, dedup kept).
+      let snapshot = getFastLaneLeaseSnapshot();
+      expect(snapshot.leases[0].state).toBe('QUARANTINED');
+
+      // Wait past the quarantine max age; trigger reap via another admission.
+      await new Promise((r) => setTimeout(r, 150));
+      const c2 = inject('SSSSS');
+      vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockResolvedValue(null);
+      await evaluateFastCandidate(c2.id);
+
+      // The quarantined lease is evicted (dedup released).
+      snapshot = getFastLaneLeaseSnapshot();
+      const rrrrr = snapshot.leases.find((l: any) => l.symbol === 'RRRRR');
+      expect(rrrrr).toBeUndefined();
+    } finally {
+      (tradingSafety as any).fastLaneQuarantineMaxAgeMs = origQuarantineMaxAge;
+      (tradingSafety as any).fastLaneEvaluationTimeoutMs = origTimeout;
+      (tradingSafety as any).fastLaneHungLeaseMaxConsecutiveTimeouts = origMaxTimeouts;
+    }
+  });
+});
