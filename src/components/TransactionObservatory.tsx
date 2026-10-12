@@ -16,6 +16,7 @@
  * ==========================================================
  */
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEscapeKey } from "../hooks/useEscapeKey";
 import {
   X, Play, Pause, SkipBack, SkipForward, RotateCcw, Activity, Users, Scale, ShieldCheck,
   ShieldAlert, Send, CheckCircle2, XCircle, HelpCircle, ChevronDown, ChevronRight, Brain,
@@ -142,6 +143,7 @@ interface Stage {
 }
 
 export default function TransactionObservatory({ transactionId, onClose }: { transactionId: string; onClose: () => void }) {
+  useEscapeKey(onClose);
   const [data, setData] = useState<TransactionData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -164,7 +166,8 @@ export default function TransactionObservatory({ transactionId, onClose }: { tra
       .then(json => {
         if (cancelled) return;
         if (!json.ok) { setError(json.error || 'Unknown error'); setLoading(false); return; }
-        setData(json);
+        // Normalize arrays: a payload missing them would crash riskGates.map / fills.length on render.
+        setData({ ...json, riskGates: Array.isArray(json.riskGates) ? json.riskGates : [], fills: Array.isArray(json.fills) ? json.fills : [] });
         setLoading(false);
       })
       .catch(e => { if (!cancelled) { setError(e.message); setLoading(false); } });
@@ -254,7 +257,7 @@ export default function TransactionObservatory({ transactionId, onClose }: { tra
               {outcome.label}
             </span>
           </div>
-          <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors"><X size={20} /></button>
+          <button aria-label="Close" onClick={onClose} className="text-slate-500 hover:text-white transition-colors"><X size={20} /></button>
         </div>
 
         <div className="p-6 flex flex-col gap-6 overflow-y-auto">
@@ -283,8 +286,8 @@ export default function TransactionObservatory({ transactionId, onClose }: { tra
 
           {/* VCR controls */}
           <div className="bg-[#111822] border border-slate-800 rounded p-4 flex items-center gap-4 flex-wrap">
-            <button onClick={restart} className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition-colors"><RotateCcw size={14} /></button>
-            <button onClick={stepBack} disabled={stageIndex === 0} className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition-colors disabled:opacity-30"><SkipBack size={14} /></button>
+            <button aria-label="Restart replay" onClick={restart} className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition-colors"><RotateCcw size={14} /></button>
+            <button aria-label="Step back" onClick={stepBack} disabled={stageIndex === 0} className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition-colors disabled:opacity-30"><SkipBack size={14} /></button>
             <button
               onClick={() => setIsPlaying(p => !p)}
               disabled={stages.length === 0}

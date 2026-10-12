@@ -92,6 +92,8 @@ export default function QuantSignalsPanel() {
     notSupportedCount: number;
   }>>([]);
   const [taxonomyNote, setTaxonomyNote] = useState<string | null>(null);
+  const [strategiesLoading, setStrategiesLoading] = useState(true);
+  const [strategiesError, setStrategiesError] = useState<string | null>(null);
   const [selectedStrategy, setSelectedStrategy] = useState("TREND_FOLLOWING");
   const [backtestSymbol, setBacktestSymbol] = useState("AAPL");
   const [startDate, setStartDate] = useState(() => new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]);
@@ -101,10 +103,12 @@ export default function QuantSignalsPanel() {
   const [runError, setRunError] = useState<string | null>(null);
 
   useEffect(() => {
+    setStrategiesLoading(true);
+    setStrategiesError(null);
     fetch("/api/v2/quant/strategies")
       .then(r => r.json())
       .then(json => {
-        if (!json.ok) return;
+        if (!json.ok) { setStrategiesError(json.error || 'Failed to load strategies.'); return; }
         const core = json.strategies || [];
         const experimental = (json.experimentalStrategies || []).map((s: QuantStrategy) => ({
           ...s,
@@ -124,7 +128,8 @@ export default function QuantSignalsPanel() {
           setTaxonomyNote(tax.masterNote || tax.note || null);
         }
       })
-      .catch(() => {});
+      .catch(() => { setStrategiesError('Could not reach the strategy catalog.'); })
+      .finally(() => setStrategiesLoading(false));
   }, []);
 
   const loadAssessments = (sym: string) => {
@@ -196,7 +201,11 @@ export default function QuantSignalsPanel() {
           />
         </div>
 
-        {masterFamilies.length > 0 && (
+        {strategiesLoading ? (
+          <div className="mb-6 bg-[#111822] border border-slate-800 rounded-lg p-4 text-center text-slate-500 text-sm font-mono py-8">Loading strategy catalog…</div>
+        ) : strategiesError ? (
+          <div className="mb-6 bg-[#111822] border border-rose-900/50 rounded-lg p-4 text-center text-rose-400 text-sm font-mono py-8">{strategiesError}</div>
+        ) : masterFamilies.length > 0 && (
           <div className="mb-6 bg-[#111822] border border-slate-800 rounded-lg p-4">
             <div className="text-[10px] text-slate-500 uppercase tracking-widest font-mono mb-2">Master taxonomy (catalog)</div>
             {taxonomyNote && <p className="text-[10px] text-slate-500 leading-relaxed mb-3 font-mono">{taxonomyNote}</p>}
@@ -283,7 +292,8 @@ export default function QuantSignalsPanel() {
         <div className="flex flex-wrap items-end gap-3 mb-6">
           <div className="flex flex-col gap-1">
             <label className="text-[10px] font-mono text-slate-500 uppercase">Strategy</label>
-            <select value={selectedStrategy} onChange={e => setSelectedStrategy(e.target.value)} className="bg-[#111822] border border-slate-800 rounded px-3 py-2 text-sm text-white font-mono">
+            <select value={selectedStrategy} onChange={e => setSelectedStrategy(e.target.value)} aria-label="Strategy" className="bg-[#111822] border border-slate-800 rounded px-3 py-2 text-sm text-white font-mono">
+              {strategies.length === 0 && <option value="">No strategies loaded</option>}
               {strategies.map(s => <option key={s.id} value={s.id}>{s.displayName}</option>)}
             </select>
           </div>

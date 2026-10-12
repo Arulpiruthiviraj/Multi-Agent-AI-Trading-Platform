@@ -480,7 +480,7 @@ export default function SystemOptimizer() {
               Visualize and stress-test the balance between LLM API concurrency, database connection pools, and background state synchronization.
             </p>
           </div>
-          <button
+          <button aria-label="Run stress test"
             onClick={startStressTest}
             className={`px-4 py-2 text-[10px] font-mono font-black uppercase tracking-widest rounded border transition-all cursor-pointer flex items-center gap-2 ${
               isStressTesting

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Globe, RefreshCw, AlertCircle, Newspaper } from "lucide-react";
+import { safeParseSymbols } from "./shared/safeJson";
 
 interface NewsClusterItem {
   id: string;
@@ -93,7 +94,7 @@ export default function LiveMarketNewsTicker() {
           <div className="ticker-content">
             {doubledNews.map((item, idx) => {
               const sentiment = (item.sentimentScore || 0) > 0 ? 'BULLISH' : (item.sentimentScore || 0) < 0 ? 'BEARISH' : 'NEUTRAL';
-              const syms = item.symbols ? JSON.parse(item.symbols) : [];
+              const syms = safeParseSymbols(item.symbols);
               return (
                 <div key={`${item.id}-${idx}`} className="flex items-center space-x-3 mx-4 flex-shrink-0">
                   <span className={`font-mono font-bold uppercase ${sentiment === 'BULLISH' ? 'text-emerald-400' : sentiment === 'BEARISH' ? 'text-rose-400' : 'text-slate-400'}`}>

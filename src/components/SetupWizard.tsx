@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect } from "react";
+import { useEscapeKey } from "../hooks/useEscapeKey";
 import { BrainCircuit, Check, Shield, Zap, TrendingUp, AlertTriangle, Settings, Activity, Cpu, CheckCircle2, ChevronRight, X, Play, RefreshCw, BarChart, Server, Globe, Database, HelpCircle, Lock, Key, CreditCard } from "lucide-react";
 
 interface ProviderStatus {
@@ -9,6 +10,7 @@ interface ProviderStatus {
 }
 
 export function SetupWizard({ onComplete, onSkip }: { onComplete: (config: any) => void, onSkip?: () => void }) {
+  useEscapeKey(onSkip ?? null);
   const [step, setStep] = useState(0);
   const [wizardMode, setWizardMode] = useState<'detecting' | 'setup'>('detecting');
   const [readinessScore, setReadinessScore] = useState(0);

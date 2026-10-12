@@ -2,7 +2,8 @@
 
 export function fmtUsd(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return '--';
-  return `$${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const sign = v < 0 ? '-' : '';
+  return `${sign}$${Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export function fmtPct(v: number | null | undefined, digits = 1): string {

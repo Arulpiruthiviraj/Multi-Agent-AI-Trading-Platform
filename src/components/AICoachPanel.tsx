@@ -65,7 +65,7 @@ export function AICoachPanel({ onClose }: { onClose?: () => void }) {
           <span className="text-sm font-bold text-white tracking-wide">AI Trading Coach</span>
         </div>
         {onClose && (
-          <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
+          <button onClick={onClose} aria-label="Close" className="text-slate-400 hover:text-white transition-colors">
             <X size={16} />
           </button>
         )}

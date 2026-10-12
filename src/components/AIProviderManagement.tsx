@@ -212,11 +212,13 @@ export default function AIProviderManagement() {
   useEffect(() => {
     fetch('/api/v1/config/providers')
       .then(res => res.json())
-      .then(data => setProviders(Array.isArray(data) ? data : []));
+      .then(data => setProviders(Array.isArray(data) ? data : []))
+      .catch(() => setProviders([]));
 
     fetch('/api/v1/config/usage')
       .then(res => res.json())
-      .then(data => setUsage(Array.isArray(data) ? data : []));
+      .then(data => setUsage(Array.isArray(data) ? data : []))
+      .catch(() => setUsage([]));
 
     fetchRoutingOverrides();
 

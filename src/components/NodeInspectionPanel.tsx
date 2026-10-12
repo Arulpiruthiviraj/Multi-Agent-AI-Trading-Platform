@@ -214,7 +214,7 @@ export default function NodeInspectionPanel({ nodeId, onClose, activeEvents }: {
                        <p className="text-[10px] text-slate-500 font-mono">Process Introspection</p>
                    </div>
                </div>
-               <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors">
+               <button aria-label="Close" onClick={onClose} className="text-slate-500 hover:text-white transition-colors">
                    <X size={18} />
                </button>
            </div>

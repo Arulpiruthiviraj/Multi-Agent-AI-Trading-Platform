@@ -195,6 +195,7 @@ const GlobalSearch: React.FC<GlobalSearchProps> = ({ isOpen, onClose, setActiveT
               </div>
               <button 
                 onClick={onClose}
+                aria-label="Close search"
                 className="ml-3 p-1.5 hover:bg-slate-800 text-slate-500 hover:text-white rounded-lg transition-colors"
               >
                 <X size={16} />

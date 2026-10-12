@@ -78,7 +78,7 @@ export default function AgentEvaluationDashboard() {
       const res = await fetch("/api/v2/agents/performance", { signal: controller.signal });
       const data = await res.json();
       if (data.ok) {
-        setStats(data.stats);
+        setStats(Array.isArray(data.stats) ? data.stats : []);
       }
     } catch (e: any) {
       if (e?.name === 'AbortError') return;
@@ -153,19 +153,19 @@ export default function AgentEvaluationDashboard() {
                     <div>
                        <div className="text-[9px] text-slate-500 uppercase">Win Rate</div>
                        <div className={`text-sm font-mono ${agent.winRate > 0.5 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                         {(agent.winRate * 100).toFixed(1)}%
+                         {typeof agent.winRate === 'number' ? `${(agent.winRate * 100).toFixed(1)}%` : 'N/A'}
                        </div>
                     </div>
                     <div>
                        <div className="text-[9px] text-slate-500 uppercase">Profit Factor</div>
                        <div className="text-sm font-mono text-indigo-400">
-                         {agent.profitFactor.toFixed(2)}
+                         {agent.profitFactor == null ? 'N/A' : agent.profitFactor.toFixed(2)}
                        </div>
                     </div>
                     <div>
                        <div className="text-[9px] text-slate-500 uppercase">Sharpe</div>
                        <div className="text-sm font-mono text-slate-300">
-                         {agent.sharpeRatio.toFixed(2)}
+                         {agent.sharpeRatio == null ? 'N/A' : agent.sharpeRatio.toFixed(2)}
                        </div>
                     </div>
                     <div>
