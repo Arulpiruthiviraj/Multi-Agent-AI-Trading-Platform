@@ -189,7 +189,7 @@ describe('Shell CLI embedded node scripts are syntactically valid', () => {
 
   function extractNodeEBlocks(shellSource: string): string[] {
     const blocks: string[] = [];
-    const re = /node -e '\n([\s\S]*?)\n\s*'/g;
+    const re = /node -e '\r?\n([\s\S]*?)\r?\n\s*'/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(shellSource)) !== null) {
       blocks.push(m[1]);
@@ -200,6 +200,11 @@ describe('Shell CLI embedded node scripts are syntactically valid', () => {
   const commonShPath = join(ROOT, 'scripts', 'cli', 'common.sh');
   const commonShSource = existsSync(commonShPath) ? readFileSync(commonShPath, 'utf8') : '';
   const blocks = extractNodeEBlocks(commonShSource);
+
+  it.each(['\n', '\r\n'])('extracts all multiline scripts with %j line endings', (newline) => {
+    const source = ["node -e '", 'console.log(1);', "'", "node -e '", 'console.log(2);', "'"].join(newline);
+    expect(extractNodeEBlocks(source)).toEqual(['console.log(1);', 'console.log(2);']);
+  });
 
   it('finds at least one embedded node -e block to check (test is not vacuous)', () => {
     expect(blocks.length).toBeGreaterThan(0);

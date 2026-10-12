@@ -359,8 +359,8 @@ describe('fastLaneEvaluator lease semantics (2026-10-09 P1 lease fix)', () => {
       const snapshot = getFastLaneLeaseSnapshot();
       expect(snapshot.activeLeaseCount).toBe(1);
       expect(snapshot.leases[0].state).toBe('QUARANTINED');
-      expect(snapshot.leases[0].slotHeld).toBe(false); // capacity recovered
-      expect(fastLaneActiveEvaluationCountForTests()).toBe(0);
+      expect(snapshot.leases[0].slotHeld).toBe(true); // quarantine is not cancellation
+      expect(fastLaneActiveEvaluationCountForTests()).toBe(1);
       // The caller's watchdog still resolves honestly, and the post-quarantine timeout must
       // not regress the lease state or touch the candidate.
       const r = await p;
@@ -372,7 +372,7 @@ describe('fastLaneEvaluator lease semantics (2026-10-09 P1 lease fix)', () => {
     }
   });
 
-  it('hung work: bounded capacity consumption, quarantine recovers capacity, no duplicate execution, late settle cannot double-apply', async () => {
+  it('hung work retains bounded capacity through quarantine until actual settlement', async () => {
     const origMax = tradingSafety.fastLaneMaxConcurrentEvaluations;
     const origMaxTimeouts = tradingSafety.fastLaneHungLeaseMaxConsecutiveTimeouts;
     const origCooldown = tradingSafety.fastLaneSymbolEvaluationCooldownMs;
@@ -418,22 +418,22 @@ describe('fastLaneEvaluator lease semantics (2026-10-09 P1 lease fix)', () => {
       expect(fastLaneActiveEvaluationCountForTests()).toBe(1);
 
       // 5. The next admission attempt runs the reaper: 2 consecutive timeouts >= 2 -> QUARANTINE.
-      //    The slot is returned to the pool (capacity recovers); the dedup entry is kept.
+      //    Both capacity and dedup stay held until actual settlement.
       const third = inject('RRRRR')!;
       const rThird = await evaluateFastCandidate(third.id);
-      expect(rThird.status).toBe('VALID_STRATEGY_EVIDENCE'); // admitted and evaluated normally
-      expect(spy).toHaveBeenCalledTimes(3); // PPPPP x2, RRRRR x1 - no duplicate execution
+      expect(rThird.reasonCodes).toContain('MAX_CONCURRENT_EVALUATIONS_REACHED');
+      expect(spy).toHaveBeenCalledTimes(2);
       const quarantined = getFastLaneLeaseSnapshot().leases.find((l) => l.symbol === 'PPPPP');
       expect(quarantined?.state).toBe('QUARANTINED');
-      expect(quarantined?.slotHeld).toBe(false);
-      expect(fastLaneActiveEvaluationCountForTests()).toBe(0);
+      expect(quarantined?.slotHeld).toBe(true);
+      expect(fastLaneActiveEvaluationCountForTests()).toBe(1);
 
       // 6. A replacement evaluation for the quarantined symbol is refused - quarantine can never
       //    create duplicate concurrent work for the same symbol.
       const hung3 = inject('PPPPP')!;
       const rHung3 = await evaluateFastCandidate(hung3.id);
       expect(rHung3.reasonCodes).toContain('FAST_LANE_SYMBOL_QUARANTINED');
-      expect(spy).toHaveBeenCalledTimes(3);
+      expect(spy).toHaveBeenCalledTimes(2);
 
       // 7. The second hung work finally settles with valid evidence: discarded, never double-applied.
       hungResolvers[1](fakeEvaluation([
@@ -441,7 +441,7 @@ describe('fastLaneEvaluator lease semantics (2026-10-09 P1 lease fix)', () => {
       ]));
       await new Promise((r) => setTimeout(r, 20));
       expect(fastLaneManager.getCandidate(hung2.id)?.state).toBe('NO_SETUP'); // timeout verdict stands
-      expect(spy).toHaveBeenCalledTimes(3);
+      expect(spy).toHaveBeenCalledTimes(2);
       expect(getFastLaneLeaseSnapshot().activeLeaseCount).toBe(0);
       expect(fastLaneActiveEvaluationCountForTests()).toBe(0);
 
@@ -453,7 +453,7 @@ describe('fastLaneEvaluator lease semantics (2026-10-09 P1 lease fix)', () => {
       const hung4 = inject('PPPPP')!;
       const rHung4 = await evaluateFastCandidate(hung4.id);
       expect(rHung4.reasonCodes).toContain('EVALUATION_TIMEOUT'); // hangs again, caller bounded
-      expect(spy).toHaveBeenCalledTimes(4);
+      expect(spy).toHaveBeenCalledTimes(3);
       expect(fastLaneActiveEvaluationCountForTests()).toBe(1); // new lease honestly held
     } finally {
       (tradingSafety as any).fastLaneMaxConcurrentEvaluations = origMax;
@@ -505,8 +505,8 @@ describe('fastLaneEvaluator coalesced-caller watchdog (2026-10-11 defect 4)', ()
   });
 });
 
-describe('fastLaneEvaluator quarantine eviction (2026-10-11 #15)', () => {
-  it('quarantined lease older than fastLaneQuarantineMaxAgeMs is evicted with loud log', async () => {
+describe('fastLaneEvaluator quarantine ownership', () => {
+  it('age cannot release unresolved work or admit a second evaluation of the same symbol', async () => {
     const origQuarantineMaxAge = (tradingSafety as any).fastLaneQuarantineMaxAgeMs;
     const origTimeout = tradingSafety.fastLaneEvaluationTimeoutMs;
     const origMaxTimeouts = (tradingSafety as any).fastLaneHungLeaseMaxConsecutiveTimeouts;
@@ -537,10 +537,17 @@ describe('fastLaneEvaluator quarantine eviction (2026-10-11 #15)', () => {
       vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockResolvedValue(null);
       await evaluateFastCandidate(c2.id);
 
-      // The quarantined lease is evicted (dedup released).
+      // Age is not cancellation: the unresolved lease and its capacity remain owned.
       snapshot = getFastLaneLeaseSnapshot();
       const rrrrr = snapshot.leases.find((l: any) => l.symbol === 'RRRRR');
-      expect(rrrrr).toBeUndefined();
+      expect(rrrrr?.state).toBe('QUARANTINED');
+      expect(rrrrr?.slotHeld).toBe(true);
+      const spy = vi.mocked(quantSignalAgent.evaluateSymbol);
+      const callsBefore = spy.mock.calls.length;
+      const replacement = inject('RRRRR');
+      const refused = await evaluateFastCandidate(replacement.id);
+      expect(refused.reasonCodes).toContain('FAST_LANE_SYMBOL_QUARANTINED');
+      expect(spy.mock.calls.length).toBe(callsBefore);
     } finally {
       (tradingSafety as any).fastLaneQuarantineMaxAgeMs = origQuarantineMaxAge;
       (tradingSafety as any).fastLaneEvaluationTimeoutMs = origTimeout;

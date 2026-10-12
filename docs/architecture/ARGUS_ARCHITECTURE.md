@@ -4862,20 +4862,19 @@ execution path. The spine shape is now: `TRADE_IDEA_GENERATED` → (policy prefi
 reject) → ChiefTrader consensus (strict >0.75, min-2-independent-evidence, vetoes) →
 RiskEngine (27 gates) → PositionSizing → OMS → BrokerManager.
 
-### Quarantine — formally sanctioned safe-abandonment protocol (mission adjudication)
+### Quarantine ownership — corrected October 12
 
-Fast Lane (and the quant priority scheduler's quant stage) quarantine hung work: the
-concurrency slot is returned as fungible capacity while ownership/dedup are RETAINED and the
-late settle is discarded via a generation guard. At 7bd0ddc the mission recorded the
-adjudication in code comments: quarantine is BLESSED as the formally-sanctioned
-safe-abandonment protocol. Returning fungible capacity while retaining ownership/dedup, with
-bounded loud eviction (`fastLaneQuarantineMaxAgeMs`, 3600000ms default, `config/tradingSafety.json`)
-and generation-guarded late-settle discard, satisfies the safety rules. The quarantine state's
-contract is now: (1) capacity is fungible — slot recoverable after bounded age; (2) dedup is
-retained — replacement work refused via `PRIOR_EVALUATION_STILL_IN_FLIGHT`; (3) late settle
-never double-applies — generation guard; (4) eviction is loud and bounded — log + dedup
-release at max age. The same quarantine semantics were adopted by the scheduler's quant-stage
-watchdog (b509d39).
+The earlier safe-abandonment claim was incorrect: discarding a late result does not stop
+the underlying computation or provider request. Fast Lane now retains both its concurrency
+slot and symbol dedup entry through timeout and quarantine until real settlement. It no
+longer age-evicts unresolved leases. The legacy `fastLaneQuarantineMaxAgeMs` setting remains
+compatibility-only. Caller deadlines and coalesced-caller deadlines remain bounded; existing
+lease snapshots expose unresolved capacity. Late results remain discarded.
+
+This change bounds Fast Lane work but does not recover permanently hung dependencies.
+Confirmed cancellation or worker/process recovery is still needed for liveness. The current
+priority scheduler still returns slots and evicts ownership on timeout/age; that separate
+defect remains open on this branch. Do not infer scheduler protection from Fast Lane tests.
 
 ### RiskEngine gate count: 27 (and stale references)
 
@@ -4944,7 +4943,7 @@ Reuse current owners rather than creating parallel systems:
 - HistoricalDataGateway remains the provider, cache and in-flight request owner. MarketContext currently mixes retrieval with computation. Move toward acquisition followed by an immutable, versioned context snapshot; the first slice below only shares requests within one assessment.
 - Java Quant Core is the implementation target for new calculations and migrations. Existing TypeScript calculations are not rewritten in this slice. Benchmark features may eventually be computed once and reused only with exact input, provider, adjustment, session and as-of identity plus TS/Java parity tests. Do not round a decision cutoff to improve cache hits.
 - QuantStrategyAuthorization remains the lifecycle resolver. lifecycle/certificationBridge is the existing reviewed transition boundary. No second promotion service is proposed.
-- ChiefTrader owns the decision. Current main treats QuantExecutionPolicy as a rejection-only pre-filter followed by ordinary consensus. Calling this current behavior AI-independent execution would be incorrect.
+- ChiefTrader owns the decision. Current main treats QuantExecutionPolicy as a rejection-only pre-filter followed by ordinary consensus. Calling this independent Quant-policy approval would be incorrect. Consensus can use deterministic sources, but they still must meet its evidence and veto contract; AI outage is not, by itself, proof that all Quant execution is impossible.
 - Existing capital allocation, sizing, cost/forecast evidence and correlation controls remain authoritative. Any new capital-efficiency calculation belongs in Java and initially produces research comparisons only. It cannot raise a risk limit, invent missing costs or rank unknown expectancy as zero.
 - Existing AIRouter/provider managers and process telemetry remain the AI/resource owners. Resource controls should isolate optional work from critical data/decision processing; no new service stack is justified before profiling.
 
@@ -4998,4 +4997,10 @@ Research: net expectancy and uncertainty, profit factor, drawdown, cost sensitiv
 
 Only explicit PASS can satisfy a required release check. A partial policy probe, green unit suite, synthetic fill, unmeasured resource limit or a status label is not next-session certification. Required evidence must bind to the exact executable/config/schema/lifecycle snapshot. The prior 182.774-minute synthetic soak showed about 1,045 MB RSS growth and tail stalls above 52 seconds; it is NOT a resource-stability pass and is not evidence against this later branch unless reproduced here.
 
-Validation of the initial October 12 slice: 33 targeted tests and 62 related/invariant/lifecycle tests passed (8 files total), with typecheck passing. This is code-level evidence only; no provider/load SLA or release readiness is claimed. Fresh full-suite and production-build validation are still required on the checkpoint. The snapshot flag remains off in the example configuration.
+Validation of the initial October 12 slice: 33 targeted tests and 62 related/invariant/lifecycle tests passed (8 files total), with typecheck and build passing. The full run exited 1: 797 files passed, 1 failed; 6,619 tests passed, 1 failed, 1 expected failure and 2 skipped. The failure was the shell test's LF-only extraction of CRLF scripts in this Windows checkout. The corrected parser and LF/CRLF regression passed all 17 shell tests. This is a failed full run followed by a passing targeted check, not a green full rerun. The snapshot flag remains off in the example configuration; no provider/load SLA or readiness is claimed.
+
+B2 policy-review caveat: the current QuantExecutionPolicy describes regime, internal ensemble, calibration sufficiency and R:R as independent support dimensions. Source inspection establishes that these checks exist; it does not establish statistical independence or positive expectancy. Before making this policy authoritative, review shared inputs/correlation, whether calibration is sufficient versus actually reliable, and the exact missing-cost behavior. A count of heterogeneous checks must not be certified as measured independent evidence. Its current success text also still says consensus was not run/forwarding to RiskEngine, while ChiefTrader now uses that result only as a pre-filter. The current caller's actual control flow is authoritative; this narrative mismatch belongs in the B review.
+
+Build evidence for e502901: typecheck and production build completed successfully; server bundle SHA-256 is 899d020881f13b8e3597933001b20f4277d5b222091cccd9f0aa4de294e633c3. Current main's build script does not emit the older repair branch's build-metadata.json. This manually recorded hash identifies that earlier built file, not the running executable or subsequent Fast Lane repair.
+
+October 12 Fast Lane follow-up: three ownership assertions failed before the repair (max-age quarantine, capacity after quarantine, and age eviction), then all 19 evaluator tests passed. The broader run passed 138 tests across 9 files, including Fast Lane, shell protection and architecture invariants; typecheck and production build exited 0. No full-suite rerun has completed for this follow-up. These are component tests with controlled unresolved promises, not live provider recovery or organic trading evidence. No runtime restart, deployment, strategy promotion or trading-threshold change was performed.

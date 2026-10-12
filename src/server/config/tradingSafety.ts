@@ -18,27 +18,13 @@ export interface TradingSafety {
    *  evaluator - prevents duplicate-evaluation races and bar-request storms from a symbol
    *  receiving several near-simultaneous detection events (e.g. repeated news catalysts). */
   fastLaneSymbolEvaluationCooldownMs: number;
-  /** 2026-10-08 (fast-lane D4 defect fix): liveness watchdog for a single fast-lane strategy
-   *  evaluation. A hung evaluateSymbol() promise is abandoned after this long; the candidate is
-   *  terminally transitioned and the concurrency slot released. Resource governor, not a trading
-   *  threshold. */
+  /** Caller watchdog: reports timeout while work retains capacity and dedup until settlement. */
   fastLaneEvaluationTimeoutMs: number;
-  /** 2026-10-09 (P1 fast-lane lease fix, hung-work Part 4): consecutive caller-timeouts for ONE
-   *  symbol after which its lease is QUARANTINED - the concurrency slot is returned to the pool
-   *  (capacity recovers) while the dedup entry is kept so no replacement concurrent evaluation
-   *  can start for that symbol. quantSignalAgent.evaluateSymbol() accepts no AbortSignal and
-   *  HistoricalDataGateway's provider fetch has no timeout/cancel path, so a permanently hung
-   *  evaluation cannot be cooperatively cancelled from here - quarantine is the bounded
-   *  alternative. Resource governor, not a trading threshold. */
+  /** Consecutive caller timeouts before quarantine. Quarantine retains ownership and capacity. */
   fastLaneHungLeaseMaxConsecutiveTimeouts: number;
-  /** 2026-10-09 (P1 fast-lane lease fix, hung-work Part 4): maximum age of a lease (ms) before it
-   *  is QUARANTINED even without consecutive timeouts - the backstop that guarantees a
-   *  permanently hung task can never hold Fast Lane capacity forever. Same semantics as
-   *  fastLaneHungLeaseMaxConsecutiveTimeouts: slot recovered, dedup entry kept, late settle
-   *  discarded and never double-applied. Resource governor, not a trading threshold. */
+  /** Maximum age before quarantine; does not cancel work or release its slot. */
   fastLaneHungLeaseMaxAgeMs: number;
-  /** 2026-10-11 (#15): maximum age (ms) for a QUARANTINED lease before bounded eviction.
-   *  Resource governor, not a trading threshold. */
+  /** Compatibility-only legacy setting. Age-based ownership eviction is disabled. */
   fastLaneQuarantineMaxAgeMs: number;
   /** 2026-10-08 (fast-lane D5 defect fix): bound for fastCanonicalDedup.ts's in-memory
    *  evidence-fingerprint idempotency cache. Oldest-first eviction past this size.
