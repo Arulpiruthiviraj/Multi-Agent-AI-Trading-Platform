@@ -54,6 +54,8 @@ function StatCard({ icon, label, value, tone, title }: { icon: React.ReactNode; 
 export default function MissionControlBar() {
   const [data, setData] = useState<MissionControlData | null>(null);
 
+  const [stalePolls, setStalePolls] = useState(0);
+
   useEffect(() => {
     let cancelled = false;
     let inFlight = false;
@@ -62,8 +64,12 @@ export default function MissionControlBar() {
       inFlight = true;
       fetch('/api/v2/system/mission-control')
         .then(r => r.json())
-        .then(json => { if (!cancelled && json.ok) setData(json); })
-        .catch(() => {})
+        .then(json => {
+          if (cancelled) return;
+          if (json.ok) { setData(json); setStalePolls(0); }
+          else setStalePolls(n => n + 1);
+        })
+        .catch(() => { if (!cancelled) setStalePolls(n => n + 1); })
         .finally(() => { inFlight = false; });
     };
     load();
@@ -82,6 +88,11 @@ export default function MissionControlBar() {
 
   return (
     <div className="flex flex-wrap gap-3">
+      {stalePolls >= 3 && (
+        <span className="text-[9px] font-mono uppercase tracking-widest text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-2 py-1" role="status">
+          Stale — feed not refreshing
+        </span>
+      )}
       <StatCard
         icon={<Activity size={12} />} label="Market Data"
         value={data.marketData.connected ? '● CONNECTED' : '○ DISCONNECTED'}

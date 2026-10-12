@@ -34,6 +34,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { useEscapeKey } from "../hooks/useEscapeKey";
 import { X, Play, Pause, SkipBack, FastForward, Activity, BrainCircuit, BarChart2, ShieldCheck, Send, CheckCircle2, XCircle } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip } from 'recharts';
 import { SafeResponsiveContainer } from './shared/SafeResponsiveContainer';
@@ -137,6 +138,8 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
     return () => clearInterval(interval);
   }, [isPlaying, traceEvents.length]);
 
+  useEscapeKey(onClose);
+
   if (loading) return null;
 
   if (traceEvents.length === 0) {
@@ -145,7 +148,7 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
         <div className="bg-[#0A0F16] border border-slate-800 rounded-lg w-full max-w-lg shadow-2xl overflow-hidden animate-fade-in relative flex flex-col font-mono">
           <div className="bg-[#111822] border-b border-slate-800 p-4 flex justify-between items-center">
             <h2 className="text-white font-bold tracking-widest uppercase text-sm">Trade Replay: {trade.symbol}</h2>
-            <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors"><X size={20} /></button>
+            <button onClick={onClose} aria-label="Close" className="text-slate-500 hover:text-white transition-colors"><X size={20} /></button>
           </div>
           <div className="p-8 flex flex-col items-center text-center gap-3">
             <XCircle size={32} className="text-slate-600" />
@@ -187,7 +190,7 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
                     {showExplainability ? "Hide Explainability Report" : "View Explainability Report"}
                  </button>
              )}
-            <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors">
+            <button onClick={onClose} aria-label="Close" className="text-slate-500 hover:text-white transition-colors">
               <X size={20} />
             </button>
           </div>

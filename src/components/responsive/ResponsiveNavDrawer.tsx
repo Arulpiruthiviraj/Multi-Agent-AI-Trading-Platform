@@ -58,6 +58,7 @@ export function ResponsiveNavDrawer({ open, activeTab, onClose, onSelectTab }: R
                         <button
                           type="button"
                           onClick={() => handleSelect(tabId)}
+                          aria-current={activeTab === tabId ? 'page' : undefined}
                           className={`w-full argus-touch-target flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-[11px] font-mono transition-colors ${
                             activeTab === tabId
                               ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400'

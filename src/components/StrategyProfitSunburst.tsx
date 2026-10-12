@@ -199,7 +199,7 @@ export default function StrategyProfitSunburst() {
 
       {available === true && (
         <div className="flex justify-center items-center w-full relative">
-          <svg ref={svgRef} className="w-full max-w-[400px] h-[400px] drop-shadow-2xl" />
+          <svg ref={svgRef} className="w-full max-w-[400px] aspect-square drop-shadow-2xl" />
           <div className="absolute bottom-0 right-0 flex flex-col gap-2 bg-[#111822]/80 backdrop-blur border border-slate-800 p-3 rounded font-mono text-[9px] z-0">
              <div className="text-slate-400 font-bold uppercase mb-1 border-b border-slate-800 pb-1">Legend</div>
              <div className="flex items-center gap-2">

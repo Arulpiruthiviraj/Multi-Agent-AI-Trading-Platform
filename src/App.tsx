@@ -4412,6 +4412,7 @@ export default function App() {
                     type="text"
                     value={nlpQuery}
                     onChange={(e) => setNlpQuery(e.target.value)}
+                    aria-label="Natural language trade command"
                     placeholder="e.g. Buy 10 shares of MSFT and hold them tight..."
                     className="flex-1 bg-[#111822] border border-slate-700 rounded-lg px-4 py-2.5 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500 transition-colors w-full"
                     onKeyDown={(e) => e.key === "Enter" && handleMcpTrade()}
@@ -4980,6 +4981,7 @@ export default function App() {
                   <div className="col-span-5">
                     <select
                       name="alertSymbol"
+                      aria-label="Alert symbol"
                       className="w-full bg-[#111822] border border-slate-800 rounded px-2 py-1.5 text-xs text-slate-200 outline-none focus:border-indigo-500"
                       value={selectedAlertSymbol}
                       onChange={(e) => setSelectedAlertSymbol(e.target.value)}
@@ -4998,6 +5000,7 @@ export default function App() {
                   <div className="col-span-4">
                     <select
                       name="alertCondition"
+                      aria-label="Alert condition"
                       className="w-full bg-[#111822] border border-slate-800 rounded px-2 py-1.5 text-xs text-slate-200 outline-none focus:border-indigo-500"
                     >
                       <option value="greater">Goes Above</option>
@@ -5017,6 +5020,7 @@ export default function App() {
                   <div className="col-span-12">
                     <select
                       name="alertSound"
+                      aria-label="Alert sound"
                       className="w-full bg-[#111822] border border-slate-800 rounded px-2 py-1.5 text-xs text-slate-200 outline-none focus:border-indigo-500"
                       defaultValue="default"
                     >
@@ -8409,8 +8413,9 @@ export default function App() {
                         <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-4">Register New Endpoint</h3>
                         <form onSubmit={handleAddWebhook} className="flex flex-col gap-4">
                            <div>
-                              <label className="text-[10px] uppercase font-mono text-slate-500 block mb-1">Friendly Name</label>
+                              <label htmlFor="webhook-name" className="text-[10px] uppercase font-mono text-slate-500 block mb-1">Friendly Name</label>
                               <input 
+                                 id="webhook-name"
                                  type="text" 
                                  value={newWebhookName} 
                                  onChange={(e) => setNewWebhookName(e.target.value)} 
@@ -8420,8 +8425,9 @@ export default function App() {
                            </div>
 
                            <div>
-                              <label className="text-[10px] uppercase font-mono text-slate-500 block mb-1">Webhook URL</label>
+                              <label htmlFor="webhook-url" className="text-[10px] uppercase font-mono text-slate-500 block mb-1">Webhook URL</label>
                               <input 
+                                 id="webhook-url"
                                  type="text" 
                                  value={newWebhookUrl} 
                                  onChange={(e) => setNewWebhookUrl(e.target.value)} 

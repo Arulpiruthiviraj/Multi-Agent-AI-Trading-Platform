@@ -1074,7 +1074,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
         </div>
 
         {/* Content Area */}
-        <div className="flex-1 overflow-y-auto bg-[#0A0F16] p-8 lg:p-12 relative scroll-smooth">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden bg-[#0A0F16] p-8 lg:p-12 relative scroll-smooth">
            
            {/* Background decorative elements */}
            <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-indigo-500/5 blur-[120px] rounded-full pointer-events-none"></div>

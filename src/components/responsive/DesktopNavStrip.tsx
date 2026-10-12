@@ -152,6 +152,7 @@ export function DesktopNavStrip({
                     id={item.buttonId}
                     type="button"
                     onClick={() => onSelectTab(item.id)}
+                    aria-current={isActive ? "page" : undefined}
                     className={tabClass(isActive, item.accent)}
                   >
                     <Icon size={14} />

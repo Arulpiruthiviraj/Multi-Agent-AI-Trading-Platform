@@ -34,6 +34,7 @@
  */
 
 import React, { useState, useEffect } from "react";
+import { useEscapeKey } from "../hooks/useEscapeKey";
 import { X, ChevronRight, ChevronLeft, LayoutDashboard, BrainCircuit, Activity, Sliders, ShieldCheck, Cpu } from "lucide-react";
 
 interface Step {
@@ -101,6 +102,11 @@ export const AppWalkthrough: React.FC = () => {
   const [currentStep, setCurrentStep] = useState(0);
   const [targetRect, setTargetRect] = useState<DOMRect | null>(null);
   const [showWelcome, setShowWelcome] = useState(false);
+  useEscapeKey(() => {
+    setShowWelcome(false);
+    setIsVisible(false);
+    try { localStorage.setItem("argus_tour_seen", "true"); } catch { /* noop */ }
+  }, isVisible || showWelcome);
 
   useEffect(() => {
     const hasSeenTour = localStorage.getItem("argus_tour_seen");
@@ -232,7 +238,7 @@ export const AppWalkthrough: React.FC = () => {
           })
         }}
       >
-        <button onClick={skipTour} className="absolute top-3 right-3 text-slate-500 hover:text-white transition-colors">
+        <button aria-label="Skip tour" onClick={skipTour} className="absolute top-3 right-3 text-slate-500 hover:text-white transition-colors">
           <X size={16} />
         </button>
         
@@ -259,7 +265,7 @@ export const AppWalkthrough: React.FC = () => {
           
           <div className="flex gap-2">
             {currentStep > 0 && (
-              <button onClick={handlePrev} className="p-1.5 bg-slate-800 text-slate-300 rounded hover:bg-slate-700 transition-colors">
+              <button onClick={handlePrev} aria-label="Previous step" className="p-1.5 bg-slate-800 text-slate-300 rounded hover:bg-slate-700 transition-colors">
                 <ChevronLeft size={16} />
               </button>
             )}

@@ -34,6 +34,7 @@
  */
 
 import React, { useState, useMemo } from 'react';
+import { useEscapeKey } from "../hooks/useEscapeKey";
 import { X, Activity, Maximize2, Network } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from 'recharts';
 import { SafeResponsiveContainer } from './shared/SafeResponsiveContainer';
@@ -74,6 +75,8 @@ export default function AgentComparisonModal({
     }));
   }, [agentRoiData, agentAlpha, agentBeta]);
 
+  useEscapeKey(onClose, isOpen);
+
   if (!isOpen) return null;
 
   return (
@@ -92,6 +95,7 @@ export default function AgentComparisonModal({
           </div>
           <button 
             onClick={onClose}
+            aria-label="Close comparison"
             className="text-slate-400 hover:text-white transition-colors p-2 hover:bg-slate-800 rounded"
           >
             <X size={20} />

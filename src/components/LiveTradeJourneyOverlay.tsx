@@ -34,6 +34,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { useEscapeKey } from "../hooks/useEscapeKey";
 import ReactFlow, { Background, Controls, Edge, Node } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { JourneyNode } from './journeyFlowTypes';
@@ -82,6 +83,8 @@ export default function LiveTradeJourneyOverlay({ trade, onClose }: { trade: any
      setEdges(newEdges);
   }, [timelineIndex, traceEvents, trade]);
 
+  useEscapeKey(onClose);
+
   if (traceEvents.length === 0) return null;
 
   return (
@@ -99,7 +102,7 @@ export default function LiveTradeJourneyOverlay({ trade, onClose }: { trade: any
               <p className="text-emerald-400 text-[10px] font-mono">Live Decision Journey Tracing</p>
             </div>
           </div>
-          <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors bg-slate-800 p-2 rounded">
+          <button aria-label="Close" onClick={onClose} className="text-slate-500 hover:text-white transition-colors bg-slate-800 p-2 rounded">
             <X size={16} />
           </button>
         </div>

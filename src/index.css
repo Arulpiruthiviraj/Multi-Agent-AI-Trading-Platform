@@ -234,3 +234,16 @@ a.argus-touch-target {
     animation: none;
   }
 }
+
+/* Visible keyboard focus: several components use focus:outline-none, so
+   provide a consistent replacement ring for keyboard users. */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
