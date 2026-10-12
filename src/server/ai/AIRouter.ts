@@ -399,10 +399,22 @@ export class AIRouter {
   private trackRouteTaskInFlight(key: string, promise: Promise<RouteTaskResult>): void {
     this.pruneStaleRouteTaskInFlight(Date.now());
     // Bounded: oldest-first eviction at the same cap the governor uses for its state cache.
+    // 2026-10-12 (L3): evict the oldest SETTLED entry first. The old code evicted the map's
+    // oldest entry regardless of state, so a still-running (unsettled) execution could lose
+    // its dedup entry and a duplicate provider call would start - the same hazard #19 fixed
+    // for TTL pruning above. Only when every entry is unsettled does the oldest unsettled
+    // entry get evicted. The cap itself is unchanged.
     while (this.routeTaskInFlight.size >= aiCallGovernor.aiStateCacheMaxEntries) {
-      const oldest = this.routeTaskInFlight.keys().next();
-      if (oldest.done) break;
-      this.routeTaskInFlight.delete(oldest.value);
+      let evictKey: string | undefined;
+      for (const [key, entry] of this.routeTaskInFlight) {
+        if (entry.settled) { evictKey = key; break; }
+      }
+      if (evictKey === undefined) {
+        const oldest = this.routeTaskInFlight.keys().next();
+        if (oldest.done) break;
+        evictKey = oldest.value;
+      }
+      this.routeTaskInFlight.delete(evictKey);
     }
     const entry = { promise, createdAt: Date.now(), settled: false };
     // 2026-10-11 (#19): track settlement so pruneStaleRouteTaskInFlight only prunes
@@ -514,6 +526,11 @@ export class AIRouter {
   /** Test-only — current size of the bounded routeTask() in-flight coalescing map. */
   public __routeTaskInFlightSizeForTests(): number {
     return this.routeTaskInFlight.size;
+  }
+
+  /** Test-only — insertion-ordered keys of the in-flight map with their settled flags. */
+  public __routeTaskInFlightKeysForTests(): Array<{ key: string; settled: boolean }> {
+    return [...this.routeTaskInFlight.entries()].map(([key, entry]) => ({ key, settled: entry.settled }));
   }
 
   private async disableProviderForAuthFailure(providerId: string, reason: string): Promise<void> {

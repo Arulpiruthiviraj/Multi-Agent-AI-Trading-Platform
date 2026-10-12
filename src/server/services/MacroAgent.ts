@@ -24,6 +24,7 @@ import { waitForFreshMarketData } from '../core/waitForFreshMarketData';
 import { selectPriorityRoundRobinSymbol } from '../core/agentRoundRobin';
 import { getRecentCandidates } from '../core/recentCandidateRegistry';
 import { tradingSafety } from '../config/tradingSafety';
+import { aiModels } from '../config/aiModels';
 import { getFinceptMacroSnapshot, formatFinceptMacroSnapshotForPrompt } from './FinceptCacheAdapter';
 import {
   notePipelineAgentFailure,
@@ -78,6 +79,35 @@ const MACRO_CACHE_MAX_AGE_MS = runtimeIntervals.macroCacheMaxAgeMs;
 // for) + a hash of the exact macro data used + a prompt-version tag.
 const AI_ANALYSIS_PROMPT_VERSION = 'v1';
 const AI_ANALYSIS_CACHE_MAX_AGE_MS = MACRO_CACHE_MAX_AGE_MS;
+
+/**
+ * 2026-10-12 (coverage #18): raw fetch() calls with no timeout - a stalled provider hung the
+ * agent interval loop forever. AbortSignal-based timeout matching AIRouter.withTimeout's exact
+ * pattern (AbortController + setTimeout that aborts and rejects with a named timeout error +
+ * clearTimeout on settle). Default is aiModels.researchTimeoutMs (8000ms) - the same default
+ * AIRouter uses - since this agent defines no fetch timeout of its own. A timeout rejects into
+ * the caller's existing catch, which fails closed to the honest UNKNOWN/RATE_LIMITED HOLD.
+ */
+class DataFetchTimeoutError extends Error {
+  constructor(source: string, ms: number) {
+    super(`Data provider '${source}' did not respond within ${ms}ms`);
+    this.name = 'DataFetchTimeoutError';
+  }
+}
+
+function fetchWithTimeout(url: string, source: string, ms: number = aiModels.researchTimeoutMs): Promise<Response> {
+  const controller = new AbortController();
+  return new Promise<Response>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      controller.abort();
+      reject(new DataFetchTimeoutError(source, ms));
+    }, ms);
+    fetch(url, { signal: controller.signal }).then(
+      (response) => { clearTimeout(timer); resolve(response); },
+      (err) => { clearTimeout(timer); controller.abort(); reject(err); },
+    );
+  });
+}
 
 interface CachedAnalysis { recommendation: string; confidence: number; reasoning: string; }
 
@@ -135,7 +165,7 @@ export class MacroEconomyAgent {
     const key = process.env.FRED_API_KEY;
     if (!key) return [];
     const url = `${networkEndpoints.marketData.fredBaseUrl}?series_id=${seriesId}&api_key=${key}&file_type=json&sort_order=desc&limit=${limit}`;
-    const response = await fetch(url);
+    const response = await fetchWithTimeout(url, 'FRED');
     if (!response.ok) return [];
     const body = await response.json() as any;
     const obs = Array.isArray(body?.observations) ? body.observations : [];
@@ -210,7 +240,7 @@ export class MacroEconomyAgent {
          const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
          const fetchOne = async (fn: string): Promise<any> => {
            if (!(await AlphaVantageBudget.tryConsume(1, undefined, 'MacroAgent'))) return { __budgetExhausted: true };
-           const r = await fetch(`${avBase}?function=${fn}&apikey=${key}`);
+           const r = await fetchWithTimeout(`${avBase}?function=${fn}&apikey=${key}`, 'AlphaVantage');
            if (r.status === 429) return { __http429: true };
            return r.json() as any;
          };
