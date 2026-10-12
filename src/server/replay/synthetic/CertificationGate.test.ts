@@ -66,6 +66,11 @@ function fakeResult(
     dbPath: '/tmp/fake.db',
     calibrationSeedResults: [],
     costProfile,
+    faultOutcomes: [],
+    stoppedEarly: false,
+    stoppedAtBarIndex: null,
+    brokerState: null,
+    ideaGenerationGateOpen: true,
   };
 }
 
@@ -76,6 +81,19 @@ describe('evaluateCertification', () => {
     expect(cert.certification).toBe('FAIL');
     expect(cert.reason).toContain('MARKET_DATA');
     expect(cert.stages.MARKET_DATA).toBe(false);
+  });
+
+  it('Test A FAILS when the idea-generation gate was held at boot (silent gating, not a quiet market)', () => {
+    seq = 0;
+    const timeline = [
+      entry('MARKET_DATA', { symbol: 'AAPL' }),
+      entry('MARKET_DATA', { symbol: 'AAPL' }),
+    ];
+    const result = fakeResult(timeline);
+    result.ideaGenerationGateOpen = false;
+    const cert = evaluateCertification(result, false);
+    expect(cert.certification).toBe('FAIL');
+    expect(cert.reason).toContain('HELD');
   });
 
   it('Test A passes with market data and zero trades, reporting a legible reason', () => {

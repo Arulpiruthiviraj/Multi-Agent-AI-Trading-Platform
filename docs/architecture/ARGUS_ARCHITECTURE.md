@@ -265,6 +265,61 @@ now means "prefilter checks passed", not a trade approval).
 — fast lane verified inert (zero live ideas; permanently `REQUIRES_CONSENSUS`), exit semantics
 (agent-tagged, not origin-tagged).
 
+## 2026-10-11: Release certification driver + full-session synthetic certification harness (Worker H)
+
+**Release certification driver** (`src/server/certification/releaseCertificationDriver.ts`):
+orchestrates ALL mandatory next-session checks from a manifest. Each check resolves to
+`PASS` / `FAIL` / `NOT_RUN` / `UNKNOWN` / `NOT_CERTIFIED`; **READY is true only if every
+mandatory check is PASS** — a partial probe can never report READY (`FAIL`, `NOT_RUN`,
+`UNKNOWN`, `NOT_CERTIFIED` all force `READY=false`, fail-closed). Suite-delegated checks
+name their owning test files (`delegatedToSuite`) and are actually executed via vitest
+child processes under `--with-suites`; live probes (component health via `--engine-url`)
+resolve to `UNKNOWN` when the engine is unreachable rather than assuming health.
+`argus-cli certify-next-session` (`scripts/certifyNextSession.ts`) runs the driver and
+emits the flat 44-field machine contract (`BUILD_SHA`, `ARTIFACT_HASH`, `CONFIG_HASH`,
+`SCHEMA_VERSION`, `JAVA_ARTIFACT_HASH`, `STRATEGY_REGISTRY_HASH`, `DB_SNAPSHOT_ID`,
+`PRODUCTION_CONFIG_EQUIVALENT`, `LIFECYCLE_SUMMARY`, `AUTHORIZED_PAPER_QUANT_STRATEGIES`,
+`QUANT_POLICY_REACHABILITY`, `JEV_*`, `ALL_AI_DOWN_QUANT`, `HISTORICAL_DATA_FRESHNESS`,
+`INTRADAY_DATA_READINESS`, `MARKET_DATA_HEALTH`, `SUBSCRIPTION_HEALTH`,
+`SCHEDULER_P50/P95/P99/MAX`, `MRNA_SCENARIO`, `CRCL_SCENARIO`, `FAST_LANE`,
+`ASYNC_OWNERSHIP`, `PIT_REPLAY`, `NO_LOOKAHEAD`, `PREMARKET`, `RISK_SPINE`, `OMS`,
+`RECONCILIATION`, `BACKUP`, `WATCHDOG`, `MEMORY`, `QUEUES`, `LISTENERS`, `TIMERS`,
+`WORKERS`, `FULL_SESSION`, `WALL_CLOCK_SOAK`, `OVERALL_STATUS`); exit 0 = READY, 2 =
+READY_WITH_CONDITIONS, 3 = NO_GO (a result, not a bug), 1 = internal error. The production
+DB is snapshotted with the sqlite3 online `.backup` API into an isolated copy — the prior
+raw-copy snapshot fallback was deleted; a failed snapshot fails loud, never falls back.
+
+**Full-session synthetic certification harness** (environment-only fault injection;
+synthetic controls the ENVIRONMENT, never the decision — no forced signals, approvals,
+or fills above the broker boundary):
+- `src/server/replay/synthetic/SessionFaultPlan.ts` — the session fault plan: premarket
+  probes (`RISK_REJECTION_PROBE`, `INVALID_STRATEGY_PROBE`, `VALID_STRATEGY_PROBE`,
+  `STALE_TAIL_PROBE`), bar-level one-shots (`LATE_MOVER`, `NEWS_BURST`, `AI_OUTAGE`,
+  `AI_RECOVERY`, `JEV_OUTAGE_PROBE`, `BACKUP_RUN`), and window faults
+  (`FEED_INTERRUPTION`, `PARTIAL_FILL_LIQUIDITY_CAP`). All production imports are dynamic;
+  faults never steer a decision.
+- `SyntheticSessionEngine` extensions: `faultPlan` application per bar, 30-day-shifted
+  stale-cache tails, `stopAfterBarIndex` / resume-from-`brokerState` for restart
+  certification, feed-interruption tick suppression, idempotent settings seeding, and the
+  **idea-generation-gate proof** (`ideaGenerationGateOpen`): the engine records whether
+  `isLiveIdeaGenerationEnabled()` was true at boot. A session whose restart-safety hold
+  was engaged (stale unclean session marker from a previous crashed run with the same
+  simulationId) or whose trading state was paused silently gates every idea agent — a
+  "no ideas" result then proves nothing. `evaluateCertification` FAILs a held session
+  fail-loud; planned restart stops mark a clean shutdown (`markCleanShutdown()`) so the
+  resume half does not inherit a spurious hold, and the driver uses a unique
+  simulationId per run.
+- `HistoricalReplayBroker.exportState()` / `importState()` — additive broker-state
+  snapshot/restore for restart continuity (positions, cash, orders); no behavior change
+  to the fill path.
+
+Certification artifacts: `docs/testing/ARGUS_FULL_SESSION_SYNTHETIC_CERTIFICATION.md`
+(session design, scenario matrix results, defects found),
+`docs/testing/ARGUS_NEXT_SESSION_CERTIFICATION.md` §11 (production-state run results +
+CLI output). House rule: synthetic calibration fixtures are labeled
+`SYNTHETIC_SEEDED` / `NON_ORGANIC` / `CERTIFICATION_FIXTURE_ONLY` and never presented as
+organic evidence.
+
 ## 2026-10-07: `DbBackupService` retention defect fix (unbounded backup growth filled the disk)
 
 **Real, live-reproduced defect, not a hypothetical.** The disk hosting `data/argus.db` ran to

@@ -206,10 +206,14 @@ export function evaluateCertification(
   let reason: string | null = null;
   let zeroTradeReason: string | null = null;
 
-  // 2026-10-04: a Test A run that produced zero market-data ticks is not a safety
-  // proof - it is a broken simulator (dead data engine). Previously this passed
-  // silently, which is exactly the false-confidence failure this gate exists to prevent.
-  if (marketDataTicks === 0) {
+  // 2026-10-11: a session whose idea-generation gate was closed at boot (restart-safety
+  // hold from a stale unclean marker, or a paused trading state) silently gates EVERY idea
+  // agent - a "no ideas" result then proves nothing about the pipeline. Fail loud: a held
+  // session is a broken test setup, not a quiet market.
+  if ((result as any).ideaGenerationGateOpen === false) {
+    certification = 'FAIL';
+    reason = 'Idea generation was HELD for this session (restart-safety hold engaged or trading paused at boot) - every idea agent was silently gated, so zero ideas prove nothing. Use a fresh simulationId (a previous crashed run with this id left an unclean session marker).';
+  } else if (marketDataTicks === 0) {
     certification = 'FAIL';
     reason = 'No MARKET_DATA ticks recorded - the synthetic data engine produced nothing; the test itself is broken, not the pipeline.';
   } else if (fatalViolations.length > 0) {

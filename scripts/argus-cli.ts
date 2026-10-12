@@ -1033,7 +1033,7 @@ export const COMMAND_HELP: Record<string, string> = {
   'pipeline-ready': 'Usage: argus pipeline-ready\nPipeline readiness check.',
   'readiness': 'Usage: argus readiness\nPre-session checklist: per-check PASS/WARN/FAIL with READY / READY_WITH_WARNINGS / NOT_READY verdict. Read-only; AI checks are advisory only.',
   'quant-readiness': 'Usage: argus quant-readiness [--json]\nProduction-state diagnostic: per-strategy authorization verdicts (AUTHORIZED_QUANT_POLICY / REQUIRES_CONSENSUS / NOT_ELIGIBLE / NOT_AUTHORIZED) computed by the real resolver against the live runtime DB. Read-only; requires the engine API.',
-  'certify-next-session': 'Usage: argus certify-next-session [--db=<path>] [--json]\nPre-market release gate: snapshots the production DB read-only into an isolated copy, runs canonical authorization + data-readiness + build/config/schema provenance, and emits OVERALL_STATUS (READY / READY_WITH_CONDITIONS / NO_GO). Never seeds lifecycle, never promotes strategies, never arms LIVE.',
+  'certify-next-session': 'Usage: argus certify-next-session [--db=<path>] [--json] [--with-suites] [--engine-url=<url>]\nPre-market release gate: snapshots the production DB read-only into an isolated copy, runs canonical authorization + data-readiness + build/config/schema provenance + the release certification driver (ALL mandatory checks; only PASS satisfies - a partial probe never reports READY), and emits OVERALL_STATUS (READY / READY_WITH_CONDITIONS / NO_GO) plus every required field (BUILD_SHA, ARTIFACT_HASH, CONFIG_HASH, SCHEMA_VERSION, JAVA_ARTIFACT_HASH, STRATEGY_REGISTRY_HASH, DB_SNAPSHOT_ID, PRODUCTION_CONFIG_EQUIVALENT, LIFECYCLE_SUMMARY, AUTHORIZED_PAPER_QUANT_STRATEGIES, QUANT_POLICY_REACHABILITY, JEV_*, ALL_AI_DOWN_QUANT, HISTORICAL_DATA_FRESHNESS, INTRADAY_DATA_READINESS, MARKET_DATA_HEALTH, SUBSCRIPTION_HEALTH, SCHEDULER_P50/P95/P99/MAX, MRNA/CRCL_SCENARIO, FAST_LANE, ASYNC_OWNERSHIP, PIT_REPLAY, NO_LOOKAHEAD, PREMARKET, RISK_SPINE, OMS, RECONCILIATION, BACKUP, WATCHDOG, MEMORY, QUEUES, LISTENERS, TIMERS, WORKERS, FULL_SESSION, WALL_CLOCK_SOAK). --with-suites executes the suite-delegated checks (slow); --engine-url enables live market/subscription/scheduler probes. Never seeds lifecycle, never promotes strategies, never arms LIVE.',
   'session-checkpoint': 'Usage: argus session-checkpoint\nEarly-warning inactivity check: classifies the session HEALTHY_ZERO_TRADE / SUSPICIOUS_ZERO_TRADE (or TRADING). Run at 09:35/10:00/11:00/13:00/15:00 ET during PAPER sessions.',
   'session-report': 'Usage: argus session-report\nSession report.',
   'research': 'Usage: argus research <subcommand> [args]\nResearch intelligence (advisory only, never a trade). Run `argus research --help` for subcommands.',
@@ -2207,10 +2207,12 @@ const commands: Record<string, () => Promise<void>> = {
   },
   async 'certify-next-session'() {
     // Pre-market release gate. Snapshot the production DB read-only into an isolated
-    // copy (VACUUM INTO from a read-only connection: consistent even while the engine
-    // writes), then run the certification child against the copy. The child never
-    // touches the live DB; nothing here seeds lifecycle, promotes strategies, or arms
-    // LIVE. A NO_GO verdict is a certification RESULT (exit 3), not a bug.
+    // copy (sqlite3 online backup API: consistent even while the engine writes), then
+    // run the certification child against the copy. The child never touches the live
+    // DB; nothing here seeds lifecycle, promotes strategies, or arms LIVE. A NO_GO
+    // verdict is a certification RESULT (exit 3), not a bug. The release certification
+    // driver computes the verdict: only PASS satisfies; FAIL/NOT_RUN/UNKNOWN/
+    // NOT_CERTIFIED force READY=false (a partial probe can never report READY).
     const { parse } = await import('dotenv');
     const { execFileSync } = await import('node:child_process');
     const { mkdtempSync, rmSync } = await import('node:fs');
@@ -2218,6 +2220,8 @@ const commands: Record<string, () => Promise<void>> = {
     const { resolve } = await import('node:path');
 
     const dbFlag = process.argv.slice(3).find(a => a.startsWith('--db='));
+    const withSuites = process.argv.slice(3).includes('--with-suites');
+    const engineUrlFlag = process.argv.slice(3).find(a => a.startsWith('--engine-url='));
     const asJson = process.argv.slice(3).includes('--json');
     const envFile = existsSync('.env') ? parse(readFileSync('.env')) : {};
     const env = { ...envFile, ...process.env };
@@ -2248,8 +2252,13 @@ const commands: Record<string, () => Promise<void>> = {
           '--use-system-ca', resolve('node_modules/tsx/dist/cli.mjs'),
           resolve('scripts/certifyNextSession.ts'), `--isolated-db=${snapshotDb}`,
           ...(asJson ? ['--json'] : []),
+          ...(withSuites ? ['--with-suites'] : []),
+          ...(engineUrlFlag ? [engineUrlFlag] : []),
         ], {
-          env: { ...env, SYNTHETIC_SIMULATION: 'false', ARGUS_DISABLE_MARKET_DATA_WS: 'true' },
+          env: {
+            ...env, SYNTHETIC_SIMULATION: 'false', ARGUS_DISABLE_MARKET_DATA_WS: 'true',
+            ARGUS_CERT_SOURCE_DB: sourcePath,
+          },
           stdio: 'inherit',
         });
         child.once('error', reject);

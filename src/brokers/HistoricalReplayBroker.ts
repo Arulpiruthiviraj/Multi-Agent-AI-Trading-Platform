@@ -12,6 +12,21 @@ import {
   resolvePaperBrokerOrderRegistryMax,
 } from './brokerMemory';
 
+/** JSON-safe snapshot of HistoricalReplayBroker's mutable state (see exportState/importState). */
+export interface HistoricalReplayBrokerState {
+  cash: number;
+  positions: Position[];
+  orders: Array<Omit<Order, 'createdAt' | 'updatedAt'> & { createdAt: number | string; updatedAt: number | string }>;
+  workingOrders: Array<{
+    id: string; symbol: string; side: 'BUY' | 'SELL'; remainingQty: number;
+    filledSoFar: number; totalNotionalFilled: number; lastAdvancedAtMs: number | null;
+  }>;
+  realizedPnl: number;
+  feesPaid: number;
+  slippagePaid: number;
+  clockNowMs: number;
+}
+
 export class HistoricalReplayBroker implements BrokerPlugin {
   id = 'historical_replay';
   name = 'Argus Historical Replay Simulator';
@@ -434,8 +449,66 @@ export class HistoricalReplayBroker implements BrokerPlugin {
     }
   }
 
-  async modifyOrder() { throw new Error('Replay modifyOrder unsupported'); }
-  async cancelOrder(orderId: string) {
+  /**
+   * Session-restart support (2026-10-11, full-session synthetic certification): exports the
+   * complete mutable broker state as plain JSON-safe data so a restarted session process can
+   * restore it. Additive only - no behavior change to fill/accounting logic. Positions, orders,
+   * working-order remainders, cash, and cumulative cost/P&L counters are all captured; the
+   * volume-participation cap and cost profile are constructor config, re-supplied by the
+   * restoring session (not serialized).
+   */
+  exportState(): HistoricalReplayBrokerState {
+    return {
+      cash: this.cash,
+      positions: Array.from(this._positions.values()).map((p) => ({ ...p })),
+      orders: Array.from(this._orders.values()).map((o) => ({
+        ...o,
+        createdAt: o.createdAt instanceof Date ? o.createdAt.getTime() : o.createdAt,
+        updatedAt: o.updatedAt instanceof Date ? o.updatedAt.getTime() : o.updatedAt,
+      })),
+      workingOrders: Array.from(this._workingOrders.entries()).map(([id, w]) => ({ id, ...w })),
+      realizedPnl: this.realizedPnl,
+      feesPaid: this.feesPaid,
+      slippagePaid: this.slippagePaid,
+      clockNowMs: this.clockNowMs,
+    };
+  }
+
+  /**
+   * Restores state previously captured by exportState(). Intended only for the synthetic
+   * session restart path (a fresh HistoricalReplayBroker in a new process continuing the
+   * same isolated session) - never used by the live/paper path.
+   */
+  importState(s: HistoricalReplayBrokerState): void {
+    this.cash = s.cash;
+    this._positions = new Map(s.positions.map((p) => [p.symbol, { ...p }]));
+    this._orders = new Map(
+      s.orders.map((o: any) => [
+        o.id,
+        {
+          ...o,
+          createdAt: new Date(o.createdAt),
+          updatedAt: new Date(o.updatedAt),
+        },
+      ]),
+    );
+    this._workingOrders = new Map(
+      s.workingOrders.map((w) => [
+        w.id,
+        {
+          symbol: w.symbol, side: w.side, remainingQty: w.remainingQty,
+          filledSoFar: w.filledSoFar, totalNotionalFilled: w.totalNotionalFilled,
+          lastAdvancedAtMs: w.lastAdvancedAtMs,
+        },
+      ]),
+    );
+    this.realizedPnl = s.realizedPnl;
+    this.feesPaid = s.feesPaid;
+    this.slippagePaid = s.slippagePaid;
+    this.clockNowMs = s.clockNowMs;
+  }
+
+  async modifyOrder() { throw new Error('Replay modifyOrder unsupported'); }  async cancelOrder(orderId: string) {
     const o = this._orders.get(orderId);
     if (!o || (o.status !== 'PENDING' && o.status !== 'PARTIALLY_FILLED')) return false;
     this._workingOrders.delete(orderId);

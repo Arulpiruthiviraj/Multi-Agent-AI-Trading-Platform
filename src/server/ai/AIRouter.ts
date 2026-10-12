@@ -390,7 +390,15 @@ export class AIRouter {
     const entry = { promise, createdAt: Date.now(), settled: false };
     // 2026-10-11 (#19): track settlement so pruneStaleRouteTaskInFlight only prunes
     // settled entries (a still-running execution must not lose its dedup entry).
-    promise.finally(() => { entry.settled = true; });
+    // 2026-10-11 (Worker H): use the two-handler .then() form, NOT .finally(). A bare
+    // `promise.finally(cb)` returns a derived promise that rejects when the original
+    // rejects; discarding it is an unhandled rejection that crashes the process under
+    // Node's --unhandled-rejections=throw. The two-handler form settles the derived
+    // promise successfully in both cases - no unhandled rejection is possible.
+    promise.then(
+      () => { entry.settled = true; },
+      () => { entry.settled = true; },
+    );
     this.routeTaskInFlight.set(key, entry);
     // Attach a no-op rejection handler so a settled-but-unjoined entry never surfaces as an
     // unhandled rejection; real callers still observe the rejection through their own await.
