@@ -149,6 +149,12 @@ export interface QuantEvaluateSymbolOptions {
   emitIdeas?: boolean;
   cycleCtx?: { cycleId: string; scheduledIndex: number };
   isLiveCheck?: () => boolean;
+  /**
+   * 2026-10-11 (#23): instrumentation callback. Called when strategy selection
+   * (bestStrategyIdea) completes, so the scheduler can record
+   * strategySelectionFinishedAtMs. Optional; ignored if absent.
+   */
+  onStrategySelectionFinished?: () => void;
 }
 
 /**
@@ -970,6 +976,9 @@ export class QuantSignalAgent {
       });
     }
     let strategyIdea = bestStrategyIdea(explorationAdjusted);
+    // 2026-10-11 (#23): report strategy-selection completion for scheduler instrumentation.
+    // Wrapped in try/catch so a faulty callback can never break evaluation.
+    try { options?.onStrategySelectionFinished?.(); } catch { /* instrumentation only */ }
     let matchedStrategyEvaluation = strategyIdea ? strategyEvaluations.find(e => e.strategy === strategyIdea!.strategy) ?? null : null;
     // Real strategy-attribution bug found and fixed (Master Transformation Mandate Part 7 audit,
     // 2026-09-13): captured BEFORE the cold-start-bootstrap branch below nulls

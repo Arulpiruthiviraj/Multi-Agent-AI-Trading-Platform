@@ -145,6 +145,12 @@ export interface QuantStageTimestamps {
   dataFetchStartedAtMs: number | null;
   dataFetchFinishedAtMs: number | null;
   quantStartedAtMs: number | null;
+  // 2026-10-11 (#23): instrumentation to split QUANT_STAGE into worker-acquisition
+  // vs strategy-selection time. workerGrantedAtMs is set when the quant slot is
+  // granted; strategySelectionFinishedAtMs is set via the onStrategySelectionFinished
+  // callback (evaluator reports when its strategy selection completes).
+  workerGrantedAtMs: number | null;
+  strategySelectionFinishedAtMs: number | null;
   javaStartedAtMs: null;
   javaFinishedAtMs: null;
   quantFinishedAtMs: number | null;
@@ -312,6 +318,13 @@ export interface QuantSchedulerDeps {
        * missing predicate as "live" (legacy behavior preserved).
        */
       isLiveCheck?: () => boolean;
+      /**
+       * 2026-10-11 (#23): instrumentation callback. The evaluator calls this when its
+       * strategy selection completes, so the scheduler can record
+       * strategySelectionFinishedAtMs and split QUANT_STAGE into worker-acquisition
+       * vs selection time. Optional; evaluators that don't support it simply omit the call.
+       */
+      onStrategySelectionFinished?: () => void;
     },
   ) => Promise<unknown>;
   /** Cache read (cheap, bounded). Production: historicalDataGateway.getBars. */
@@ -688,6 +701,8 @@ export class QuantPriorityScheduler {
         dataFetchStartedAtMs: null,
         dataFetchFinishedAtMs: null,
         quantStartedAtMs: null,
+        workerGrantedAtMs: null,
+        strategySelectionFinishedAtMs: null,
         javaStartedAtMs: null,
         javaFinishedAtMs: null,
         quantFinishedAtMs: null,
@@ -766,6 +781,8 @@ export class QuantPriorityScheduler {
         dataFetchStartedAtMs: null,
         dataFetchFinishedAtMs: null,
         quantStartedAtMs: null,
+        workerGrantedAtMs: null,
+        strategySelectionFinishedAtMs: null,
         javaStartedAtMs: null,
         javaFinishedAtMs: null,
         quantFinishedAtMs: null,
@@ -1016,6 +1033,8 @@ export class QuantPriorityScheduler {
     try {
       if (rec.terminalState) return;
       rec.stages.quantStartedAtMs = this.now();
+      // 2026-10-11 (#23): workerGrantedAtMs marks when the quant worker slot was granted.
+      rec.stages.workerGrantedAtMs = rec.stages.quantStartedAtMs;
       this.emit('QUANT_SCHEDULER_QUANT_STARTED', {
         candidateId: rec.candidateId, symbol: rec.symbol, priority: rec.priority,
         queueWaitMs: (rec.stages.quantStartedAtMs ?? 0) - rec.stages.admittedAtMs,
@@ -1122,6 +1141,11 @@ export class QuantPriorityScheduler {
         // emission on this. A watchdog-quarantined or otherwise non-live evaluation
         // must not emit as if current.
         isLiveCheck: () => this.isQuantEmissionLive(rec),
+        // 2026-10-11 (#23): the evaluator reports when strategy selection finishes,
+        // so the stage record can split worker-acquisition vs selection time.
+        onStrategySelectionFinished: () => {
+          rec.stages.strategySelectionFinishedAtMs = this.now();
+        },
       }).then(
         (value) => ({ value }) as const,
         (error: unknown) => ({ error }) as const,
