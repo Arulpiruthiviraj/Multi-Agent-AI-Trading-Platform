@@ -599,6 +599,33 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
       }
     });
 
+    it('memory cache does not leak post-cutoff bars: narrow query after wide warm -> filtered (2026-10-11 #10)', async () => {
+      const now = Date.now();
+      const start = now - 90 * 86_400_000;
+      // Seed 90 daily bars ending yesterday.
+      await seedStaleSizedCache('CACHETEST', now - 86_400_000, 90);
+      const T1 = now - 10 * 86_400_000; // narrow cutoff
+      const T2 = now - 86_400_000;      // wider cutoff (T2 > T1)
+
+      // Query T1 (narrow).
+      const narrow1 = await historicalDataGateway.getBars('CACHETEST', '1Day', start, T1);
+      expect(narrow1.length).toBeGreaterThan(0);
+      expect(narrow1[narrow1.length - 1].timestamp).toBeLessThanOrEqual(T1);
+
+      // Query T2 (wider) — warms the cache with a wider range.
+      const wide = await historicalDataGateway.getBars('CACHETEST', '1Day', start, T2);
+      expect(wide.length).toBeGreaterThan(narrow1.length);
+
+      // Repeat T1 — must NOT return post-T1 bars even though the cache was warmed
+      // by the wider query (the old hour-bucketed key collided; the fix keys on
+      // exact times and filters on hit).
+      const narrow2 = await historicalDataGateway.getBars('CACHETEST', '1Day', start, T1);
+      expect(narrow2.length).toBe(narrow1.length);
+      for (const bar of narrow2) {
+        expect(bar.timestamp).toBeLessThanOrEqual(T1);
+      }
+    });
+
     it('keeps the SYNTHETIC_SIMULATION isolation guard fail-closed: stale cache returns without network, empty cache still refuses', async () => {
       const fetchMock = vi.fn(async () => { throw new Error('fetch must not be called during synthetic simulation'); });
       vi.stubGlobal('fetch', fetchMock);

@@ -193,9 +193,13 @@ export class HistoricalDataGateway {
   }
 
   private memoryKey(symbol: string, timeframe: string, startMs: number, endMs: number): string {
-    const startBucket = Math.floor(startMs / 3_600_000);
-    const endBucket = Math.floor(endMs / 3_600_000);
-    return `${symbol}|${timeframe}|${startBucket}|${endBucket}`;
+    // 2026-10-11 (#10): key on the EXACT (startMs, endMs), not hour buckets. The old
+    // hour-bucketing (Math.floor(ms/3_600_000)) collided: a wider query warming the
+    // bucket + a narrower same-bucket query returned post-cutoff bars. DB identity
+    // suffices for the key (no source dimension): getBars()'s DB query does not
+    // filter by source, so the cache is a faithful mirror of exactly what the DB
+    // would return for this (symbol, timeframe, range).
+    return `${symbol}|${timeframe}|${startMs}|${endMs}`;
   }
 
   private armBarsRateLimitBackoff(retryAfterHeader: string | null): void {
@@ -675,7 +679,10 @@ export class HistoricalDataGateway {
     const key = this.memoryKey(symbol, timeframe, startMs, endMs);
     const hit = this.cacheGet(key);
     if (hit && hit.expiresAt > Date.now()) {
-      return hit.bars;
+      // 2026-10-11 (#10): filter cached bars to the requested [startMs, endMs] on hit.
+      // The cache entry may cover a wider range than this query (e.g. warmed by an
+      // earlier wider query); returning it unfiltered would leak post-cutoff bars.
+      return hit.bars.filter((b) => b.timestamp >= startMs && b.timestamp <= endMs);
     }
     const rows = await db.select().from(schema.ohlcvBars)
       .where(and(
