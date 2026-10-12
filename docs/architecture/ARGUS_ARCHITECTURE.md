@@ -1,5 +1,33 @@
 # Argus Architecture
 
+## 2026-10-12 (live forensic): bounded Quant on-demand work, bounded intraday wait, one daily bar per session, escalating AI-provider cooldown
+
+Evidence: `docs/audits/ARGUS_OCT12_LIVE_FORENSIC_INTERIM_2026-10-12.md`. Zero organic trades; Quant evaluations took ~300 s.
+Authorization (lifecycle) and consensus independence remain SEPARATE blockers and are unchanged.
+
+- **On-demand overlap (verified).** `ConfluenceCoordinator` re-triggered `quantSignalAgent.evaluateSymbol(symbol)` every
+  `confluenceCoordinatorCooldownMs` (60 s) while an evaluation lasted ~300 s: 3,035 on-demand vs 8 scheduled evaluations,
+  218-406 in flight, median 33 evaluations per symbol. Now a per-symbol in-flight guard skips a re-trigger while the previous
+  on-demand evaluation is younger than `quantOnDemandInflightMaxAgeMs` (600000, liveness bound); a never-settling evaluation is
+  replaced at most once per window; release is generation-guarded so a stale late settle cannot free a newer slot. Kronos/Technical
+  triggers are unaffected. This is NOT a global admission service: scheduled cycle, Fast Lane and priority scheduler keep their own
+  controls; a single bounded work-admission entry point is future, separately certified work.
+- **Intraday wait (mechanism reproduced, live causality unconfirmed).** With `QUANT_ORB_STRATEGY_ENABLED=true` every evaluation awaits
+  an intraday (1Min) `ensureBars`; live IEX 1Min coverage never met `quantBarsCacheMinCoverageRatio`, so each call entered the
+  global paced provider path. The wait is bounded by `quantIntradayFetchMaxWaitMs` (8000, a latency bound like
+  `quantContradictionMaxWaitMs`); on expiry the evaluation proceeds exactly as when that fetch fails (no intraday bars, opening range
+  honestly unavailable) while the fetch keeps running (never cancelled, never duplicated). `QUANT_INTRADAY_FETCH_DEADLINE` is logged.
+- **Duplicate daily bars (verified).** ibkr stamps a session at 00:00Z, alpaca at 04:00Z/05:00Z, so 77 of 728 symbols held every
+  trading day twice. `getBars()` now returns one bar per UTC calendar day for `1Day`/`1D` (later stamp wins); stored rows are
+  untouched; intraday timeframes are unaffected.
+- **AI provider cooldown.** A transiently failing provider (e.g. local Ollama: 942/1,000 requests HTTP 500) was re-dispatched after
+  each flat 5-minute cooldown. The cooldown now doubles per consecutive failed episode up to `aiProviderQuotaExceededCooldownMs`
+  and resets on success (`escalatedProviderCooldownMs`).
+- **Observability.** `QUANT_SYMBOL_EVAL_FINISHED` now carries `errorCode` (fixed vocabulary, never message text), `lastCompletedStage`,
+  `totalMs` and `stageMs` (`src/server/quant/evalStageTiming.ts`).
+- **Still unconfirmed:** the universal ~300 s between "primary bars available" and "selection pool emitted". The stage timings are
+  the instrument for locating it; no timeout value was changed to hide it.
+
 ## 2026-10-12: `HistoricalDataGateway.getBars()` returns the exact requested window on every path
 
 **Contract:** `getBars(symbol, timeframe, startMs, endMs)` returns exactly the stored bars with
