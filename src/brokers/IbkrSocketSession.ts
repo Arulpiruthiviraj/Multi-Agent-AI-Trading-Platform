@@ -332,6 +332,10 @@ export class IbkrSocketSession {
   private port: number | null = null;
   private accountTags: AccountTags = {};
   private positions = new Map<string, PosRow>();
+  /** Keys reported by `position` events since the last `positionEnd`. 2026-10-12: positionEnd used to be an
+   *  empty handler, so a position that left the broker's snapshot without a zero-quantity event lingered
+   *  forever (DDOG, after a full exit) and reconciliation raised a false POSITION_FILL_CONFLICT. */
+  private positionKeysSeenSinceEnd = new Set<string>();
   private marketDataTicker = 1;
   private activeMktData = new Map<number, string>();
   private symbolToTicker = new Map<string, number>();
@@ -974,6 +978,7 @@ export class IbkrSocketSession {
       ib.on(EventName.position, (account, contract, pos, avgCost) => {
         const symbol = contract?.symbol || String(contract?.conId || '');
         if (!symbol) return;
+        this.positionKeysSeenSinceEnd.add(`${account}:${symbol}`);
         this.positions.set(`${account}:${symbol}`, {
           symbol,
           quantity: pos,
@@ -983,7 +988,11 @@ export class IbkrSocketSession {
       });
 
       ib.on(EventName.positionEnd, () => {
-        /* snapshot complete */
+        // Snapshot complete: anything we hold that the broker did not just report no longer exists there.
+        for (const key of [...this.positions.keys()]) {
+          if (!this.positionKeysSeenSinceEnd.has(key)) this.positions.delete(key);
+        }
+        this.positionKeysSeenSinceEnd.clear();
       });
 
       ib.on(EventName.orderStatus, (orderId, status, filled, _remaining, avgFillPrice) => {
