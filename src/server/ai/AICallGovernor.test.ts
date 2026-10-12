@@ -878,3 +878,40 @@ describe('observability', () => {
     expect(stats.avoidanceRate).toBeCloseTo(2 / 3);
   });
 });
+
+// -- failed calls must not leak unhandled rejections ------------------------------------
+// 2026-10-12: `invoke.finally(onInvokeSettled)` returned a derived promise that re-rejected with
+// no handler, so EVERY failed governed call leaked an unhandled rejection (seen live as
+// `[Jev] request aborted` in crash.log, and 111 times in the Jev network-down chaos test). The
+// process-level handler counts them toward the crash-storm exit, so a provider outage could take
+// the engine down. The governor's contract is "FAILED never throws, never leaks".
+describe('failed governed calls leak no unhandled rejection', () => {
+  const cases: Array<[string, () => () => ReturnType<typeof gov.request>]> = [
+    ['STRUCTURED_DECISION (Jev) failure', () => {
+      const { provider } = jevFailer('NETWORK');
+      gov.__setJevProviderForTests(provider);
+      return () => gov.request(jevOpts());
+    }],
+    ['GENERATIVE_ANALYSIS failure', () => {
+      const run = async (): Promise<never> => { throw new Error('provider 500'); };
+      gov.setGenerativeExecutor(run);
+      return () => gov.request(genOpts({}, run));
+    }],
+  ];
+
+  it.each(cases)('%s', async (_label, setup) => {
+    const leaked: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { leaked.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const result = await setup()();
+      expect(result.status).toBe('FAILED');
+      // Node reports an unhandled rejection after the microtask queue drains; give it a real turn.
+      await new Promise((r) => setTimeout(r, 25));
+      await new Promise((r) => setImmediate(r));
+      expect(leaked).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+});

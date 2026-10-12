@@ -581,6 +581,130 @@ on it. This is a testing-mission Phase 1 document; it records history, it does n
 
 ---
 
+## Phase 4 — Final-SHA validation escapes (2026-10-12, register entries OCT12-01..07)
+
+Found by a fresh full-suite run on the exact merged `main` (`06b75a7`) and by root-causing
+each failure instead of classifying it. Fixes are in the working tree, not yet committed.
+
+### OCT12_BUCKET_MISS_LOOKAHEAD_ESCAPE
+
+- **What happened (found 2026-10-12; introduced by 9ff0d70 on 2026-10-12):**
+  `HistoricalDataGateway.getBars()` on a cache MISS fetched the whole hour bucket and
+  returned it unfiltered, while only the cache-HIT path filtered to `[startMs, endMs]`.
+  A cold query for an 11-minute window returned all 60 bars of the hour, including 40 bars
+  after the cutoff; a repeat of the same query returned the correct 11. Results depended on
+  cache state. This re-opened `OCT11_CACHE_COLLISION_LOOKAHEAD_ESCAPE`, whose own stated
+  invariant ("cache identity is exact-window") the D1 memory fix (9ff0d70) quietly replaced
+  with hour buckets.
+- **OLD_TEST_GAP:** The #10 regression used `1Day` bars one day apart, so an hour-bucket
+  superset equals the exact window and an intra-hour leak is structurally invisible. No test
+  asserted that a cold result equals a warm result.
+- **NEW_TEST:** `HistoricalDataGateway.test.ts` — 1Min bars inside one hour; cold miss must
+  return exactly the requested window, equal to the warm result, and a second window in the
+  same bucket must also be exact (confirmed red before the fix: 60 bars vs 11).
+- **NEW_RELEASE_INVARIANT:** `getBars()` output must not depend on cache state. Any change to
+  cache-key granularity must ship a cold-vs-warm equality test at the query's native bar
+  granularity.
+- **Responsible layer:** LAYER 1 (data contract / point-in-time).
+
+### OCT12_FLAKY_LABEL_ESCAPE
+
+- **What happened (2026-10-12):** The merged-tree validation addendum
+  (`ARGUS_OCT8_OCT9_INTEGRATION_2026-10-12.md`) recorded 9 failed files / 10 failed tests as
+  "pre-existing/environmental, none are regressions", including
+  `PredictionOutcomeEvaluator.test.ts` (2), `.backlog.test.ts` (1) as "timing-sensitive; files
+  unmodified by either mission" and the tier-4 compaction soak as "pre-existing". The
+  evaluator failures were deterministic and were the visible symptom of a real lookahead
+  regression (OCT12-01) in a file the mission DID modify — the gateway those tests depend on.
+  Primary evidence: the root cause (OCT12-01), reproduced red-before-green. Supporting, not
+  conclusive: a full `src/server/services` run (119 files, 1070 tests, including the
+  evaluator test file) was green on 2026-10-07 at about 17:10 ET; those files were edited by
+  another session afterwards and committed in 5fede80, so this does not prove the committed
+  version passed.
+- **OLD_TEST_GAP:** Not a test gap — a process gap. "Unmodified test file" was treated as
+  "unrelated to the change", ignoring dependencies; no failure was required to be
+  reproduced in isolation or root-caused before being labeled environmental.
+- **NEW_TEST:** None (process rule).
+- **NEW_RELEASE_INVARIANT:** A failing test may be labeled pre-existing/environmental/flaky
+  only with (a) the commit where it last passed or evidence it never did, and (b) a reproduced
+  cause. Anything else is treated as a regression until proven otherwise.
+- **Responsible layer:** LAYER 5 (release gate / process).
+
+### OCT12_ENV_LEAK_ESCAPE
+
+- **What happened (2026-10-12):** `oct07ProviderCollapse.regression.test.ts` asserts a cost
+  bound of 5 provider calls but made 10 on a machine whose real `.env` sets
+  `QUANT_BULL_BEAR_ENABLED=true` (Bull and Bear researchers fan out concurrently to every
+  provider before any failure arms a cooldown). The merged-tree run in an isolated worktree
+  had no `.env` and passed. The same mechanism produced the register's incorrect "Jev remains
+  INERT (no API key)" (the deployment `.env` does have a key).
+- **OLD_TEST_GAP:** `vitest.setup.ts` isolates some flags from the developer's `.env`
+  (OpenAlice, Chronos, Ollama, extended hours) but not feature flags generally; tests that
+  assume a flag's default do not pin it.
+- **NEW_TEST:** The Oct-7 regression now pins `QUANT_BULL_BEAR_ENABLED=false`. Not a general
+  fix: other tests may still assume defaults.
+- **NEW_RELEASE_INVARIANT:** Test results must not depend on the machine's `.env`. Run the
+  suite on a machine with the deployment `.env` AND one without; a divergence is a finding.
+- **Responsible layer:** LAYER 2 (test hermeticity).
+- **Open observation (not changed):** with the flag on, a provider collapse costs two
+  concurrent researcher calls per provider (10 here, then 0 for the next 9 ideas). No
+  per-provider concurrency ceiling exists.
+
+### OCT12_UNFORCED_GC_ESCAPE
+
+- **What happened (2026-10-12):** `MarketDataWorker.memoryLeak` "sustained tick ingestion"
+  reported +41.3 MB against a 2 MB bound. The helper only called `global.gc()` if present
+  and nothing in the default runner exposes it, so it measured uncollected garbage. Every
+  per-symbol collection size was unchanged. With `--expose-gc` the test passes (4/4, twice);
+  without it the same assertion fails at the same value.
+- **OLD_TEST_GAP:** The test header said "run with NODE_OPTIONS=--expose-gc"; no script or
+  config set it, so the default `vitest run` silently measured the wrong thing.
+- **NEW_TEST:** The helper enables gc at runtime (`v8.setFlagsFromString` +
+  `vm.runInNewContext('gc')`); 4/4 three times under the default runner.
+- **NEW_RELEASE_INVARIANT:** A heap-delta assertion must force a real GC itself; a test must
+  not depend on a CLI flag it cannot enforce.
+- **Responsible layer:** LAYER 4 (resource). Does not resolve OCT8-21 (live leak unknown).
+
+### OCT12_UNHANDLED_FINALLY_ESCAPE
+
+- **What happened (found 2026-10-12, introduced by b9975e4 on 2026-10-11):**
+  `AICallGovernor` did `invoke.finally(onInvokeSettled)` with no handler on the promise
+  `finally` returns, which re-rejects whenever the call rejects. Every failed governed call —
+  Jev structured decisions and generative analysis — raised an unhandled rejection. Seen live
+  in `data/logs/crash.log` (`[Jev] request aborted`, ~1 per 30 s) the first time the engine ran
+  this code, and 111 times in `ChaosMatrixHeavy` H1. The process-level handler counts these
+  toward the crash-storm exit (>4 in 5 s), so a provider outage could have exited the engine.
+- **OLD_TEST_GAP:** Tests asserted the governor's return value (`FAILED`) and the singleflight
+  bookkeeping, never that a failure leaves the process's unhandled-rejection channel quiet.
+  The chaos test did surface it, but as vitest "Unhandled Errors" on a run whose files all
+  passed — read as noise, with only the exit code (1) giving it away.
+- **NEW_TEST:** `AICallGovernor.test.ts` — both capabilities; red with the trailing `.catch`
+  removed (2 failed, one leaked rejection each), green with it.
+- **NEW_RELEASE_INVARIANT:** A green test run with a non-zero exit code or any "Unhandled
+  Errors" block is a failure until each error is explained. Any `.finally()`/`.then()` on a
+  promise that may reject needs its own terminal handler.
+- **Responsible layer:** LAYER 2 (async ownership). **Open:** other derived-promise sites were
+  not audited.
+
+### OCT12_STALE_PURGE_TEST_ESCAPE
+
+- **What happened (2026-10-12):** The tier-4 compaction soak expected one
+  `purgeVerifiedDays` call to purge a 1,000,000-row day and got `totalRowsPurged = 0`. The
+  purge is deliberately batch-budgeted (a huge day stays `VERIFIED` and the next sweep
+  resumes), and a truncated sweep's partial deletes are not counted in the return value.
+  Aggregation is now 11–77 ms, so the Oct 4 "real perf failure" no longer reproduces.
+- **OLD_TEST_GAP:** The test predates batched purging; the file header says tier 4 is "never
+  part of the fast default tier" yet plain `vitest run` includes it (only `test:tier1`
+  excludes it).
+- **NEW_TEST:** Drains by bounded repeated sweeps and asserts the day's window is empty and
+  the archive row is `PURGED`.
+- **NEW_RELEASE_INVARIANT:** Tests of bounded maintenance work must drain via repeated
+  sweeps; they must not assume one call completes it.
+- **Responsible layer:** LAYER 4 (resource / retention). **Open:** the `totalRowsPurged`
+  reporting gap and the tier-4-in-default-run inconsistency are unchanged (OCT12-06).
+
+---
+
 ## Reading this registry
 
 1. **Every entry is a real escape**, dated, with the honest gap named. "No test exercised X"

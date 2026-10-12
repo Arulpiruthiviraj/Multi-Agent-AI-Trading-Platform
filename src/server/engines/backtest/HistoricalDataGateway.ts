@@ -188,6 +188,15 @@ export class HistoricalDataGateway {
     this.consecutiveRateLimits = 0;
   }
 
+  /**
+   * Drop every cached bar window. For callers that change ohlcv_bars outside this gateway
+   * (ensureBars already invalidates its own window): the cache is keyed by hour bucket, so a
+   * stale bucket would otherwise be served for up to its 60s TTL.
+   */
+  clearBarsMemoryCache(): void {
+    this.memoryBars.clear();
+  }
+
   getBarsRateLimitedUntilMs(): number {
     return this.rateLimitedUntilMs;
   }
@@ -737,7 +746,10 @@ export class HistoricalDataGateway {
       .orderBy(asc(schema.ohlcvBars.timestamp));
     const bars = rows.map(r => ({ timestamp: r.timestamp, open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume }));
     this.cacheSet(key, { bars, expiresAt: Date.now() + 60_000 });
-    return bars;
+    // The cache holds the whole bucket, but the caller asked for [startMs, endMs]: returning the
+    // bucket here would hand a cold query bars AFTER its cutoff (lookahead) and make the result
+    // depend on whether the cache was warm. Both paths must return the identical exact slice.
+    return bars.filter((b) => b.timestamp >= startMs && b.timestamp <= endMs);
   }
 }
 

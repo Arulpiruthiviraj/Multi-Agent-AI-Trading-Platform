@@ -64,6 +64,11 @@ const BOUNDED_TABLES = new Set([
   'agent_confidence_calibration',
   'learning_versions',
   'portfolio',
+  // 2026-10-12: last-successful-response cache. PK is `${provider}:${dataType}:${symbol|GLOBAL}`
+  // and ExternalDataCache.ts only ever upserts (onConflictDoUpdate) or updates that same row,
+  // so growth is bounded by distinct (provider, data type, symbol) - the tracked symbol
+  // universe - not by time. Rows are never appended per fetch.
+  'external_data_cache',
 ]);
 
 /** Generous: a healthy session never approaches this; the backup defect hit minutes. */

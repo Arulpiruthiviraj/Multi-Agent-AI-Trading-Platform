@@ -222,6 +222,11 @@ describe('Part 49 — Oct-7 provider-collapse regression (partial multi-provider
     process.env.QUANT_ENGINE_ENABLED = 'true';
     process.env.ARGUS_QUANT_INDEPENDENT_QUALIFICATION_ENABLED = 'false';
     process.env.ARGUS_STRATEGY_SELECTION_CONFLUENCE_GUARD_ENABLED = 'false';
+    // Hermetic against the developer's .env: the deployment .env sets QUANT_BULL_BEAR_ENABLED=true,
+    // which makes the first idea fan Bull and Bear researchers out to every provider at once
+    // (observed 2026-10-12: 10 provider calls instead of the 5 this test's cost bound assumes,
+    // and the debate then finds nothing routable). The bounds below are the default (off) shape.
+    process.env.QUANT_BULL_BEAR_ENABLED = 'false';
 
     ({ db, sqliteDb } = await import('../db'));
     schema = await import('../db/schema');

@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import v8 from 'node:v8';
+import vm from 'node:vm';
 
 /**
  * Memory-leak regression tests for the Market Data subsystem (2026-10-08 leak hunt).
@@ -97,8 +99,22 @@ function collectionSizes(w: WorkerAny): Record<string, number> {
   return out;
 }
 
+/**
+ * A heap delta only measures retention if a real GC ran first. The default `vitest run` does not
+ * start workers with --expose-gc (nothing in package.json/vitest.config provides it), and without
+ * it the sustained-ingestion case read +41.3MB of UNCOLLECTED garbage over 200k ticks while every
+ * per-collection size was unchanged; with a real GC it passes. Enable gc at runtime instead of
+ * depending on a CLI flag nobody sets.
+ */
+function ensureGc(): void {
+  if (typeof (globalThis as { gc?: unknown }).gc === 'function') return;
+  v8.setFlagsFromString('--expose-gc');
+  (globalThis as { gc?: () => void }).gc = vm.runInNewContext('gc') as () => void;
+}
+
 function gcAndHeapMb(): number {
-  if (typeof global.gc === 'function') global.gc();
+  ensureGc();
+  (globalThis as { gc?: () => void }).gc?.();
   return process.memoryUsage().heapUsed / 1024 / 1024;
 }
 

@@ -1,5 +1,37 @@
 # Argus Architecture
 
+## 2026-10-12: `HistoricalDataGateway.getBars()` returns the exact requested window on every path
+
+**Contract:** `getBars(symbol, timeframe, startMs, endMs)` returns exactly the stored bars with
+`startMs <= timestamp <= endMs`, whether the in-memory cache is cold or warm. The cache is keyed by
+hour bucket (bounded memory, commit 9ff0d70) and a miss caches the whole bucket, but the caller
+receives only its slice. Before this fix a cold miss returned the unfiltered bucket — bars after the
+cutoff (lookahead) and before the start — while a warm hit returned the correct slice, so results
+depended on cache state. This re-opened the Oct 11 cache-collision lookahead. Live consumers (quant,
+risk, portfolio) query up to "now" and were exposed only to extra leading bars; historical consumers
+(outcome grading, missed-opportunity evaluation, backtest, replay) were exposed to real lookahead.
+The defective build never ran in production (engine last wrote data 2026-10-10; commit is 2026-10-12).
+
+New: `clearBarsMemoryCache()` drops every cached window, for code that changes `ohlcv_bars` outside
+the gateway (`ensureBars` already invalidates its own window). Regression: a 1Min cold-miss test in
+`HistoricalDataGateway.test.ts` (cold result == warm result == exact slice). Detail and the other
+findings from the final-SHA validation round: `docs/audits/ARGUS_OCT8_OCT9_MASTER_DEFECT_REGISTER.md`
+(OCT12-01..07) and `docs/testing/ARGUS_DEFECT_ESCAPE_REGISTRY.md` (Phase 4).
+
+**`AICallGovernor` — a failed governed call must not leak an unhandled rejection.** The Oct 11
+singleflight fix attached `invoke.finally(onInvokeSettled)` with no handler on the promise `finally`
+returns, which re-rejects whenever the call fails. Every failed governed call — Jev structured
+decisions and generative analysis alike — therefore raised an unhandled rejection, which the process
+handler counts toward the crash-storm exit. Observed in the live engine on 2026-10-12 (`[Jev] request
+aborted`, ~1 per 30 s in `data/logs/crash.log`) and 111 times in the Jev network-down chaos test.
+Fixed with a trailing `.catch`; regression test in `AICallGovernor.test.ts` (red without the fix, for
+both capabilities). The running process picks the fix up at its next restart.
+
+**Readiness schema check** (`v2ReadinessExt.ts`, `argus-cli readiness`) now mirrors drizzle's own
+rule — pending = journal entries whose `when` is newer than the latest applied `created_at` — instead
+of comparing the applied-row count to the journal length. The production DB carries one fewer row than
+entries with nothing pending, which the old check reported as "migrations behind" on every run.
+
 ## 2026-10-09: Bounded priority quant scheduler (P2) — control-plane redesign of quant evaluation scheduling
 
 Forensic driver: the 2026-10-09 audit measured admission→Quant-completion at p50

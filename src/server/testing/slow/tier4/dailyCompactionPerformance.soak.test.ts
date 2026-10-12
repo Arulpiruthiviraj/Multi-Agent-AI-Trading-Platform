@@ -78,10 +78,26 @@ describe('Daily Learning Compaction performance (§17)', () => {
     const archiveSizeBytes = Buffer.byteLength(archiveRow.summaryJson, 'utf8');
     const rawSizeEstimateBytes = rowCount * 200; // rough: ~200 bytes/row for this schema shape
 
+    // purgeWindow is deliberately batch-budgeted so one huge DELETE can never block the event
+    // loop: a day larger than the budget stays VERIFIED and the NEXT sweep resumes it. A truncated
+    // sweep's partial deletes are not included in totalRowsPurged, so drain with repeated sweeps
+    // (bounded) and verify against the table itself rather than one call's return value.
+    const MAX_PURGE_SWEEPS = 100;
     const purgeStart = performance.now();
-    const purgeResult = await orchestrator.purgeVerifiedDays(source, 0, windowEndMs + 2000);
+    let purgeSweeps = 0;
+    let purgedDaysTotal = 0;
+    while (purgeSweeps < MAX_PURGE_SWEEPS && purgedDaysTotal === 0) {
+      const sweep = await orchestrator.purgeVerifiedDays(source, 0, windowEndMs + 2000);
+      purgeSweeps += 1;
+      purgedDaysTotal += sweep.purgedDays;
+    }
     const purgeMs = performance.now() - purgeStart;
-    expect(purgeResult.totalRowsPurged).toBe(rowCount);
+    expect(purgedDaysTotal).toBe(1);
+    // Scoped to the day's window: the orchestrator's own log events land in this same table at
+    // the current time (outside the window) and are not part of the purged day.
+    expect((sqliteDb.prepare('SELECT COUNT(*) AS c FROM observability_events WHERE ts >= ? AND ts <= ?')
+      .get(windowStartMs, windowEndMs) as { c: number }).c).toBe(0);
+    expect(db.select().from(schema.dailyLearningArchive).all()[0].compactionStatus).toBe('PURGED');
 
     const mem = process.memoryUsage();
     const result = {
@@ -93,6 +109,7 @@ describe('Daily Learning Compaction performance (§17)', () => {
       rawSizeEstimateBytes,
       compressionRatio: Number((rawSizeEstimateBytes / archiveSizeBytes).toFixed(1)),
       purgeDurationMs: Math.round(purgeMs),
+      purgeSweeps,
       peakRssMb: Math.round(mem.rss / 1024 / 1024),
     };
     // eslint-disable-next-line no-console

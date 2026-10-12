@@ -11,9 +11,9 @@ fixes are deployed to the running engine.
 
 ## 1. Counts
 
-- **Total issues:** 109
-- **By severity:** critical: 9, major: 47, minor: 53
-- **By final status:** BLOCKED_BY_RESEARCH: 1, FULL_SUITE_TESTED: 1, INVESTIGATING: 3, NOT_A_DEFECT: 6, NOT_STARTED: 1, SUPERSEDED: 1, TARGETED_TESTED: 96
+- **Total issues:** 117
+- **By severity:** critical: 9, major: 49, minor: 59
+- **By final status:** BLOCKED_BY_RESEARCH: 1, FULL_SUITE_TESTED: 1, INVESTIGATING: 3, NOT_A_DEFECT: 6, NOT_STARTED: 1, PARTIAL: 1, SUPERSEDED: 1, TARGETED_TESTED: 103
 
 ## 2. Summary table
 
@@ -128,6 +128,14 @@ fixes are deployed to the running engine.
 | TONIGHT-24 | 2026-10-11 | minor | testing | TARGETED_TESTED |
 | TONIGHT-25 | 2026-10-11 | minor | testing | TARGETED_TESTED |
 | TONIGHT-26 | 2026-10-11 | minor | testing | TARGETED_TESTED |
+| OCT12-01 | 2026-10-12 | major | data/point-in-time | TARGETED_TESTED |
+| OCT12-02 | 2026-10-12 | minor | testing/point-in-time | TARGETED_TESTED |
+| OCT12-03 | 2026-10-12 | minor | testing/hermeticity | TARGETED_TESTED |
+| OCT12-04 | 2026-10-12 | minor | testing/resource | TARGETED_TESTED |
+| OCT12-05 | 2026-10-12 | minor | testing/retention | TARGETED_TESTED |
+| OCT12-06 | 2026-10-12 | minor | testing/retention | TARGETED_TESTED |
+| OCT12-07 | 2026-10-12 | minor | documentation | PARTIAL |
+| OCT12-08 | 2026-10-12 | major | ai/async-ownership | TARGETED_TESTED |
 
 ## 3. Evidence files read
 
@@ -244,6 +252,7 @@ fixes are deployed to the running engine.
 - **OCT9-17** (minor, INVESTIGATING): Zero IBKR_MARKET_DATA_ACKNOWLEDGED events in the Oct 9 window despite promotions/requests... Files: 
 - **OCT9-18** (minor, INVESTIGATING): First ten RTH minutes (09:30-09:40) lack runtime evidence; first boot evidence 09:40:50... Files: 
 - **OCT10-18** (minor, NOT_STARTED): Quant fast-lane 180s SLA (mission item 3 P2) not implemented... Files: 
+- **OCT12-07** (minor, PARTIAL): Register accuracy: audited_sha is the pre-merge branch SHA 3edf5bc, not the merged main 06b75a7; and 'Jev remains INERT (no API key)' is wrong for the... Files: docs/audits/gen_master_register.py
 
 ## 6. Per-issue detail
 
@@ -288,3 +297,30 @@ large-integral-double serialization + parse-error mapping (OCT10-08), Java EMA s
   absolute safety rules, not treated as an approved architectural exception.
 - No lifecycle row was manufactured; no threshold lowered; no LIVE authority expanded.
 - `certify-next-session` verdict at the audited SHA: **NO_GO** (QUANT_FIRST_OPERATIONALLY_INACTIVE).
+
+## Fresh validation rounds (2026-10-12)
+
+Statuses above (OCT8-* .. TONIGHT-*) were audited at `3edf5bcdb73a8ec28d9d71db4479cd21f29cbbb5` on the pre-merge branch and were NOT re-bound issue by issue. The rounds below are fresh runs.
+
+### Round 1 - `06b75a7724b36e84200298dcab1926abde6d743d` (clean main == origin/main)
+
+- typecheck: PASS
+- build: PASS
+- vitest: exit 1, 6 failed | 790 passed (796); 7 failed | 6600 passed | 1 expected fail | 2 skipped (6610); 1210.62s
+- failures (7):
+  - oct07ProviderCollapse flood
+  - SyntheticSessionGuards external_data_cache
+  - MarketDataWorker memoryLeak heap
+  - PredictionOutcomeEvaluator.backlog (ties:true)
+  - PredictionOutcomeEvaluator restart-resume
+  - PredictionOutcomeEvaluator backfill
+  - tier4 dailyCompactionPerformance
+- classification: All 7 reproduced in isolation (not load flakiness). See OCT12-01..06.
+
+### Round 2 - `06b75a7724b36e84200298dcab1926abde6d743d` (main + uncommitted fixes for OCT12-01..06 (NOT the OCT12-08 governor fix, and not the readiness-check edit, which landed mid-run); ran partly concurrent with engine boot)
+
+- typecheck: PASS
+- build: PASS
+- vitest: exit 1, 796 passed (796); 6608 passed | 1 expected fail | 2 skipped (6611); 1152.87s
+- classification: 0 test failures (the 7 from round 1 are fixed). Exit code 1 came from 111 unhandled rejections raised in AICallGovernor.invokeJev during ChaosMatrixHeavy H1 - see OCT12-08. A third round on the final tree (with the OCT12-08 fix) has NOT been run yet.
+

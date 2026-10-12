@@ -955,6 +955,95 @@ I("TONIGHT-26","2026-10-11","Test-infra: consensus strict->0.75 boundary was ung
 "New boundary tests: exactly-0.75 confidence -> NO TRADE (rejected); 0.7501 -> eligible",
 "FIXED at c78e98e: strict-greater-than semantics pinned from both sides","COMPLETE",N,N,Y,"PENDING","PENDING","PENDING","PENDING","PENDING",
 "TARGETED_TESTED","Test-only. Pins Arul's standing 0.75 bar against future drift.","Mission defect 26."),
+# ---------------- OCT 12 (final-SHA validation round on merged main 06b75a7) ----------------
+I("OCT12-01","2026-10-12","HistoricalDataGateway.getBars(): on a cache MISS it returned the whole hour-bucket from the DB unfiltered (bars before startMs and, critically, AFTER the endMs cutoff); only the cache-HIT path filtered to [startMs,endMs]. Result depended on cache state (first call != second call)","major","data/point-in-time",
+"getBars(symbol,tf,start,end) returns exactly the bars in [start,end] regardless of cache state; no bar after the cutoff is ever served",
+"Cold query returned up to ~1h of extra bars including post-cutoff bars (60 bars returned for an 11-bar window); warm query returned the correct 11",
+"Commit 9ff0d70 (D1 memory fix) changed cache keys from exact to hour-bucket and made the miss path fetch the full bucket, but only the hit path was filtered. Re-opened the lookahead class closed by ea1c0c1 (TONIGHT-10). The #10 regression used 1Day bars, where the bucket superset equals the exact window, so it could not see an intra-hour leak","high",
+["src/server/engines/backtest/HistoricalDataGateway.ts"],
+["(uncommitted, working tree on 06b75a7)"],
+"HistoricalDataGateway.test.ts: new 1Min cold-miss test (red before fix: 60 bars vs 11; green after); cold == warm; other window in same bucket exact",
+"FIXED in working tree: miss path caches the full bucket but returns the exact [startMs,endMs] slice; added clearBarsMemoryCache() for out-of-band ohlcv_bars changes","N/A (fixed directly on main working tree)",N,N,Y,"PENDING","PENDING","PENDING","PENDING","PENDING",
+"TARGETED_TESTED","Not yet committed or deployed. Memory-bounding intent of 9ff0d70 preserved (bucketed keys unchanged). SCOPE (from the caller list, ~35 production getBars callers): live consumers (QuantSignalAgent, RiskEngine, PortfolioMonitor, TechnicalAgent, ChiefTrader advisory) query up to now, so for them the cold-miss exposure was extra bars BEFORE startMs (<=~1h of intraday bars), not future bars; historical consumers (Prediction/MultiHorizon outcome evaluators, MissedOpportunityEvaluator, BacktestEngine, replay provider registry, runBacktest) got real post-cutoff lookahead. The defective code (9ff0d70, 2026-10-12) post-dates the engine's last data write (2026-10-10T03:32Z), so it never ran in production. Callers were enumerated, not individually re-tested; full-suite round 2 is the check.","Found by the fresh full-suite run on the exact merged SHA (7 failures); three PredictionOutcomeEvaluator tests were the visible symptom."),
+I("OCT12-02","2026-10-12","PredictionOutcomeEvaluator: 3 tests failed deterministically on merged main (restart-resume, backfill, pending-page ties) - empty outcome sets","minor","testing/point-in-time",
+"Fixtures use legitimate pre-cutoff endpoint evidence; tests isolate the gateway's in-memory cache",
+"Restart/backfill fixtures dated predictions at PRED_TIME-2/-3 ms, placing the seeded endpoint bar AFTER the cutoff (they only passed while OCT12-01 leaked it); the backlog test wiped ohlcv_bars behind the gateway's back so case 2 was served case 1's cached bucket",
+"Test fixtures encoded the OCT12-01 leak plus missing cache isolation (mission item L). Production evaluator endpoint rule is correct and was NOT weakened","high",
+["src/server/services/PredictionOutcomeEvaluator.test.ts","src/server/services/PredictionOutcomeEvaluator.backlog.test.ts"],
+["(uncommitted, working tree on 06b75a7)"],
+"PredictionOutcomeEvaluator.test.ts (EARLY_PRED_TIME, minute-aligned, own entry+endpoint bars, still sorts ahead of backlog); .backlog.test.ts (clearBarsMemoryCache in beforeEach); 59/59 across gateway+evaluator files",
+"FIXED in working tree (tests only)","N/A (fixed directly on main working tree)",N,N,Y,"PENDING","PENDING","PENDING","PENDING","PENDING",
+"TARGETED_TESTED","Test-only. The original -1/-2/-3 ms offsets were a deliberate ordering trick (oldest-first pending scan), preserved by using an earlier time rather than a later one.","Mission item L."),
+I("OCT12-03","2026-10-12","oct07ProviderCollapse flood test failed on this machine: 10 provider chat calls instead of the asserted 5; the single routeConsensus dispatch rejected with 'No routable AI providers'","minor","testing/hermeticity",
+"Regression result is independent of the developer's local .env",
+"Deployment .env sets QUANT_BULL_BEAR_ENABLED=true; the first idea fanned Bull and Bear researchers out concurrently to all 5 providers (2 prompts x 5 = 10 calls) before any failure armed a cooldown; the debate then found nothing routable",
+"Test pinned some flags but not QUANT_BULL_BEAR_ENABLED, so it only passed where no .env existed (e.g. the closure workers' isolated worktrees). Same environment-dependence class as the register's Jev 'INERT (no API key)' claim (OCT12-07)","high",
+["src/server/quant/oct07ProviderCollapse.regression.test.ts"],
+["(uncommitted, working tree on 06b75a7)"],
+"oct07ProviderCollapse.regression.test.ts: 2 passed, 1 skipped (pre-existing skip) with the flag pinned off",
+"FIXED in working tree (test pinned hermetic)","N/A (fixed directly on main working tree)",N,N,Y,"PENDING","PENDING","PENDING","PENDING","PENDING",
+"TARGETED_TESTED","OBSERVATION, NOT FIXED: with Bull/Bear ON (as in the real .env) a provider collapse costs 2 concurrent researcher calls per provider before cooldown (10 here, bounded, then 0 for the remaining 9 ideas). No per-provider concurrency ceiling exists - the design gap named in the Oct 8 forensic. Whether to change it is an operator decision.","Observed total 10 calls then flat for the other 9 ideas."),
+I("OCT12-04","2026-10-12","MarketDataWorker.memoryLeak 'sustained tick ingestion' failed: heap +41.3MB vs a 2MB bound over 200k ticks","minor","testing/resource",
+"Heap-delta check measures retention (needs a real GC first)",
+"Helper only called global.gc() if present; the default vitest run never exposes gc, so the delta measured uncollected garbage. Every per-symbol collection size was identical before/after (deterministic leak check passed)",
+"Test assumed NODE_OPTIONS=--expose-gc (stated in its own header) but nothing provides it. Verified experimentally: with --expose-gc 4/4 pass twice; without it the same assertion fails at the same value (41.32MB)","high",
+["src/server/services/MarketDataWorker.memoryLeak.test.ts"],
+["(uncommitted, working tree on 06b75a7)"],
+"memoryLeak test 4/4 x3 under the default runner after the helper enables gc at runtime (v8.setFlagsFromString + vm.runInNewContext)",
+"FIXED in working tree (test helper)","N/A (fixed directly on main working tree)",N,N,Y,"PENDING","PENDING","PENDING","PENDING","PENDING",
+"TARGETED_TESTED","Tick-ingestion path only. Does NOT resolve OCT8-21 (live leak classification SUSPECT/UNKNOWN) - that still needs the production-equivalent soak.","Not a leak finding."),
+I("OCT12-05","2026-10-12","SyntheticSessionGuards: external_data_cache grew (3 rows) with no registered retention story","minor","testing/retention",
+"Every table a session writes has a sweeper or a documented bounded/permanent status",
+"external_data_cache missing from the guard's allowlists",
+"Table is a last-successful-response cache with PK provider:dataType:symbol, written only by upsert (onConflictDoUpdate) or same-row update in ExternalDataCache.ts - bounded by the symbol universe, not time. The allowlist was never updated when the table was introduced","high",
+["src/server/replay/synthetic/SyntheticSessionGuards.test.ts"],
+["(uncommitted, working tree on 06b75a7)"],
+"SyntheticSessionGuards.test.ts 1/1 after adding external_data_cache to BOUNDED_TABLES with the reasoning recorded",
+"FIXED in working tree (documented bounded; verified from the writer, not assumed)","N/A (fixed directly on main working tree)",N,N,Y,"PENDING","PENDING","PENDING","PENDING","PENDING",
+"TARGETED_TESTED","Bounded by distinct (provider,dataType,symbol); payloads are JSON blobs so a very large symbol universe over months could still add tens of MB. No sweeper added.","Allowlist decision, not a new sweeper."),
+I("OCT12-06","2026-10-12","tier-4 dailyCompactionPerformance.soak test failed in the default suite: totalRowsPurged 0 vs 1,000,000 seeded","minor","testing/retention",
+"Test matches the batch-budgeted purge behavior; slow tier does not break the default run",
+"purgeWindow is deliberately budgeted (a huge day stays VERIFIED and the next sweep resumes it) and a truncated sweep's partial deletes are not counted in totalRowsPurged; the test expected one call to purge everything",
+"Stale test vs. intended production behavior (batching is the event-loop protection the mission asks for). Aggregation is now 11-77ms, so the Oct 4 'real perf failure' no longer reproduces","high",
+["src/server/testing/slow/tier4/dailyCompactionPerformance.soak.test.ts"],
+["(uncommitted, working tree on 06b75a7)"],
+"tier4 compaction test passes: drains by bounded repeated sweeps, asserts the day's window is empty (not the whole table - the orchestrator logs its own events there) and the archive row is PURGED",
+"FIXED in working tree (test only)","N/A (fixed directly on main working tree)",N,N,Y,"PENDING","PENDING","PENDING","PENDING","PENDING",
+"TARGETED_TESTED","OPEN: (1) purgeVerifiedDays totalRowsPurged omits partial deletes of truncated days (reporting gap, unchanged); (2) the file header says tier 4 is 'never part of the fast default tier' but plain `vitest run` includes it (only test:tier1 excludes it) - process decision; (3) OCT10-18 daily-compaction soak still not run.","Related: OCT10-18."),
+I("OCT12-07","2026-10-12","Register accuracy: audited_sha is the pre-merge branch SHA 3edf5bc, not the merged main 06b75a7; and 'Jev remains INERT (no API key)' is wrong for the real deployment","minor","documentation",
+"Statuses are bound to the exact SHA they were validated against; environmental claims name the environment",
+"Every status describes the branch before the merge. The real .env has a non-empty JEV_API_KEY (value never read or printed); governor config has jevEnabled=true (maxInFlight 4, queue 32, timeout 8s, 20/min, circuit breaker); ARGUS_JEV_SHADOW_SCORING_ENABLED and ARGUS_JEV_ESCALATION_ENABLED are strict ==='true' checks, default false and absent from .env (news triage/escalation OFF). BUT AiAdvisoryService (called from NewsEngine on material news and from ChiefTrader for quant candidates) makes governed Jev calls whenever jevEnabled (config default true) and a key exist, so Jev is an ACTIVE advisory channel here. Observed live 2026-10-12 as ~1 call/30s; every failed call leaked an unhandled rejection (OCT12-08)",
+"Workers ran in isolated worktrees without the deployment .env, so 'no API key' was true there and was recorded as a property of the system","high",
+["docs/audits/gen_master_register.py"],
+["(uncommitted, working tree on 06b75a7)"],
+"Static checks: no Jev module imports RiskEngine/OMS/BrokerManager/ChiefTrader; no boot-path reference to Jev; jevCannotCauseOrder.test.ts present. External smoke 2026-10-12 (scripts/jev-smoke.ts, ONE request, key loaded via --env-file, never printed): authenticated, model jev-1.13.0, 362ms, response schema parsed, ~$0.000016. Proves connection + schema ONLY - it calls JevProvider directly, so the governor, circuit breaker and observability were not exercised externally (covered by unit/chaos tests). Observation: the answer was fully saturated (P(bullish)=0.93, sentiment confidence 1.000, distribution {bullish:1}) on a trivial prompt - a Jev confidence must never be read as calibrated evidence.",
+"PARTIAL: corrected here. Jev is NOT inert on this deployment (active advisory channel via AiAdvisoryService; news triage/escalation flags off); earlier statements that it was effectively inert were wrong and are withdrawn. Advisory-only by contract: nothing in the trading path awaits or reads it for a decision","N/A",N,N,"PENDING","PENDING","PENDING","PENDING","PENDING","PENDING",
+"PARTIAL","Jev external smoke is NOT_CERTIFIED. Per-issue statuses above OCT12 were NOT re-bound to 06b75a7 issue by issue; only the round-1/round-2 validation blocks are.","Environment-dependence class, see OCT12-03."),
+I("OCT12-08","2026-10-12","AICallGovernor: every FAILED governed call (Jev structured decision AND generative analysis) leaked an unhandled promise rejection. Seen live in data/logs/crash.log (2 x '[Jev] request aborted' at 09:32:33 and 09:33:03 ET, ~1 per 30s) and 111 times in ChaosMatrixHeavy H1, which made vitest exit 1 on a run with 796/796 files passing","major","ai/async-ownership",
+"FAILED never throws and never leaks: a provider failure is contained by the governor",
+"invoke.finally(onInvokeSettled) returns a NEW promise that re-rejects whenever the call rejects; nothing handled it. The adjacent invoke.catch() only handles the promise it creates itself. The process-level unhandledRejection handler counts these toward the crash-storm exit (>4 in 5s -> clean process.exit(1))",
+"Defect-18 fix (b9975e4, 2026-10-11, singleflight delete on invoke settle) added the .finally without a trailing .catch. Pre-dates no production run: today's engine is the first to execute it","high",
+["src/server/ai/AICallGovernor.ts","src/server/ai/AICallGovernor.test.ts"],
+["(uncommitted, working tree on 06b75a7)"],
+"AICallGovernor.test.ts: new 'failed governed calls leak no unhandled rejection' - both capabilities; RED with the fix reverted (2 failed, 1 leaked rejection each), GREEN with it (2 passed); file restored byte-identical after the red run",
+"FIXED in working tree (one trailing .catch). NOT in the running engine: it loaded before the fix and picks it up only at its next restart","N/A (fixed directly on main working tree)",N,N,Y,"PENDING","PENDING","PENDING","PENDING","PENDING",
+"TARGETED_TESTED","Live exposure until the engine restarts: any burst of governed-call failures (>4 in 5s) could trip the crash-storm exit; observed rate so far ~1 per 30s while the event loop was starved. Restart must wait for the startup backup to finish (a restart would start it over) - after market close is the safe window. Follow-up audit of the 14 production .finally( call sites (read-only): 8 inspected - AICallGovernor (fixed), QuantCoreBridge and KronosModelManager (.catch before .finally), fastLaneEvaluator (result goes through Promise.race, which attaches handlers), NewsEngine boot rehydrate (function wraps its body in try/catch), AIRouter (already uses the two-handler .then form, documented), AiAdvisoryService (relies on its documented catch-all contract - not independently proven), and one more via the same contract; no further defect found. NOT inspected (6): gracefulShutdown, OpenAliceWorkspace, FirstFillForensicCheckpoint, heavyReportGuard, forecastEngine, ChiefTraderAgent:817. .then()/Promise.all derived-promise sites were not searched.","The test run's exit code was 1 despite 0 failed tests - 'Unhandled Errors' on a green run is a finding, not noise."),
+]
+
+# Fresh validation rounds on the final candidate (section 76: no reuse of earlier counts).
+VALIDATION_ROUNDS = [
+ {"round": 1, "sha": "06b75a7724b36e84200298dcab1926abde6d743d", "tree": "clean main == origin/main",
+  "typecheck": "PASS", "build": "PASS",
+  "vitest": {"exit": 1, "files": "6 failed | 790 passed (796)", "tests": "7 failed | 6600 passed | 1 expected fail | 2 skipped (6610)", "duration_s": 1210.62},
+  "failures": ["oct07ProviderCollapse flood", "SyntheticSessionGuards external_data_cache", "MarketDataWorker memoryLeak heap",
+               "PredictionOutcomeEvaluator.backlog (ties:true)", "PredictionOutcomeEvaluator restart-resume", "PredictionOutcomeEvaluator backfill",
+               "tier4 dailyCompactionPerformance"],
+  "classification": "All 7 reproduced in isolation (not load flakiness). See OCT12-01..06."},
+ {"round": 2, "sha": "06b75a7724b36e84200298dcab1926abde6d743d", "tree": "main + uncommitted fixes for OCT12-01..06 (NOT the OCT12-08 governor fix, and not the readiness-check edit, which landed mid-run); ran partly concurrent with engine boot",
+  "typecheck": "PASS", "build": "PASS",
+  "vitest": {"exit": 1, "files": "796 passed (796)", "tests": "6608 passed | 1 expected fail | 2 skipped (6611)", "duration_s": 1152.87},
+  "failures": [],
+  "classification": "0 test failures (the 7 from round 1 are fixed). Exit code 1 came from 111 unhandled rejections raised in AICallGovernor.invokeJev during ChaosMatrixHeavy H1 - see OCT12-08. A third round on the final tree (with the OCT12-08 fix) has NOT been run yet."},
 ]
 
 EVIDENCE_FILES = [
@@ -1183,6 +1272,9 @@ def main():
         "generated_by": "Worker B (historical audit), read-only",
         "updated_by": "Worker I (mission defect closure, 2026-10-11): TONIGHT-01..08 -> FIXED; TONIGHT-09..26 added; OCT9-02/OCT9-05 -> FIXED",
         "audited_sha": AUDIT_SHA,
+        "audited_sha_note": "Statuses for OCT8-*/OCT9-*/OCT10-*/TONIGHT-* were audited on the pre-merge branch at this SHA. They were not re-bound to the merged main; see validation_rounds for what was freshly validated on 2026-10-12.",
+        "last_updated": "2026-10-12 (OCT12-01..07 added; validation_rounds added)",
+        "validation_rounds": VALIDATION_ROUNDS,
         "branch": "mission/oct8-oct9-closure",
         "safety_posture": "PAPER ONLY, LIVE_NO_GO; engine never redeployed with Oct-10 fixes",
         "counts": {"total": total, "by_severity": by_sev, "by_final_status": by_final},
@@ -1190,11 +1282,24 @@ def main():
         "checklist": [{"area":a,"item":i,"verdict":v,"evidence":e} for a,i,v,e in CHECKLIST],
         "issues": [{f: issue[f] for f in FIELDS} for issue in ISSUES],
     }
-    with open(os.path.join(HERE, "ARGUS_OCT8_OCT9_MASTER_DEFECT_REGISTER.json"), "w") as f:
+    # UTF-8 explicitly: the default encoding on Windows (cp1252) wrote the em-dashes in two
+    # headings as invalid bytes. newline="\n" keeps the committed line endings stable.
+    with open(os.path.join(HERE, "ARGUS_OCT8_OCT9_MASTER_DEFECT_REGISTER.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(payload, f, indent=2)
         f.write("\n")
-    with open(os.path.join(HERE, "ARGUS_OCT8_OCT9_MASTER_DEFECT_REGISTER.md"), "w") as f:
+    with open(os.path.join(HERE, "ARGUS_OCT8_OCT9_MASTER_DEFECT_REGISTER.md"), "w", encoding="utf-8", newline="\n") as f:
         f.write(build_markdown())
+        f.write("\n## Fresh validation rounds (2026-10-12)\n\n")
+        f.write("Statuses above (OCT8-* .. TONIGHT-*) were audited at `%s` on the pre-merge branch and were NOT re-bound issue by issue. The rounds below are fresh runs.\n\n" % AUDIT_SHA)
+        for r in VALIDATION_ROUNDS:
+            f.write("### Round %s - `%s` (%s)\n\n" % (r["round"], r["sha"], r["tree"]))
+            f.write("- typecheck: %s\n- build: %s\n- vitest: exit %s, %s; %s; %ss\n" % (
+                r["typecheck"], r["build"], r["vitest"]["exit"], r["vitest"]["files"], r["vitest"]["tests"], r["vitest"]["duration_s"]))
+            if r.get("failures"):
+                f.write("- failures (%d):\n" % len(r["failures"]))
+                for x in r["failures"]:
+                    f.write("  - %s\n" % x)
+            f.write("- classification: %s\n\n" % r["classification"])
     print(f"issues={total} sev={by_sev} final={by_final}")
 
 if __name__ == "__main__":

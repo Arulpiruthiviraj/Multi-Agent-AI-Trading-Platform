@@ -626,6 +626,34 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
       }
     });
 
+    it('cold-miss getBars returns exactly [startMs, endMs], never the surrounding hour bucket (point-in-time regression, 2026-10-12)', async () => {
+      // The #10 test above uses daily bars, so an hour-bucket superset equals the exact window and
+      // cannot expose an intra-hour leak. 1Min bars inside one hour can: a cache MISS must not
+      // return bars before startMs or (the dangerous case) after the endMs cutoff.
+      const hour = 3_600_000;
+      const base = Math.floor(Date.now() / hour) * hour - 6 * hour; // hour-aligned, in the past
+      for (let i = 0; i < 60; i++) {
+        const ts = base + i * 60_000;
+        await db.insert(schema.ohlcvBars).values({
+          id: `BUCKETLEAK:1Min:${ts}`, symbol: 'BUCKETLEAK', timeframe: '1Min', timestamp: ts,
+          open: 10, high: 11, low: 9, close: 10 + i, volume: 1000, source: 'alpaca',
+        }).onConflictDoNothing();
+      }
+      const minutes = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, k) => base + (from + k) * 60_000);
+
+      const start = base + 10 * 60_000;
+      const end = base + 20 * 60_000;
+      const cold = await historicalDataGateway.getBars('BUCKETLEAK', '1Min', start, end); // cache miss
+      expect(cold.map((b) => b.timestamp)).toEqual(minutes(10, 20));
+
+      const warm = await historicalDataGateway.getBars('BUCKETLEAK', '1Min', start, end); // cache hit
+      expect(warm).toEqual(cold); // result must not depend on cache state
+
+      // Another narrow window in the same hour bucket shares the cached entry and must still be exact.
+      const other = await historicalDataGateway.getBars('BUCKETLEAK', '1Min', base + 30 * 60_000, base + 35 * 60_000);
+      expect(other.map((b) => b.timestamp)).toEqual(minutes(30, 35));
+    });
+
     it('keeps the SYNTHETIC_SIMULATION isolation guard fail-closed: stale cache returns without network, empty cache still refuses', async () => {
       const fetchMock = vi.fn(async () => { throw new Error('fetch must not be called during synthetic simulation'); });
       vi.stubGlobal('fetch', fetchMock);

@@ -21,6 +21,9 @@ describe('Prediction outcome pending-page fairness', () => {
   });
   beforeEach(() => {
     sqliteDb.exec('DELETE FROM prediction_outcomes; DELETE FROM agent_predictions; DELETE FROM kronos_predictions; DELETE FROM news_predictions; DELETE FROM ohlcv_bars;');
+    // The table was wiped behind the gateway's back; without this the previous case's cached
+    // hour-bucket (60s TTL) is served to the next case and its endpoint bar is filtered out.
+    gateway.clearBarsMemoryCache();
   });
   afterAll(() => {
     vi.restoreAllMocks();

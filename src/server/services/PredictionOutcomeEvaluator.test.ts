@@ -21,6 +21,11 @@ describe('PredictionOutcomeEvaluator (Phase 4)', () => {
   let KRONOS_EVALUATION_HORIZON_MS: number;
 
   const PRED_TIME = new Date('2026-01-05T14:30:00.000Z').getTime(); // arbitrary fixed epoch, well aligned to 1-min bars
+  // Predictions are evaluated oldest-first, and earlier cases leave a pending backlog dated just
+  // before PRED_TIME. The restart/backfill cases need to be reached in ONE evaluatePending(), so
+  // they use an earlier, minute-aligned time with its own legitimate evidence (entry bar at the
+  // prediction time, endpoint bar exactly at its horizon - never after the cutoff).
+  const EARLY_PRED_TIME = PRED_TIME - 10 * 60_000;
 
   beforeAll(async () => {
     tmpDbPath = path.join(os.tmpdir(), `argus_outcomes_${Date.now()}_${process.pid}.db`);
@@ -53,6 +58,12 @@ describe('PredictionOutcomeEvaluator (Phase 4)', () => {
       await db.insert(schema.ohlcvBars).values({ id: `UPTEST:1Min:${timestamp}`,
         symbol: 'UPTEST', timeframe: '1Min', timestamp,
         open: 110, high: 110, low: 110, close: 110, volume: 1000, source: 'test' });
+    }
+    for (const timestamp of [EARLY_PRED_TIME, EARLY_PRED_TIME + EVALUATION_HORIZON_MS]) {
+      const close = timestamp === EARLY_PRED_TIME ? 100 : 110;
+      await db.insert(schema.ohlcvBars).values({ id: `UPTEST:1Min:${timestamp}`,
+        symbol: 'UPTEST', timeframe: '1Min', timestamp,
+        open: close, high: close, low: close, close, volume: 1000, source: 'test' }).onConflictDoNothing();
     }
   });
 
@@ -460,7 +471,7 @@ describe('PredictionOutcomeEvaluator (Phase 4)', () => {
 
     it('restart resumes correctly: a fresh evaluator instance (simulating a process restart) picks up exactly the still-pending backlog, with no loss and no duplication', async () => {
       const { PredictionOutcomeEvaluator: EvaluatorClass } = await import('./PredictionOutcomeEvaluator');
-      const oldTimestamp = new Date(PRED_TIME - 2).toISOString();
+      const oldTimestamp = new Date(EARLY_PRED_TIME).toISOString();
       await db.insert(schema.agentPredictions).values([
         { id: 'restart-a', agentName: 'TechnicalAgent', symbol: 'UPTEST', prediction: 'BUY', confidence: 0.8, reasoning: 'restart test', timestamp: oldTimestamp },
         { id: 'restart-b', agentName: 'TechnicalAgent', symbol: 'NOBARSYMBOL', prediction: 'BUY', confidence: 0.8, reasoning: 'restart test - stays pending (no bars)', timestamp: oldTimestamp },
@@ -492,7 +503,7 @@ describe('PredictionOutcomeEvaluator (Phase 4)', () => {
     });
 
     it('deliberate backfill: deleting an outcome makes its prediction eligible again within a bounded sweep', async () => {
-      const oldTimestamp = new Date(PRED_TIME - 3).toISOString();
+      const oldTimestamp = new Date(EARLY_PRED_TIME).toISOString();
       await db.insert(schema.agentPredictions).values({
         id: 'backfill-target', agentName: 'TechnicalAgent', symbol: 'UPTEST', prediction: 'BUY',
         confidence: 0.8, reasoning: 'backfill test', timestamp: oldTimestamp,

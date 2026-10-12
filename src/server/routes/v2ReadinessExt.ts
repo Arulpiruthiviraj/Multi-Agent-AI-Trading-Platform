@@ -133,30 +133,68 @@ function checkRunningSha(): ReadinessCheck {
   }
 }
 
+/**
+ * drizzle's migrator applies exactly the journal entries whose `when` is newer than the latest
+ * applied row's `created_at` - it does not compare row counts. The production DB has carried one
+ * fewer applied row than journal entries for a long time with nothing pending, so a count
+ * comparison reported "migrations behind" on every run (a permanent false FAIL that trained
+ * operators to ignore this gate). Mirror drizzle's own rule instead.
+ */
+export function pendingJournalMigrations(
+  entries: Array<{ tag: string | null; when: number }>,
+  maxAppliedCreatedAt: number | null,
+): Array<{ tag: string | null; when: number }> {
+  if (maxAppliedCreatedAt === null) return entries.slice();
+  return entries.filter((e) => e.when > maxAppliedCreatedAt);
+}
+
 function checkSchemaMigrations(): ReadinessCheck {
   let journalEntries = 0;
   let latestTag: string | null = null;
+  let journalWhens: Array<{ tag: string | null; when: number }> = [];
   try {
     const journal = JSON.parse(
       readFileSync(join(process.cwd(), 'drizzle', 'meta', '_journal.json'), 'utf8'),
-    ) as { entries?: Array<{ tag?: string }> };
+    ) as { entries?: Array<{ tag?: string; when?: number }> };
     const entries = Array.isArray(journal.entries) ? journal.entries : [];
     journalEntries = entries.length;
     latestTag = entries.length > 0 ? entries[entries.length - 1]?.tag ?? null : null;
+    journalWhens = entries
+      .filter((e) => typeof e.when === 'number' && Number.isFinite(e.when))
+      .map((e) => ({ tag: e.tag ?? null, when: e.when as number }));
   } catch {
     journalEntries = 0;
   }
   let applied: number | null = null;
+  let maxAppliedCreatedAt: number | null = null;
   try {
-    const row = sqliteDb.prepare('SELECT COUNT(*) AS n FROM __drizzle_migrations').get() as
-      | { n: number }
+    const row = sqliteDb.prepare('SELECT COUNT(*) AS n, MAX(created_at) AS m FROM __drizzle_migrations').get() as
+      | { n: number; m: number | null }
       | undefined;
     applied = typeof row?.n === 'number' ? row.n : null;
+    maxAppliedCreatedAt = typeof row?.m === 'number' ? row.m : null;
   } catch (e: unknown) {
     return fail('schema', 'Schema / migrations', `migration table unreadable: ${errMsg(e)}`);
   }
   if (applied === null) return fail('schema', 'Schema / migrations', 'migration count query returned no rows');
   const tagPart = latestTag ? `, latest tag ${latestTag}` : '';
+  // Timestamp rule needs every journal entry to carry a numeric `when`; otherwise fall back to the
+  // old count comparison rather than silently passing.
+  if (journalEntries > 0 && journalWhens.length === journalEntries) {
+    const pending = pendingJournalMigrations(journalWhens, maxAppliedCreatedAt);
+    if (pending.length > 0) {
+      return fail(
+        'schema',
+        'Schema / migrations',
+        `migrations behind: ${pending.length} journal entr${pending.length === 1 ? 'y' : 'ies'} newer than the latest applied ` +
+          `(first: ${pending[0].tag ?? 'unknown'}); ${applied} applied rows, ${journalEntries} journal entries${tagPart}`,
+      );
+    }
+    const countNote = applied < journalEntries
+      ? ` (row count ${applied} < ${journalEntries} journal entries, but none are newer than the latest applied - drizzle applies by timestamp)`
+      : '';
+    return pass('schema', 'Schema / migrations', `${applied}/${journalEntries} applied, none pending${tagPart}${countNote}`);
+  }
   if (journalEntries > 0 && applied < journalEntries) {
     return fail(
       'schema',

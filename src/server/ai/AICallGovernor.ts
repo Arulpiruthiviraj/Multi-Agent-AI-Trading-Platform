@@ -721,8 +721,13 @@ export class AICallGovernor {
       // 2026-10-11 (#18): delete the singleflight entry when invoke settles, not
       // when the timeout race settles. Keeps abort-on-timeout; prevents a duplicate
       // request in the timeout-to-abort-observation window from starting a second call.
+      // .finally() returns a NEW promise that re-rejects whenever `invoke` rejects, and the
+      // .catch() below only handles the promise it creates itself - so without its own .catch
+      // every failed governed call leaked an unhandled rejection (observed live 2026-10-12:
+      // `[Jev] request aborted` every ~30s, and 111 in the Jev network-down chaos test). The
+      // process-level handler counts these toward the crash-storm exit.
       if (onInvokeSettled) {
-        invoke.finally(onInvokeSettled);
+        invoke.finally(onInvokeSettled).catch(() => undefined);
       }
       // Suppress unhandled-rejection noise if the timeout path wins the race
       // and the provider promise settles later.
