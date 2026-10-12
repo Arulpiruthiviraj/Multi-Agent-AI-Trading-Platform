@@ -5,7 +5,7 @@
  */
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   clearEnginePid,
@@ -2236,13 +2236,12 @@ const commands: Record<string, () => Promise<void>> = {
       try {
         execFileSync('sqlite3', [sourcePath, `.backup '${snapshotDb.replace(/'/g, "''")}'`], { stdio: 'pipe' });
       } catch (backupError: any) {
-        const { copyFileSync } = await import('node:fs');
-        copyFileSync(sourcePath, snapshotDb);
-        for (const suffix of ['-wal', '-shm']) {
-          const sidecar = sourcePath + suffix;
-          if (existsSync(sidecar)) copyFileSync(sidecar, snapshotDb + suffix);
-        }
-        console.error(`certify-next-session: sqlite3 .backup failed (${backupError?.message || backupError}); used file copy instead (snapshot may reflect the last checkpoint).`);
+        // 2026-10-11 (#11): the old fallback did copyFileSync of the live DB plus
+        // -wal/-shm while the engine writes — a torn non-atomic snapshot that can
+        // silently feed wrong rows into certification. Deleted. Fail loudly instead:
+        // a torn snapshot is worse than no snapshot.
+        console.error(`certify-next-session: sqlite3 .backup failed (${backupError?.message || backupError}); refusing to use a torn file-copy snapshot.`);
+        process.exit(1);
       }
       const code = await new Promise<number>((resolveCode, reject) => {
         const child = spawn(process.execPath, [
@@ -2259,8 +2258,10 @@ const commands: Record<string, () => Promise<void>> = {
       process.exitCode = code;
     } finally {
       // Remove only this freshly-created snapshot directory; never sourcePath.
+      // 2026-10-11 (#12): use basename(), not split('/').pop() — on Windows paths
+      // use '\', so the old guard always threw and cleanup never ran.
       if (dirname(snapshotRoot) !== resolve(tmpdir()) ||
-          !snapshotRoot.split('/').pop()!.startsWith('argus-certify-next-session-')) {
+          !basename(snapshotRoot).startsWith('argus-certify-next-session-')) {
         throw new Error('Refusing snapshot cleanup outside the owned temporary directory');
       }
       rmSync(snapshotRoot, { recursive: true, force: true });
