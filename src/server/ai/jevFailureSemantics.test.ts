@@ -320,6 +320,12 @@ describe('Jev failure semantics: AI-unavailable-neutral parity for validated qua
     const { bucketFor } = await import('../services/ConfidenceCalibration');
     const { deskIntelligence } = await import('../config/deskIntelligence');
     const { tradingSafety } = await import('../config/tradingSafety');
+    // 2026-10-11: disable the consensus-eval min-interval throttle — sequential
+    // parity scenarios with the same symbol+agent would otherwise hit
+    // `replacedSameAgent && Date.now()-lastEval < interval` and skip evaluation
+    // entirely, hanging the test. The throttle is a production rate-limit, not a
+    // safety gate; disabling it in this isolated test is safe.
+    (tradingSafety as any).consensusEvalMinIntervalMs = 0;
     const { generateTraceId } = await import('../core/traceId');
     const { getTradingDateStr } = await import('../core/TradingCalendar');
     const { SyntheticRandom } = await import('../replay/synthetic/SyntheticRandom');
