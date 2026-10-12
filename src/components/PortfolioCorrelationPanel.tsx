@@ -178,7 +178,7 @@ const PortfolioCorrelationPanel = () => {
               <div className="flex flex-wrap gap-2">
                 {resp.data.clusters.map((c, i) => (
                   <div key={i} className="bg-slate-800/60 border border-slate-700/50 rounded px-2 py-1 text-[10px] font-mono text-slate-300">
-                    {c.symbols.join(' + ')} <span className="text-slate-500">({c.averageIntraClusterCorrelation.toFixed(2)} avg)</span>
+                    {(Array.isArray(c.symbols) ? c.symbols : []).join(' + ')} <span className="text-slate-500">({typeof c.averageIntraClusterCorrelation === 'number' ? c.averageIntraClusterCorrelation.toFixed(2) : 'N/A'} avg)</span>
                   </div>
                 ))}
               </div>

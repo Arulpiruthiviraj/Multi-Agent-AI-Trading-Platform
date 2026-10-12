@@ -85,7 +85,7 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
              const res = await fetch(`/api/v2/system/trace/${trade.traceId}`);
              const data = await res.json();
              if (cancelled || requestKey !== selectedTradeKey) return; // late response for a since-abandoned trade
-             if (data.trace && data.trace.length > 0) {
+             if (Array.isArray(data.trace) && data.trace.length > 0) {
                  setTraceEvents(data.trace);
                  setLoading(false);
                  return;

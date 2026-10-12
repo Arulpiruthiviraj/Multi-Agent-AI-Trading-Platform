@@ -117,8 +117,9 @@ const StrategySynergyMatrix = () => {
                   {SHORT_LABEL[rowAgent] || rowAgent}
                 </div>
                 {agents.map((colAgent, j) => {
-                  const val = data!.matrix[i][j];
-                  const n = data!.sampleCounts[i][j];
+                  const val = data?.matrix?.[i]?.[j];
+                  const n = data?.sampleCounts?.[i]?.[j];
+                  if (val === undefined || n === undefined) return null;
                   return (
                     <div key={`cell-${i}-${j}`} className="w-20 h-8 shrink-0 p-0.5">
                       {val === null ? (

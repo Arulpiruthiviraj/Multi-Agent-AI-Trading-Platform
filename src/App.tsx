@@ -1065,6 +1065,12 @@ export default function App() {
       const res = await fetch(`/api/v2/portfolio/stress-test?shockPct=${shockPct}`);
       const json = await res.json();
       if (!json.ok) { setStressError(json.error || 'Request failed.'); return; }
+      // Validate the payload shape before storing: a malformed {ok:true, available:true}
+      // without data would crash the portfolio tab on render (F4).
+      if (json.available === true && (!json.data || typeof json.data.projectedLoss !== 'number' || !Array.isArray(json.data.affectedSectors))) {
+        setStressError('Stress-test response was malformed.');
+        return;
+      }
       setStressResult(json);
     } catch (e: any) {
       setStressError(e.message);
@@ -1183,7 +1189,7 @@ export default function App() {
       const res = await fetch("/api/v1/webhooks");
       if (res.ok) {
         const data = await res.json();
-        setWebhooksList(data);
+        setWebhooksList(Array.isArray(data) ? data : []);
       }
     } catch (e) {
       console.error("Failed to fetch webhooks", e);
@@ -3374,7 +3380,9 @@ export default function App() {
           <AICoachPanel onClose={() => setShowCoach(false)} />
         </Suspense>
       )}
-      <LiveMarketNewsTicker />
+      <PanelBoundary label="News ticker" resetKeys={[activeTab]}>
+        <LiveMarketNewsTicker />
+      </PanelBoundary>
       {enginesHalted && (
         <div className="bg-rose-600 px-4 py-2 flex flex-col gap-2 text-white w-full">
           <div className="flex items-center gap-2 font-bold text-xs tracking-wide uppercase flex-wrap">
@@ -3648,6 +3656,7 @@ export default function App() {
       <ResponsiveStatsSection brokerRibbon={brokerRibbon} />
 
       {/* Tab strip stays on screen while the workspace scrolls. Wrap — do not hide desks behind a scrollbar. */}
+      <PanelBoundary label="Tab navigation" resetKeys={[activeTab]}>
       <div
         className="argus-desktop-only sticky top-0 z-50 bg-[#1A1F2B]/95 backdrop-blur-md border-b border-slate-850 px-4 shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
         id="tabs-navigation"
@@ -3665,6 +3674,7 @@ export default function App() {
           </Explainer>
         </div>
       </div>
+      </PanelBoundary>
 
       {/* Main Workspace Frame container */}
       <main className={`flex-1 p-4 md:p-6 argus-fluid-container ${compactNav ? 'pb-28' : ''}`} id="workspace-main">
@@ -6538,7 +6548,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody className="text-xs font-mono text-slate-300">
-                       {learningSummary.agentWeights.map((a: any) => (
+                       {(Array.isArray(learningSummary.agentWeights) ? learningSummary.agentWeights : []).map((a: any) => (
                          <tr key={a.agentName} className="border-b border-slate-800/40 hover:bg-slate-800/20 transition-colors">
                             <td className="py-3 px-2 font-bold text-white">{a.agentName}</td>
                             <td className={`py-3 px-2 ${a.winRate === null ? 'text-slate-500' : a.winRate >= 50 ? 'text-emerald-400' : 'text-rose-400'}`}>{a.winRate === null ? 'N/A' : `${a.winRate}%`}</td>
@@ -8519,7 +8529,7 @@ export default function App() {
 
                                        <div className="flex items-center gap-1.5 flex-wrap">
                                           <span className="text-[9px] text-slate-500 uppercase font-mono">Triggers:</span>
-                                          {wh.events.map((ev: string) => (
+                                          {(Array.isArray(wh.events) ? wh.events : []).map((ev: string) => (
                                              <span key={ev} className="bg-slate-900 text-slate-400 text-[8px] font-mono px-1.5 py-0.5 rounded border border-slate-800">
                                                 {ev.replace(/_/g, ' ')}
                                              </span>

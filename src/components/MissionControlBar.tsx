@@ -77,8 +77,8 @@ export default function MissionControlBar() {
 
   const winRateReason = data.winRateUnavailableReason || WIN_RATE_UNAVAILABLE;
   const pnlReason = data.realizedPnlUnavailableReason || REALIZED_PNL_UNAVAILABLE;
-  const agentsTitle = data.agents.active === 0 ? AGENTS_INACTIVE : `${data.agents.active} of ${data.agents.total} pipeline agents emitted a prediction in the last ~3 minutes.`;
-  const modelsTitle = data.aiModels.healthy < data.aiModels.total || data.aiModels.total === 0 ? AI_MODELS_PARTIAL : `${data.aiModels.healthy} enabled AI providers marked Healthy.`;
+  const agentsTitle = (data.agents?.active ?? 0) === 0 ? AGENTS_INACTIVE : `${data.agents?.active ?? 0} of ${data.agents?.total ?? 0} pipeline agents emitted a prediction in the last ~3 minutes.`;
+  const modelsTitle = (data.aiModels?.healthy ?? 0) < (data.aiModels?.total ?? 0) || (data.aiModels?.total ?? 0) === 0 ? AI_MODELS_PARTIAL : `${data.aiModels?.healthy ?? 0} enabled AI providers marked Healthy.`;
 
   return (
     <div className="flex flex-wrap gap-3">
@@ -135,21 +135,21 @@ export default function MissionControlBar() {
       />
       <StatCard
         icon={<TrendingUp size={12} />} label="Win Rate"
-        value={data.winRate !== null
+        value={data.winRate != null
           ? `${(data.winRate * 100).toFixed(1)}%`
           : <UnavailableHint reason={winRateReason}>DATA UNAVAILABLE</UnavailableHint>}
-        tone={data.winRate === null ? 'neutral' : undefined}
-        title={data.winRate === null ? winRateReason : 'Share of today\'s filled trades with booked P&L that were profitable. Not a calibrated live edge.'}
+        tone={data.winRate == null ? 'neutral' : undefined}
+        title={data.winRate == null ? winRateReason : 'Share of today\'s filled trades with booked P&L that were profitable. Not a calibrated live edge.'}
       />
       <StatCard
         icon={<DollarSign size={12} />} label="Realized P&L"
-        value={data.realizedPnlToday !== null
+        value={data.realizedPnlToday != null
           ? `${data.realizedPnlToday >= 0 ? '+' : ''}$${data.realizedPnlToday.toFixed(2)}`
           : <UnavailableHint reason={pnlReason}>DATA UNAVAILABLE</UnavailableHint>}
-        tone={data.realizedPnlToday === null ? 'neutral' : data.realizedPnlToday >= 0 ? 'good' : 'bad'}
-        title={data.realizedPnlToday === null ? pnlReason : 'Sum of booked profitLoss on today\'s filled trades.'}
+        tone={data.realizedPnlToday == null ? 'neutral' : data.realizedPnlToday >= 0 ? 'good' : 'bad'}
+        title={data.realizedPnlToday == null ? pnlReason : 'Sum of booked profitLoss on today\'s filled trades.'}
       />
-      <StatCard icon={<DollarSign size={12} />} label="AI Cost Today" value={`$${data.aiCostToday.toFixed(4)}`} title="Sum of ai_calls.cost for rows created today. Local/Ollama is $0." />
+      <StatCard icon={<DollarSign size={12} />} label="AI Cost Today" value={`$${(data.aiCostToday ?? 0).toFixed(4)}`} title="Sum of ai_calls.cost for rows created today. Local/Ollama is $0." />
       <StatCard icon={<Zap size={12} />} label="Events / Sec" value={data.eventsPerSec} title="In-memory EventBus ring count over the last 10 seconds. Not a durable event_traces rate." />
     </div>
   );

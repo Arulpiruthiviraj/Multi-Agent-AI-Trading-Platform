@@ -1,6 +1,7 @@
 import tradingSafety from "../../config/tradingSafety.json";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Newspaper, Globe, AlertTriangle, TrendingUp, TrendingDown, Activity, Clock, ShieldCheck, Database, Server, Crosshair } from "lucide-react";
+import { safeParseSymbols } from "./shared/safeJson";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar, Cell } from "recharts";
 
 /** Match RiskEngine news_veto scale: cluster impactScore is 0–1; threshold is 0–100. */
@@ -38,9 +39,9 @@ export function NewsDashboardTab() {
           fetch("/api/v1/news/providers", { signal: controller.signal })
         ]);
 
-        if (clustersRes.ok) setClusters(await clustersRes.json());
-        if (articlesRes.ok) setArticles(await articlesRes.json());
-        if (providersRes.ok) setProviders(await providersRes.json());
+        if (clustersRes.ok) { const j = await clustersRes.json(); setClusters(Array.isArray(j) ? j : []); }
+        if (articlesRes.ok) { const j = await articlesRes.json(); setArticles(Array.isArray(j) ? j : []); }
+        if (providersRes.ok) { const j = await providersRes.json(); setProviders(Array.isArray(j) ? j : []); }
       } catch (err: any) {
         if (err?.name === 'AbortError') return;
         console.error("Failed to fetch news intelligence data", err);
@@ -97,7 +98,7 @@ export function NewsDashboardTab() {
             ) : (
               clusters.map((cluster, idx) => {
                 const sentiment = (cluster.sentimentScore || 0);
-                const syms = cluster.symbols ? JSON.parse(cluster.symbols) : [];
+                const syms = safeParseSymbols(cluster.symbols);
                 return (
                   <div key={idx} className="bg-[#111822] border border-slate-800/80 p-3 rounded-md hover:border-slate-700 transition-colors">
                     <div className="flex justify-between items-start mb-2">
@@ -165,7 +166,7 @@ export function NewsDashboardTab() {
                      </span>
                      {article.symbols && (
                        <span className="text-[9px] font-mono text-indigo-400">
-                         {JSON.parse(article.symbols).join(', ')}
+                         {safeParseSymbols(article.symbols).join(', ')}
                        </span>
                      )}
                    </div>

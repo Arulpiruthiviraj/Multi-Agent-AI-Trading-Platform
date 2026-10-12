@@ -164,7 +164,8 @@ export default function TransactionObservatory({ transactionId, onClose }: { tra
       .then(json => {
         if (cancelled) return;
         if (!json.ok) { setError(json.error || 'Unknown error'); setLoading(false); return; }
-        setData(json);
+        // Normalize arrays: a payload missing them would crash riskGates.map / fills.length on render.
+        setData({ ...json, riskGates: Array.isArray(json.riskGates) ? json.riskGates : [], fills: Array.isArray(json.fills) ? json.fills : [] });
         setLoading(false);
       })
       .catch(e => { if (!cancelled) { setError(e.message); setLoading(false); } });
