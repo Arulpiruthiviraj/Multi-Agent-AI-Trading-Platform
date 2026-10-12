@@ -25,6 +25,7 @@ describe('createQuantEvalStageTimer', () => {
 describe('classifyQuantEvalError', () => {
   it.each([
     ['[HistoricalDataGateway] COALESCE_CALLER_TIMEOUT for AAPL (1Day): waiter exceeded 300000ms', 'COALESCE_CALLER_TIMEOUT'],
+    ['[HistoricalDataGateway] HISTORICAL_INNER_FETCH_TIMEOUT for SPY (1Day): inner provider operation exceeded 30000ms', 'HISTORICAL_INNER_FETCH_TIMEOUT'],
     ['IBKR historicalData timeout for MSFT (1Day)', 'IBKR_HISTORICAL_TIMEOUT'],
     ['IBKR historicalData error code=162: pacing violation', 'IBKR_HISTORICAL_ERROR'],
     ['IBKR socket session is not connected for historical bars.', 'IBKR_NOT_CONNECTED'],

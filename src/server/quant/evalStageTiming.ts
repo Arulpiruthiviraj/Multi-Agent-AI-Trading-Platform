@@ -37,6 +37,7 @@ export function createQuantEvalStageTimer(now: () => number = Date.now): QuantEv
 
 export type QuantEvalErrorCode =
   | 'COALESCE_CALLER_TIMEOUT'
+  | 'HISTORICAL_INNER_FETCH_TIMEOUT'
   | 'IBKR_HISTORICAL_TIMEOUT'
   | 'IBKR_HISTORICAL_ERROR'
   | 'IBKR_NOT_CONNECTED'
@@ -55,6 +56,7 @@ export type QuantEvalErrorCode =
 export function classifyQuantEvalError(e: unknown): QuantEvalErrorCode {
   const msg = String((e as { message?: unknown } | null)?.message ?? e ?? '');
   if (/COALESCE_CALLER_TIMEOUT/.test(msg)) return 'COALESCE_CALLER_TIMEOUT';
+  if (/HISTORICAL_INNER_FETCH_TIMEOUT/.test(msg)) return 'HISTORICAL_INNER_FETCH_TIMEOUT';
   if (/IBKR historicalData timeout/i.test(msg)) return 'IBKR_HISTORICAL_TIMEOUT';
   if (/IBKR historicalData error|IBKR historical-data rejection/i.test(msg)) return 'IBKR_HISTORICAL_ERROR';
   if (/IBKR socket session is not connected/i.test(msg)) return 'IBKR_NOT_CONNECTED';
