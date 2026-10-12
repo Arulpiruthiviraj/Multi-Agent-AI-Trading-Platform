@@ -134,7 +134,7 @@ describe('Property: close-long flows through positionFillEvidence can never over
       }),
       { numRuns: 300, seed: fcSeed },
     );
-  });
+  }, 60_000); // 2026-10-11 (#24): 300-run fast-check takes ~15s; explicit timeout for slow runners
 
   it('refuses a SELL whose remote quantity disagrees with the fill-ledger watermark even when it would otherwise be a legal partial close', async () => {
     // Deliberately replays the OKTA shape at random quantities: BUY N, SELL all N (flat), then a

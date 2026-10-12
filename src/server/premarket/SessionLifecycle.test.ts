@@ -200,42 +200,42 @@ describe('sessionLifecycleWorker (stateful, event-emitting)', () => {
       const refined = await getRefinedSnapshot(snap);
       expect(refined.appState).toBe('PLAN_BUILDING');
       expect(refined.marketSession).toBe('PRE_MARKET'); // unrefined fields pass through unchanged
-    });
+    }, 60_000); // 2026-10-11 (#25): explicit timeout for slow environments
 
     it('PRE_MARKET with existing plans -> PLAN_READY', async () => {
       await db.insert(schema.tradePlans).values(baseTradePlanRow());
       const snap = evaluateSessionLifecycle(etOnWednesday(8, 0));
       const refined = await getRefinedSnapshot(snap);
       expect(refined.appState).toBe('PLAN_READY');
-    });
+    }, 60_000); // 2026-10-11 (#25): explicit timeout for slow environments
 
     it('REGULAR with a plan still READY/VALID/REVALIDATING -> OPEN_REVALIDATION', async () => {
       await db.insert(schema.tradePlans).values(baseTradePlanRow({ status: 'VALID' }));
       const snap = evaluateSessionLifecycle(etOnWednesday(10, 0));
       const refined = await getRefinedSnapshot(snap);
       expect(refined.appState).toBe('OPEN_REVALIDATION');
-    });
+    }, 60_000); // 2026-10-11 (#25): explicit timeout for slow environments
 
     it('REGULAR with only terminal-status plans -> unrefined (INTRADAY)', async () => {
       await db.insert(schema.tradePlans).values(baseTradePlanRow({ status: 'INVALIDATED' }));
       const snap = evaluateSessionLifecycle(etOnWednesday(10, 0));
       const refined = await getRefinedSnapshot(snap);
       expect(refined.appState).toBe('INTRADAY');
-    });
+    }, 60_000); // 2026-10-11 (#25): explicit timeout for slow environments
 
     it('CLOSED/AFTER_HOURS pass through unrefined regardless of plan state', async () => {
       await db.insert(schema.tradePlans).values(baseTradePlanRow());
       const snap = evaluateSessionLifecycle(etOnWednesday(2, 0)); // CLOSED
       const refined = await getRefinedSnapshot(snap);
       expect(refined.appState).toBe('IDLE');
-    });
+    }, 60_000); // 2026-10-11 (#25): explicit timeout for slow environments
 
     it('never mutates sessionLifecycleWorker\'s own current/event-emission state', async () => {
       sessionLifecycleWorker.evaluate(etOnWednesday(8, 0));
       const before = sessionLifecycleWorker.getSnapshot();
       await getRefinedSnapshot(before);
       expect(sessionLifecycleWorker.getSnapshot()).toEqual(before); // untouched by the refinement call
-    });
+    }, 60_000); // 2026-10-11 (#25): explicit timeout for slow environments
   });
 
   describe('Phase 4J: persistence across restart', () => {
