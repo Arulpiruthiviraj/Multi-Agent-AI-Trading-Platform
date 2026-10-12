@@ -23,7 +23,7 @@
 import { timedWorkCycle } from '../observability/workCycle';
 import { db } from '../db';
 import { transactions, consensusDecisions, consensusEvidence, agentPredictions, trainingExamples } from '../db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, isNotNull, ne, and, notInArray } from 'drizzle-orm';
 import { evaluatePrediction, EVALUATION_HORIZON_MS } from './PredictionOutcomeEvaluator';
 import { tradingSafety } from '../config/tradingSafety';
 
@@ -49,12 +49,19 @@ export class TrainingExampleBuilder {
 
   private async buildPendingUntimed() {
     const now = Date.now();
-    const existing = await db.select().from(trainingExamples);
+    // 2026-10-12 (event-loop stall forensics): this ran every 15 minutes and loaded ALL transactions
+    // (131,571 live rows) plus every training example into memory, then discarded nearly all of them in JS.
+    // The two skips below are now applied in SQL with identical semantics: only transactions that HAVE a
+    // decision and do not yet have a training example are fetched (189 live rows).
+    const existing = await db.select({ transactionId: trainingExamples.transactionId }).from(trainingExamples);
     const existingIds = new Set(existing.map(t => t.transactionId));
 
-    const txns = await db.select().from(transactions);
+    const decided = and(isNotNull(transactions.finalDecision), ne(transactions.finalDecision, ''));
+    const txns = await db.select().from(transactions).where(
+      existingIds.size > 0 ? and(decided, notInArray(transactions.id, [...existingIds])) : decided,
+    );
     for (const txn of txns) {
-      if (existingIds.has(txn.id)) continue;
+      if (existingIds.has(txn.id)) continue; // kept as a defensive no-op
       if (!txn.finalDecision) continue; // NO_CONSENSUS transactions have no decision to label
 
       const decision = await db.select().from(consensusDecisions).where(eq(consensusDecisions.transactionId, txn.id)).get();
