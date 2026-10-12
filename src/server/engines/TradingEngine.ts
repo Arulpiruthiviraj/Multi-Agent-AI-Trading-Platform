@@ -63,6 +63,7 @@ import {
   resolveEnvTradingMode,
 } from '../core/tradingModeEnv';
 import { isValidHHMM, isValidTimezone, isWithinScheduledWindow } from '../core/AutoTradeSchedule';
+import { validateSettingsBounds } from '../core/settingsValidation';
 import { getTimeHHMMInZone, TRADING_TIMEZONE } from '../core/TradingCalendar';
 
 export type TradingState = 'TRADING_ENABLED' | 'TRADING_PAUSED' | 'EMERGENCY_STOP';
@@ -349,7 +350,38 @@ class TradingEngine {
                 // (emergencyStopActive on TradingEngine.state), so a process restart while
                 // EMERGENCY_STOP was active silently resumed trading - defeating "require
                 // explicit reactivation". Now loaded from the persisted settings row.
-                this.state.tradingState = (s.tradingState as TradingState) || 'TRADING_ENABLED';
+                // L12 fix (2026-10-12): the persisted tradingState is validated against the known
+                // TradingState union. An unknown/corrupted value FAILS CLOSED to TRADING_PAUSED
+                // (never resumes trading on garbage state) and is repaired in the DB row; a
+                // missing value keeps the legacy TRADING_ENABLED default. The loud warning goes
+                // to both the structured log and stderr so a restart never silently proceeds.
+                const persistedTradingState = s.tradingState as string | null | undefined;
+                if (
+                    persistedTradingState === 'TRADING_ENABLED' ||
+                    persistedTradingState === 'TRADING_PAUSED' ||
+                    persistedTradingState === 'EMERGENCY_STOP'
+                ) {
+                    this.state.tradingState = persistedTradingState;
+                } else if (persistedTradingState == null) {
+                    this.state.tradingState = 'TRADING_ENABLED';
+                } else {
+                    observeSafe(() => structuredLogger.warn('trading_state_invalid_from_db_coerced_paused', {
+                        category: 'TRADING_SAFETY',
+                        eventType: 'TRADING_STATE_INVALID_FROM_DB',
+                        invalidValue: String(persistedTradingState).slice(0, 64),
+                        coercedTo: 'TRADING_PAUSED',
+                    }));
+                    console.warn(
+                        `[TradingEngine] INVALID tradingState "${persistedTradingState}" loaded from settings DB - ` +
+                        'coercing to TRADING_PAUSED (fail-closed). Inspect and correct the settings row before resuming.'
+                    );
+                    this.state.tradingState = 'TRADING_PAUSED';
+                    try {
+                        await db.update(schema.settings).set({ tradingState: 'TRADING_PAUSED' }).where(eq(schema.settings.id, s.id)).run();
+                    } catch (e) {
+                        console.error('[TradingEngine] Failed to persist coerced TRADING_PAUSED tradingState', e);
+                    }
+                }
                 this.state.emergencyStopActive = this.state.tradingState === 'EMERGENCY_STOP';
                 if (this.state.tradingState !== 'TRADING_ENABLED') {
                     console.warn(`[TradingEngine] Restored from a non-enabled trading state: ${this.state.tradingState}. Explicit reactivation required.`);
@@ -425,6 +457,21 @@ class TradingEngine {
     }
 
     public async toggle(config: Partial<AutoBotState> & { confirmLiveTrading?: string; autoBotEnabled?: boolean }): Promise<{ ok: boolean; error?: string }> {
+        // H1 fix (2026-10-12): POST /api/v1/autobot/toggle used to reach toggle() with NO numeric
+        // bounds check, while POST /api/v1/config/settings applies validateSettingsBounds(). Now
+        // enforced here - the one real entry point both routes go through - so every
+        // TOGGLE_ALLOWED_FIELDS numeric field (budget, maxTradeSize, dailyLossLimit,
+        // takeProfitPct, trailingStopPct, minAiConfidence) is range-checked against the same
+        // bounds config/tradingSafety.json defines (bound VALUES unchanged; only the
+        // whitelisted subset present in this patch is checked). A rejected toggle never has any
+        // side effect: no state applied, nothing persisted.
+        const boundsCheck = validateSettingsBounds(config as Record<string, unknown>);
+        if (boundsCheck.ok === false) {
+            // Returned verbatim: SettingsValidationResult's {ok:false, error} matches toggle()'s
+            // own return shape. (Note: this repo's tsconfig has strictNullChecks off, so the
+            // !boundsCheck.ok form does not narrow the union - the === false form does.)
+            return boundsCheck;
+        }
         // Validated here (the one real entry point both /autobot/toggle and /config/settings go
         // through) rather than only at the route layer, so a bad value can never be silently
         // persisted and then silently skipped forever by AutoTradeScheduler.tick().

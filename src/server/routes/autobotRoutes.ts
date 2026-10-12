@@ -115,6 +115,9 @@ autobotRouter.get("/state", (req: Request, res: Response) => {
 });
 
 autobotRouter.post("/toggle", tradingLimiter, async (req: Request, res: Response) => {
+  // H1 (2026-10-12): numeric bounds for the toggle body (budget, maxTradeSize, dailyLossLimit,
+  // takeProfitPct, trailingStopPct, minAiConfidence) are enforced inside TradingEngine.toggle()
+  // via validateSettingsBounds() - this route is covered by it, same as /config/settings.
   const result = await tradingEngine.toggle(req.body);
   if (!result.ok) {
     return res.status(400).json(result);

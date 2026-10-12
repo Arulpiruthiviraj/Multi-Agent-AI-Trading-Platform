@@ -69,6 +69,26 @@ export function expectedBarCountForWindow(timeframe: string, startMs: number, en
   return Math.max(1, Math.floor(spanMs / dayMs));
 }
 
+/**
+ * 2026-10-12 (duplicate-bars defect): ohlcv_bars ids are `${symbol}:${timeframe}:${timestamp}` and the
+ * two providers stamp the SAME daily session differently (ibkr 00:00Z, alpaca 04:00Z/05:00Z NY
+ * midnight), so a symbol fetched through both held every trading day twice (77 of 728 symbols
+ * live), doubling bar counts and corrupting every indicator. The stored rows are left untouched
+ * (history is append-only evidence); the READ path returns exactly one bar per UTC calendar day for
+ * daily timeframes - the later-stamped (NY-midnight) bar wins, a deterministic source-agnostic rule.
+ * Intraday timeframes pass through unchanged. Input is timestamp-ascending, output stays ascending.
+ */
+export function dedupeDailyBarsBySession<T extends { timestamp: number }>(timeframe: string, bars: T[]): T[] {
+  if (timeframe !== '1Day' && timeframe !== '1D') return bars;
+  const byDay = new Map<number, T>();
+  for (const b of bars) {
+    const day = Math.floor(b.timestamp / 86_400_000);
+    const prev = byDay.get(day);
+    if (!prev || b.timestamp > prev.timestamp) byDay.set(day, b);
+  }
+  return byDay.size === bars.length ? bars : [...byDay.values()].sort((a, b) => a.timestamp - b.timestamp);
+}
+
 export class HistoricalDataGateway {
   private static instance: HistoricalDataGateway;
   /** Shared across symbols so one 429 stops an idea-storm of ensureBars fan-out. */
@@ -128,10 +148,12 @@ export class HistoricalDataGateway {
    * redundant fetch back-to-back - a self-inflicted mini-storm when, e.g., QuantSignalAgent,
    * RiskEngine and MissedOpportunityEvaluator evaluate the same symbol in the same cycle.
    * The public ensureBars() below is a thin wrapper that shares one in-flight
-   * ensureBarsInner() promise per window. Bounded two ways: the entry is removed on settle,
-   * and a TTL (quantBarsCoalesceEntryMaxAgeMs) evicts it if the inner never settles - the
-   * inner provider call has no timeout/cancel path, so without the TTL one stalled fetch
-   * would wedge the window forever. A shared rejection is shared
+   * ensureBarsInner() promise per window. Bounded three ways: (1) the 2026-10-12 inner
+   * timeout (quantBarsInnerFetchTimeoutMs) fails a stalled inner FIRST with
+   * HISTORICAL_INNER_FETCH_TIMEOUT and releases the entry for a fresh attempt; (2) the
+   * entry is removed on settle; (3) a TTL (quantBarsCoalesceEntryMaxAgeMs) marks it overdue
+   * with a loud warn as a backstop. A late-settling zombie's cache writes are
+   * entry-identity-guarded (isCurrentEntry) and skipped. A shared rejection is shared
    * honestly - every coalesced caller sees the same error; none gets silent stale data.
    */
   private inflightEnsureBars = new Map<string, { promise: Promise<void>; overdue: boolean }>();
@@ -309,16 +331,73 @@ export class HistoricalDataGateway {
       }
       return;
     }
-    const run = this.ensureBarsInner(symbol, timeframe, startMs, endMs);
-    const entry = { promise: run, overdue: false };
+    // 2026-10-12 (M2): the inner-timeout race owns an AbortController, aborted BEFORE the
+    // timeout rejection is delivered so the inner's real network work is cancelled, not just
+    // abandoned. The Alpaca REST path below honors the signal. The IBKR path CANNOT be
+    // cancelled: IbkrSocketSession.requestHistoricalBars (behind the histChain) exposes a bare
+    // Promise with no AbortSignal parameter - its internal ib.cancelHistoricalData(reqId) fires
+    // only on its own internal timer - and HistoricalBarProvider.fetchBars has no signal slot,
+    // so threading a fake signal there would be a lie. An IBKR-side stalled inner therefore
+    // remains a true zombie; its late writes stay fully guarded by isCurrentEntry() at the
+    // entry-release site, exactly as before.
+    const innerAbort = new AbortController();
+    // 2026-10-12 (L1): entry-identity replaces the old per-key generation counter (an
+    // unbounded Map). isCurrentEntry() compares the map's CURRENT entry against THIS
+    // attempt's entry object by identity: a late-settling zombie holds a DIFFERENT entry
+    // object, so it can never mistake a newer attempt for its own. Identity cannot collide
+    // the way a recycled generation number could, and there is no per-key counter map left
+    // to bound - the entry is removed on settle at the release site below.
+    const entry: { promise: Promise<void>; overdue: boolean } = { promise: Promise.resolve(), overdue: false };
+    const isCurrentEntry = () => this.inflightEnsureBars.get(coalesceKey) === entry;
+    const inner = this.ensureBarsInner(symbol, timeframe, startMs, endMs, isCurrentEntry, innerAbort.signal);
+    // A rejected zombie must never surface as an unhandled rejection after the timeout below
+    // wins the race: attach a no-op catch to the raw inner promise. Its late cache writes are
+    // already entry-identity-guarded; its late errors are intentionally dropped (the timeout error
+    // is what callers observed).
+    inner.catch(() => {});
+    // 2026-10-12 (Oct 12 forensic): real bounded timeout on the INNER provider operation.
+    // A stalled inner previously wedged this window's entry until the 300s caller-side
+    // timeout (COALESCE_CALLER_TIMEOUT). Now the inner fails first with the distinct
+    // HISTORICAL_INNER_FETCH_TIMEOUT, the entry is released via the finally below, and a
+    // fresh attempt can proceed immediately. This does NOT lower the caller timeout.
+    // 2026-10-12 (M2): the timeout ABORTS the inner's real network work (innerAbort.abort())
+    // before rejecting - the Alpaca fetch below honors the signal, so no zombie fetch keeps
+    // burning provider quota after the timeout. The IBKR path has no cancellation API (see
+    // the innerAbort comment above) and remains a true zombie - still entry-identity-guarded
+    // against zombie writes at the release site.
+    const innerTimeoutMs = tradingSafety.quantBarsInnerFetchTimeoutMs;
+    let innerTimer: ReturnType<typeof setTimeout> | undefined;
+    const run = (async (): Promise<void> => {
+      try {
+        await Promise.race([
+          inner,
+          new Promise<void>((_, reject) => {
+            innerTimer = setTimeout(() => {
+              innerAbort.abort();
+              reject(new Error(
+                `[HistoricalDataGateway] HISTORICAL_INNER_FETCH_TIMEOUT for ${symbol} (${timeframe}): ` +
+                `inner provider operation exceeded quantBarsInnerFetchTimeoutMs=${innerTimeoutMs}ms. ` +
+                `The inner's cancellable network work was aborted; the coalescing entry is released ` +
+                `so a fresh attempt can proceed; a late-settling zombie is entry-identity-guarded ` +
+                `and cannot clobber newer cache entries.`,
+              ));
+            }, innerTimeoutMs);
+          }),
+        ]);
+      } finally {
+        if (innerTimer !== undefined) clearTimeout(innerTimer);
+      }
+    })();
+    // The raced promise is the shared entry so coalesced waiters observe the timeout too.
+    entry.promise = run;
     this.inflightEnsureBars.set(coalesceKey, entry);
-    // 2026-10-11 (#13): liveness bound for the coalescing entry. The inner provider
-    // call has no timeout/cancel path (fetch/IBKR), so a stalled call would otherwise
-    // wedge this window's entry FOREVER. Past quantBarsCoalesceEntryMaxAgeMs the entry
-    // is marked OVERDUE with a loud warn — but RETAINED until the inner settles.
+    // 2026-10-11 (#13) + 2026-10-12: liveness backstop for the coalescing entry. The inner
+    // now has its own timeout (quantBarsInnerFetchTimeoutMs, normally fires first), but a
+    // wedged edge case must never hold the entry FOREVER. Past quantBarsCoalesceEntryMaxAgeMs
+    // the entry is marked OVERDUE with a loud warn — but RETAINED until the inner settles.
     // Deleting it (the old behavior) caused duplicate provider work (new callers
     // started fresh fetches) and let the zombie inner's finally-clause clobber the
-    // newer fetch's cache via a stale generation-guarded delete. Retention + the
+    // newer fetch's cache via a stale identity-guarded delete. Retention + the
     // caller-side timeout above gives waiters their own bound without deleting the
     // shared entry. unref'd so a wedged entry never holds the process open on its own.
     const maxAgeMs = tradingSafety.quantBarsCoalesceEntryMaxAgeMs;
@@ -353,7 +432,17 @@ export class HistoricalDataGateway {
    * cache whose newest bar is older than quantBarsTailFreshnessToleranceMs (present-time
    * request only) falls through to a provider refresh instead of returning early.
    */
-  private async ensureBarsInner(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<void> {
+  private async ensureBarsInner(
+    symbol: string,
+    timeframe: string,
+    startMs: number,
+    endMs: number,
+    isCurrentEntry: () => boolean = () => true,
+    // 2026-10-12 (M2): aborted by the HISTORICAL_INNER_FETCH_TIMEOUT race in ensureBars().
+    // Combined with the per-page request timeout below so the timeout cancels the real HTTP
+    // request instead of abandoning it as a zombie fetch.
+    abortSignal?: AbortSignal,
+  ): Promise<void> {
     const existing = await this.getBars(symbol, timeframe, startMs, endMs);
     const expected = expectedBarCountForWindow(timeframe, startMs, endMs);
     const coverage = existing.length / expected;
@@ -417,11 +506,20 @@ export class HistoricalDataGateway {
       try {
         const fetched = await provider.fetchBars(symbol, timeframe, startMs, endMs);
         if (fetched.length > 0) {
-          await this.persistBars(symbol, timeframe, fetched, 'ibkr', startMs, endMs);
+          // 2026-10-12 (zombie guard): a late-settling inner whose entry was already
+          // released+regenerated must not clobber the newer attempt's cache rows.
+          if (isCurrentEntry()) {
+            await this.persistBars(symbol, timeframe, fetched, 'ibkr', startMs, endMs);
+          } else {
+            console.warn(`[HistoricalDataGateway] stale zombie persist skipped for ${symbol} (${timeframe}): entry regenerated after inner timeout.`);
+          }
           // Stale-tail path: the IBKR bars must actually have moved the tail - verify
           // instead of assuming. Old bars returned by the provider are not relabeled fresh.
           if (staleTail) await this.verifyStaleTailMoved(symbol, timeframe, startMs, endMs);
-          else this.consecutiveRateLimits = 0;
+          // 2026-10-12 (L2): a zombie inner (entry released + regenerated after the inner
+          // timeout) must not reset the CURRENT attempt's 429 backoff - the fresh attempt
+          // may have armed it while this stale inner was settling.
+          else if (isCurrentEntry()) this.consecutiveRateLimits = 0;
           return;
         }
         // 2026-10-11 (stale-tail invariant): the IBKR-empty path must run the same
@@ -493,12 +591,16 @@ export class HistoricalDataGateway {
       // 2026-10-11 (#20): the pagination loop had NO timeout — a stalled connection
       // hangs forever and wedges the fast-lane/scheduler work it feeds. Use the
       // existing alpacaRequestTimeoutMs convention.
+      // 2026-10-12 (M2): combine the per-page request timeout with the inner-timeout
+      // AbortSignal so HISTORICAL_INNER_FETCH_TIMEOUT cancels this real HTTP request
+      // instead of abandoning it as a zombie fetch.
+      const pageTimeoutSignal = AbortSignal.timeout(tradingSafety.alpacaRequestTimeoutMs);
       const res = await fetch(url.toString(), {
         headers: {
           'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
           'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY,
         },
-        signal: AbortSignal.timeout(tradingSafety.alpacaRequestTimeoutMs),
+        signal: abortSignal ? AbortSignal.any([pageTimeoutSignal, abortSignal]) : pageTimeoutSignal,
       });
       if (!res.ok) {
         const body = await res.text().catch(() => '');
@@ -533,13 +635,21 @@ export class HistoricalDataGateway {
             volume: b.v,
           };
         });
-        await this.persistBars(symbol, timeframe, mapped, 'alpaca', startMs, endMs);
+        // 2026-10-12 (zombie guard): see IBKR path above.
+        if (isCurrentEntry()) {
+          await this.persistBars(symbol, timeframe, mapped, 'alpaca', startMs, endMs);
+        } else {
+          console.warn(`[HistoricalDataGateway] stale zombie persist skipped for ${symbol} (${timeframe}): entry regenerated after inner timeout.`);
+        }
       }
       pageToken = data.next_page_token || undefined;
       if (pageToken) await this.paceAlpacaFetch();
     } while (pageToken);
 
-    this.memoryBars.delete(this.memoryKey(symbol, timeframe, startMs, endMs));
+    // 2026-10-12 (zombie guard): a stale inner must not wipe the fresh attempt's memory cache.
+    if (isCurrentEntry()) {
+      this.memoryBars.delete(this.memoryKey(symbol, timeframe, startMs, endMs));
+    }
 
     // Stale-tail path: the provider refresh must have actually moved the tail. An empty
     // provider response leaves "missing" missing - no bar is fabricated - and the loud
@@ -744,7 +854,10 @@ export class HistoricalDataGateway {
         lte(schema.ohlcvBars.timestamp, bucketEndMs)
       ))
       .orderBy(asc(schema.ohlcvBars.timestamp));
-    const bars = rows.map(r => ({ timestamp: r.timestamp, open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume }));
+    const bars = dedupeDailyBarsBySession(
+      timeframe,
+      rows.map(r => ({ timestamp: r.timestamp, open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume })),
+    );
     this.cacheSet(key, { bars, expiresAt: Date.now() + 60_000 });
     // The cache holds the whole bucket, but the caller asked for [startMs, endMs]: returning the
     // bucket here would hand a cold query bars AFTER its cutoff (lookahead) and make the result

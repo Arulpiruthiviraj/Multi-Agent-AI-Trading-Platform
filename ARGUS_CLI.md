@@ -116,6 +116,36 @@ npm run argus-cli -- pause --reason="..."
 
 ---
 
+## 1b. One-command start, stop and restart (2026-10-12)
+
+```bash
+./argus start --enable-trading     # boot, wait for a clean reconciliation, then resume
+./argus restart --resume           # graceful stop + start + resume ONLY if trading was enabled before
+./argus restart --enable-trading   # same, but resume regardless of the previous state
+./argus stop                       # graceful stop (drains, then confirms /health is gone)
+```
+
+What changed and why (each item fixed a real problem from the Oct 12 restarts):
+
+* **Boot wait is 6 minutes** (`ARGUS_CLI_START_TIMEOUT_MS` overrides). Boot takes about 160 s on this host; the old
+  150 s limit reported a false failure while the engine came up fine. If the wait still expires with the process
+  alive, the command exits with code 2 and says "still booting" (the engine is NOT stopped); a dead process exits 1.
+* **Ollama is off by default** for engine starts. Pass `--with-ollama` to opt in; an explicit `ARGUS_SKIP_OLLAMA`
+  in your environment always wins. (A relaunched Ollama on a 16 GB host caused a retry storm.)
+* **`--enable-trading` / `--resume` wait for a clean broker reconciliation** (up to 12 min,
+  `ARGUS_CLI_RECONCILIATION_WAIT_MS`) before calling the normal resume route. A fresh process can report one
+  transient `ACCOUNT_VALUATION_UNAVAILABLE` cycle; the command waits it out. If reconciliation never clears, the
+  engine is left **paused** (exit code 3) with the reason; it is never forced.
+* **`restart --resume` never undoes a deliberate pause.** It restores trading only when the previous state was
+  `TRADING_ENABLED` with no emergency stop; a paused or emergency-stopped engine stays that way.
+* The bash wrappers now forward `--with-ollama`, `--no-watchdog` (start) and all flags (restart); the PowerShell
+  wrapper (`.\argus.ps1`) already forwarded everything.
+
+Exit codes for start/restart: `0` ok, `1` failed to start, `2` alive but still booting, `3` started but resume
+withheld because reconciliation was not clean.
+
+---
+
 ## 2. Check engine status
 
 ```bash

@@ -654,6 +654,35 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
       expect(other.map((b) => b.timestamp)).toEqual(minutes(30, 35));
     });
 
+    it('daily bars written by two sources for the same trading day are returned once (2026-10-12 duplicate-bars defect)', async () => {
+      // Live finding: 77 of 728 symbols held every trading day twice - ibkr stamps the session at
+      // 00:00Z, alpaca at 04:00Z (NY midnight) - doubling bar counts and corrupting every indicator.
+      const day = 86_400_000;
+      const d0 = Date.UTC(2026, 8, 14); // 2026-09-14 00:00Z
+      for (let i = 0; i < 5; i++) {
+        const ibkrTs = d0 + i * day;
+        const alpacaTs = ibkrTs + 4 * 3_600_000;
+        await db.insert(schema.ohlcvBars).values({ id: `DUPDAY:1Day:${ibkrTs}`, symbol: 'DUPDAY', timeframe: '1Day', timestamp: ibkrTs, open: 1, high: 2, low: 1, close: 100 + i, volume: 10, source: 'ibkr' }).onConflictDoNothing();
+        await db.insert(schema.ohlcvBars).values({ id: `DUPDAY:1Day:${alpacaTs}`, symbol: 'DUPDAY', timeframe: '1Day', timestamp: alpacaTs, open: 1, high: 2, low: 1, close: 100.04 + i, volume: 10, source: 'alpaca' }).onConflictDoNothing();
+      }
+      const bars = await historicalDataGateway.getBars('DUPDAY', '1Day', d0 - day, d0 + 6 * day);
+      expect(bars).toHaveLength(5); // one bar per trading day, not 10
+      expect(new Set(bars.map((b: any) => new Date(b.timestamp).toISOString().slice(0, 10))).size).toBe(5);
+      // deterministic, source-agnostic rule: the later-stamped (NY-midnight) bar wins
+      expect(bars.every((b: any) => (b.timestamp - d0) % day === 4 * 3_600_000)).toBe(true);
+    });
+
+    it('intraday bars are never collapsed by the daily de-duplication', async () => {
+      const hour = 3_600_000;
+      const base = Math.floor(Date.now() / hour) * hour - 8 * hour;
+      for (let i = 0; i < 3; i++) {
+        const ts = base + i * 60_000;
+        await db.insert(schema.ohlcvBars).values({ id: `NODUPMIN:1Min:${ts}`, symbol: 'NODUPMIN', timeframe: '1Min', timestamp: ts, open: 1, high: 2, low: 1, close: 1 + i, volume: 1, source: 'alpaca' }).onConflictDoNothing();
+      }
+      const bars = await historicalDataGateway.getBars('NODUPMIN', '1Min', base, base + 5 * 60_000);
+      expect(bars).toHaveLength(3);
+    });
+
     it('keeps the SYNTHETIC_SIMULATION isolation guard fail-closed: stale cache returns without network, empty cache still refuses', async () => {
       const fetchMock = vi.fn(async () => { throw new Error('fetch must not be called during synthetic simulation'); });
       vi.stubGlobal('fetch', fetchMock);

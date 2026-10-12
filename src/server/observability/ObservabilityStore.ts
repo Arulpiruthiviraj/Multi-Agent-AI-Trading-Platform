@@ -11,6 +11,7 @@ import { incMetric } from './ObservabilityMetrics';
 import type { ObservabilityLevel } from '../config/observability';
 import { purgeVerifiedDays } from '../db/dailyCompaction/DailyCompactionOrchestrator';
 import { observabilityEventsSource } from '../db/dailyCompaction/observabilityEventsSource';
+import { timeAsyncPersist } from './syncPersistTiming';
 
 export interface ObservabilityEventRow {
   id: string;
@@ -51,7 +52,11 @@ export function getObservabilityQueueSnapshot() {
 }
 
 async function defaultPersist(batch: ObservabilityEventRow[]): Promise<void> {
-  await db.insert(observabilityEvents).values(batch);
+  // 2026-10-12 (pre-market perfection mission, item 1): warn-level timing around this
+  // synchronous-under-the-hood commit - a disk-level stall here blocks the event loop
+  // (SYNC_PERSIST_SLOW at WARN). The drizzle call is sync better-sqlite3; measuring the
+  // awaited window measures the main-thread block.
+  await timeAsyncPersist('ObservabilityStore.defaultPersist', () => db.insert(observabilityEvents).values(batch));
 }
 
 function scheduleFlush(): void {
@@ -155,6 +160,21 @@ export function stopObservabilityRetentionSweep(): void {
     clearInterval(retentionTimer);
     retentionTimer = null;
   }
+}
+
+/**
+ * 2026-10-12 (L6): the batch-flush timer was never cleared. Called during the graceful-shutdown
+ * drain BEFORE the SQLite checkpoint/close - clears the timer and performs a final flush of any
+ * pending events so nothing queued in memory is dropped on shutdown. Safe to call when the
+ * queue is empty. (The retention sweep has its own stopObservabilityRetentionSweep(), already
+ * wired into the shutdown drain.)
+ */
+export async function stopObservabilityStore(): Promise<void> {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  await flushObservabilityStore();
 }
 
 /** Test hooks — never used on the live path. */

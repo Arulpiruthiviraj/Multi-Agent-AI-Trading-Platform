@@ -202,6 +202,30 @@ export interface TradingSafety {
    * while capping the worst-case added decision latency well under one provider timeout.
    */
   quantContradictionMaxWaitMs: number;
+  /**
+   * 2026-10-12 (live forensic): LATENCY BOUND, not a trading threshold. QuantSignalAgent awaits the
+   * optional intraday (1Min) fetch used only by the opening-range strategy. Live, IEX 1Min cache
+   * coverage was below the 0.85 sufficiency bar for every symbol, so every evaluation entered the
+   * provider path (global paced/serialized) and the whole evaluation queued behind it (~300 s). The
+   * fetch is documented best-effort and fail-open; past this wait the evaluation proceeds exactly as
+   * it already does when that fetch fails (intraday bars unavailable, opening range honestly
+   * unavailable) while the underlying fetch keeps running (never cancelled, never duplicated).
+   * Same 8000ms precedent as quantContradictionMaxWaitMs.
+   */
+  quantIntradayFetchMaxWaitMs: number;
+  /** 2026-10-12: a periodic background job whose single run takes at least this long (wall clock) is logged as WORK_CYCLE_SLOW with its CPU share. Observability only; added after two ~4 min CPU-bound engine freezes 15 min apart could not be attributed to any job. */
+  workCycleSlowWarnMs: number;
+  /** 2026-10-12: rows per page when CalibrationCandidateBuilder loads prediction history. Each page is one synchronous SQLite call, so this bounds the longest event-loop block of the 15-minute calibration cycle (which previously held the whole engine for ~3.5-4 min as one uninterrupted task). A latency/safety bound, not a trading threshold. */
+  calibrationFetchPageRows: number;
+  /** 2026-10-12: lifetime of a single-use protective-exit seal (see core/protectiveExitSeal.ts). Must cover PortfolioMonitor emit -> ChiefTrader risk-exit approval -> RiskEngine evaluation, including serialization behind other evaluations and a worst-case multi-minute event-loop pause; an expired seal fails CLOSED (news_veto then applies as before). Also bounds the in-memory registry. */
+  protectiveExitSealTtlMs: number;
+  /**
+   * 2026-10-12: LIVENESS BOUND for ConfluenceCoordinator's per-symbol on-demand Quant in-flight
+   * guard. A re-trigger is skipped while the previous on-demand evaluation for that symbol is
+   * younger than this; an older, never-settling one no longer blocks the symbol forever (at most one
+   * replacement per window, so duplication stays bounded). Set to 2x quantBarsCoalesceEntryMaxAgeMs.
+   */
+  quantOnDemandInflightMaxAgeMs: number;
   aiProviderAuthFailureCooldownMs: number;
   /** Skip 404 / fetch-failed providers this long (in-memory; does not flip DB enabled). */
   aiProviderUnreachableCooldownMs: number;
@@ -404,6 +428,17 @@ export interface TradingSafety {
    * purpose - legitimate multi-page backfills take seconds.
    */
   quantBarsCoalesceEntryMaxAgeMs: number;
+  /**
+   * 2026-10-12 (Oct 12 forensic): real bounded timeout for the INNER provider operation inside
+   * ensureBarsInner (IBKR histChain / Alpaca fetch), which has no native timeout/cancel path.
+   * Must stay well below quantBarsCoalesceEntryMaxAgeMs so a stalled inner fails FIRST with the
+   * distinct HISTORICAL_INNER_FETCH_TIMEOUT error (releasing the coalescing entry for a fresh
+   * attempt) instead of wedging until the caller-side timeout. This is a liveness bound, not
+   * a way to hide the 300s caller timeout — the inner timeout surfaces its own error code.
+   * Generous on purpose: IBKR serializes historical requests behind per-request timeouts, so a
+   * legitimate multi-request backfill needs minutes, not seconds.
+   */
+  quantBarsInnerFetchTimeoutMs: number;
   /**
    * P1-A remediation Patch B (2026-09-14): bound on HistoricalDataGateway.memoryBars, a real,
    * standalone unbounded-Map defect found while investigating P1-A (not the proven cause of the
@@ -796,6 +831,11 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'alpacaCircuitBreakerFailureThreshold',
   'aiProviderTimeoutMs',
   'quantContradictionMaxWaitMs',
+  'quantIntradayFetchMaxWaitMs',
+  'workCycleSlowWarnMs',
+  'calibrationFetchPageRows',
+  'protectiveExitSealTtlMs',
+  'quantOnDemandInflightMaxAgeMs',
   'aiProviderAuthFailureCooldownMs',
   'aiProviderUnreachableCooldownMs',
   'aiProviderTimeoutSkipCooldownMs',
@@ -859,6 +899,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'quantBarsCacheMinCoverageRatio',
   'quantBarsTailFreshnessToleranceMs',
   'quantBarsCoalesceEntryMaxAgeMs',
+  'quantBarsInnerFetchTimeoutMs',
   'historicalBarsMemoryCacheMaxEntries',
   'quantBarsRateLimitBaseBackoffMs',
   'quantBarsRateLimitMaxBackoffMs',

@@ -1,0 +1,53 @@
+{
+  "entries": [
+    {
+      "date": "2026-10-12",
+      "detectedIn": "prod",
+      "fixRef": "95838c6 (calibration cycle loads each agent once, paged, with yields; running since 14:54 ET)",
+      "id": "event-loop-stall-20261012",
+      "notes": "Root cause: the 15-minute CalibrationValidationWorker cycle (attributed by learning_versions cycle-start timestamps; reproduced at production shape: old 11.6 s single block, fixed 1.86 s / 177 ms max gap). Runtime evidence on the fixed build: second full cycle 19:11:35Z, max event gap 7 s (old 218 s), PortfolioMonitor reviewed DDOG every ~2 min through it. ONE cycle observed; four are required before closing. heapSnapshotEnabled=false; backups and WAL checkpoints ruled out.",
+      "regressionTest": "src/server/continuous/CalibrationCandidateBuilder.eventLoop.test.ts",
+      "rootCause": "~3-minute event-loop freeze 13:32-13:35 ET on prod PID 7244; /health timeouts, CPU ~10%, self-recovered. Cause UNKNOWN: candidates are v8.writeHeapSnapshot (heapSnapshotEnabled=false in shipped config, needs deploy-side check) and a synchronous better-sqlite3 commit tail.",
+      "severity": "P0",
+      "status": "open",
+      "title": "Event-loop stall: ~3-minute freeze on prod PID 7244"
+    },
+    {
+      "date": "2026-10-12",
+      "detectedIn": "prod",
+      "fixRef": "branch fix/oct12-hunt-defects (item H1)",
+      "id": "toggle-bounds-bypass-20261012",
+      "notes": "Fix + regression test live on the sibling branch; verify both at merge (warn only, no hard block).",
+      "regressionTest": "pending:<test added on fix/oct12-hunt-defects>",
+      "rootCause": "The toggle endpoint bypassed validateSettingsBounds, allowing unbounded risk-parameter mutation.",
+      "severity": "P0",
+      "status": "fixed-elsewhere",
+      "title": "POST /api/v1/autobot/toggle bypassed validateSettingsBounds"
+    },
+    {
+      "date": "2026-10-12",
+      "detectedIn": "prod",
+      "fixRef": "486d51f",
+      "id": "guard-expiry-race-20261012",
+      "notes": "Verified 2026-10-12: test path exists in the tree on this branch and covers the generation-token isLiveCheck emission fence (8 references). Commit: 'ConfluenceCoordinator: fence superseded on-demand Quant evaluations (generation-token isLiveCheck) and log replacements'.",
+      "regressionTest": "src/server/services/ConfluenceCoordinator.quantInflight.test.ts",
+      "rootCause": "The 10-minute in-flight guard replaced still-running evaluations; CAT observed an 11.5-minute overlap on a 25-minute evaluation.",
+      "severity": "P1",
+      "status": "fixed",
+      "title": "ConfluenceCoordinator 10-min guard replaced still-running evaluations"
+    },
+    {
+      "date": "2026-10-12",
+      "detectedIn": "prod",
+      "fixRef": "open",
+      "id": "intraday-provider-backlog-20261012",
+      "notes": "Regression covers CONTAINMENT only (the 8 s bounded wait: an evaluation completes without intraday bars while the fetch keeps running). It does NOT test the root cause (why 1Min fetches are slow: IBKR 15 s timeout / entitlements / serial histChain backlog are candidates). A chaos-provider regression (persistent 1Min timeouts + opening-range abstention contract) is still required before this entry can close. b842ef5 'Bound the inner provider fetch with a real timeout' is a partial mitigation.",
+      "regressionTest": "src/server/services/QuantSignalAgent.intradayDeadline.test.ts",
+      "rootCause": "Intraday fetch timeout rate remained high (76.5%->54.6%). b842ef5 bounds the wait with a real timeout, but the data still doesn't arrive - mitigation, not a fix.",
+      "severity": "P1",
+      "status": "open",
+      "title": "Intraday provider backlog: 76.5%->54.6% fetch timeout rate"
+    }
+  ],
+  "version": 1
+}

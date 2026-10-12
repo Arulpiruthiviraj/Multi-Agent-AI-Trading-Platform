@@ -38,6 +38,8 @@ export const WEBHOOK_EVENT_TYPES = [
   "order_executed",
   "process_boot",
   "external_manual_order",
+  // 2026-10-12: event-loop lag monitor's CRITICAL alert (AlertingService.alertEventLoopStall).
+  "event_loop_stall",
 ] as const;
 
 export type WebhookEventType = (typeof WEBHOOK_EVENT_TYPES)[number];

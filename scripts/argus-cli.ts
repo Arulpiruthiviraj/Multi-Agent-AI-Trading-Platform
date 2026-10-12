@@ -37,6 +37,7 @@ import {
   unauthorizedMessage,
   writeSessionCookie,
 } from './cli/cliSession';
+import { buildEngineEnv, DEFAULT_START_TIMEOUT_MS, DEFAULT_RECONCILIATION_WAIT_MS, shouldRestoreTrading, waitForCleanReconciliation, type ReconciliationSnapshot } from './cli/lifecycle';
 import {
   argusBanner,
   badge,
@@ -438,6 +439,10 @@ export function parseFlags(argv: string[]) {
     // 2026-10-05: lets `start` skip the watchdog auto-start (which is otherwise on by default)
     // for maintenance/debug sessions where an unsupervised engine is intentional.
     noWatchdog: argv.includes('--no-watchdog'),
+    // 2026-10-12: optional local inference (Ollama) is OFF for engine starts unless asked for (see cli/lifecycle.ts).
+    withOllama: argv.includes('--with-ollama'),
+    // 2026-10-12: `restart --resume` restores TRADING_ENABLED only if it was enabled before the restart.
+    resume: argv.includes('--resume'),
   };
 }
 
@@ -571,8 +576,26 @@ export function buildEngineSpawnArgs(useProd: boolean, root: string): { args: st
   };
 }
 
-async function startEngine() {
+async function fetchReconciliationSnapshot(): Promise<ReconciliationSnapshot> {
+  const res = await fetch(`${BASE}/api/v1/system/reconciliation/status`, {
+    headers: cliAuthHeaders(),
+    signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 20_000)),
+  });
+  return (await res.json()) as ReconciliationSnapshot;
+}
+
+async function readPreRestartState(): Promise<{ tradingState?: string; emergencyStopActive?: boolean }> {
+  try {
+    const status = (await fetchJson('/api/v2/runtime/status')) as { autobot?: { tradingState?: string; emergencyStopActive?: boolean } };
+    return { tradingState: status?.autobot?.tradingState, emergencyStopActive: status?.autobot?.emergencyStopActive };
+  } catch {
+    return {}; // unknown => never restore (fail closed)
+  }
+}
+
+async function startEngine(overrides: { enableTrading?: boolean } = {}) {
   const flags = parseFlags(process.argv.slice(3));
+  if (overrides.enableTrading) flags.enableTrading = true;
   if (isEngineProcessRunning()) {
     console.log(JSON.stringify({ ok: true, message: 'Engine already running', pid: readEnginePid() }, null, 2));
     return;
@@ -606,7 +629,7 @@ async function startEngine() {
     }, null, 2));
     process.exit(1);
   }
-  const env = { ...process.env, ARGUS_HEADLESS: 'true', ARGUS_ENGINE: 'true' };
+  const env = buildEngineEnv(process.env, { withOllama: flags.withOllama });
   const spawnSpec = buildEngineSpawnArgs(useProd, ROOT);
   const child = spawn(process.execPath, spawnSpec.args, { cwd: ROOT, env, detached: true, stdio: 'ignore' });
   if (!child.pid) throw new Error('Failed to spawn Argus engine process');
@@ -615,11 +638,16 @@ async function startEngine() {
   // Real-world boot time on this machine consistently runs 65-75s (ArgusCoreBoot + migrations +
   // model probes), past a 60s cap - repeatedly observed reporting a false "health check timed out"
   // moments before /health actually came up healthy. Default raised to 150s; still overridable.
-  const startTimeoutMs = Number(process.env.ARGUS_CLI_START_TIMEOUT_MS || 150_000);
+  const startTimeoutMs = Number(process.env.ARGUS_CLI_START_TIMEOUT_MS || DEFAULT_START_TIMEOUT_MS);
   // staleAnsweringPid is always undefined here (the guard above already exited otherwise) - this
   // spawn is the only thing that can legitimately answer /health from this point forward.
   const ready = await waitForHealth(startTimeoutMs);
-  const message = ready ? 'Engine started' : 'Engine spawned but health check timed out';
+  const stillAlive = !ready && isEngineProcessRunning();
+  const message = ready
+    ? 'Engine started'
+    : stillAlive
+      ? `Engine process is alive but /health has not answered within ${Math.round(startTimeoutMs / 1000)}s (still booting or wedged). It was NOT stopped. Run: argus wait-ready   then: argus resume`
+      : 'Engine process exited before /health answered - start failed';
   let reportedPid = child.pid;
   if (ready && !useProd) {
     // Originally written (2026-08-25) to reconcile the pid file when --dev mode spawned tsx's CLI
@@ -640,8 +668,9 @@ async function startEngine() {
     headless: true,
     api: BASE,
     message,
+    ...(stillAlive ? { booting: true } : {}),
   }, null, 2));
-  if (!ready) process.exit(1);
+  if (!ready) process.exit(stillAlive ? 2 : 1);
   // --enable-trading (2026-09-15): chains the same resumeTrading() operator-resume path a separate
   // `argus-cli resume` call would use, right after a successful boot - for exactly the case this
   // was added for (starting today's session and enabling it in one step). This does NOT weaken or
@@ -654,8 +683,29 @@ async function startEngine() {
   if (flags.enableTrading) {
     const reason = resumeReasonFromArgv(process.argv.slice(3), 'Auto-resume via argus-cli start --enable-trading');
     try {
+      // 2026-10-12: a fresh process can report one transient ACCOUNT_VALUATION_UNAVAILABLE cycle; resuming into
+      // that blip is refused by the server. Wait (bounded) for a clean reconciliation instead of failing, and
+      // if it never clears leave the engine PAUSED with the reason - never force a resume.
+      const waitMs = Number(process.env.ARGUS_CLI_RECONCILIATION_WAIT_MS || DEFAULT_RECONCILIATION_WAIT_MS);
+      console.log(`Waiting up to ${Math.round(waitMs / 1000)}s for a clean broker reconciliation before resuming...`);
+      const recon = await waitForCleanReconciliation({
+        fetchStatus: fetchReconciliationSnapshot,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+        now: () => Date.now(),
+      }, { timeoutMs: waitMs });
+      if (!recon.clean) {
+        const unclean = recon as { waitedMs: number; lastSeen: string };
+        console.error(JSON.stringify({
+          enableTrading: true,
+          ok: false,
+          reconciliation: unclean.lastSeen,
+          message: `Reconciliation was not clean after ${Math.round(unclean.waitedMs / 1000)}s (${unclean.lastSeen}). Engine left PAUSED. Inspect: argus reconciliation-status   then: argus resume`,
+        }, null, 2));
+        process.exitCode = 3;
+      } else {
       const resumeResult = await resumeTrading(reason);
-      console.log(JSON.stringify({ enableTrading: true, resumeResult }, null, 2));
+      console.log(JSON.stringify({ enableTrading: true, reconciliationWaitedMs: recon.waitedMs, resumeResult }, null, 2));
+      }
     } catch (e: any) {
       console.error(JSON.stringify({
         enableTrading: true,
@@ -970,9 +1020,9 @@ export const COMMAND_HELP: Record<string, string> = {
   'version': 'Usage: argus version\nPrint CLI version and the API endpoint in use.',
   'login': 'Usage: argus login\nAuthenticate the CLI. Reads ARGUS_CLI_USER + ARGUS_CLI_PASSWORD (or AUTH_USERNAME + AUTH_PASSWORD) from the environment and stores a session cookie. The password is never printed.',
   'logout': 'Usage: argus logout\nClear the stored CLI session.',
-  'start': 'Usage: argus start [--enable-trading] [--dev] [--no-watchdog]\nStart the Argus engine (headless daemon). The watchdog supervisor auto-starts too unless --no-watchdog is given. Use `argus help` / ./argus for process-mode details.',
+  'start': 'Usage: argus start [--enable-trading] [--with-ollama] [--dev] [--no-watchdog] [--reason="..."]\nStart the Argus engine (headless daemon). Waits up to 6 min for boot. Ollama stays OFF unless --with-ollama. --enable-trading waits for a clean broker reconciliation, then resumes (never forced). The watchdog auto-starts unless --no-watchdog.',
+  'restart': 'Usage: argus restart [--resume | --enable-trading] [--with-ollama] [--reason="..."]\nGraceful stop, then start. --resume restores trading ONLY if it was enabled before (never undoes a pause or emergency stop). --enable-trading resumes unconditionally after a clean reconciliation.',
   'stop': 'Usage: argus stop\nStop the Argus engine gracefully (waits for /health to stop answering).',
-  'restart': 'Usage: argus restart\nStop then start the engine.',
   'watchdog-start': 'Usage: argus watchdog-start\nStart the detached auto-restart supervisor.',
   'watchdog-stop': 'Usage: argus watchdog-stop\nStop the watchdog supervisor.',
   'watchdog-restart': 'Usage: argus watchdog-restart\nRestart the watchdog supervisor.',
@@ -1033,7 +1083,7 @@ export const COMMAND_HELP: Record<string, string> = {
   'pipeline-ready': 'Usage: argus pipeline-ready\nPipeline readiness check.',
   'readiness': 'Usage: argus readiness\nPre-session checklist: per-check PASS/WARN/FAIL with READY / READY_WITH_WARNINGS / NOT_READY verdict. Read-only; AI checks are advisory only.',
   'quant-readiness': 'Usage: argus quant-readiness [--json]\nProduction-state diagnostic: per-strategy authorization verdicts (AUTHORIZED_QUANT_POLICY / REQUIRES_CONSENSUS / NOT_ELIGIBLE / NOT_AUTHORIZED) computed by the real resolver against the live runtime DB. Read-only; requires the engine API.',
-  'certify-next-session': 'Usage: argus certify-next-session [--db=<path>] [--json] [--with-suites] [--engine-url=<url>]\nPre-market release gate: snapshots the production DB read-only into an isolated copy, runs canonical authorization + data-readiness + build/config/schema provenance + the release certification driver (ALL mandatory checks; only PASS satisfies - a partial probe never reports READY), and emits OVERALL_STATUS (READY / READY_WITH_CONDITIONS / NO_GO) plus every required field (BUILD_SHA, ARTIFACT_HASH, CONFIG_HASH, SCHEMA_VERSION, JAVA_ARTIFACT_HASH, STRATEGY_REGISTRY_HASH, DB_SNAPSHOT_ID, PRODUCTION_CONFIG_EQUIVALENT, LIFECYCLE_SUMMARY, AUTHORIZED_PAPER_QUANT_STRATEGIES, QUANT_POLICY_REACHABILITY, JEV_*, ALL_AI_DOWN_QUANT, HISTORICAL_DATA_FRESHNESS, INTRADAY_DATA_READINESS, MARKET_DATA_HEALTH, SUBSCRIPTION_HEALTH, SCHEDULER_P50/P95/P99/MAX, MRNA/CRCL_SCENARIO, FAST_LANE, ASYNC_OWNERSHIP, PIT_REPLAY, NO_LOOKAHEAD, PREMARKET, RISK_SPINE, OMS, RECONCILIATION, BACKUP, WATCHDOG, MEMORY, QUEUES, LISTENERS, TIMERS, WORKERS, FULL_SESSION, WALL_CLOCK_SOAK). --with-suites executes the suite-delegated checks (slow); --engine-url enables live market/subscription/scheduler probes. Never seeds lifecycle, never promotes strategies, never arms LIVE.',
+  'certify-next-session': 'Usage: argus certify-next-session [--db=<path>] [--json] [--with-suites] [--engine-url=<url>] [--with-sim] [--sim-speed=N]\nPre-market release gate: snapshots the production DB read-only into an isolated copy, reports the real lifecycle state read-only (authorized PAPER quant strategies, the PAPER allocation profile, open positions, key trading-safety numbers from config), runs canonical authorization + data-readiness + build/config/schema provenance + the release certification driver (ALL mandatory checks; only PASS satisfies - a partial probe never reports READY), and emits a fail-closed GO / NO-GO verdict with the evidence behind it (driver OVERALL_STATUS READY / READY_WITH_CONDITIONS / NO_GO plus goNoGoReasons). --with-suites executes the suite-delegated checks (slow); --engine-url enables live market/subscription/scheduler probes; --with-sim runs a synthetic market-open session via the scripts/sim/marketOpen.ts --certify infrastructure (Test A no-trade safety + Test B tradeable scenario; results labeled SYNTHETIC_SEEDED / NON_ORGANIC / CERTIFICATION_FIXTURE_ONLY and folded into the verdict — never organic evidence); --sim-speed overrides the sim clock speed (default 400, as in npm run test:certification). Never seeds lifecycle, never promotes strategies, never forces a signal/approval/fill, never arms LIVE.',
   'session-checkpoint': 'Usage: argus session-checkpoint\nEarly-warning inactivity check: classifies the session HEALTHY_ZERO_TRADE / SUSPICIOUS_ZERO_TRADE (or TRADING). Run at 09:35/10:00/11:00/13:00/15:00 ET during PAPER sessions.',
   'session-report': 'Usage: argus session-report\nSession report.',
   'research': 'Usage: argus research <subcommand> [args]\nResearch intelligence (advisory only, never a trade). Run `argus research --help` for subcommands.',
@@ -1352,8 +1402,20 @@ const commands: Record<string, () => Promise<void>> = {
     // stopEngine() itself now waits for confirmation the old process actually stopped answering
     // /health (graceful path) or applies its own short buffer (SIGTERM fallback) - no need for an
     // additional blind fixed delay here on top of that (DEF-26 fix, 2026-08-26).
+    // 2026-10-12: one command for the whole cycle. `restart --resume` remembers whether trading was enabled and,
+    // only if so (and no emergency stop), waits for a clean reconciliation and resumes after the new process is
+    // up. `restart --enable-trading` resumes unconditionally (still subject to every server-side check).
+    const restartFlags = parseFlags(process.argv.slice(3));
+    let restore = false;
+    if (restartFlags.resume) {
+      const pre = await readPreRestartState();
+      restore = shouldRestoreTrading(pre);
+      console.log(restore
+        ? 'Trading was ENABLED before the restart - it will be resumed once the new process is up and reconciliation is clean.'
+        : `Trading was not enabled before the restart (${pre.tradingState ?? 'unknown'}) - it will stay paused.`);
+    }
     await stopEngine().catch(() => undefined);
-    return startEngine();
+    return startEngine({ enableTrading: restore });
   },
   async 'watchdog-start'() {
     return startWatchdog();
@@ -2223,6 +2285,10 @@ const commands: Record<string, () => Promise<void>> = {
     const withSuites = process.argv.slice(3).includes('--with-suites');
     const engineUrlFlag = process.argv.slice(3).find(a => a.startsWith('--engine-url='));
     const asJson = process.argv.slice(3).includes('--json');
+    // Phase 2 (2026-10-12): pass the synthetic market-open session stage through
+    // to the cert child (scripts/certifyNextSession.ts --with-sim).
+    const withSim = process.argv.slice(3).includes('--with-sim');
+    const simSpeedFlag = process.argv.slice(3).find(a => a.startsWith('--sim-speed='));
     const envFile = existsSync('.env') ? parse(readFileSync('.env')) : {};
     const env = { ...envFile, ...process.env };
     const sourcePath = resolve(dbFlag ? dbFlag.slice('--db='.length) : (env.ARGUS_DB_PATH || 'data/argus.db'));
@@ -2254,6 +2320,8 @@ const commands: Record<string, () => Promise<void>> = {
           ...(asJson ? ['--json'] : []),
           ...(withSuites ? ['--with-suites'] : []),
           ...(engineUrlFlag ? [engineUrlFlag] : []),
+          ...(withSim ? ['--with-sim'] : []),
+          ...(simSpeedFlag ? [simSpeedFlag] : []),
         ], {
           env: {
             ...env, SYNTHETIC_SIMULATION: 'false', ARGUS_DISABLE_MARKET_DATA_WS: 'true',

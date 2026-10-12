@@ -1608,6 +1608,13 @@ export class MarketDataWorker {
       if (this.ws !== socket) return;
       this.lastError = err?.message || String(err);
       console.error("[MarketDataWorker] WebSocket error:", err);
+      // 2026-10-12 (M3): mirror the 'close' handler's order - tear the dead socket down
+      // BEFORE scheduling the reconnect. Without this, this.ws kept pointing at the
+      // errored socket (and `authenticated` stayed true) until the reconnect timer fired,
+      // and the dead socket's listeners stayed attached. tearDownSocket() nulls this.ws
+      // (so the dead socket's own late 'close' is ignored by the this.ws !== socket guard,
+      // no double reconnect) and closes it if still OPEN/CONNECTING.
+      this.tearDownSocket();
       if (this.disconnectedAt === null) this.disconnectedAt = Date.now();
       eventBus.emit(EVENTS.MARKET_DATA_DISCONNECTED, { reason: this.lastError });
       this.scheduleReconnect('socket error');

@@ -112,12 +112,20 @@ export class OpenAliceAdapter implements ExternalVerificationProvider {
     const timeoutMs = runtimeIntervals.modelRuntimeProbeTimeoutMs;
     try {
       await this.ensureWorkspaceScoped();
-      const tools = await Promise.race([
-        this.mcp.listToolNames(),
-        new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error(`OpenAlice health timed out after ${timeoutMs}ms`)), timeoutMs);
-        }),
-      ]);
+      // 2026-10-12 defect hunt (L8): the race-timeout timer id is captured so it is cleared
+      // once the race settles - otherwise a fast provider leaves a dangling timer behind.
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      let tools: string[];
+      try {
+        tools = await Promise.race([
+          this.mcp.listToolNames(),
+          new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error(`OpenAlice health timed out after ${timeoutMs}ms`)), timeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timeoutId !== undefined) clearTimeout(timeoutId);
+      }
       const hasRequired = tools.includes('issue_create') && tools.includes('inbox_read');
       const looksLikeTradingMcp = tools.includes('placeOrder') || tools.includes('tradingCommit') || tools.includes('getQuote');
       let detail: string;

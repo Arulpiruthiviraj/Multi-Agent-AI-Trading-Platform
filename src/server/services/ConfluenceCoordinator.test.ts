@@ -134,7 +134,7 @@ describe('ConfluenceCoordinator', () => {
     fakeEventBus.emit('TRADE_IDEA_GENERATED', kronosIdea());
     await flush();
     expect(technicalEvaluateOnDemand).toHaveBeenCalledWith('AAPL');
-    expect(evaluateSymbol).toHaveBeenCalledWith('AAPL');
+    expect(evaluateSymbol).toHaveBeenCalledWith('AAPL', { isLiveCheck: expect.any(Function) }); // symbol + generation fence ONLY: no side/confidence channel
     expect(evaluateOnDemand).not.toHaveBeenCalled();
   });
 
@@ -151,7 +151,7 @@ describe('ConfluenceCoordinator', () => {
     fakeEventBus.emit('TRADE_IDEA_GENERATED', kronosIdea());
     await flush();
     expect(technicalEvaluateOnDemand).not.toHaveBeenCalled();
-    expect(evaluateSymbol).toHaveBeenCalledWith('AAPL');
+    expect(evaluateSymbol).toHaveBeenCalledWith('AAPL', { isLiveCheck: expect.any(Function) }); // symbol + generation fence ONLY: no side/confidence channel
   });
 
   // 2026-09-22 (operator review of the symmetric-trigger fix): symmetric triggering opens a real
@@ -215,10 +215,15 @@ describe('ConfluenceCoordinator', () => {
   it('agents remain independent: on-demand calls receive ONLY the symbol - no side, confidence, or reasoning', async () => {
     fakeEventBus.emit('TRADE_IDEA_GENERATED', technicalIdea({ confidence: 0.93, side: 'SELL', reasoning: 'do not leak this' }));
     await flush();
-    expect(evaluateSymbol).toHaveBeenCalledWith('AAPL');
+    expect(evaluateSymbol).toHaveBeenCalledWith('AAPL', { isLiveCheck: expect.any(Function) }); // symbol + generation fence ONLY: no side/confidence channel
     expect(evaluateOnDemand).toHaveBeenCalledWith('AAPL');
-    // Single positional argument each - nothing else was passed through.
-    expect(evaluateSymbol.mock.calls[0]).toHaveLength(1);
+    // Nothing but the symbol carries information. QuantEngine additionally receives ONE generation
+    // fence (a function, isLiveCheck - 2026-10-12): it can only ever answer "is this run still the
+    // owner", and has no channel for side, confidence or reasoning. Kronos stays symbol-only.
+    expect(evaluateSymbol.mock.calls[0]).toHaveLength(2);
+    expect(Object.keys(evaluateSymbol.mock.calls[0][1])).toEqual(['isLiveCheck']);
+    expect(typeof evaluateSymbol.mock.calls[0][1].isLiveCheck).toBe('function');
+    expect(JSON.stringify(evaluateSymbol.mock.calls[0])).not.toMatch(/SELL|0\.93|leak/);
     expect(evaluateOnDemand.mock.calls[0]).toHaveLength(1);
   });
 

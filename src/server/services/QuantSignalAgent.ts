@@ -21,6 +21,8 @@
  * opted in sees zero behavior change.
  * ==========================================================
  */
+import { awaitWithinDeadline } from '../quant/awaitWithinDeadline';
+import { createQuantEvalStageTimer, classifyQuantEvalError, type QuantEvalStageTimer } from '../quant/evalStageTiming';
 import { generateTraceId } from '../core/traceId';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
@@ -156,6 +158,70 @@ export interface QuantEvaluateSymbolOptions {
    * strategySelectionFinishedAtMs. Optional; ignored if absent.
    */
   onStrategySelectionFinished?: () => void;
+}
+
+/**
+ * 2026-10-12 (pre-market perfection mission, item 1): cooperative cancellation for superseded
+ * on-demand Quant evaluations. The 486d51f generation-token fence guarantees a replaced run
+ * never EMITS, but without cancellation the run still burns bar fetches, Java HTTP calls,
+ * ensemble compute, AI review, and SQLite writes before being fenced at the end.
+ *
+ * What is NOT cancelled: in-flight provider fetches. HistoricalDataGateway's provider calls
+ * (IBKR histChain / Alpaca fetch) have no native AbortSignal support, and awaitWithinDeadline()
+ * deliberately never cancels the underlying work - a superseded evaluation already inside a
+ * provider fetch still rides that fetch out. What IS cancelled: everything after each await
+ * settles. Re-checking the generation token at each major await point throws
+ * QuantEvalSupersededError, aborting before the next expensive stage (no ensemble compute, no
+ * AI review, no quant_assessments/provenance writes, no emission).
+ *
+ * Callers that predate isLiveCheck (legacy fan-out, scheduler cycle without a predicate) pass no
+ * predicate and are completely unaffected - the check is a no-op without one.
+ */
+export class QuantEvalSupersededError extends Error {
+  readonly symbol: string;
+  readonly stage: string;
+  constructor(symbol: string, stage: string) {
+    super(`Quant evaluation for ${symbol} superseded at stage ${stage} - cancelling cooperatively`);
+    this.name = 'QuantEvalSupersededError';
+    this.symbol = symbol;
+    this.stage = stage;
+  }
+}
+
+/**
+ * Generation-token re-check for cooperative cancellation. Throws QuantEvalSupersededError (and
+ * emits QUANT_EVAL_CANCELLED_SUPERSEDED) when the caller's isLiveCheck predicate reports this
+ * evaluation no longer owns its symbol's slot. A no-op when no predicate was supplied.
+ */
+export function throwIfSuperseded(
+  options: QuantEvaluateSymbolOptions | undefined,
+  symbol: string,
+  traceId: string,
+  stage: string,
+): void {
+  if (!options?.isLiveCheck) return;
+  let live = true;
+  try {
+    live = options.isLiveCheck();
+  } catch {
+    live = true; // a broken predicate must never cancel a live evaluation - fail open
+  }
+  if (live) return;
+  observeSafe(() =>
+    structuredLogger.info('quant_eval_cancelled_superseded', {
+      category: 'DISCOVERY',
+      eventType: 'QUANT_EVAL_CANCELLED_SUPERSEDED',
+      symbol,
+      traceId,
+      stage,
+      reasoning:
+        `On-demand Quant evaluation for ${symbol} was superseded (its generation token no ` +
+        `longer owns the symbol's slot) while at stage ${stage}; aborting cooperatively before ` +
+        `the next expensive stage instead of burning it and withholding emission at the end ` +
+        `(486d51f fence remains as defense-in-depth at emission).`,
+    }),
+  );
+  throw new QuantEvalSupersededError(symbol, stage);
 }
 
 /**
@@ -677,24 +743,45 @@ export class QuantSignalAgent {
       category: 'DISCOVERY', eventType: 'QUANT_SYMBOL_EVAL_STARTED',
       cycleId, traceId, symbol, scheduledIndex,
     }));
-    let outcome: 'ASSESSED' | 'INSUFFICIENT_BARS' | 'RATE_LIMITED' | 'ERROR' = 'ERROR';
+    let outcome: 'ASSESSED' | 'INSUFFICIENT_BARS' | 'RATE_LIMITED' | 'SUPERSEDED_CANCELLED' | 'ERROR' = 'ERROR';
     const timing = new QuantEvaluationTiming();
     let errorKind: string | null = null;
+    // 2026-10-12: stage timing + bounded error code (observability only; see evalStageTiming.ts).
+    const stageTimer = createQuantEvalStageTimer();
+    let errorCode: string | null = null;
     try {
-      const result = await this.evaluateSymbolInternal(symbol, options, traceId, timing);
+      const result = await this.evaluateSymbolInternal(symbol, options, traceId, timing, stageTimer);
       // evaluateSymbolInternal's only null return is the insufficient-bars early return below -
       // every other path returns a full evaluation.
       outcome = result === null ? 'INSUFFICIENT_BARS' : 'ASSESSED';
       return result;
     } catch (e: any) {
+      // 2026-10-12 (cooperative cancellation): a superseded evaluation is not an error - the
+      // run was replaced by a newer one for the same symbol. The QUANT_EVAL_CANCELLED_SUPERSEDED
+      // event (emitted at the throw site) plus this FINISHED marker keep it traceable; no
+      // quant_assessments row is written because the evaluation never completed, and no idea is
+      // emitted. errorCode stays null (classifyQuantEvalError is for real failures), and the
+      // error is NOT rethrown - null is the established "no evaluation" return (same as the
+      // insufficient-bars path), which the scheduler's and coordinator's continuations already
+      // handle.
+      if (e instanceof QuantEvalSupersededError) {
+        outcome = 'SUPERSEDED_CANCELLED';
+        return null;
+      }
       // Same 429 wording the runCycle fan-out guard already uses to arm provider backoff.
       errorKind = quantEvaluationErrorKind(e);
       outcome = /429|rate-limited|Too Many Requests/i.test(String(e?.message || e)) ? 'RATE_LIMITED' : 'ERROR';
+      errorCode = classifyQuantEvalError(e);
       throw e;
     } finally {
       observeSafe(() => structuredLogger.info('quant_symbol_eval_finished', {
         category: 'DISCOVERY', eventType: 'QUANT_SYMBOL_EVAL_FINISHED',
         cycleId, traceId, symbol, outcome, errorKind, ...timing.snapshot(),
+        errorCode,
+        // Last stage that COMPLETED; on an error exit the failing stage is the one after it.
+        lastCompletedStage: stageTimer.openStageAfter(),
+        totalMs: stageTimer.totalMs(),
+        stageMs: stageTimer.stageMs(),
       }));
     }
   }
@@ -704,6 +791,7 @@ export class QuantSignalAgent {
     options: QuantEvaluateSymbolOptions | undefined,
     traceId: string,
     timing: QuantEvaluationTiming,
+    stageTimer?: QuantEvalStageTimer,
   ): Promise<QuantSymbolEvaluation> {
     const emitIdeas = options?.emitIdeas !== false;
     notePipelineAgentTick('QuantEngine');
@@ -719,7 +807,13 @@ export class QuantSignalAgent {
       if (!/429|rate-limited|Too Many Requests/i.test(msg)) throw e;
       console.warn(`[QuantSignalAgent] ${symbol}: ensureBars rate-limited — attempting SQLite cache only`);
     }
+    // 2026-10-12 (cooperative cancellation): a superseded evaluation still inside a provider
+    // fetch rides that fetch out (no AbortSignal plumbing in HistoricalDataGateway), but burns
+    // nothing further - abort before the next expensive stage.
+    throwIfSuperseded(options, symbol, traceId, 'postEnsureBars');
     const bars: Bar[] = await historicalDataGateway.getBars(symbol, TIMEFRAME, startMs, endMs);
+    throwIfSuperseded(options, symbol, traceId, 'primaryBars');
+    stageTimer?.mark('primaryBars');
     observeSafe(() => structuredLogger.info('quant_bar_input_availability', {
       category: 'DISCOVERY', eventType: 'QUANT_BAR_INPUT_AVAILABILITY', symbol, traceId,
       timeframe: TIMEFRAME, requestedStartMs: startMs, requestedEndMs: endMs,
@@ -771,14 +865,30 @@ export class QuantSignalAgent {
       try {
         const window = computeIntradayFetchWindow(endMs);
         if (window) {
-          try {
-            await historicalDataGateway.ensureBars(symbol, INTRADAY_TIMEFRAME, window.startMs, window.endMs);
-          } catch (e: any) {
-            const msg = String(e?.message || e);
-            if (!/429|rate-limited|Too Many Requests/i.test(msg)) throw e;
+          // 2026-10-12 (live forensic): bounded wait. The 1Min cache never met the 0.85 coverage bar
+          // live, so every evaluation entered the global paced provider queue and stalled ~300 s
+          // here. Past quantIntradayFetchMaxWaitMs the evaluation proceeds as it already does when
+          // this fetch fails (no intraday bars; opening range honestly unavailable) - the fetch keeps
+          // running underneath (never cancelled or duplicated) and its bars serve a later evaluation.
+          const intradayFetch = (async () => {
+            try {
+              await historicalDataGateway.ensureBars(symbol, INTRADAY_TIMEFRAME, window.startMs, window.endMs);
+            } catch (e: any) {
+              const msg = String(e?.message || e);
+              if (!/429|rate-limited|Too Many Requests/i.test(msg)) throw e;
+            }
+            return historicalDataGateway.getBars(symbol, INTRADAY_TIMEFRAME, window.startMs, window.endMs);
+          })();
+          const intradayOutcome = await awaitWithinDeadline(intradayFetch, tradingSafety.quantIntradayFetchMaxWaitMs);
+          if (intradayOutcome.timedOut) {
+            observeSafe(() => structuredLogger.info('quant_intraday_fetch_deadline', {
+              category: 'DISCOVERY', eventType: 'QUANT_INTRADAY_FETCH_DEADLINE', symbol, traceId,
+              reasoning: `Intraday ${INTRADAY_TIMEFRAME} fetch exceeded ${tradingSafety.quantIntradayFetchMaxWaitMs}ms; evaluation proceeds without intraday bars (opening range unavailable this cycle). Fetch continues in the background.`,
+            }));
+          } else if ('value' in intradayOutcome) {
+            intradayBars = intradayOutcome.value;
+            intradaySessionOpenMs = window.sessionOpenMs;
           }
-          intradayBars = await historicalDataGateway.getBars(symbol, INTRADAY_TIMEFRAME, window.startMs, window.endMs);
-          intradaySessionOpenMs = window.sessionOpenMs;
         }
       } catch (e) {
         console.warn(`[QuantSignalAgent] ${symbol}: intraday bar fetch for opening-range evaluation failed (non-fatal - falling back to daily-bar-only support/resistance features)`, e);
@@ -786,8 +896,14 @@ export class QuantSignalAgent {
       }
     }
 
+    stageTimer?.mark('intradayFetch');
+    // 2026-10-12 (cooperative cancellation): the intraday fetch above is already deadline-bounded
+    // (awaitWithinDeadline never cancels the underlying fetch - it keeps running underneath for a
+    // later evaluation); a superseded run aborts here instead of continuing into feature compute.
+    throwIfSuperseded(options, symbol, traceId, 'intradayFetch');
     timing.enter('REGIME');
     const regime = classifyRegime(bars);
+    stageTimer?.mark('classifyRegime');
     // SHADOW-ONLY Java parity check (docs/architecture/ARGUS_ARCHITECTURE.md (Java Quant Core section) Phase
     // 2 feature-pipeline follow-up): never awaited - must add zero latency to evaluateSymbol and can
     // never affect its real return value. QuantCoreBridge.compareRegimeParity() is itself fully
@@ -804,6 +920,9 @@ export class QuantSignalAgent {
     }
     timing.enter('MARKET_CONTEXT');
     const marketContext = await getMarketContext(symbol, bars, TIMEFRAME, startMs, endMs);
+    stageTimer?.mark('marketContext');
+    // 2026-10-12 (cooperative cancellation).
+    throwIfSuperseded(options, symbol, traceId, 'marketContext');
     timing.enter('FEATURES');
     const liveQuotePriceUsed = marketDataWorker.getLatestPrice(symbol);
     const currentPrice = resolveQuantCurrentPrice(bars[bars.length - 1], liveQuotePriceUsed, Date.now());
@@ -831,9 +950,11 @@ export class QuantSignalAgent {
       smc: computeSmcFeatures(bars),
       ...(isMultiAssetEnabled() ? { assetClass: classifyAsset({ symbol, price: currentPrice }).assetClass } : {}),
     };
+    stageTimer?.mark('features');
     timing.enter('STRATEGIES');
     const strategyEvaluations = evaluateAll(strategyContext);
     timing.enter('SELECTION_AND_ECONOMICS');
+    stageTimer?.mark('evaluateAll');
     // SHADOW-ONLY Java CORE-strategy ensemble comparison (docs/audits/
     // ARGUS_JAVA_QUANT_AUTHORITY_ADR_2026-09-10.md §21 Phase 2/3): compares TS's own best-of-the-
     // 5-CORE-strategies pick against Java's real, bars-owning /api/v1/quant/ensemble/{symbol}
@@ -921,7 +1042,11 @@ export class QuantSignalAgent {
     // stopping its background evaluation - strategyEvaluations (persisted below, unfiltered) and
     // adaptedEvaluations' own telemetry above are both completely unaffected; only the pool
     // bestStrategyIdea() actually picks from is filtered here.
+    stageTimer?.mark('adaptiveSelection');
     const emissionEligibleEvaluations = await filterQuarantinedStrategies(adaptedEvaluations);
+    stageTimer?.mark('lifecycleFilter');
+    // 2026-10-12 (cooperative cancellation).
+    throwIfSuperseded(options, symbol, traceId, 'lifecycleFilter');
     observeSafe(() => structuredLogger.info('quant_selection_pool', {
       category: 'DISCOVERY', eventType: 'QUANT_SELECTION_POOL', symbol, traceId, focusId,
       evaluatedStrategies: strategyEvaluations.map(e => e.strategy),
@@ -1024,6 +1149,7 @@ export class QuantSignalAgent {
     // insufficient outcome samples, poor risk/reward, and no eligible strategy at all, all reported
     // identically). Tracked explicitly here so an operator can distinguish "we measured a real,
     // non-positive edge" from "we never had enough evidence to measure one at all".
+    stageTimer?.mark('strategySelection');
     let noTradeCode: string | null = null;
     if (strategyIdea && matchedStrategyEvaluation) {
       const stopPrice = matchedStrategyEvaluation.stop.price;
@@ -1033,6 +1159,8 @@ export class QuantSignalAgent {
       // direction-agnostic |distance| ratio through the EV gate.
       const rr = computeEvGateRiskReward(strategyIdea.side, currentPrice, stopPrice, targetPrice);
       const liveWinRate = await computeLiveStrategyWinRate(matchedStrategyEvaluation.strategy);
+      // 2026-10-12 (cooperative cancellation).
+      throwIfSuperseded(options, symbol, traceId, 'evGate');
       // Real defect fixed this pass: a strategy with e.g. 1 closed trade (100% or 0% win rate) used
       // to be treated as a fully-trusted EV estimate here - the exact same MIN_SAMPLE_SIZE_FOR_KELLY
       // bar that fractionalKelly() already refuses under (this file's own prior comment claimed this
@@ -1117,6 +1245,7 @@ export class QuantSignalAgent {
       }
     }
 
+    stageTimer?.mark('evGate');
     const idea = strategyIdea;
     if (!idea) {
       // noTradeCode is set above whenever a real strategyIdea existed and was then refused by the
@@ -1156,12 +1285,21 @@ export class QuantSignalAgent {
     timing.enter('AI_REVIEW');
     let aiContradictionAnalysis: ContradictionAnalysisResult | null = null;
     if (idea) {
+      // 2026-10-12 (cooperative cancellation): the AI review below is an expensive awaited
+      // stage (LLM provider call, deadline-bounded) - a superseded evaluation must not run it
+      // at all, so check before entering it.
+      throwIfSuperseded(options, symbol, traceId, 'preAiReview');
       aiContradictionAnalysis = await analyzeContradictionsBounded({
         symbol, side: idea.side, regime, strategyEvaluation: matchedStrategyEvaluation, groupedScores: groupedScores[idea.side],
       }, traceId);
+      // 2026-10-12 (cooperative cancellation): the predicate may have flipped while the AI
+      // review was in flight - abort before the internal-ensemble Java call, emission, and
+      // persistence instead of continuing with a stale evaluation.
+      throwIfSuperseded(options, symbol, traceId, 'aiContradiction');
     }
 
     timing.enter('IDEA_EMISSION');
+    stageTimer?.mark('aiContradiction');
     let emittedTradeIdea = false;
     // Evaluation-only mode (emitIdeas === false, fast-lane D1 2026-10-08): the strategy
     // evaluations are returned for the caller to judge, but no idea is ever emitted and no
@@ -1235,6 +1373,9 @@ export class QuantSignalAgent {
       const internalEnsemble = (isQuantIndependentQualificationEnabled() || confluenceGuardOn) && (idea.side === 'BUY' || idea.side === 'SELL')
         ? await computeInternalEnsembleQualification(symbol, bars, emissionEligibleEvaluations, idea.side)
         : null;
+      // 2026-10-12 (cooperative cancellation): the internal-ensemble qualification above is a
+      // Java HTTP call - a superseded run aborts here instead of emitting or persisting.
+      throwIfSuperseded(options, symbol, traceId, 'internalEnsemble');
       // 2026-09-10, real observability gap closed (see InternalEnsembleQualification.sideMismatch's
       // own doc comment): when the broader correlation-adjusted ensemble disagrees with
       // bestStrategyIdea()'s picked side, this used to be indistinguishable from "agreed but
@@ -1288,86 +1429,107 @@ export class QuantSignalAgent {
       // quant_assessments persistence below (outside this whole if/else) still runs unaffected, so
       // this suppression remains fully visible to missed-opportunity forensics rather than vanishing.
       if (!confluenceGuardSuppresses) {
-      eventBus.emitTradeIdea({
-        traceId, symbol, side: idea.side, confidence: idea.confidence,
-        currentPrice, reasoning: idea.reasoning, agent: 'QuantEngine',
-        origin: 'QUANT_STRATEGY', // Phase 3 idea provenance: validated-quant idea path (real strategyId above; producer allowlist + lifecycle decide authority, not this tag)
-        // Real strategy identity - survives independent of whether this idea ended up EV-backed
-        // or cold-start-bootstrapped (see resolvedStrategyId's own comment above for why the
-        // previous quantDetail.strategyEvaluation.strategy path silently dropped this for the
-        // cold-start case, which is the overwhelming majority of real production volume today).
-        strategyId: resolvedStrategyId,
-        quantDetail: {
-          regime,
-          internalEnsemble,
-          strategyEvaluation: matchedStrategyEvaluation,
-          groupedScores: groupedScores[idea.side],
-          contradictions: matchedStrategyEvaluation?.contradictions ?? [],
-          aiContradictionAnalysis,
-          featureSnapshot: snapshotFromStrategyContext({
-            ctx: strategyContext,
-            evaluations: strategyEvaluations,
-            groupedScores,
-            bars,
-          }),
-          ensembleRanking: ranked.map(e => ({
-            strategy: e.strategy,
-            regimeRelevance: e.regimeRelevance,
-            ensembleScore: e.ensembleScore,
-            setupScore: e.setupScore,
-            confidence: e.confidence,
-          })),
-          dataQuality,
-          newsCatalysts: catalysts.slice(0, 5),
-          tradeThesis: assembleTradeThesis({
-            symbol,
-            ctx: strategyContext,
-            evaluation: matchedStrategyEvaluation,
-            ideaSide: idea.side,
-            reasonsNotToTrade: [
-              ...(matchedStrategyEvaluation?.contradictions ?? []),
-              ...(matchedStrategyEvaluation?.conditionsFailed.map(c => `Unmet: ${c}`) ?? []),
-              ...(catalysts.length === 0 ? ['No contemporaneous news catalyst (not required, but listed as why-not)'] : []),
-            ],
-            relativeStrengthVsSpy: strategyContext.marketContext.relativeStrengthVsSPY?.relativeStrengthPct ?? null,
-            relativeStrengthVsSector: strategyContext.marketContext.relativeStrengthVsSector?.relativeStrengthPct ?? null,
-            vwapDistancePct: strategyContext.volume.vwap.distancePct,
-            catalystContribution: catalysts[0]?.contribution ?? null,
-          }),
-          eliteTraderDecision: buildEliteTraderDecision({
-            symbol,
+      // 2026-10-12 (M1, scheduler timeliness invariant): FINAL single point-of-emission
+      // gate. The options?.isLiveCheck check at the top of this branch ran BEFORE several
+      // awaits (internal-ensemble qualification, feature-snapshot assembly), and the
+      // scheduler's predicate can flip false in between; the late-settle discard only
+      // drops the returned evaluation VALUE - it cannot recall an idea already emitted.
+      // So the predicate is re-checked HERE, immediately before emitTradeIdea, with NO
+      // intervening await, and an evaluation that expired in flight is withheld (honest
+      // DESK_NO_TRADE, same code as the early check) instead of emitting as if current.
+      // isLiveCheck absent => live (legacy callers keep the existing behavior exactly).
+      if (options?.isLiveCheck && !options.isLiveCheck()) {
+        eventBus.emit(EVENTS.DESK_NO_TRADE, {
+          traceId, symbol,
+          code: 'SCHEDULER_EVALUATION_NOT_LIVE',
+          reason: 'Quant strategy candidate withheld at the point of emission: the priority scheduler no longer considers this evaluation live (it expired in flight after the earlier check) - emitting it would present a stale evaluation as current.',
+        });
+        observeSafe(() => structuredLogger.info('quant_idea_withheld_not_live', {
+          category: 'DISCOVERY', eventType: 'QUANT_IDEA_WITHHELD_NOT_LIVE',
+          traceId, symbol, strategy: idea.strategy, side: idea.side,
+        }));
+      } else {
+        eventBus.emitTradeIdea({
+          traceId, symbol, side: idea.side, confidence: idea.confidence,
+          currentPrice, reasoning: idea.reasoning, agent: 'QuantEngine',
+          origin: 'QUANT_STRATEGY', // Phase 3 idea provenance: validated-quant idea path (real strategyId above; producer allowlist + lifecycle decide authority, not this tag)
+          // Real strategy identity - survives independent of whether this idea ended up EV-backed
+          // or cold-start-bootstrapped (see resolvedStrategyId's own comment above for why the
+          // previous quantDetail.strategyEvaluation.strategy path silently dropped this for the
+          // cold-start case, which is the overwhelming majority of real production volume today).
+          strategyId: resolvedStrategyId,
+          quantDetail: {
             regime,
-            evaluation: matchedStrategyEvaluation,
+            internalEnsemble,
+            strategyEvaluation: matchedStrategyEvaluation,
+            groupedScores: groupedScores[idea.side],
+            contradictions: matchedStrategyEvaluation?.contradictions ?? [],
+            aiContradictionAnalysis,
+            featureSnapshot: snapshotFromStrategyContext({
+              ctx: strategyContext,
+              evaluations: strategyEvaluations,
+              groupedScores,
+              bars,
+            }),
+            ensembleRanking: ranked.map(e => ({
+              strategy: e.strategy,
+              regimeRelevance: e.regimeRelevance,
+              ensembleScore: e.ensembleScore,
+              setupScore: e.setupScore,
+              confidence: e.confidence,
+            })),
             dataQuality,
-            catalystContribution: catalysts[0]?.contribution ?? null,
-            relativeStrengthVsSpy: strategyContext.marketContext.relativeStrengthVsSPY?.relativeStrengthPct ?? null,
-            vwapDistancePct: strategyContext.volume.vwap.distancePct,
-            contradictions: matchedStrategyEvaluation?.contradictions,
-            newsEmitsTradeIdeas: newsAgentEmitsTradeIdeas(),
-          }),
-        },
-      });
-      emittedTradeIdea = true;
-      notePipelineAgentSuccess('QuantEngine');
-      // Master Transformation Mandate Part 7/9 (2026-09-13): real strategy-diversity evidence,
-      // reusing internalEnsemble - already computed above for the confluence guard, never a second
-      // Java call - passed through to the Forecast Engine so effectiveIndependentCount/familyCount
-      // on a persisted forecast are the SAME canonical measurement ChiefTrader's own independent-
-      // qualification bar uses, never a duplicate or approximated algorithm.
-      // resolveEnsembleEvidenceForForecast() (internalQuantEnsemble.ts, independently unit tested)
-      // owns the sideMismatch-exclusion decision. Fire-and-forget: this is real telemetry/
-      // provenance, not a gate - it must never add latency or a new failure mode to the live
-      // idea-emission path it rides along with, and it only ever fires at real idea-emission
-      // cadence (bounded by this pipeline's own existing thresholds/cooldowns), never
-      // per-evaluation-cycle.
-      void buildForecast({
-        agentName: 'QuantEngine',
-        strategyId: resolvedStrategyId,
-        symbol,
-        direction: idea.side as 'BUY' | 'SELL',
-        regime: regime.regime,
-        ensembleEvidence: resolveEnsembleEvidenceForForecast(internalEnsemble),
-      }).catch((e) => console.error(`[QuantSignalAgent] Forecast build failed for ${symbol}`, e));
+            newsCatalysts: catalysts.slice(0, 5),
+            tradeThesis: assembleTradeThesis({
+              symbol,
+              ctx: strategyContext,
+              evaluation: matchedStrategyEvaluation,
+              ideaSide: idea.side,
+              reasonsNotToTrade: [
+                ...(matchedStrategyEvaluation?.contradictions ?? []),
+                ...(matchedStrategyEvaluation?.conditionsFailed.map(c => `Unmet: ${c}`) ?? []),
+                ...(catalysts.length === 0 ? ['No contemporaneous news catalyst (not required, but listed as why-not)'] : []),
+              ],
+              relativeStrengthVsSpy: strategyContext.marketContext.relativeStrengthVsSPY?.relativeStrengthPct ?? null,
+              relativeStrengthVsSector: strategyContext.marketContext.relativeStrengthVsSector?.relativeStrengthPct ?? null,
+              vwapDistancePct: strategyContext.volume.vwap.distancePct,
+              catalystContribution: catalysts[0]?.contribution ?? null,
+            }),
+            eliteTraderDecision: buildEliteTraderDecision({
+              symbol,
+              regime,
+              evaluation: matchedStrategyEvaluation,
+              dataQuality,
+              catalystContribution: catalysts[0]?.contribution ?? null,
+              relativeStrengthVsSpy: strategyContext.marketContext.relativeStrengthVsSPY?.relativeStrengthPct ?? null,
+              vwapDistancePct: strategyContext.volume.vwap.distancePct,
+              contradictions: matchedStrategyEvaluation?.contradictions,
+              newsEmitsTradeIdeas: newsAgentEmitsTradeIdeas(),
+            }),
+          },
+        });
+        emittedTradeIdea = true;
+        notePipelineAgentSuccess('QuantEngine');
+        // Master Transformation Mandate Part 7/9 (2026-09-13): real strategy-diversity evidence,
+        // reusing internalEnsemble - already computed above for the confluence guard, never a second
+        // Java call - passed through to the Forecast Engine so effectiveIndependentCount/familyCount
+        // on a persisted forecast are the SAME canonical measurement ChiefTrader's own independent-
+        // qualification bar uses, never a duplicate or approximated algorithm.
+        // resolveEnsembleEvidenceForForecast() (internalQuantEnsemble.ts, independently unit tested)
+        // owns the sideMismatch-exclusion decision. Fire-and-forget: this is real telemetry/
+        // provenance, not a gate - it must never add latency or a new failure mode to the live
+        // idea-emission path it rides along with, and it only ever fires at real idea-emission
+        // cadence (bounded by this pipeline's own existing thresholds/cooldowns), never
+        // per-evaluation-cycle.
+        void buildForecast({
+          agentName: 'QuantEngine',
+          strategyId: resolvedStrategyId,
+          symbol,
+          direction: idea.side as 'BUY' | 'SELL',
+          regime: regime.regime,
+          ensembleEvidence: resolveEnsembleEvidenceForForecast(internalEnsemble),
+        }).catch((e) => console.error(`[QuantSignalAgent] Forecast build failed for ${symbol}`, e));
+      }
       }
       }
       } // closes the isLiveCheck else: a non-live evaluation skips the entire emission path
@@ -1384,6 +1546,12 @@ export class QuantSignalAgent {
       });
     }
 
+    stageTimer?.mark('ideaEmission');
+    // 2026-10-12 (cooperative cancellation): a superseded evaluation must not write a
+    // quant_assessments row that looks like a completed evaluation, and must not emit
+    // QUANT_ASSESSMENT_COMPLETED for work that never finished. The QUANT_EVAL_CANCELLED_SUPERSEDED
+    // event plus QUANT_SYMBOL_EVAL_FINISHED (SUPERSEDED_CANCELLED) keep it traceable.
+    throwIfSuperseded(options, symbol, traceId, 'prePersist');
     eventBus.emit(EVENTS.QUANT_ASSESSMENT_COMPLETED, { traceId, symbol, regime, marketContext, strategyEvaluations, groupedScores, aiContradictionAnalysis, timestamp: new Date().toISOString(), emittedTradeIdea });
     observeSafe(() => structuredLogger.info('quant_quote_evidence', {
       category: 'DISCOVERY', eventType: 'QUANT_QUOTE_EVIDENCE', traceId, symbol,
@@ -1436,6 +1604,7 @@ export class QuantSignalAgent {
       console.error(`[QuantSignalAgent] Failed to record decision provenance for ${symbol}`, e.message);
     }
 
+    stageTimer?.mark('assessmentEventAndProvenance');
     try {
       await db.insert(schema.quantAssessments).values({
         id: traceId,
@@ -1453,6 +1622,7 @@ export class QuantSignalAgent {
       console.error(`[QuantSignalAgent] Failed to persist assessment for ${symbol}`, e.message);
     }
 
+    stageTimer?.mark('persistAssessment');
     if (!emittedTradeIdea) {
       notePipelineAgentGated('QuantEngine');
     }
