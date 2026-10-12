@@ -1,3 +1,4 @@
+import { classifyMarketSession } from '../replay/marketSession';
 /**
  * Pure reconciliation math helpers (no DB, no broker, no config, no side effects).
  *
@@ -19,4 +20,16 @@ export function safeDollarImpact(qty: number, price: number | null | undefined, 
   const p = typeof price === 'number' && Number.isFinite(price) && price > 0 ? price : NaN;
   const impact = q * p;
   return Number.isFinite(impact) && impact > 0 ? impact : fallbackDollars;
+}
+
+/**
+ * 2026-10-12: a held position has no fresh live mark outside US trading hours (the tick feed is idle),
+ * so "valuation unavailable" there is EXPECTED, not an account discrepancy. It used to confirm after two
+ * overnight cycles, pause trading (and Autobot) and leave the next session unable to trade or exit.
+ * Only the session CLOSED window (weekend, before pre-market, after after-hours; holiday-blind like every
+ * other session representation here) is exempt; PRE_MARKET, REGULAR and AFTER_HOURS still escalate.
+ * Quantity / fill-ledger conflicts are unaffected.
+ */
+export function valuationMarksExpectedUnavailable(nowMs: number): boolean {
+  return classifyMarketSession(nowMs, 'America/New_York', true) === 'CLOSED';
 }

@@ -1,8 +1,16 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { eq } from 'drizzle-orm';
+
+// The market-session exemption for missing valuation marks is clock-dependent in production; pin it so
+// these tests never depend on when they run (the closed-session behavior has its own test below).
+const sessionClosed = vi.hoisted(() => ({ value: false }));
+vi.mock('./reconciliationMath', async (orig) => ({
+  ...(await orig<typeof import('./reconciliationMath')>()),
+  valuationMarksExpectedUnavailable: () => sessionClosed.value,
+}));
 
 /**
  * Real integration test (isolated temp SQLite DB, no per-module mocks) for the Phase 3
@@ -79,6 +87,26 @@ describe('PortfolioReconciliationWorker.reconcile persistence (Phase 3)', () => 
     } finally {
       broker.portfolio = original;
       await db.delete(schema.portfolio).where(eq(schema.portfolio.symbol, 'NOMRK'));
+    }
+  });
+
+  it('2026-10-12: missing valuation marks while the session is CLOSED are expected and never confirm into a mismatch or pause', async () => {
+    const broker = (await import('../../brokers/BrokerManager')).BrokerManager.getInstance().getActiveBroker();
+    const original = broker.portfolio;
+    broker.portfolio = async () => ({ cash: 1000, buyingPower: 1000, equity: 1100, positions: [
+      { symbol: 'NOMRKCLOSED', quantity: 1, entryPrice: 100, currentPrice: null, marketValue: null,
+        unrealizedPnl: null, unrealizedPnlPercent: null, valuationStatus: 'UNAVAILABLE' },
+    ] });
+    sessionClosed.value = true;
+    try {
+      for (let i = 0; i < 4; i++) await portfolioReconciliationWorker.reconcile();
+      const events = await db.select().from(schema.reconciliationEvents);
+      const m = events.at(-1).mismatches ? JSON.parse(events.at(-1).mismatches) : [];
+      expect(m).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: 'ACCOUNT_VALUATION_UNAVAILABLE' })]));
+    } finally {
+      sessionClosed.value = false;
+      broker.portfolio = original;
+      await db.delete(schema.portfolio).where(eq(schema.portfolio.symbol, 'NOMRKCLOSED'));
     }
   });
 

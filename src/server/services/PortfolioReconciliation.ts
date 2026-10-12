@@ -28,7 +28,7 @@ import { marketDataWorker } from './MarketDataWorker';
 
 const QTY_TOLERANCE = tradingSafety.reconQtyTolerance;
 const STALE_PRICE_THRESHOLD_MS = tradingSafety.stalePriceThresholdMs;
-import { safeDollarImpact } from './reconciliationMath';
+import { safeDollarImpact, valuationMarksExpectedUnavailable } from './reconciliationMath';
 // Re-exported for AlertingService.ts (imports it from this module).
 export const SIGNIFICANT_MISMATCH_DOLLARS = tradingSafety.reconSignificantMismatchDollars;
 
@@ -599,7 +599,9 @@ export class PortfolioReconciliationWorker {
           // genuine data gap, not a misclassified startup race or a priced position.
           const faultKey = discrepancyFaultKey('ACCOUNT_VALUATION_UNAVAILABLE', '__ACCOUNT__');
           liveFaultKeys.add(faultKey);
-          if (confirmConsecutiveFault(this.consecutiveFaults, faultKey, PAUSE_CONSECUTIVE_CYCLES)) {
+          if (valuationMarksExpectedUnavailable(Date.now())) {
+            console.warn('[PortfolioReconciliation] Missing valuation marks while the US market session is CLOSED - expected (idle tick feed); not counted toward a pause.');
+          } else if (confirmConsecutiveFault(this.consecutiveFaults, faultKey, PAUSE_CONSECUTIVE_CYCLES)) {
             mismatches.push({ symbol: '__ACCOUNT__', type: 'ACCOUNT_VALUATION_UNAVAILABLE', localQty: 0,
               remoteQty: 0, approxDollarImpact: SIGNIFICANT_MISMATCH_DOLLARS });
           } else {
