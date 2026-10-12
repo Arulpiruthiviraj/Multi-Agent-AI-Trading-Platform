@@ -65,6 +65,7 @@ import { startObservabilityRetentionSweep, stopObservabilityRetentionSweep } fro
 import { startOperationalRetentionSweep, stopOperationalRetentionSweep } from '../db/operationalRetention';
 import { startProcessTelemetry, stopProcessTelemetry } from '../observability/processTelemetry';
 import { startEventLoopLagMonitor, stopEventLoopLagMonitor } from '../observability/eventLoopLagMonitor';
+import { startFreezeProfiler } from '../observability/freezeProfiler';
 import { transactionLifecycleTracker } from '../services/TransactionLifecycleTracker';
 import { marketDataCrossChecker } from '../services/MarketDataCrossChecker';
 import { alertingService } from '../services/AlertingService';
@@ -100,6 +101,7 @@ export class SystemBootstrap {
     // the ~3-minute-stall class seen 13:32-13:35 ET; persists STALL_DETECTED and alerts on
     // critical crossings.
     startEventLoopLagMonitor();
+    startFreezeProfiler(); // opt-in diagnostic (ARGUS_FREEZE_PROFILER=true), no-op otherwise
     advancedQuantEngines.start();
     
     authorizeMarketDataWebSocket('SystemBootstrap');
