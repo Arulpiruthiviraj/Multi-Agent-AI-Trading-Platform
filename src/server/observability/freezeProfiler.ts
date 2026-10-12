@@ -1,5 +1,5 @@
 /**
- * freezeProfiler.ts - opt-in diagnostic (ARGUS_FREEZE_PROFILER=true; off by default).
+ * freezeProfiler.ts - diagnostic (on by default; ARGUS_FREEZE_PROFILER=false disables).
  *
  * Oct-12 2026: the engine froze ~220 s every ~15 min and `--cpu-prof` could not capture it
  * (profiles flush only on graceful exit, and the HTTP drain cannot run during a freeze). A worker
@@ -37,8 +37,11 @@ async function stopAndWrite(reason) {
   } catch (e) { profiling = false; parentPort.postMessage({ error: String(e) }); }
 }
 (async () => {
-  await post('Profiler.enable');
-  await post('Profiler.setSamplingInterval', { interval: 10000 });
+  try {
+    await post('Profiler.enable');
+    await post('Profiler.setSamplingInterval', { interval: 10000 });
+    parentPort.postMessage({ ready: true });
+  } catch (e) { parentPort.postMessage({ error: 'init: ' + String(e) }); return; }
   setInterval(async () => {
     const silent = Date.now() - beat[0];
     if (!profiling && silent > workerData.thresholdMs) {
@@ -52,9 +55,10 @@ async function stopAndWrite(reason) {
 `;
 
 export function startFreezeProfiler(): void {
-  if (process.env.ARGUS_FREEZE_PROFILER !== 'true' || worker) return;
+  // On by default (idle worker + 1 s heartbeat; profiles only during a real freeze); ARGUS_FREEZE_PROFILER=false disables.
+  if (process.env.ARGUS_FREEZE_PROFILER === 'false' || process.env.SYNTHETIC_SIMULATION === 'true' || process.env.VITEST || worker) return;
   const dir = process.env.ARGUS_FREEZE_PROFILER_DIR || path.join(process.cwd(), 'data', 'freeze-profiles');
-  const thresholdMs = Number(process.env.ARGUS_FREEZE_PROFILER_THRESHOLD_MS) || 15000;
+  const thresholdMs = Number(process.env.ARGUS_FREEZE_PROFILER_THRESHOLD_MS) || 6000;
   const maxMs = Number(process.env.ARGUS_FREEZE_PROFILER_MAX_MS) || 300000;
   const shared = new SharedArrayBuffer(8);
   const beat = new Float64Array(shared);

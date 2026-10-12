@@ -101,7 +101,7 @@ export class SystemBootstrap {
     // the ~3-minute-stall class seen 13:32-13:35 ET; persists STALL_DETECTED and alerts on
     // critical crossings.
     startEventLoopLagMonitor();
-    startFreezeProfiler(); // opt-in diagnostic (ARGUS_FREEZE_PROFILER=true), no-op otherwise
+    startFreezeProfiler(); // freeze diagnostic (on by default, ARGUS_FREEZE_PROFILER=false disables)
     advancedQuantEngines.start();
     
     authorizeMarketDataWebSocket('SystemBootstrap');
