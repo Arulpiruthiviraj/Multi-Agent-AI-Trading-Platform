@@ -436,6 +436,17 @@ export interface TradingSafety {
    */
   quantBarsCoalesceEntryMaxAgeMs: number;
   /**
+   * 2026-10-12 (Oct 12 forensic): real bounded timeout for the INNER provider operation inside
+   * ensureBarsInner (IBKR histChain / Alpaca fetch), which has no native timeout/cancel path.
+   * Must stay well below quantBarsCoalesceEntryMaxAgeMs so a stalled inner fails FIRST with the
+   * distinct HISTORICAL_INNER_FETCH_TIMEOUT error (releasing the coalescing entry for a fresh
+   * attempt) instead of wedging until the caller-side timeout. This is a liveness bound, not
+   * a way to hide the 300s caller timeout — the inner timeout surfaces its own error code.
+   * Generous on purpose: IBKR serializes historical requests behind per-request timeouts, so a
+   * legitimate multi-request backfill needs minutes, not seconds.
+   */
+  quantBarsInnerFetchTimeoutMs: number;
+  /**
    * P1-A remediation Patch B (2026-09-14): bound on HistoricalDataGateway.memoryBars, a real,
    * standalone unbounded-Map defect found while investigating P1-A (not the proven cause of the
    * reproduced RSS growth there - that was Patch A's evaluator overlap - but a real leak/bounded-
@@ -892,6 +903,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'quantBarsCacheMinCoverageRatio',
   'quantBarsTailFreshnessToleranceMs',
   'quantBarsCoalesceEntryMaxAgeMs',
+  'quantBarsInnerFetchTimeoutMs',
   'historicalBarsMemoryCacheMaxEntries',
   'quantBarsRateLimitBaseBackoffMs',
   'quantBarsRateLimitMaxBackoffMs',
