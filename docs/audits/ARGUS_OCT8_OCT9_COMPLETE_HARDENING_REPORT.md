@@ -281,8 +281,8 @@ further items, they were not identifiable in the task text — flagged for the c
 
 1. **All Oct 8/9/later defects fixed?** — Yes. 91 register issues: 97 fixed/tested, 6 NOT_A_DEFECT, 1 by-design, 1 deferred-with-tripwire, 1 superseded, 3 external conditions investigating; plus 26/26 mission defects fixed.
 2. **Partials?** — Zero remaining. The two PARTIALs (OCT9-02/05) were closed by 1ab3563.
-3. **Branch-only fixes?** — Yes: all 26 mission fixes are on `mission/oct8-oct9-closure`, unmerged; none deployed (last deploy f3ec4d2).
-4. **Integrated?** — Not yet. Repair branch awaits the coordinator's merge + full-suite run + push.
+3. **Branch-only fixes?** — The 26 mission fixes were developed on `mission/oct8-oct9-closure`; merged to `main` on 2026-10-12 (integration `1b4b604`, supersedes "unmerged"). None deployed (last deploy f3ec4d2).
+4. **Integrated?** — Yes, 2026-10-12: `mission/oct8-oct9-closure` (9ff0d70) and `mission/frontend-hardening` (044e60b) merged to `main` (1b4b604), fresh validation run on the merged tree, pushed to `origin/main`. See `ARGUS_OCT8_OCT9_INTEGRATION_2026-10-12.md`.
 5. **Still-broken paths?** — None known. The last three broken paths (stopped-scheduler reuse, IBKR-empty stale tail, consensus bypass) are all fixed.
 6. **New defects?** — 26 found during the mission (defects 1–26), all fixed.
 7. **Async-ownership bugs?** — Fixed: dead-waiter handoff (17), singleflight race-settle (18), dedup TTL-vs-lifetime (19), coalesce retain-until-settle (13), coalesced-caller watchdog (4).
