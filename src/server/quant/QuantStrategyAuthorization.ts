@@ -18,8 +18,9 @@
  *      terminal; it must never silently inherit the UNTESTED default's semantics), and the
  *      most recent decision (StrategyEmissionEligibility, learning_versions — the
  *      runtime-authoritative lifecycle; promotionEngine's ladder stays research-side)
- *      must be VALIDATED or CHAMPION. UNTESTED/SHADOW/CANDIDATE/ACTIVE_EXPLORATION/
- *      ROLLED_BACK keep today's consensus path (no behavior change); DEGRADED/RETIRED are
+ *      must be VALIDATED, CHAMPION, or (operator decision 2026-10-12, see below)
+ *      ACTIVE_EXPLORATION. UNTESTED/SHADOW/CANDIDATE/ROLLED_BACK keep today's consensus
+ *      path (no behavior change); DEGRADED/RETIRED are
  *      terminally NOT_ELIGIBLE (their exposure was explicitly removed by evidence-backed
  *      operator decision).
  *
@@ -35,7 +36,25 @@
  *      Predicate: resolveQuantStrategyAuthorization() (this module). Conjunctive,
  *      fail-closed; the narrow new privilege this whole change exists for.
  *
- * ACTIVE_EXPLORATION evidence conclusion (2026-10-08): the code proves ACTIVE_EXPLORATION
+ * OPERATOR DECISION 2026-10-12 — ACTIVE_EXPLORATION NOW GRANTS PAPER-ONLY EXECUTION
+ * AUTHORITY (supersedes the 2026-10-08 conclusion below, which was a correct reading of the
+ * ORIGINAL design). Why: VALIDATED requires organic PAPER evidence (researchSafety.json:
+ * 30 closed trades, 10 sessions, 30 calendar days, profit factor >= 1.2), and organic paper
+ * trades could only be produced through the consensus path — which needs AI evidence agents
+ * that were unavailable on Oct 7 and Oct 8 (0/10 providers healthy; 0 approvals in 20,000+
+ * rounds, 38% of rounds blocked solely by the 2-independent-agent floor). VALIDATED could
+ * therefore never be reached: a circular dependency (register item OCT8-38). The operator
+ * (Arul) chose the bounded PAPER exploration tier: an operator-signed ACTIVE_EXPLORATION
+ * strategy may use QuantExecutionPolicy without AI, in PAPER only, and its trades become the
+ * organic evidence VALIDATED requires. Entry bar (chosen by the operator): sample-sufficient
+ * backtest + OOS pass, assessed by the lifecycle certification bridge and signed by an
+ * operator. No extra exposure caps were requested: exploration trades size and risk-check
+ * exactly like any other (all RiskEngine gates, PositionSizing, OMS unchanged).
+ * Nothing about LIVE changes: the paper-only environment lock below fails first, so LIVE is
+ * NOT_ELIGIBLE under every lifecycle status. A strategy still needs an explicit lifecycle
+ * record — nothing is authorized by default, and RETIRED/DEGRADED stay terminally ineligible.
+ *
+ * ACTIVE_EXPLORATION evidence conclusion (2026-10-08, HISTORICAL — superseded): the code proves ACTIVE_EXPLORATION
  * was designed as emission eligibility, NOT execution authority. StrategyEmissionEligibility
  * documents it as "bounded, monitored real exposure while evidence accumulates. Eligible."
  * — eligibility for the real-selection pool, whose ideas then take the unchanged consensus
@@ -138,7 +157,6 @@ const CONSENSUS_LIFECYCLE_REASONS: Record<string, QuantAuthorizationReason> = {
   UNTESTED: 'STRATEGY_UNTESTED',
   SHADOW: 'STRATEGY_SHADOW',
   CANDIDATE: 'STRATEGY_CANDIDATE',
-  ACTIVE_EXPLORATION: 'STRATEGY_ACTIVE_EXPLORATION',
   ROLLED_BACK: 'STRATEGY_ROLLED_BACK',
 };
 
@@ -247,16 +265,23 @@ export async function resolveQuantStrategyAuthorization(
   if (lifecycleStatus === 'RETIRED') {
     return { ...withLifecycle, authority: 'NOT_ELIGIBLE', reason: 'STRATEGY_RETIRED' };
   }
-  // Positive authorization: only an explicit VALIDATED/CHAMPION lifecycle decision grants
-  // AI-independent execution. This is the narrow new privilege this whole change exists for.
+  // Positive authorization: only an explicit VALIDATED/CHAMPION/ACTIVE_EXPLORATION lifecycle
+  // decision grants AI-independent execution. The paper-only environment lock above has already
+  // failed closed for anything that is not PAPER, so each of these is PAPER-only by construction.
   if (lifecycleStatus === 'VALIDATED') {
     return { ...withLifecycle, authority: 'AUTHORIZED_QUANT_POLICY', reason: 'STRATEGY_VALIDATED' };
   }
   if (lifecycleStatus === 'CHAMPION') {
     return { ...withLifecycle, authority: 'AUTHORIZED_QUANT_POLICY', reason: 'STRATEGY_CHAMPION' };
   }
+  // Bounded PAPER exploration tier (operator decision 2026-10-12): see the header. The decision
+  // record (consensus_decisions.strategy_lifecycle) keeps these trades identifiable so their
+  // outcomes feed the organic evidence VALIDATED requires.
+  if (lifecycleStatus === 'ACTIVE_EXPLORATION') {
+    return { ...withLifecycle, authority: 'AUTHORIZED_QUANT_POLICY', reason: 'STRATEGY_ACTIVE_EXPLORATION' };
+  }
   // Every other lifecycle (recorded UNTESTED — a row genuinely exists — SHADOW, CANDIDATE,
-  // ACTIVE_EXPLORATION, ROLLED_BACK): today's behavior, unchanged - the consensus path.
+  // ROLLED_BACK): today's behavior, unchanged - the consensus path.
   // Note: a strategy with NO lifecycle record never reaches this point; it is
   // NOT_AUTHORIZED/NO_LIFECYCLE_RECORD above, never silently treated as UNTESTED.
   const reason = CONSENSUS_LIFECYCLE_REASONS[lifecycleStatus] ?? 'STRATEGY_UNTESTED';

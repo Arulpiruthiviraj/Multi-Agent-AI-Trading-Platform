@@ -1493,32 +1493,45 @@ export class ChiefTraderAgent {
   }
 
   /**
-   * Quant-First Decision Architecture (2026-10-07, remediated 2026-10-11): deterministic
-   * policy evaluation for a centrally-authorized validated quant strategy — now a
-   * fail-closed PRE-FILTER ONLY. Returns true when the policy's check set passes, false
-   * when it rejects (the rejection is terminally recorded here: DESK_NO_TRADE with a
-   * precise quant reason code — a policy-rejected idea is never silently re-routed into
-   * consensus).
+   * Quant-First Decision Architecture: deterministic policy DECISION for a centrally-authorized
+   * quant strategy (lifecycle VALIDATED, CHAMPION, or the bounded PAPER exploration tier
+   * ACTIVE_EXPLORATION — see QuantStrategyAuthorization). The policy APPROVES or terminally
+   * REJECTS; a rejection is never silently re-routed into consensus, and an approval never
+   * enters the consensus evidence pool (one idea, exactly one decision, by construction).
    *
-   * 2026-10-11 remediation: this method used to APPROVE directly (recordConsensusTransaction
-   * + eventBus.emitChiefApproval with threshold: 0 "never compared against" and
-   * independentAgreeingAgents: 0 / requiredAgents: 0) — a silent architectural exception to
-   * the standing consensus invariants, structurally skipping the 0.75 strict-> gate and the
-   * min-2-independent-agents floor. That approval branch is REMOVED, not preserved or
-   * grandfathered: a policy-passed idea now enters the standard consensus evidence pool
-   * via the router's fall-through and must clear the IDENTICAL gate as every other idea.
-   * No parallel gate is invented here; the consensus path's own gate decides. Correct
-   * NO_TRADE (e.g. a single-voice quant idea, or confidence < 0.75) is the expected
-   * outcome for ideas that cannot clear it.
+   * OPERATOR DECISION 2026-10-12 (explicit, recorded): direct approval is RESTORED for
+   * authorized quant ideas. History: the 2026-10-07 design approved here directly; the
+   * 2026-10-11 hardening pass (TONIGHT-01, commit 52b6933) removed that as a "silent
+   * architectural exception" and demoted this method to a prefilter that fell through to the
+   * consensus gate (> 0.75 AND >= 2 independent evidence groups). That made AI-independent
+   * quant trading structurally impossible — QuantEngine is ONE evidence group, so an authorized
+   * strategy could never be approved without a working AI/second voice, which is exactly the
+   * dependency the quant-first architecture exists to remove. The operator reviewed this
+   * conflict and chose to restore the Oct-7 behavior for the quant path ONLY. It is therefore
+   * an APPROVED, DOCUMENTED exception, no longer silent:
+   *   - the 0.75 strict-> bar and the min-2-independent-agents floor are UNCHANGED for every
+   *     AI / news / technical / other-origin idea (the consensus path below is untouched);
+   *   - this path's own bar is QuantExecutionPolicy's deterministic check set (trigger, regime,
+   *     data freshness, spread/liquidity, EV and R:R, calibration support, and at least
+   *     minQuantSupportDimensions of the four independent quantitative dimensions);
+   *   - PAPER ONLY: QuantStrategyAuthorization fails closed to NOT_ELIGIBLE under any
+   *     non-paper environment, so this method is unreachable in LIVE;
+   *   - everything downstream is unchanged and mandatory: RiskAgent -> RiskEngine (all gates)
+   *     -> PositionSizing -> OMS -> BrokerManager;
+   *   - the decision record is honest about which policy decided: decision_policy =
+   *     QUANT_EXECUTION, strategy_id, strategy_lifecycle and authorization_reason are persisted;
+   *     `threshold`/`requiredAgents` are stored as 0 because NO consensus threshold applies on
+   *     this path and nothing is compared against them — readers MUST key off decision_policy /
+   *     decisionTier, never read 0 as "consensus was satisfied".
    *
    * AI providers are never consulted here: AI availability is neutral (recorded as
    * NOT_CONSULTED, with a routability snapshot for observability), never negative evidence.
    * AI contradiction analysis on the idea is advisory only — never a veto.
    */
-  private async evaluateQuantPolicyPrefilter(
+  private async evaluateQuantPolicy(
     idea: { traceId: string, symbol: string, side: string, confidence: number, reasoning: string, agent: string, currentPrice?: number, newsDetails?: any },
     authorization: QuantStrategyAuthorization,
-  ): Promise<boolean> {
+  ): Promise<void> {
     const { traceId, symbol } = idea;
 
     // AI-availability snapshot for observability only: proves the quant path does not depend

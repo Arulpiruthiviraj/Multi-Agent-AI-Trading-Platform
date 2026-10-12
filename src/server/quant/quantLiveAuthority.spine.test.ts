@@ -209,10 +209,19 @@ describe('Part-30: no production code path can grant LIVE quant authority', () =
     const re = /authority\s*:\s*['"]AUTHORIZED_QUANT_POLICY['"]/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(code)) !== null) grants.push(m.index);
-    expect(grants.length, 'expected exactly the two known grant sites (VALIDATED, CHAMPION)').toBe(2);
+    expect(grants.length, 'expected exactly the three known grant sites (VALIDATED, CHAMPION, ACTIVE_EXPLORATION)').toBe(3);
     for (const g of grants) {
       expect(g).toBeGreaterThan(lockIdx);
     }
+    // Name the granting statuses, so a fourth grant (or a swapped one) fails loudly instead of
+    // just changing a count. ACTIVE_EXPLORATION joined VALIDATED/CHAMPION by operator decision
+    // 2026-10-12 (bounded PAPER exploration tier); it is PAPER-only because the lock above
+    // precedes every grant. Anything added here is an authority-creep change needing the same
+    // explicit operator decision.
+    const grantingStatuses = [...code.matchAll(/lifecycleStatus\s*===\s*['"](\w+)['"]\s*\)\s*\{\s*return\s*\{[^}]*authority\s*:\s*['"]AUTHORIZED_QUANT_POLICY['"]/g)]
+      .map((x) => x[1])
+      .sort();
+    expect(grantingStatuses).toEqual(['ACTIVE_EXPLORATION', 'CHAMPION', 'VALIDATED']);
   });
 
   it('exactly one production call site of evaluateQuantExecutionPolicy exists (ChiefTrader router)', () => {
