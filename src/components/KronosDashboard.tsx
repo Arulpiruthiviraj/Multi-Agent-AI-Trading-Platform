@@ -252,7 +252,9 @@ export const KronosDashboard = () => {
           ) : null}
         </div>
 
-        {isUnavailable ? (
+        {probing && !loadError ? (
+          <div className="py-8 text-center text-slate-500 text-sm font-mono">Probing Kronos service…</div>
+        ) : isUnavailable ? (
           <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded text-rose-400 flex items-start gap-3">
             <AlertTriangle className="shrink-0 mt-0.5" size={16} />
             <div>

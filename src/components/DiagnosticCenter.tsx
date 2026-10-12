@@ -8,6 +8,7 @@ export default function DiagnosticCenter() {
   const [error, setError] = useState<string | null>(null);
   const [whyId, setWhyId] = useState('');
   const [why, setWhy] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
   // Real perf fix (2026-08-18): 15s poll with no cancellation.
   const abortRef = useRef<AbortController | null>(null);
 
@@ -15,10 +16,12 @@ export default function DiagnosticCenter() {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+    setLoading(true);
     fetch('/api/v2/diagnostics', { signal: controller.signal })
       .then(r => r.json())
       .then(j => { if (j.ok) { setSnap(j); setError(null); } else setError(j.error || 'diagnostics request failed'); })
-      .catch(e => { if (e?.name !== 'AbortError') setError(e.message); });
+      .catch(e => { if (e?.name !== 'AbortError') setError(e.message); })
+      .finally(() => setLoading(false));
   };
 
   useEffect(() => {
@@ -98,6 +101,10 @@ export default function DiagnosticCenter() {
           <span className="text-amber-300">Used (positions + reserved)</span><span className="text-right text-amber-300">${Number(snap.capital.argus.used).toFixed(2)}</span>
           <span className="text-emerald-300">Argus remaining</span><span className="text-right text-emerald-300">${Number(snap.capital.argus.remaining).toFixed(2)}</span>
         </div>
+      )}
+
+      {loading && !snap && (
+        <div className="py-8 text-center text-slate-500 text-sm font-mono">Loading diagnostics snapshot…</div>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
