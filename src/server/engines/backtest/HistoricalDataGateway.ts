@@ -69,6 +69,26 @@ export function expectedBarCountForWindow(timeframe: string, startMs: number, en
   return Math.max(1, Math.floor(spanMs / dayMs));
 }
 
+/**
+ * 2026-10-12 (duplicate-bars defect): ohlcv_bars ids are `${symbol}:${timeframe}:${timestamp}` and the
+ * two providers stamp the SAME daily session differently (ibkr 00:00Z, alpaca 04:00Z/05:00Z NY
+ * midnight), so a symbol fetched through both held every trading day twice (77 of 728 symbols
+ * live), doubling bar counts and corrupting every indicator. The stored rows are left untouched
+ * (history is append-only evidence); the READ path returns exactly one bar per UTC calendar day for
+ * daily timeframes - the later-stamped (NY-midnight) bar wins, a deterministic source-agnostic rule.
+ * Intraday timeframes pass through unchanged. Input is timestamp-ascending, output stays ascending.
+ */
+export function dedupeDailyBarsBySession<T extends { timestamp: number }>(timeframe: string, bars: T[]): T[] {
+  if (timeframe !== '1Day' && timeframe !== '1D') return bars;
+  const byDay = new Map<number, T>();
+  for (const b of bars) {
+    const day = Math.floor(b.timestamp / 86_400_000);
+    const prev = byDay.get(day);
+    if (!prev || b.timestamp > prev.timestamp) byDay.set(day, b);
+  }
+  return byDay.size === bars.length ? bars : [...byDay.values()].sort((a, b) => a.timestamp - b.timestamp);
+}
+
 export class HistoricalDataGateway {
   private static instance: HistoricalDataGateway;
   /** Shared across symbols so one 429 stops an idea-storm of ensureBars fan-out. */
@@ -744,7 +764,10 @@ export class HistoricalDataGateway {
         lte(schema.ohlcvBars.timestamp, bucketEndMs)
       ))
       .orderBy(asc(schema.ohlcvBars.timestamp));
-    const bars = rows.map(r => ({ timestamp: r.timestamp, open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume }));
+    const bars = dedupeDailyBarsBySession(
+      timeframe,
+      rows.map(r => ({ timestamp: r.timestamp, open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume })),
+    );
     this.cacheSet(key, { bars, expiresAt: Date.now() + 60_000 });
     // The cache holds the whole bucket, but the caller asked for [startMs, endMs]: returning the
     // bucket here would hand a cold query bars AFTER its cutoff (lookahead) and make the result

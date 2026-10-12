@@ -21,6 +21,8 @@
  * opted in sees zero behavior change.
  * ==========================================================
  */
+import { awaitWithinDeadline } from '../quant/awaitWithinDeadline';
+import { createQuantEvalStageTimer, classifyQuantEvalError, type QuantEvalStageTimer } from '../quant/evalStageTiming';
 import { generateTraceId } from '../core/traceId';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
@@ -677,8 +679,11 @@ export class QuantSignalAgent {
       cycleId, traceId, symbol, scheduledIndex,
     }));
     let outcome: 'ASSESSED' | 'INSUFFICIENT_BARS' | 'RATE_LIMITED' | 'ERROR' = 'ERROR';
+    // 2026-10-12: stage timing + bounded error code (observability only; see evalStageTiming.ts).
+    const stageTimer = createQuantEvalStageTimer();
+    let errorCode: string | null = null;
     try {
-      const result = await this.evaluateSymbolInternal(symbol, options, traceId);
+      const result = await this.evaluateSymbolInternal(symbol, options, traceId, stageTimer);
       // evaluateSymbolInternal's only null return is the insufficient-bars early return below -
       // every other path returns a full evaluation.
       outcome = result === null ? 'INSUFFICIENT_BARS' : 'ASSESSED';
@@ -686,11 +691,17 @@ export class QuantSignalAgent {
     } catch (e: any) {
       // Same 429 wording the runCycle fan-out guard already uses to arm provider backoff.
       outcome = /429|rate-limited|Too Many Requests/i.test(String(e?.message || e)) ? 'RATE_LIMITED' : 'ERROR';
+      errorCode = classifyQuantEvalError(e);
       throw e;
     } finally {
       observeSafe(() => structuredLogger.info('quant_symbol_eval_finished', {
         category: 'DISCOVERY', eventType: 'QUANT_SYMBOL_EVAL_FINISHED',
         cycleId, traceId, symbol, outcome,
+        errorCode,
+        // Last stage that COMPLETED; on an error exit the failing stage is the one after it.
+        lastCompletedStage: stageTimer.openStageAfter(),
+        totalMs: stageTimer.totalMs(),
+        stageMs: stageTimer.stageMs(),
       }));
     }
   }
@@ -699,6 +710,7 @@ export class QuantSignalAgent {
     symbol: string,
     options: QuantEvaluateSymbolOptions | undefined,
     traceId: string,
+    stageTimer?: QuantEvalStageTimer,
   ): Promise<QuantSymbolEvaluation> {
     const emitIdeas = options?.emitIdeas !== false;
     notePipelineAgentTick('QuantEngine');
@@ -715,6 +727,7 @@ export class QuantSignalAgent {
       console.warn(`[QuantSignalAgent] ${symbol}: ensureBars rate-limited — attempting SQLite cache only`);
     }
     const bars: Bar[] = await historicalDataGateway.getBars(symbol, TIMEFRAME, startMs, endMs);
+    stageTimer?.mark('primaryBars');
     observeSafe(() => structuredLogger.info('quant_bar_input_availability', {
       category: 'DISCOVERY', eventType: 'QUANT_BAR_INPUT_AVAILABILITY', symbol, traceId,
       timeframe: TIMEFRAME, requestedStartMs: startMs, requestedEndMs: endMs,
@@ -765,14 +778,30 @@ export class QuantSignalAgent {
       try {
         const window = computeIntradayFetchWindow(endMs);
         if (window) {
-          try {
-            await historicalDataGateway.ensureBars(symbol, INTRADAY_TIMEFRAME, window.startMs, window.endMs);
-          } catch (e: any) {
-            const msg = String(e?.message || e);
-            if (!/429|rate-limited|Too Many Requests/i.test(msg)) throw e;
+          // 2026-10-12 (live forensic): bounded wait. The 1Min cache never met the 0.85 coverage bar
+          // live, so every evaluation entered the global paced provider queue and stalled ~300 s
+          // here. Past quantIntradayFetchMaxWaitMs the evaluation proceeds as it already does when
+          // this fetch fails (no intraday bars; opening range honestly unavailable) - the fetch keeps
+          // running underneath (never cancelled or duplicated) and its bars serve a later evaluation.
+          const intradayFetch = (async () => {
+            try {
+              await historicalDataGateway.ensureBars(symbol, INTRADAY_TIMEFRAME, window.startMs, window.endMs);
+            } catch (e: any) {
+              const msg = String(e?.message || e);
+              if (!/429|rate-limited|Too Many Requests/i.test(msg)) throw e;
+            }
+            return historicalDataGateway.getBars(symbol, INTRADAY_TIMEFRAME, window.startMs, window.endMs);
+          })();
+          const intradayOutcome = await awaitWithinDeadline(intradayFetch, tradingSafety.quantIntradayFetchMaxWaitMs);
+          if (intradayOutcome.timedOut) {
+            observeSafe(() => structuredLogger.info('quant_intraday_fetch_deadline', {
+              category: 'DISCOVERY', eventType: 'QUANT_INTRADAY_FETCH_DEADLINE', symbol, traceId,
+              reasoning: `Intraday ${INTRADAY_TIMEFRAME} fetch exceeded ${tradingSafety.quantIntradayFetchMaxWaitMs}ms; evaluation proceeds without intraday bars (opening range unavailable this cycle). Fetch continues in the background.`,
+            }));
+          } else if ('value' in intradayOutcome) {
+            intradayBars = intradayOutcome.value;
+            intradaySessionOpenMs = window.sessionOpenMs;
           }
-          intradayBars = await historicalDataGateway.getBars(symbol, INTRADAY_TIMEFRAME, window.startMs, window.endMs);
-          intradaySessionOpenMs = window.sessionOpenMs;
         }
       } catch (e) {
         console.warn(`[QuantSignalAgent] ${symbol}: intraday bar fetch for opening-range evaluation failed (non-fatal - falling back to daily-bar-only support/resistance features)`, e);
@@ -780,7 +809,9 @@ export class QuantSignalAgent {
       }
     }
 
+    stageTimer?.mark('intradayFetch');
     const regime = classifyRegime(bars);
+    stageTimer?.mark('classifyRegime');
     // SHADOW-ONLY Java parity check (docs/architecture/ARGUS_ARCHITECTURE.md (Java Quant Core section) Phase
     // 2 feature-pipeline follow-up): never awaited - must add zero latency to evaluateSymbol and can
     // never affect its real return value. QuantCoreBridge.compareRegimeParity() is itself fully
@@ -796,6 +827,7 @@ export class QuantSignalAgent {
       /* shadow diagnostics only - must never affect real evaluation */
     }
     const marketContext = await getMarketContext(symbol, bars, TIMEFRAME, startMs, endMs);
+    stageTimer?.mark('marketContext');
     const liveQuotePriceUsed = marketDataWorker.getLatestPrice(symbol);
     const currentPrice = resolveQuantCurrentPrice(bars[bars.length - 1], liveQuotePriceUsed, Date.now());
 
@@ -822,7 +854,9 @@ export class QuantSignalAgent {
       smc: computeSmcFeatures(bars),
       ...(isMultiAssetEnabled() ? { assetClass: classifyAsset({ symbol, price: currentPrice }).assetClass } : {}),
     };
+    stageTimer?.mark('features');
     const strategyEvaluations = evaluateAll(strategyContext);
+    stageTimer?.mark('evaluateAll');
     // SHADOW-ONLY Java CORE-strategy ensemble comparison (docs/audits/
     // ARGUS_JAVA_QUANT_AUTHORITY_ADR_2026-09-10.md §21 Phase 2/3): compares TS's own best-of-the-
     // 5-CORE-strategies pick against Java's real, bars-owning /api/v1/quant/ensemble/{symbol}
@@ -910,7 +944,9 @@ export class QuantSignalAgent {
     // stopping its background evaluation - strategyEvaluations (persisted below, unfiltered) and
     // adaptedEvaluations' own telemetry above are both completely unaffected; only the pool
     // bestStrategyIdea() actually picks from is filtered here.
+    stageTimer?.mark('adaptiveSelection');
     const emissionEligibleEvaluations = await filterQuarantinedStrategies(adaptedEvaluations);
+    stageTimer?.mark('lifecycleFilter');
     observeSafe(() => structuredLogger.info('quant_selection_pool', {
       category: 'DISCOVERY', eventType: 'QUANT_SELECTION_POOL', symbol, traceId, focusId,
       evaluatedStrategies: strategyEvaluations.map(e => e.strategy),
@@ -1013,6 +1049,7 @@ export class QuantSignalAgent {
     // insufficient outcome samples, poor risk/reward, and no eligible strategy at all, all reported
     // identically). Tracked explicitly here so an operator can distinguish "we measured a real,
     // non-positive edge" from "we never had enough evidence to measure one at all".
+    stageTimer?.mark('strategySelection');
     let noTradeCode: string | null = null;
     if (strategyIdea && matchedStrategyEvaluation) {
       const stopPrice = matchedStrategyEvaluation.stop.price;
@@ -1106,6 +1143,7 @@ export class QuantSignalAgent {
       }
     }
 
+    stageTimer?.mark('evGate');
     const idea = strategyIdea;
     if (!idea) {
       // noTradeCode is set above whenever a real strategyIdea existed and was then refused by the
@@ -1149,6 +1187,7 @@ export class QuantSignalAgent {
       }, traceId);
     }
 
+    stageTimer?.mark('aiContradiction');
     let emittedTradeIdea = false;
     // Evaluation-only mode (emitIdeas === false, fast-lane D1 2026-10-08): the strategy
     // evaluations are returned for the caller to judge, but no idea is ever emitted and no
@@ -1371,6 +1410,7 @@ export class QuantSignalAgent {
       });
     }
 
+    stageTimer?.mark('ideaEmission');
     eventBus.emit(EVENTS.QUANT_ASSESSMENT_COMPLETED, { traceId, symbol, regime, marketContext, strategyEvaluations, groupedScores, aiContradictionAnalysis, timestamp: new Date().toISOString(), emittedTradeIdea });
     observeSafe(() => structuredLogger.info('quant_quote_evidence', {
       category: 'DISCOVERY', eventType: 'QUANT_QUOTE_EVIDENCE', traceId, symbol,
@@ -1422,6 +1462,7 @@ export class QuantSignalAgent {
       console.error(`[QuantSignalAgent] Failed to record decision provenance for ${symbol}`, e.message);
     }
 
+    stageTimer?.mark('assessmentEventAndProvenance');
     try {
       await db.insert(schema.quantAssessments).values({
         id: traceId,
@@ -1439,6 +1480,7 @@ export class QuantSignalAgent {
       console.error(`[QuantSignalAgent] Failed to persist assessment for ${symbol}`, e.message);
     }
 
+    stageTimer?.mark('persistAssessment');
     if (!emittedTradeIdea) {
       notePipelineAgentGated('QuantEngine');
     }

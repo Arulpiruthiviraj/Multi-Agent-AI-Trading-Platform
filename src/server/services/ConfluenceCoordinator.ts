@@ -112,6 +112,9 @@ export class ConfluenceCoordinator {
     return this.listening;
   }
 
+  /** Symbols with an on-demand QuantEngine evaluation currently running (bounded by the symbol universe). */
+  private readonly quantEvaluationsInFlight = new Map<string, { startedAt: number; token: symbol }>();
+
   /** Test hook — bypasses the per-symbol cooldown for a deterministic re-trigger in a fresh test. */
   resetCooldownForTests(symbol: string): void {
     this.lastTriggeredAt.delete(symbol.toUpperCase());
@@ -183,15 +186,33 @@ export class ConfluenceCoordinator {
 
     if (idea.agent !== 'QuantEngine') {
       if (isPipelineAgentEnabled('QuantEngine') && quantSignalAgent.isEnabledPublic()) {
-        triggered.push('QuantEngine');
-        jobs.push(
-          quantSignalAgent.evaluateSymbol(symbol).then(
-            () => undefined,
-            (e: unknown) => {
-              console.warn(`[ConfluenceCoordinator] QuantEngine on-demand evaluation failed for ${symbol}`, e);
-            },
-          ),
-        );
+        // 2026-10-12 (live forensic): per-symbol in-flight guard. The 60 s trigger cooldown is
+        // shorter than a Quant evaluation (~300 s observed live), so without this each symbol
+        // stacked ~5 overlapping evaluations (220-400 in flight, 3,035 on-demand evaluations vs
+        // 8 scheduled). A re-trigger while the previous on-demand evaluation is still running adds
+        // no new evidence - the running one already reads the same bars - so it is skipped, not
+        // queued. The guard is released on success AND failure (finally-equivalent below).
+        const inFlight = this.quantEvaluationsInFlight.get(symbol);
+        // Liveness bound: an evaluation older than quantOnDemandInflightMaxAgeMs no longer blocks the
+        // symbol (it may never settle); at most one replacement per window keeps duplication bounded.
+        if (inFlight && now - inFlight.startedAt < tradingSafety.quantOnDemandInflightMaxAgeMs) {
+          skipped.push('QuantEngine:in_flight');
+        } else {
+          triggered.push('QuantEngine');
+          const token = Symbol(symbol);
+          this.quantEvaluationsInFlight.set(symbol, { startedAt: now, token });
+          jobs.push(
+            quantSignalAgent.evaluateSymbol(symbol).then(
+              () => undefined,
+              (e: unknown) => {
+                console.warn(`[ConfluenceCoordinator] QuantEngine on-demand evaluation failed for ${symbol}`, e);
+              },
+            ).then(() => {
+              // Generation-guarded: a stale evaluation settling late must not release a newer one's slot.
+              if (this.quantEvaluationsInFlight.get(symbol)?.token === token) this.quantEvaluationsInFlight.delete(symbol);
+            }),
+          );
+        }
       } else {
         skipped.push('QuantEngine:disabled');
       }

@@ -216,6 +216,24 @@ export interface TradingSafety {
    * while capping the worst-case added decision latency well under one provider timeout.
    */
   quantContradictionMaxWaitMs: number;
+  /**
+   * 2026-10-12 (live forensic): LATENCY BOUND, not a trading threshold. QuantSignalAgent awaits the
+   * optional intraday (1Min) fetch used only by the opening-range strategy. Live, IEX 1Min cache
+   * coverage was below the 0.85 sufficiency bar for every symbol, so every evaluation entered the
+   * provider path (global paced/serialized) and the whole evaluation queued behind it (~300 s). The
+   * fetch is documented best-effort and fail-open; past this wait the evaluation proceeds exactly as
+   * it already does when that fetch fails (intraday bars unavailable, opening range honestly
+   * unavailable) while the underlying fetch keeps running (never cancelled, never duplicated).
+   * Same 8000ms precedent as quantContradictionMaxWaitMs.
+   */
+  quantIntradayFetchMaxWaitMs: number;
+  /**
+   * 2026-10-12: LIVENESS BOUND for ConfluenceCoordinator's per-symbol on-demand Quant in-flight
+   * guard. A re-trigger is skipped while the previous on-demand evaluation for that symbol is
+   * younger than this; an older, never-settling one no longer blocks the symbol forever (at most one
+   * replacement per window, so duplication stays bounded). Set to 2x quantBarsCoalesceEntryMaxAgeMs.
+   */
+  quantOnDemandInflightMaxAgeMs: number;
   aiProviderAuthFailureCooldownMs: number;
   /** Skip 404 / fetch-failed providers this long (in-memory; does not flip DB enabled). */
   aiProviderUnreachableCooldownMs: number;
@@ -809,6 +827,8 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'alpacaCircuitBreakerFailureThreshold',
   'aiProviderTimeoutMs',
   'quantContradictionMaxWaitMs',
+  'quantIntradayFetchMaxWaitMs',
+  'quantOnDemandInflightMaxAgeMs',
   'aiProviderAuthFailureCooldownMs',
   'aiProviderUnreachableCooldownMs',
   'aiProviderTimeoutSkipCooldownMs',

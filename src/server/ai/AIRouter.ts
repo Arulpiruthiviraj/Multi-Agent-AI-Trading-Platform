@@ -226,6 +226,21 @@ export function isAuthFailureError(err: unknown): boolean {
 }
 
 /**
+ * 2026-10-12 (live forensic): escalating cooldown for a provider that keeps failing transiently.
+ * A flat 5-minute cooldown let an unhealthy local Ollama (model load failing, 942 of the last
+ * 1,000 requests HTTP 500, ~22 s each) be re-dispatched to - and re-load a 4 GB model - every
+ * time the cooldown lapsed. Each consecutive failed EPISODE (a failure that arrives after the
+ * provider was tried again, not another in-flight call of the same burst) doubles the cooldown,
+ * capped at the existing long "does not self-heal within a session" value. A success resets it.
+ * Pure: streak 1 -> base, 2 -> 2x base, ... never above capMs, never below baseMs.
+ */
+export function escalatedProviderCooldownMs(baseMs: number, streak: number, capMs: number): number {
+  const n = Math.max(1, Math.floor(streak));
+  const raw = baseMs * 2 ** Math.min(n - 1, 16);
+  return Math.max(baseMs, Math.min(raw, Math.max(capMs, baseMs)));
+}
+
+/**
  * 404 / network-down / transient server errors — skip for aiProviderUnreachableCooldownMs; do not
  * flip DB enabled. Real gap found (Phase 9 Friday forensic audit, 2026-08-28 crash/ai_calls
  * evidence): 408/409/500/502/503/504 previously matched NONE of noteProviderSkipFromError's
@@ -338,6 +353,8 @@ export class AIRouter {
   private authDisabledUntil: Map<string, number> = new Map();
   /** 404 / timeout / fetch-failed skip (in-memory only — not a DB enabled:false). */
   private skipUntil: Map<string, number> = new Map();
+  /** Consecutive failed transient-failure EPISODES per provider (see escalatedProviderCooldownMs). */
+  private transientFailureStreak: Map<string, number> = new Map();
   private lastExhaustionEmitAt = 0;
   /**
    * OPS-1 fix (post-remediation-audit): which credential a provider is actually using right now,
@@ -548,7 +565,17 @@ export class AIRouter {
       return;
     }
     if (isUnreachableProviderError(err)) {
-      this.skipProviderTemporarily(providerId, AI_UNREACHABLE_COOLDOWN_MS, err instanceof Error ? err.message : String(err));
+      // A new EPISODE only when this failure arrives outside an active cooldown (the provider was
+      // genuinely tried again); concurrent failures from the same burst must not inflate the streak.
+      const activeUntil = this.skipUntil.get(providerId);
+      const newEpisode = !(typeof activeUntil === 'number' && activeUntil > Date.now());
+      const streak = (this.transientFailureStreak.get(providerId) ?? 0) + (newEpisode ? 1 : 0);
+      this.transientFailureStreak.set(providerId, Math.max(1, streak));
+      this.skipProviderTemporarily(
+        providerId,
+        escalatedProviderCooldownMs(AI_UNREACHABLE_COOLDOWN_MS, Math.max(1, streak), AI_QUOTA_EXCEEDED_COOLDOWN_MS),
+        err instanceof Error ? err.message : String(err),
+      );
       return;
     }
     // Real gap found live (2026-08-26 forensic audit): a billing-suspended/quota-exceeded provider
@@ -1028,6 +1055,7 @@ export class AIRouter {
                 cost: provider.estimateCost(res.inputTokens || 0, res.outputTokens ?? res.tokens),
                 latencyMs: latency, status: 'success',
             });
+            this.transientFailureStreak.delete(providerId);
 
             // Hardening pass, Phase 5: decision/confidence previously passed through unvalidated
             // (`parsed.decision || "HOLD"` only guards against a falsy value, not an off-schema
@@ -1353,6 +1381,7 @@ export class AIRouter {
                 latencyMs: latency,
                 status: 'success',
             });
+            this.transientFailureStreak.delete(providerId);
 
             if (failedProviders.length > 0) {
                 const from = failedProviders[failedProviders.length - 1];

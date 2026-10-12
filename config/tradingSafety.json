@@ -56,6 +56,8 @@
   "alpacaCircuitBreakerCooldownMs": 30000,
   "aiProviderTimeoutMs": 20000,
   "quantContradictionMaxWaitMs": 8000,
+  "quantIntradayFetchMaxWaitMs": 8000,
+  "quantOnDemandInflightMaxAgeMs": 600000,
   "aiProviderAuthFailureCooldownMs": 300000,
   "aiProviderUnreachableCooldownMs": 300000,
   "aiProviderTimeoutSkipCooldownMs": 60000,
