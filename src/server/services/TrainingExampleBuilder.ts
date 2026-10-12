@@ -20,6 +20,7 @@
  * decision, rather than building a second evaluation mechanism.
  * ==========================================================
  */
+import { timedWorkCycle } from '../observability/workCycle';
 import { db } from '../db';
 import { transactions, consensusDecisions, consensusEvidence, agentPredictions, trainingExamples } from '../db/schema';
 import { eq } from 'drizzle-orm';
@@ -43,6 +44,10 @@ export class TrainingExampleBuilder {
   }
 
   async buildPending() {
+    return timedWorkCycle('TrainingExampleBuilder', () => this.buildPendingUntimed());
+  }
+
+  private async buildPendingUntimed() {
     const now = Date.now();
     const existing = await db.select().from(trainingExamples);
     const existingIds = new Set(existing.map(t => t.transactionId));
