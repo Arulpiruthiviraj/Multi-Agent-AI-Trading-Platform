@@ -120,6 +120,15 @@ export interface CertificationProvenance {
   evidenceScope: string;
   /** Code build/version that produced the evidence. */
   buildVersion: string;
+  // 2026-10-11 (#21): structured provenance completeness. period/regimes/configVersion
+  // were previously only free-text in evidenceScope (or absent). These are optional
+  // for backward compatibility; new assessments should populate them.
+  /** Structured evidence period (ISO timestamps), e.g. { start: "2020-01-01T00:00:00Z", end: "2025-12-31T23:59:59Z" }. */
+  period?: { start: string; end: string };
+  /** Market regimes covered by the evidence, e.g. ["BULL", "BEAR", "RANGE"]. */
+  regimes?: string[];
+  /** Config version snapshot (thresholds used at assessment), e.g. tradingSafety.json hash or version. */
+  configVersion?: string;
 }
 
 export interface CertificationGateResult {
@@ -305,6 +314,15 @@ export function evaluateCertification(
     eligibleTarget = 'CANDIDATE';
     reason = 'backtest + OOS pass with sufficient samples; walk-forward not yet demonstrated';
   } else if (quarantineOk && backtestOk) {
+    // 2026-10-11 (#22): SHADOW is intentionally backtest-qualifiable. SHADOW is the
+    // lifecycle's observation entry point — a strategy that passes backtest gates with
+    // sufficient samples enters SHADOW so its live shadow predictions can be tracked
+    // (recordPrediction) WITHOUT any trading authority. Requiring shadow-stage evidence
+    // (idea count, PnL observations) to ENTER shadow would be circular: shadow evidence
+    // can only accumulate once the strategy IS in shadow. The gates that matter —
+    // OOS, walk-forward, robustness, organic paper — all sit ABOVE shadow and are
+    // unchanged. SHADOW grants zero execution authority; it is a tracking status, not
+    // a promotion.
     eligibleTarget = 'SHADOW';
     reason = 'backtest passes with sufficient samples; OOS not yet demonstrated';
   }
@@ -477,6 +495,11 @@ export async function executeCertificationTransition(
     newStatus: target,
     evidenceIds: assessment.provenance.evidenceIds,
     evidenceScope: assessment.provenance.evidenceScope,
+    // 2026-10-11 (#21): structured provenance (period, regimes, configVersion).
+    // Optional for backward compatibility; populated when the assessment provides them.
+    ...(assessment.provenance.period ? { period: assessment.provenance.period } : {}),
+    ...(assessment.provenance.regimes ? { regimes: assessment.provenance.regimes } : {}),
+    ...(assessment.provenance.configVersion ? { configVersion: assessment.provenance.configVersion } : {}),
     sampleSize: assessment.samples.backtestTrades,
     oosResult: { pass: assessment.gates.find((g) => g.gate === 'OOS_PASS_SUFFICIENT')?.pass ?? false, trades: assessment.samples.oosTrades },
     walkForwardResult: { pass: assessment.gates.find((g) => g.gate === 'WALK_FORWARD_SUFFICIENT')?.pass ?? false, windows: assessment.samples.walkForwardWindows },
