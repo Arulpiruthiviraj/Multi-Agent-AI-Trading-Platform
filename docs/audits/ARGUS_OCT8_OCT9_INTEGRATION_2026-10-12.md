@@ -12,8 +12,8 @@
 | Merge commit 1 (backend, no-ff) | `e7a0dc9` |
 | Merge commit 2 (frontend, no-ff) | `98214da` |
 | Integration test-fix commit | `1b4b604` |
-| Integration docs commit | `3c4df34` |
-| **Final pushed `main`** | **`3c4df34e9c3235924d70538bc97c03e5c91b5474`** |
+| Integration docs | this file + answers #3–#4 update |
+| **Final `main`** | **HEAD at push time (verified below)** |
 
 **Conflicts:** zero. Both merges applied cleanly via the recursive strategy; no
 conflict resolution was needed, so no safety invariant was at risk during the
@@ -61,8 +61,9 @@ resolved 5 pre-existing React-component test failures (`useApi.test.tsx`,
 
 ## Push
 
-- Pushed local `main` (`3c4df34`) to `origin/main`.
-- Verified `git rev-parse origin/main` == `3c4df34e9c3235924d70538bc97c03e5c91b5474`.
+- Pushed local `main` to `origin/main` (authorized by operator).
+- Post-push verification recorded in the integration report to the operator
+  (`git rev-parse origin/main` == local HEAD at push time).
 
 ## Superseded statements
 
