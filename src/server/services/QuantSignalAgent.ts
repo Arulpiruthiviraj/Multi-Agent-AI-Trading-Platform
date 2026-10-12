@@ -64,6 +64,7 @@ import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { notePipelineAgentFailure, notePipelineAgentGated, notePipelineAgentSuccess, notePipelineAgentTick } from '../core/pipelineAgentHealth';
 import { assessDataQuality } from '../core/dataQuality';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
+import { QuantEvaluationTiming, quantEvaluationErrorKind } from '../observability/QuantEvaluationTiming';
 import { getNewsCatalysts, hasRealCatalystEvidence } from './NewsCatalystStore';
 import { buildEliteTraderDecision } from '../desk/EliteTraderDecision';
 import { isMultiAssetEnabled } from '../config/multiAsset';
@@ -677,20 +678,23 @@ export class QuantSignalAgent {
       cycleId, traceId, symbol, scheduledIndex,
     }));
     let outcome: 'ASSESSED' | 'INSUFFICIENT_BARS' | 'RATE_LIMITED' | 'ERROR' = 'ERROR';
+    const timing = new QuantEvaluationTiming();
+    let errorKind: string | null = null;
     try {
-      const result = await this.evaluateSymbolInternal(symbol, options, traceId);
+      const result = await this.evaluateSymbolInternal(symbol, options, traceId, timing);
       // evaluateSymbolInternal's only null return is the insufficient-bars early return below -
       // every other path returns a full evaluation.
       outcome = result === null ? 'INSUFFICIENT_BARS' : 'ASSESSED';
       return result;
     } catch (e: any) {
       // Same 429 wording the runCycle fan-out guard already uses to arm provider backoff.
+      errorKind = quantEvaluationErrorKind(e);
       outcome = /429|rate-limited|Too Many Requests/i.test(String(e?.message || e)) ? 'RATE_LIMITED' : 'ERROR';
       throw e;
     } finally {
       observeSafe(() => structuredLogger.info('quant_symbol_eval_finished', {
         category: 'DISCOVERY', eventType: 'QUANT_SYMBOL_EVAL_FINISHED',
-        cycleId, traceId, symbol, outcome,
+        cycleId, traceId, symbol, outcome, errorKind, ...timing.snapshot(),
       }));
     }
   }
@@ -699,6 +703,7 @@ export class QuantSignalAgent {
     symbol: string,
     options: QuantEvaluateSymbolOptions | undefined,
     traceId: string,
+    timing: QuantEvaluationTiming,
   ): Promise<QuantSymbolEvaluation> {
     const emitIdeas = options?.emitIdeas !== false;
     notePipelineAgentTick('QuantEngine');
@@ -757,6 +762,7 @@ export class QuantSignalAgent {
     // computeSupportResistanceFeatures() falls back to its pre-existing behavior (daily bars,
     // openingRange honestly reports unavailable) - never blocks the real daily-bar evaluation this
     // method exists for.
+    timing.enter('INTRADAY_BARS');
     let intradayBars: Bar[] | undefined;
     // 2026-10-04 (opening-range session-anchoring fix): the real regular-session open for the
     // opening-range anchor - computed from the same fetch window so it always matches the bars.
@@ -780,6 +786,7 @@ export class QuantSignalAgent {
       }
     }
 
+    timing.enter('REGIME');
     const regime = classifyRegime(bars);
     // SHADOW-ONLY Java parity check (docs/architecture/ARGUS_ARCHITECTURE.md (Java Quant Core section) Phase
     // 2 feature-pipeline follow-up): never awaited - must add zero latency to evaluateSymbol and can
@@ -795,7 +802,9 @@ export class QuantSignalAgent {
     } catch {
       /* shadow diagnostics only - must never affect real evaluation */
     }
+    timing.enter('MARKET_CONTEXT');
     const marketContext = await getMarketContext(symbol, bars, TIMEFRAME, startMs, endMs);
+    timing.enter('FEATURES');
     const liveQuotePriceUsed = marketDataWorker.getLatestPrice(symbol);
     const currentPrice = resolveQuantCurrentPrice(bars[bars.length - 1], liveQuotePriceUsed, Date.now());
 
@@ -822,7 +831,9 @@ export class QuantSignalAgent {
       smc: computeSmcFeatures(bars),
       ...(isMultiAssetEnabled() ? { assetClass: classifyAsset({ symbol, price: currentPrice }).assetClass } : {}),
     };
+    timing.enter('STRATEGIES');
     const strategyEvaluations = evaluateAll(strategyContext);
+    timing.enter('SELECTION_AND_ECONOMICS');
     // SHADOW-ONLY Java CORE-strategy ensemble comparison (docs/audits/
     // ARGUS_JAVA_QUANT_AUTHORITY_ADR_2026-09-10.md §21 Phase 2/3): compares TS's own best-of-the-
     // 5-CORE-strategies pick against Java's real, bars-owning /api/v1/quant/ensemble/{symbol}
@@ -1142,6 +1153,7 @@ export class QuantSignalAgent {
     // tradingSafety.quantContradictionMaxWaitMs is a LATENCY BOUND, not a trading threshold. A
     // hung provider can no longer add unbounded latency to the idea path; the emission proceeds
     // with the same honest available:false degradation instead.
+    timing.enter('AI_REVIEW');
     let aiContradictionAnalysis: ContradictionAnalysisResult | null = null;
     if (idea) {
       aiContradictionAnalysis = await analyzeContradictionsBounded({
@@ -1149,6 +1161,7 @@ export class QuantSignalAgent {
       }, traceId);
     }
 
+    timing.enter('IDEA_EMISSION');
     let emittedTradeIdea = false;
     // Evaluation-only mode (emitIdeas === false, fast-lane D1 2026-10-08): the strategy
     // evaluations are returned for the caller to judge, but no idea is ever emitted and no
@@ -1378,6 +1391,7 @@ export class QuantSignalAgent {
       emittedTradeIdea,
     }));
 
+    timing.enter('PERSISTENCE');
     // 2026-10-09 (certification mission item 1 - OCT9_PIT_PROVENANCE_ESCAPE): per-decision
     // point-in-time replay provenance, on the REAL decision path. recordDecisionProvenance()
     // is synchronous, never throws, and never awaits — it adds negligible latency and can

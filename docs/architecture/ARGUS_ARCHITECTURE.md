@@ -4923,3 +4923,79 @@ audited rather than treated as a black box.
   `SOAK_MAX_DB_GROWTH_BYTES` / `SOAK_MAX_WAL_BYTES` (new env vars in
   `scripts/soak/threeHourSoakChild.ts`, 72c7169) — NOT yet in `.env.example`; flagged for
   the coordinator per the every-new-env-field rule.
+
+## October 12, 2026 — Quant-first product direction and staged releases
+
+Status: proposed destination with a narrow Release A implementation slice. Release B's independent execution policy is NOT approved or implemented by this section. Engineering readiness and economic edge are separate decisions. No release automatically advances to the next; no live authority, lifecycle promotion, deployment or restart follows from this plan.
+
+### Source and evidence scope
+
+The current-code comparison uses main commit 151bacb, including its October 11 consensus remediation. The older repair branch checkpoint 2593bd2 completed 794 test files / 6,576 passing tests, one expected failure and one skipped. That result does not certify main 151bacb or this new branch. Git does not report 2593bd2 as an ancestor of main: earlier repair integration must be reconciled by behavior and diff, not assumed from commit messages.
+
+The existing uncommitted main report docs/audits/ARGUS_OCT12_LIVE_FORENSIC_INTERIM_2026-10-12.md is an external frozen source, left untouched. It reports 812 assessed evaluations with p50 311 s / p95 1515 s, primary-bar median wait 11 ms, and 308 s median after primary bars. Those counts were not re-queried for this design review. Its correction is essential: benchmark/sector fetching occurs after primary bars, so this does NOT establish slow numerical computation. Its reported 4 GB local-model footprint and heavy paging are historical observations, not a new measurement of current utilization. The attachment's 330 high-confidence blocked rounds are not independently verified by this change.
+
+### Destination and canonical ownership
+
+The product is one research-and-PAPER system with two independent scorecards. Continuous discovery feeds the existing candidate and subscription infrastructure; bounded scheduling assigns fresh data to candidates; validated inputs feed the existing Java computational boundary; ideas enter ChiefTrader; RiskEngine, sizing, OMS and BrokerManager retain execution ownership. Research records evidence and proposals; it never changes trading authority implicitly.
+
+Reuse current owners rather than creating parallel systems:
+
+- OpportunityDiscovery, existing discovery lineage and priority scheduler own candidate intake, prioritization and terminal explanations. Proposed labels DISCOVERED/PRIORITIZED/DATA_READY/EVALUATED/ELIGIBLE/REJECTED/EXPIRED are a diagnostic projection over existing lifecycle states, not a new independent mutable queue or trade path. Preserve source identity, admission timestamp, deadline and terminal reason across this projection.
+- HistoricalDataGateway remains the provider, cache and in-flight request owner. MarketContext currently mixes retrieval with computation. Move toward acquisition followed by an immutable, versioned context snapshot; the first slice below only shares requests within one assessment.
+- Java Quant Core is the implementation target for new calculations and migrations. Existing TypeScript calculations are not rewritten in this slice. Benchmark features may eventually be computed once and reused only with exact input, provider, adjustment, session and as-of identity plus TS/Java parity tests. Do not round a decision cutoff to improve cache hits.
+- QuantStrategyAuthorization remains the lifecycle resolver. lifecycle/certificationBridge is the existing reviewed transition boundary. No second promotion service is proposed.
+- ChiefTrader owns the decision. Current main treats QuantExecutionPolicy as a rejection-only pre-filter followed by ordinary consensus. Calling this current behavior AI-independent execution would be incorrect.
+- Existing capital allocation, sizing, cost/forecast evidence and correlation controls remain authoritative. Any new capital-efficiency calculation belongs in Java and initially produces research comparisons only. It cannot raise a risk limit, invent missing costs or rank unknown expectancy as zero.
+- Existing AIRouter/provider managers and process telemetry remain the AI/resource owners. Resource controls should isolate optional work from critical data/decision processing; no new service stack is justified before profiling.
+
+### Component gaps verified in source
+
+Discovery has bounded scheduling and lineage implementations, but production activation and end-to-end coverage are separate from their existence. The October 12 source report says the legacy scheduler was active. Do not turn a flag on to claim the architecture works.
+
+MarketContext.getMarketContext requests SPY and the sector ETF twice in one assessment (trend, then relative strength). Failure can therefore be retried inside the same assessment and calculations can consume different versions. The first Release A change addresses this specific duplicated acquisition. Cross-candidate context sharing and a pure Java feature snapshot are future work.
+
+QuantSignalAgent's completion event previously persisted a broad outcome without elapsed stage attribution or a bounded error classification. The reported 300-second cluster is therefore consistent with a coalesced timeout but was not a proven cause for every error. New telemetry identifies where future observed time was spent; it does not retroactively reconstruct missing evidence.
+
+The lifecycle is not proven circular at every rung: the current bridge permits SHADOW after sufficient backtest evidence, CANDIDATE after sufficient OOS evidence, ACTIVE_EXPLORATION after research gates, and VALIDATED after the full organic PAPER gate set. ACTIVE_EXPLORATION goes through ordinary consensus. No production CLI/route caller of applyOperatorReview/executeCertificationTransition was found. Missing records and inaccessible review workflow are distinct from failed evidence and consensus dependence. The proposed fix is an explicit review workflow and diagnostic evidence inventory, never automatic initialization of the 20 missing records as validated.
+
+### Release A — measurable engine stabilization
+
+Implemented slice on this branch:
+
+1. Attach monotonic elapsed durations to the existing QUANT_SYMBOL_EVAL_FINISHED event: primary bars, intraday bars, regime, market context, features, strategies, selection/economics, AI review, idea emission and persistence. Include lastStage and a fixed errorKind. Preserve thrown errors and return values; no raw provider body or credentials are included. These are elapsed times including awaits and host stalls, not CPU measurements. Completed-event storage remains subject to the existing bounded observability queue; absence is not zero duration.
+2. Add QUANT_MARKET_CONTEXT_SNAPSHOT_ENABLED=false. Opt-in shares an exact symbol/timeframe/start/end promise within one assessment, including rejection. It retains existing request order/concurrency and numerical functions. No shared long-lived cache, new provider request, changed cutoff or authority is introduced. SPY/sector trend and relative strength consume the same fetch result. This is not a process-wide shared feature engine or a measured latency-SLA achievement.
+3. Regression tests compare full numerical results against the unchanged path, prove one fetch per distinct benchmark, preserve failures as unavailable and retry only on the next independent assessment. Production-path tests verify the saved timing/error payload and rethrow identity.
+
+Remaining A batches, in order: measure complete and unfinished work by stage under representative host load; audit callback/HTTP/IBKR queue cancellation and true settlement before releasing capacity; reconcile previously isolated scheduler ownership fixes against current main; measure optional-model reload demand and enforce resource admission using existing managers; design a shared context refresh cadence from measured cost and freshness requirements. Each change must have a failed-before reproduction, bounded ownership and no duplicate evaluation after timeout/restart.
+
+Acceptance: no unexplained multi-minute stalls across representative provider faults and host load, with every admitted candidate classified or explicitly outstanding. Proposed p95 targets are admission-to-start <30 s and admission-to-decision <60 s for high-priority candidates with required data available; warm numerical computation <200 ms is a benchmark hypothesis. None is currently claimed achieved. Record missing-data refusals separately; do not remove those cases from end-to-end coverage denominators.
+
+Rollback: leave the new snapshot flag off; reverting the additive timing code affects diagnosis only. No runtime .env, resource process or running engine is changed by this branch.
+
+### Release B — explicit authority and research entry, requires a reviewed decision
+
+B1 is compatible with today's protected spine: expose the existing evidence assessment and operator review workflow; enumerate real strategy/version evidence and missing gates; distinguish missing record, explicit UNTESTED, research eligibility and execution authority. An operator may review a legitimate baseline or research-stage transition through the canonical bridge; no source-code migration or boot routine promotes records. A first real evidence collection campaign remains shadow/replay or ordinary-consensus PAPER. Synthetic/replay fills retain their environment labels and cannot satisfy organic PAPER minimums.
+
+B2 is the attachment's proposed architectural change: after authentic, version-bound PAPER certification, ChiefTrader would select a deterministic Quant policy as the decision authority for that class of idea instead of subsequently requiring the standard two independent evidence groups. ChiefTrader would still be the sole approval owner and would emit into the unchanged RiskEngine/sizing/OMS/BrokerManager spine. This is an explicit exception to the current consensus invariant, even when no numeric threshold is lowered. It is NOT implemented or implicitly approved here.
+
+Concrete B2 approval scope: PAPER only; recognized Quant producer; real eligible strategy/version; reviewed, current lifecycle evidence; exact fresh input/cost provenance; Quant policy may approve only within its documented checks; hard vetoes, trading state, reconciliation, capital allocation and downstream risk retain authority; unauthorized/missing/degraded/stale/unavailable cases refuse. No self-authorization, no synthetic organic evidence, no new broker caller, no LIVE capability. One idea must produce exactly one terminal decision. Thresholds and certification requirements must be specified in reviewed configuration before implementation, not invented during coding.
+
+Required B2 regression matrix: all AI unavailable with legitimately reviewed authority; missing/forged/stale/version-mismatched authority; no cost evidence; stale quote; exhausted allocation; pause/kill switch; duplicate delivery; risk refusal; broker timeout/reconcile; fill/exit attribution through the real protected boundaries. Positive mechanics alone never establish edge. Standard consensus remains unchanged for every other idea class.
+
+Approval boundary: ARGUS_ARCHITECTURE_PROTECTION.md says, "No new component may bypass ChiefTraderAgent's consensus math" apart from its existing narrow risk-exit exception. The owner must explicitly approve B2 and the corresponding contract/invariant changes before it is implemented. B1 and Release A can proceed without that exception. Merely removing the second-agent gate is not a valid implementation plan.
+
+### Releases C and D — evidence and continuous PAPER operation
+
+C: select one or two strategy families using predeclared research criteria, not today's winners. Start with the previously stated $2,000 PAPER allocation as a research scenario only; also test share granularity and cost sensitivity. This is not a settings change or a daily return promise. Version the strategy/data/adjustments/execution model; preserve point-in-time availability; use chronological holdout and walk-forward windows; include spread, fee, slippage and adverse-cost scenarios; measure uncertainty and selection bias. Compare net results, drawdown and capital/time exposure against a predeclared simple benchmark using the same dates and cost assumptions. Reject negative or insufficient results. No schedule can promise a profitable strategy.
+
+D: supervised continuous PAPER only after the exact candidate build/config/state passes the accepted release checks. Capture discovery-to-terminal coverage, missed/expired opportunities, after-cost outcomes, attribution and recovery. Make strategy drift a review signal, not an automatic parameter rewrite. LIVE remains a separate NO_GO.
+
+### Two scorecards and release evidence
+
+Engineering: candidate coverage and explicit terminal rate; admission/start/decision latency with p50/p95/p99; age and completeness of primary/intraday/benchmark inputs; provider timeout/backoff; actual work ownership and queue counts; RSS/heap/external memory and event-loop p95/p99; order idempotency and restart/reconcile behavior. Stratify by priority, data-ready state, strategy family and source, and retain excluded/missing cases.
+
+Research: net expectancy and uncertainty, profit factor, drawdown, cost sensitivity, turnover/capital utilization, regime/time stability and chronological OOS comparison. Report insufficient samples as insufficient, not neutral performance.
+
+Only explicit PASS can satisfy a required release check. A partial policy probe, green unit suite, synthetic fill, unmeasured resource limit or a status label is not next-session certification. Required evidence must bind to the exact executable/config/schema/lifecycle snapshot. The prior 182.774-minute synthetic soak showed about 1,045 MB RSS growth and tail stalls above 52 seconds; it is NOT a resource-stability pass and is not evidence against this later branch unless reproduced here.
+
+Validation of the initial October 12 slice: 33 targeted tests and 62 related/invariant/lifecycle tests passed (8 files total), with typecheck passing. This is code-level evidence only; no provider/load SLA or release readiness is claimed. Fresh full-suite and production-build validation are still required on the checkpoint. The snapshot flag remains off in the example configuration.

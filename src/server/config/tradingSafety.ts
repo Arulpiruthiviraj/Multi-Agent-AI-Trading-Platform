@@ -314,6 +314,7 @@ export interface TradingSafety {
    * explicitly opts in. Control-plane only: no strategy/threshold/gate changes.
    */
   quantPrioritySchedulerEnabledEnvVar: string;
+  quantMarketContextSnapshotEnabledEnvVar: string;
   /** Bounded pool for scheduler-driven evaluateSymbol() calls (see QUANT_SCHEDULER_CAPACITY.md). */
   quantSchedulerQuantWorkerPoolSize: number;
   /** Separate bounded pool for scheduler-initiated ensureBars() pre-fetches. */
@@ -1068,6 +1069,9 @@ function loadTradingSafety(): TradingSafety {
   if (typeof raw.quantPrioritySchedulerEnabledEnvVar !== 'string' || !raw.quantPrioritySchedulerEnabledEnvVar) {
     throw new Error('config/tradingSafety.json missing string field: quantPrioritySchedulerEnabledEnvVar');
   }
+  if (typeof raw.quantMarketContextSnapshotEnabledEnvVar !== 'string' || !raw.quantMarketContextSnapshotEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: quantMarketContextSnapshotEnabledEnvVar');
+  }
   if (typeof raw.javaQuantVoteEnabledEnvVar !== 'string' || !raw.javaQuantVoteEnabledEnvVar) {
     throw new Error('config/tradingSafety.json missing string field: javaQuantVoteEnabledEnvVar');
   }
@@ -1107,6 +1111,11 @@ export function isQuantColdStartBootstrapEnabled(): boolean {
  */
 export function isQuantPrioritySchedulerEnabled(): boolean {
   return isRuntimeFlagEnabled(tradingSafety.quantPrioritySchedulerEnabledEnvVar);
+}
+
+/** Default off. Shares exact-window benchmark inputs within one assessment only. */
+export function isQuantMarketContextSnapshotEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.quantMarketContextSnapshotEnabledEnvVar);
 }
 
 /** Off unless the operator has explicitly set this env var to 'true'. See consensusModerateTierEnabledEnvVar's doc comment above. */

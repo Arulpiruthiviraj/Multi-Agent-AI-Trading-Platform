@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import * as safety from '../config/tradingSafety';
 import { Bar } from '../engines/backtest/HistoricalDataGateway';
 import { getMarketContext, BarsFetcher, SECTOR_ETF_MAP } from './MarketContext';
 
@@ -10,6 +11,7 @@ function makeTrendingBars(count: number, startPrice: number, driftPerBar: number
 }
 
 describe('MarketContext.getMarketContext', () => {
+  afterEach(() => vi.restoreAllMocks());
   const fakeFetcher: BarsFetcher = async (symbol) => {
     // SPY/XLK trend up, QQQ trends up faster (for relative-strength differentiation), IWM flat.
     if (symbol === 'SPY') return makeTrendingBars(220, 400, 0.3);
@@ -29,6 +31,28 @@ describe('MarketContext.getMarketContext', () => {
     expect(result.spy.regime?.regime).toBe('BULLISH_TREND');
     expect(result.spy.source).toContain('SPY');
     expect(result.iwm.regime?.regime).toBe('SIDEWAYS_RANGE');
+  });
+
+  it('snapshot opt-in fetches each exact input once and preserves legacy calculations', async () => {
+    const symbolBars = makeTrendingBars(220, 150, 0.4);
+    vi.spyOn(safety, 'isQuantMarketContextSnapshotEnabled').mockReturnValue(false);
+    const legacy = await getMarketContext('AAPL', symbolBars, '1Day', 0, 220 * 86_400_000, fakeFetcher);
+    vi.spyOn(safety, 'isQuantMarketContextSnapshotEnabled').mockReturnValue(true);
+    const fetcher = vi.fn(fakeFetcher);
+    const snapshot = await getMarketContext('AAPL', symbolBars, '1Day', 0, 220 * 86_400_000, fetcher);
+    expect(snapshot).toEqual(legacy);
+    expect(fetcher.mock.calls.map(call => call[0]).sort()).toEqual(['IWM', 'QQQ', 'SPY', 'XLK']);
+  });
+
+  it('does not retry a failed benchmark within the same assessment or retain it across assessments', async () => {
+    vi.spyOn(safety, 'isQuantMarketContextSnapshotEnabled').mockReturnValue(true);
+    const fetcher = vi.fn(async (symbol: string) => { if (symbol === 'SPY') throw new Error('provider failed'); return []; });
+    const result = await getMarketContext('AAPL', [], '1Day', 0, 1000, fetcher);
+    expect(result.spy.regime).toBeNull();
+    expect(result.relativeStrengthVsSPY).toBeNull();
+    expect(fetcher.mock.calls.filter(call => call[0] === 'SPY')).toHaveLength(1);
+    await getMarketContext('AAPL', [], '1Day', 0, 999, fetcher);
+    expect(fetcher.mock.calls.filter(call => call[0] === 'SPY')).toHaveLength(2);
   });
 
   it('computes real relative strength vs SPY (AAPL genuinely outperforming in this fixture)', async () => {

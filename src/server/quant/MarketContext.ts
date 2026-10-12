@@ -23,6 +23,7 @@ import { Bar, historicalDataGateway } from '../engines/backtest/HistoricalDataGa
 import { getSector } from '../engines/PositionSizing';
 import { classifyRegime, RegimeResult } from './RegimeEngine';
 import { correlation, beta } from './statistics';
+import { isQuantMarketContextSnapshotEnabled } from '../config/tradingSafety';
 
 export const BENCHMARK_SYMBOLS = { broad: 'SPY', tech: 'QQQ', smallCap: 'IWM' } as const;
 
@@ -145,6 +146,22 @@ export async function getMarketContext(
   endMs: number,
   fetchBars: BarsFetcher = defaultBarsFetcher
 ): Promise<MarketContextResult> {
+  if (isQuantMarketContextSnapshotEnabled()) {
+    // Assessment-local input snapshot, not a new process cache. Retain rejection too:
+    // both consumers must see the same failure instead of retrying midway through a
+    // decision. No time rounding, cross-provider reuse or future-window warming.
+    const sourceFetcher = fetchBars;
+    const inputs = new Map<string, Promise<Bar[]>>();
+    fetchBars = (inputSymbol, inputTimeframe, inputStart, inputEnd) => {
+      const key = JSON.stringify([inputSymbol, inputTimeframe, inputStart, inputEnd]);
+      let input = inputs.get(key);
+      if (!input) {
+        input = Promise.resolve().then(() => sourceFetcher(inputSymbol, inputTimeframe, inputStart, inputEnd));
+        inputs.set(key, input);
+      }
+      return input;
+    };
+  }
   const [spy, qqq, iwm] = await Promise.all([
     benchmarkTrend(BENCHMARK_SYMBOLS.broad, timeframe, startMs, endMs, fetchBars),
     benchmarkTrend(BENCHMARK_SYMBOLS.tech, timeframe, startMs, endMs, fetchBars),

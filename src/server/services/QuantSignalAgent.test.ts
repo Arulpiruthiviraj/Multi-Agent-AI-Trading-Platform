@@ -117,6 +117,31 @@ describe('QuantSignalAgent.evaluateSymbol', () => {
     expect(persistedScores.BUY.overallSetupScore).toBeGreaterThanOrEqual(0);
     expect(persistedScores.SELL.overallSetupScore).toBeGreaterThanOrEqual(0);
     expect(result.groupedScores.BUY.trendScore).toBeGreaterThan(50);
+    const { flushObservabilityStore } = await import('../observability/ObservabilityStore');
+    await flushObservabilityStore();
+    const completion = sqliteDb.prepare("SELECT payload FROM observability_events WHERE event_type='QUANT_SYMBOL_EVAL_FINISHED' AND symbol=? ORDER BY ts DESC LIMIT 1").get('QSATEST');
+    const telemetry = JSON.parse(completion.payload);
+    expect(telemetry.outcome).toBe('ASSESSED');
+    expect(telemetry.errorKind).toBeNull();
+    expect(Object.keys(telemetry.stageDurationsMs)).toEqual(['PRIMARY_BARS', 'INTRADAY_BARS', 'REGIME', 'MARKET_CONTEXT', 'FEATURES', 'STRATEGIES', 'SELECTION_AND_ECONOMICS', 'AI_REVIEW', 'IDEA_EMISSION', 'PERSISTENCE']);
+    expect(telemetry.durationMs).toBeGreaterThanOrEqual(telemetry.stageDurationsMs.MARKET_CONTEXT);
+  });
+
+  it('persists the failed stage and bounded cause while rethrowing the original provider error', async () => {
+    const { historicalDataGateway } = await import('../engines/backtest/HistoricalDataGateway');
+    const { flushObservabilityStore } = await import('../observability/ObservabilityStore');
+    const failure = new Error('COALESCE_CALLER_TIMEOUT secret-provider-response');
+    const fetch = vi.spyOn(historicalDataGateway, 'ensureBars').mockRejectedValueOnce(failure);
+    try {
+      await expect(new QuantSignalAgent().evaluateSymbol('ERRST')).rejects.toBe(failure);
+      await flushObservabilityStore();
+      const completion = sqliteDb.prepare("SELECT payload FROM observability_events WHERE event_type='QUANT_SYMBOL_EVAL_FINISHED' AND symbol=? ORDER BY ts DESC LIMIT 1").get('ERRST');
+      const telemetry = JSON.parse(completion.payload);
+      expect(telemetry.lastStage).toBe('PRIMARY_BARS');
+      expect(telemetry.errorKind).toBe('COALESCE_CALLER_TIMEOUT');
+      expect(telemetry.outcome).toBe('ERROR');
+      expect(completion.payload).not.toContain('secret-provider-response');
+    } finally { fetch.mockRestore(); }
   });
 
   /**
