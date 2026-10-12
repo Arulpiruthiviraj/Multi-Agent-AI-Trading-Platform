@@ -17,10 +17,10 @@ Evidence base: `src/server/engines/RiskEngine.ts` (line numbers are from main@ca
 |---|---|---|---|
 | `emergency_stop` | Yes (requires `TRADING_ENABLED`) | A pause or emergency stop blocks exits too | Keep for EMERGENCY_STOP; review whether a plain pause should block position-reducing orders |
 | `autobot_enabled` | No (blocks BUY only) | none | none |
-| `daily_loss` | **Yes** (broker-equity based, no side branch) | Once tripped, the exit that would stop the loss is rejected | Exempt for verified protective closes |
-| `consecutive_loss` | **Yes** | Same | Exempt for verified protective closes |
-| `portfolio_drawdown` | **Yes** (broker-equity based) | Same | Exempt for verified protective closes |
-| `order_rate_limit` | **Yes** (counts all assessments/min) | A burst of entries can starve an exit | Separate exit allowance |
+| `daily_loss` | **Yes** (broker-equity based, no side branch) | Once tripped, the exit that would stop the loss is rejected | Implemented on branch `fix/protective-exit-gate-intent` (sealed protective SELL only; test `RiskEngine.lossGatesProtectiveExit.test.ts`); NOT deployed |
+| `consecutive_loss` | **Yes** | Same | Implemented on branch `fix/protective-exit-gate-intent` (sealed protective SELL only; test `RiskEngine.lossGatesProtectiveExit.test.ts`); NOT deployed |
+| `portfolio_drawdown` | **Yes** (broker-equity based) | Same | Implemented on branch `fix/protective-exit-gate-intent` (sealed protective SELL only; test `RiskEngine.lossGatesProtectiveExit.test.ts`); NOT deployed |
+| `order_rate_limit` | **Yes** (counts all assessments/min) | A burst of entries can starve an exit | Implemented on branch `fix/protective-exit-gate-intent` (sealed protective SELL only; test `RiskEngine.lossGatesProtectiveExit.test.ts`); NOT deployed |
 | `market_hours` | Yes | Legitimate: no regular-session exit outside hours | Keep |
 | `data_freshness` | Yes (quote age) | No fresh quote -> exit refused | Review: allow broker-reported mark for protective closes? |
 | `news_veto` | Yes, **exemptable** | Review branch `complete/protective-exit-seal` (1908ae7) exempts a sealed protective SELL; NOT deployed on the running engine unless restarted onto it | Done on branch, awaiting deployment |

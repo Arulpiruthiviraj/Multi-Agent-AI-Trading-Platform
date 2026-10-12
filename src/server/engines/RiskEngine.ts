@@ -508,6 +508,21 @@ export class RiskEngine {
               recordGate('buying_power_reservation', true, { reservedBuyNotional, buyingPowerAfterReservation: buyingPower });
             }
 
+            // 2026-10-12 gate-by-intent: loss/rate gates exist to stop NEW exposure. A verified,
+            // single-use protective-exit seal (minted only by PortfolioMonitor.emitRiskExit, bound to
+            // this trace+symbol+SELL) lets the position-REDUCING order past those four gates only; every
+            // mandatory gate (sell_position_exists, sufficient_size, price_validity, market_hours,
+            // data_freshness, emergency_stop) still applies. Verified once and memoized because the
+            // seal is consumed on first verification and news_veto needs the same answer.
+            let sealedProtectiveSell: boolean | null = null;
+            const isSealedProtectiveSell = (): boolean => {
+                if (sealedProtectiveSell === null) {
+                    sealedProtectiveSell = !replay && proposal.side === 'SELL'
+                        && verifyAndConsumeProtectiveExitSeal(proposal.protectiveExitSeal, { traceId: proposal.traceId, symbol: proposal.symbol, side: proposal.side });
+                }
+                return sealedProtectiveSell;
+            };
+
             // 2a. Daily loss circuit breaker - tracks real broker equity against a start-of-day
             // baseline captured the first time we evaluate risk each calendar day. Uses the real
             // exchange trading day (America/New_York), not UTC - UTC midnight is 7-8 PM New York
@@ -548,14 +563,17 @@ export class RiskEngine {
             const dailyLoss = Math.max(0, dayStartEquity - equityNow);
             tradingEngine.state.currentDailyLoss = dailyLoss;
             const dailyLossKillSwitchThreshold = dailyLossLimitDollars * tradingSafety.dailyLossKillSwitchFraction;
-            const dailyLossPassed = dailyLoss < dailyLossKillSwitchThreshold;
-            recordGate('daily_loss', dailyLossPassed, { dailyLoss, threshold: dailyLossKillSwitchThreshold, limit: dailyLossLimitDollars, restrictedLiveModeActive: restrictedLiveCaps.restricted, replay: !!replay });
+            const dailyLossRawPassed = dailyLoss < dailyLossKillSwitchThreshold;
+            const dailyLossExempt = !dailyLossRawPassed && isSealedProtectiveSell();
+            const dailyLossPassed = dailyLossRawPassed || dailyLossExempt;
+            recordGate('daily_loss', dailyLossPassed, { protectiveExitExempt: dailyLossExempt, dailyLoss, threshold: dailyLossKillSwitchThreshold, limit: dailyLossLimitDollars, restrictedLiveModeActive: restrictedLiveCaps.restricted, replay: !!replay });
             const dailyLossReason = `Daily Loss Kill-Switch: -$${dailyLoss.toFixed(2)} reached ${tradingSafety.dailyLossKillSwitchFraction * 100}% of the $${dailyLossLimitDollars}${restrictedLiveCaps.restricted ? ' (restricted live mode cap)' : ''}${replay ? ' (replay config)' : ''} daily loss limit. All new trades blocked until tomorrow or a manual reset.`;
 
             // 2a-2. Consecutive-loss circuit breaker - real realized P&L from the last three
             // FILLED trades, not a simulated/hardcoded count.
             const consecutiveLossesBad = await hasConsecutiveLosses();
-            recordGate('consecutive_loss', !consecutiveLossesBad, { maxConsecutiveLosses: MAX_CONSECUTIVE_LOSSES, triggered: consecutiveLossesBad });
+            const consecutiveLossExempt = consecutiveLossesBad && isSealedProtectiveSell();
+            recordGate('consecutive_loss', !consecutiveLossesBad || consecutiveLossExempt, { protectiveExitExempt: consecutiveLossExempt, maxConsecutiveLosses: MAX_CONSECUTIVE_LOSSES, triggered: consecutiveLossesBad });
             const consecutiveLossReason = `${MAX_CONSECUTIVE_LOSSES} consecutive losing trades. All new trades blocked pending manual review.`;
 
             // 2a-3. Portfolio drawdown circuit breaker - distinct from the daily-loss check
@@ -589,8 +607,10 @@ export class RiskEngine {
                 }
             }
             const drawdownPct = peakEquity > 0 ? Math.max(0, (peakEquity - equityNow) / peakEquity) : 0;
-            const drawdownPassed = drawdownPct < maxDrawdownPct;
-            recordGate('portfolio_drawdown', drawdownPassed, { drawdownPct, maxDrawdownPct, peakEquity, equityNow, replay: !!replay });
+            const drawdownRawPassed = drawdownPct < maxDrawdownPct;
+            const drawdownExempt = !drawdownRawPassed && isSealedProtectiveSell();
+            const drawdownPassed = drawdownRawPassed || drawdownExempt;
+            recordGate('portfolio_drawdown', drawdownPassed, { protectiveExitExempt: drawdownExempt, drawdownPct, maxDrawdownPct, peakEquity, equityNow, replay: !!replay });
             const drawdownReason = `Portfolio drawdown ${(drawdownPct * 100).toFixed(1)}% from peak equity $${peakEquity.toFixed(2)} exceeds the configured ${(maxDrawdownPct * 100).toFixed(0)}% limit. All new trades blocked pending manual review.`;
 
             // 2a-4. Order-rate limit - counts real risk_assessments rows created in the last 60
@@ -609,8 +629,10 @@ export class RiskEngine {
             const recentOrderCount = recentAssessments.length;
             // MAX-speed replay can evaluate many bars within one wall-clock minute; rate limit is a
             // live runaway guard, not a historical path constraint.
-            const orderRatePassed = replay ? true : recentOrderCount < maxOrdersPerMinute;
-            recordGate('order_rate_limit', orderRatePassed, { recentOrderCount, maxOrdersPerMinute, replay: !!replay, skipped: !!replay });
+            const orderRateRawPassed = replay ? true : recentOrderCount < maxOrdersPerMinute;
+            const orderRateExempt = !orderRateRawPassed && isSealedProtectiveSell();
+            const orderRatePassed = orderRateRawPassed || orderRateExempt;
+            recordGate('order_rate_limit', orderRatePassed, { protectiveExitExempt: orderRateExempt, recentOrderCount, maxOrdersPerMinute, replay: !!replay, skipped: !!replay });
             const orderRateReason = `Order rate limit exceeded: ${recentOrderCount} risk assessments in the last 60s (limit ${maxOrdersPerMinute}). Possible runaway signal loop - new trades blocked until the rate subsides.`;
 
             // 2b. Alpaca /v2/clock. Unconfigured → skip. Closed or clock outage → block.
@@ -718,8 +740,7 @@ export class RiskEngine {
             // 2026-10-12: a verified protective liquidation is exempt from the direction-blind news veto (the high-impact
             // news is typically the very reason to exit). Exemption requires a registered, unexpired, single-use seal
             // minted by the protective path and bound to this exact traceId, symbol and SELL; anything else fails closed.
-            const protectiveExitExempt = symbolNews.length > 0 && !replay && proposal.side === 'SELL'
-                && verifyAndConsumeProtectiveExitSeal(proposal.protectiveExitSeal, { traceId: proposal.traceId, symbol: proposal.symbol, side: proposal.side });
+            const protectiveExitExempt = symbolNews.length > 0 && isSealedProtectiveSell();
             recordGate('news_veto', symbolNews.length === 0 || protectiveExitExempt, { matchingClusters: symbolNews.length, replay: !!replay, protectiveExitExempt });
             const newsVetoReason = "High volatility news event detected, overriding AI decision.";
 
