@@ -5679,10 +5679,16 @@ export default function App() {
                           </div>
                           <button 
                             onClick={async () => {
-                              await fetch("/api/v1/scheduler/" + task.id, { method: "DELETE" });
-                              setScheduledTasks(prev => prev.filter(t => t.id !== task.id));
+                              try {
+                                const res = await fetch("/api/v1/scheduler/" + task.id, { method: "DELETE" });
+                                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                                setScheduledTasks(prev => prev.filter(t => t.id !== task.id));
+                              } catch (e: any) {
+                                console.error("Failed to delete scheduled task:", e);
+                              }
                             }}
                             className="p-1.5 text-slate-500 hover:text-rose-400 transition-colors bg-slate-800 rounded"
+                            aria-label="Delete scheduled task"
                           >
                             <Trash2 size={12} />
                           </button>
