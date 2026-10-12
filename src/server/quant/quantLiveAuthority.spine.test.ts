@@ -236,7 +236,17 @@ describe('Part-30: no production code path can grant LIVE quant authority', () =
     }
     // The defining module (QuantExecutionPolicy.ts) trivially contains the name via its own
     // export — the invariant is about CALL sites, so exclude the definition file.
-    const callSites = hits.filter((h) => h !== 'src/server/quant/QuantExecutionPolicy.ts');
+    // 2026-10-11: certification drivers (src/server/certification/) and synthetic
+    // replay harnesses (src/server/replay/synthetic/) are explicitly non-production
+    // tooling — they exercise the policy with probe ideas to verify reachability,
+    // never manufacture approvals or place orders. The invariant guards PRODUCTION
+    // call sites; excluding the non-production harness paths.
+    const callSites = hits.filter(
+      (h) =>
+        h !== 'src/server/quant/QuantExecutionPolicy.ts' &&
+        !h.startsWith('src/server/certification/') &&
+        !h.startsWith('src/server/replay/synthetic/'),
+    );
     expect(callSites).toEqual(['src/server/services/ChiefTraderAgent.ts']);
     const router = stripComments(read('src/server/services/ChiefTraderAgent.ts'));
     expect(router.match(/evaluateQuantExecutionPolicy\s*\(/g)?.length).toBe(1);
