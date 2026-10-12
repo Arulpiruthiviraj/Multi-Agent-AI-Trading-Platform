@@ -165,6 +165,7 @@ describe('QuantSignalAgent emit fixture (strategy + EV satisfied)', () => {
     const noTrades: any[] = [];
     const onIdea = (p: any) => ideas.push(p);
     const onNoTrade = (p: any) => noTrades.push(p);
+    let calls = 0;
     eventBus.subscribe('TRADE_IDEA_GENERATED', onIdea);
     eventBus.subscribe('DESK_NO_TRADE', onNoTrade);
     try {
@@ -174,16 +175,26 @@ describe('QuantSignalAgent emit fixture (strategy + EV satisfied)', () => {
       // evaluation in flight, after the early check but before the point of emission.
       // Without the 2026-10-12 final point-of-emission gate this idea WOULD emit (the
       // early check passed), so this test discriminates the final gate directly.
-      let calls = 0;
-      const result = await agent.evaluateSymbol('QFIX', { emitIdeas: true, isLiveCheck: () => ++calls <= 1 });
+      // Cooperative stage fences (throwIfSuperseded) also consult isLiveCheck. The early check and the
+      // point-of-emission gate call it DIRECTLY from evaluateSymbol; the fences call it via
+      // throwIfSuperseded. Stay live for every fence and for the first direct call; report not-live on the
+      // second direct call - the point-of-emission gate, which is what this test must discriminate.
+      let direct = 0;
+      const result = await agent.evaluateSymbol('QFIX', {
+        emitIdeas: true,
+        isLiveCheck: () => {
+          calls += 1;
+          if ((new Error().stack || '').includes('throwIfSuperseded')) return true;
+          direct += 1;
+          return direct <= 1;
+        },
+      });
       expect(result).not.toBeNull();
       const mine = ideas.find(i => i.symbol === 'QFIX' && i.agent === 'QuantEngine');
       expect(mine).toBeUndefined();
       const withheld = noTrades.find(n => n.symbol === 'QFIX' && n.code === 'SCHEDULER_EVALUATION_NOT_LIVE');
       expect(withheld).toBeDefined();
-      // Exactly two checks: the early pre-await check plus the final point-of-emission
-      // gate, with no await between the final check and the (withheld) emit.
-      expect(calls).toBe(2);
+      expect(direct).toBe(2);
     } finally {
       eventBus.unsubscribe('TRADE_IDEA_GENERATED', onIdea);
       eventBus.unsubscribe('DESK_NO_TRADE', onNoTrade);
@@ -229,12 +240,11 @@ describe('QuantSignalAgent emit fixture (strategy + EV satisfied)', () => {
       // above), but the scheduler reports this evaluation as no longer live — e.g.
       // the watchdog quarantined it while in flight. The idea must be withheld, not
       // emitted to ChiefTrader as if current.
+      // A cooperative stage fence now aborts a superseded evaluation before it reaches emission, so the
+      // result is null (QuantEvalSupersededError path); the invariant that matters is unchanged: no idea.
       const result = await agent.evaluateSymbol('QFIX', { emitIdeas: true, isLiveCheck: () => false });
-      expect(result).not.toBeNull();
-      const mine = ideas.find(i => i.symbol === 'QFIX' && i.agent === 'QuantEngine');
-      expect(mine).toBeUndefined();
-      const withheld = noTrades.find(n => n.symbol === 'QFIX' && n.code === 'SCHEDULER_EVALUATION_NOT_LIVE');
-      expect(withheld).toBeDefined();
+      expect(result).toBeNull();
+      expect(ideas.find(i => i.symbol === 'QFIX' && i.agent === 'QuantEngine')).toBeUndefined();
     } finally {
       eventBus.unsubscribe('TRADE_IDEA_GENERATED', onIdea);
       eventBus.unsubscribe('DESK_NO_TRADE', onNoTrade);

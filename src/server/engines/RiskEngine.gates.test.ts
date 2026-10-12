@@ -13,6 +13,9 @@ import { seedRuntimeOverrideCacheForTests, resetRuntimeConfigCacheForTests } fro
  * defaults to InternalPaperBroker (no external credentials needed).
  */
 describe('RiskEngine gate accumulation (Phase 2)', () => {
+  // These cases pin the BROKER-equity basis; research-basis coverage lives in researchEquity.test.ts and
+  // RiskEngine.lossGatesProtectiveExit.test.ts.
+  beforeAll(async () => { (await import('../config/tradingSafety')).tradingSafety.researchEquityRiskBasisEnabled = false; });
   let tmpDbPath: string;
   let db: any;
   let sqliteDb: any;

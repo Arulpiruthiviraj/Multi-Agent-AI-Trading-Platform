@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import * as schema from '../db/schema';
 
 /**
@@ -106,6 +106,9 @@ function gateResultsFor(traceId: string, gateName: string): { passed: boolean }[
 }
 
 describe('RiskEngine concurrency - real TOCTOU race regression tests', () => {
+  // These cases pin the BROKER-equity basis; research-basis coverage lives in researchEquity.test.ts and
+  // RiskEngine.lossGatesProtectiveExit.test.ts.
+  beforeAll(async () => { (await import('../config/tradingSafety')).tradingSafety.researchEquityRiskBasisEnabled = false; });
   beforeEach(() => {
     resetState();
     emitRiskAssessment.mockClear();

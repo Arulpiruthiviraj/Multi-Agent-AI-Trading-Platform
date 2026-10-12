@@ -1,5 +1,5 @@
 // LABEL: UNIT - proves gate-policy decisions with a mock DB backing reads. Durable-ledger behavior has separate real-DB coverage.
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import * as schema from '../db/schema';
 import { getTradingDateStr } from '../core/TradingCalendar';
 import { tradingSafety } from '../config/tradingSafety';
@@ -131,6 +131,11 @@ function lastAssessment() {
 }
 
 describe('RiskEngine.evaluateRisk', () => {
+  // These cases pin the BROKER-equity basis (day-start equity / stored peak equity). The research-capital
+  // basis has its own coverage in RiskEngine.lossGatesProtectiveExit.test.ts and researchEquity.test.ts.
+  const originalResearchBasis = tradingSafety.researchEquityRiskBasisEnabled;
+  beforeAll(() => { (tradingSafety as any).researchEquityRiskBasisEnabled = false; });
+  afterAll(() => { (tradingSafety as any).researchEquityRiskBasisEnabled = originalResearchBasis; });
   beforeEach(() => {
     resetTableRows();
     setInsertFails(false);
