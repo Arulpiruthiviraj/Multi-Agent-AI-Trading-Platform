@@ -123,6 +123,7 @@ import { ExplainerToggle } from "./components/ExplainerToggle";
 
 import { Explainer } from "./components/ContextualTooltip";
 import { PanelBoundary } from "./components/shared/ErrorBoundary";
+import { ConnectionDot } from "./components/shared/ConnectionDot";
 import { TabSkeleton } from "./components/shared/TabSkeleton";
 import { motion } from "motion/react";
 import {
@@ -3672,6 +3673,7 @@ export default function App() {
               {' | '}Size ${autoBotMaxTradeSize.toLocaleString()}
             </span>
           </Explainer>
+          <span className="ml-auto"><ConnectionDot /></span>
         </div>
       </div>
       </PanelBoundary>
