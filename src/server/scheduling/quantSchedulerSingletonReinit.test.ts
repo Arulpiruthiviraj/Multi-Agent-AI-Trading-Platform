@@ -30,7 +30,7 @@ function makeDeps(): QuantSchedulerDeps {
   return {
     evaluateSymbol: async () => ({ stub: true }),
     getBars: async () => [],
-    ensureBars: async () => ({ status: 'READY' as const, bars: [] }),
+    ensureBars: async () => {},
     providerRateLimitedUntilMs: () => 0,
     minBars: 1,
     expectedBarCount: () => 1,
@@ -57,7 +57,7 @@ describe('quant scheduler singleton re-init (2026-10-11 defect 2)', () => {
     const admission = s1.admit({
       symbol: 'DEADX',
       priority: QuantCandidatePriority.P0_URGENT_MOVER,
-      reason: 'defect-2 test',
+
     });
     expect(admission).toMatchObject({ accepted: false });
     if ('terminalState' in admission) {
@@ -79,7 +79,7 @@ describe('quant scheduler singleton re-init (2026-10-11 defect 2)', () => {
     const admission = s2.admit({
       symbol: 'LIVE1',
       priority: QuantCandidatePriority.P0_URGENT_MOVER,
-      reason: 'defect-2 test',
+
     });
     expect(admission).toMatchObject({ accepted: true });
   });

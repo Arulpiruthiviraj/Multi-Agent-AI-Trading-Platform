@@ -77,7 +77,7 @@ describe('quant scheduler emission liveness (2026-10-11 timeliness invariant)', 
     scheduler.admit({
       symbol: 'SLOWX',
       priority: QuantCandidatePriority.P0_URGENT_MOVER,
-      reason: 'liveness test',
+
     });
     try {
       // Wait for the quarantine to land and the late settle to observe it.
@@ -105,7 +105,7 @@ describe('quant scheduler emission liveness (2026-10-11 timeliness invariant)', 
     scheduler.admit({
       symbol: 'FASTX',
       priority: QuantCandidatePriority.P0_URGENT_MOVER,
-      reason: 'liveness test',
+
     });
     try {
       await sleep(600);
