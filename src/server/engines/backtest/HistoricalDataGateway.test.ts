@@ -579,6 +579,26 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
       expect(after).toHaveLength(tradingSafety.regimeMinBars); // nothing fabricated
     });
 
+    it('IBKR-empty path runs the stale-tail check: stale cache + empty IBKR + empty Alpaca -> DATA_STALE, never READY-as-fresh (2026-10-11 defect 3)', async () => {
+      const { registerHistoricalBarProvider } = await import('./historicalBarProvider');
+      const now = Date.now();
+      // Stale cache: count-sufficient but newest bar 10 days old (the Oct-9 forensic condition).
+      await seedStaleSizedCache('IBKRSTALE', now - 10 * 86_400_000);
+      // IBKR provider returns empty (the real entitlement-gap behavior).
+      registerHistoricalBarProvider({ id: 'ibkr_gateway', fetchBars: async () => [] });
+      // Alpaca also returns empty: nothing fresh can move the tail.
+      const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ bars: [] }) }));
+      vi.stubGlobal('fetch', fetchMock);
+      try {
+        await expect(
+          historicalDataGateway.ensureBars('IBKRSTALE', '1Day', now - 90 * 86_400_000, now),
+        ).rejects.toThrow(/DATA_STALE/);
+        expect(fetchMock).toHaveBeenCalled(); // fell through to Alpaca, did not return stale cache as fresh
+      } finally {
+        registerHistoricalBarProvider(null);
+      }
+    });
+
     it('keeps the SYNTHETIC_SIMULATION isolation guard fail-closed: stale cache returns without network, empty cache still refuses', async () => {
       const fetchMock = vi.fn(async () => { throw new Error('fetch must not be called during synthetic simulation'); });
       vi.stubGlobal('fetch', fetchMock);

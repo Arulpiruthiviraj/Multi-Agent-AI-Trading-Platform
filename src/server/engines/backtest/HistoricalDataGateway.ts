@@ -379,7 +379,13 @@ export class HistoricalDataGateway {
           else this.consecutiveRateLimits = 0;
           return;
         }
-        if (existing.length > 0) return;
+        // 2026-10-11 (stale-tail invariant): the IBKR-empty path must run the same
+        // stale-tail check as every other fallback. Returning the cache here without
+        // consulting staleTail re-admits the Oct-9 forensic condition (stale cache
+        // served as fresh). With a stale tail, fall through to Alpaca; the
+        // verifyStaleTailMoved at the bottom still throws DATA_STALE if nothing fresh
+        // ever arrives.
+        if (existing.length > 0 && !staleTail) return;
         // Real root cause (2026-09-10, missed-opportunity-evaluation forensic pass): confirmed
         // live that IBKR's historical-bar API returns empty for many real, liquid US symbols on
         // this account (same market-data-entitlement gap - code 354 "not subscribed" - already
