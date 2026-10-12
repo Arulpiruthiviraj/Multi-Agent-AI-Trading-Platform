@@ -425,6 +425,12 @@ describe('Jev failure semantics: AI-unavailable-neutral parity for validated qua
     // fans out to RiskAgent -> OMS, which must not blow up on an uninitialized broker).
     await db.insert(schema.settings).values({
       tradingMode: 'Paper', autoBotEnabled: true, budget: 100000, maxTradeSize: 3000,
+      // 2026-10-11: disable adversarial debate — the parity property under test is
+      // Jev-health vs quant decision, not the debate mechanism. With the consensus
+      // bypass remediated, a single-agent idea would otherwise trigger a debate
+      // (confidence > 0.6) that hangs waiting for AI providers, masking the
+      // INSUFFICIENT_AGENT_PARTICIPATION NO_TRADE this test verifies.
+      adversarialDebateMode: false,
     });
     tradingEngine.state.enabled = true;
     tradingEngine.state.tradingState = 'TRADING_ENABLED';

@@ -515,13 +515,21 @@ describe('fastLaneEvaluator quarantine eviction (2026-10-11 #15)', () => {
     (tradingSafety as any).fastLaneHungLeaseMaxConsecutiveTimeouts = 1;
     try {
       const c = inject('RRRRR');
-      // Hung evaluation: will timeout once, then quarantine (1 consecutive timeout).
+      // Hung evaluation: will timeout once (1 consecutive timeout).
       vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockImplementation(() => new Promise(() => {}) as any);
       const result = await evaluateFastCandidate(c.id);
       expect(result.status).toBe('ERROR');
-      // Lease is quarantined (slot returned, dedup kept).
+      // Lease timed out; quarantine happens lazily on the next admission's reap.
       let snapshot = getFastLaneLeaseSnapshot();
-      expect(snapshot.leases[0].state).toBe('QUARANTINED');
+      expect(snapshot.leases[0].state).toBe('CALLER_TIMED_OUT');
+
+      // Trigger reap via another admission: 1 consecutive timeout >= max (1) -> QUARANTINED.
+      const cQ = inject('QQQQQ');
+      vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockResolvedValue(null);
+      await evaluateFastCandidate(cQ.id);
+      snapshot = getFastLaneLeaseSnapshot();
+      const rrrrrQ = snapshot.leases.find((l: any) => l.symbol === 'RRRRR');
+      expect(rrrrrQ?.state).toBe('QUARANTINED');
 
       // Wait past the quarantine max age; trigger reap via another admission.
       await new Promise((r) => setTimeout(r, 150));
