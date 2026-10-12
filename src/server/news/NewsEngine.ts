@@ -573,6 +573,16 @@ export class NewsEngine {
    * confident (LLM skipped), or null when the existing LLM path should run.
    * Never throws — any failure means "fall through to the existing path".
    * Only called when ARGUS_JEV_ESCALATION_ENABLED=true.
+   *
+   * 2026-10-11 (D1, Jev certification audit): previously this constructed
+   * `new JevProvider()` with the raw key and called scoreArticleWithJev() directly —
+   * no maxInFlight bound, no budget, no circuit breaker, no singleflight/dedup/cache/
+   * cooldown. Every escalation now goes through AICallGovernor as STRUCTURED_DECISION
+   * (kind news_catalyst_triage), mirroring the Phase 1 shadow-path migration
+   * (c991233): a news flood is bounded by the governor's jev budget / concurrency cap /
+   * circuit breaker. SKIPPED/FAILED outcomes fall through to the existing LLM path —
+   * the fail-closed semantics are preserved. A missing JEV_API_KEY short-circuits at
+   * the governor's NO_API_KEY gate (silently idle, LLM path runs).
    */
   private async tryJevFirstAnalysis(
     article: NormalizedArticle,
@@ -588,12 +598,15 @@ export class NewsEngine {
     },
   ): Promise<AIAnalysisResult | null> {
     try {
-      const { buildJevNewsState, scoreArticleWithJev } = await import('./JevNewsTriage');
-      const { JevProvider } = await import('../ai/providers/JevProvider');
+      const {
+        buildJevNewsState,
+        buildJevNewsQuestions,
+        mapJevAnswersToNewsScore,
+      } = await import('./JevNewsTriage');
       const { decideJevEscalation, buildJevAnalysisResult } = await import('./JevEscalation');
-
-      const apiKey = (process.env.JEV_API_KEY || process.env.TYPESAFE_API_KEY || '').trim();
-      if (!apiKey) return null;
+      const { AICallGovernor } = await import('../ai/AICallGovernor');
+      const { aiCallGovernor } = await import('../config/aiCallGovernor');
+      type JevDecisionResultT = import('../ai/AICallGovernor').JevDecisionResult;
 
       const state = buildJevNewsState(article, opts.symbol, {
         category: opts.category,
@@ -605,10 +618,52 @@ export class NewsEngine {
       });
       if (!state) return null; // imperfect data — existing path handles it
 
-      const provider = new JevProvider();
-      await provider.initialize(apiKey);
-      // Tighter than the shadow default: this call blocks the article's analysis.
-      const score = await scoreArticleWithJev(provider, state, { timeoutMs: 8000 });
+      const governor = AICallGovernor.getInstance();
+      // Decision deadline: the governor's own jev call timeout (8000ms, matching the
+      // old direct-call 8s timeout) plus its required decision lead, so the
+      // STALE_EVENT / DEADLINE_TOO_CLOSE gates never misfire on a healthy call.
+      const decisionDeadlineMs =
+        Date.now() + aiCallGovernor.jevTimeoutMs + aiCallGovernor.aiDecisionDeadlineMinLeadMs;
+      const outcome = await governor.request<JevDecisionResultT>({
+        capability: 'STRUCTURED_DECISION',
+        kind: 'news_catalyst_triage',
+        material: {
+          symbol: opts.symbol,
+          fingerprintParts: { articleFingerprint: article.fingerprint },
+          // news_catalyst_triage requires at least MEDIUM materiality (per
+          // MIN_MATERIALITY_BY_KIND): the Jev score decides whether the LLM is
+          // skipped, so it IS a (cost/latency) decision input — unlike the
+          // LOW-materiality shadow observation path.
+          materiality: 'MEDIUM',
+          decisionDeadlineMs,
+          traceId: opts.traceId,
+        },
+        jev: {
+          state,
+          questions: buildJevNewsQuestions(state),
+          schemaVersion: 'jev-news-triage/v1',
+        },
+        // STRUCTURED_DECISION never invokes run; required by the request type only.
+        run: () => { throw new Error('STRUCTURED_DECISION ignores run'); },
+      });
+
+      if (outcome.status === 'SKIPPED') {
+        // Governor-denied (budget/cooldown/circuit/disabled/no key): neutral, fall
+        // through to the existing LLM path exactly like a provider failure today.
+        console.warn(`[NewsEngine][Jev] triage skipped, falling through to existing path: ${outcome.reason} - ${outcome.detail}`);
+        return null;
+      }
+      if (outcome.status === 'FAILED') {
+        console.warn('[NewsEngine][Jev] triage failed, falling through to existing path:', (outcome.error as Error)?.message || outcome.error);
+        return null;
+      }
+      const decided = outcome.result;
+      const score = mapJevAnswersToNewsScore(
+        decided.answers,
+        decided.model,
+        decided.inputTokens,
+        decided.latencyMs,
+      );
 
       const decision = decideJevEscalation({ jevScore: score, credibility: opts.credibility });
       console.log(`[NewsEngine][Jev] ${opts.symbol}: ${decision.reason}`);
