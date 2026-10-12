@@ -228,6 +228,39 @@ rows NULL).
 strategy must complete the full path to fill and organic exit while AI-originated ideas fail
 closed. See the test file's header for the certified assertions.
 
+## 2026-10-11: Quant-First consensus-bypass remediation (ChiefTrader policy router)
+
+**Root cause (documented per the defect-closure mission):** the 2026-10-07 policy router's
+`AUTHORIZED_QUANT_POLICY` branch approved directly — `recordConsensusTransaction` +
+`eventBus.emitChiefApproval` with `threshold: 0` ("never compared against") and
+`independentAgreeingAgents: 0` / `requiredAgents: 0`. That was a **silent architectural
+exception to the standing consensus invariants** (strict > 0.75 confidence,
+min-2-independent-agents), structurally skipping the gate every other idea clears.
+Remediated — no exception granted, not preserved or grandfathered.
+
+**What changed.** `ChiefTraderAgent.reviewIdea` still routes `QUANT_STRATEGY`-origin ideas
+through central `resolveQuantStrategyAuthorization()`, but `AUTHORIZED_QUANT_POLICY` now
+runs `evaluateQuantExecutionPolicy()` as a **fail-closed pre-filter only** (renamed to
+`evaluateQuantPolicyPrefilter`, returns boolean): it may **reject** (terminal
+`DESK_NO_TRADE`, `QUANT_POLICY_REJECTED`, precise `QUANT_*` reason code — never
+re-routed), never **approve**. A policy-passed idea falls through to the standard
+consensus intake (`upsertIdea` → `evaluateConsensus`) and must clear the **identical**
+gate as every other idea: weighted confidence strictly > `CONSENSUS_APPROVAL_THRESHOLD`
+(0.75), ≥ `MIN_INDEPENDENT_AGREEING_AGENTS` independent evidence groups, plus every
+veto (debate HOLD, bear HOLD, AI contradiction) and the operator CONFIRM side-lock
+(which the consensus path already enforces). A policy-passed quant idea at < 0.75 or
+with a single voice correctly `NO_TRADE`s (`CONFIDENCE_BELOW_STRONG` /
+`INSUFFICIENT_AGENT_PARTICIPATION`). One idea, one decision — the consensus one.
+
+**What did NOT change.** Consensus bar (0.75 / min-2-agents), RiskEngine (27 gates), OMS
+as sole `.placeOrder(` caller, `LIVE_NO_GO` / `PAPER_TRADING_ONLY`, the
+`CHIEF_APPROVED_IDEA` emitter allowlist, `NOT_ELIGIBLE`/`NOT_AUTHORIZED` terminal
+rejections, `REQUIRES_CONSENSUS` fall-through, risk-exit bypass of the router, the
+`QUANT_INDEPENDENT` consensus tier (disjoint idea set, explicit operator override).
+`QuantExecutionPolicy` itself is untouched — only its *caller* lost the direct-approval
+branch. The `quant_policy_evaluated` observability event still fires (`QUANT_POLICY_APPROVED`
+now means "prefilter checks passed", not a trade approval).
+
 **Investigation (Phases 9/10/11):** `docs/audits/QUANT_FIRST_PHASE9_10_11_INVESTIGATION_2026-10-07.md`
 — fast lane verified inert (zero live ideas; permanently `REQUIRES_CONSENSUS`), exit semantics
 (agent-tagged, not origin-tagged).

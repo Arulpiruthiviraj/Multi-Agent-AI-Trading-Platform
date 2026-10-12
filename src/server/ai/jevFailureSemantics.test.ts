@@ -479,11 +479,18 @@ describe('Jev failure semantics: AI-unavailable-neutral parity for validated qua
     { label: 'no-api-key', jevBehavior: 'noApiKey' },
   ] as const;
 
+  // 2026-10-11 (consensus-bypass remediation): the pre-2026-10-11 version of this test
+  // asserted approved=true via the remediated direct-approval branch. New behavior: the
+  // single-voice validated quant idea passes the policy prefilter but cannot clear the
+  // min-2-independent-agents floor, so the healthy outcome is a consensus NO_TRADE
+  // (INSUFFICIENT_AGENT_PARTICIPATION). The parity property under test — Jev's health
+  // never changes the quant decision — is preserved: every failure mode must match the
+  // healthy outcome exactly.
   it('parity: validated-quant policy outcome is IDENTICAL across Jev-healthy and every failure mode', async () => {
     const healthy = await runScenario({ label: 'healthy', jevBehavior: 'healthy' });
     expect(healthy.govStatus).toMatch(/CALLED|CACHE_HIT/);
-    expect(healthy.approved).toBe(true);
-    expect(healthy.decisionPolicy).toBe('QUANT_EXECUTION');
+    expect(healthy.approved).toBe(false);
+    expect(healthy.terminalReasonCode).toBe('INSUFFICIENT_AGENT_PARTICIPATION');
     expect(healthy.generativeFallbackCalls).toBe(0);
     console.log(`[jev-failure-semantics] healthy: ${JSON.stringify(healthy)}`);
 

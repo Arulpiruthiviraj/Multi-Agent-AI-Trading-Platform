@@ -29,20 +29,20 @@ vi.mock('../core/EventBus', () => ({
 vi.mock('../ai/AIRouter', () => ({
   AIRouter: { getInstance: () => ({ routeConsensus: vi.fn(), routeTask: vi.fn(), hasAnyRoutableProvider: vi.fn(async () => false) }) },
 }));
-vi.mock('../quant/QuantExecutionPolicy', () => ({
-  evaluateQuantExecutionPolicy: vi.fn(),
-}));
+
 
 import { EVENTS } from '../core/eventNames';
 import { ChiefTraderAgent } from './ChiefTraderAgent';
-import { evaluateQuantExecutionPolicy } from '../quant/QuantExecutionPolicy';
 import { deriveMappedCategory } from '../observability/whyNoTradeReport';
 
 /**
- * Real defects found and fixed (2026-10-08 defect hunt, core reader F1/F2):
+ * Real defects found and fixed (2026-10-08 defect hunt, core reader F1/F2),
+ * re-homed 2026-10-11 (consensus-bypass remediation: the quant policy's direct-approval
+ * branch is removed, so the side-lock withhold now lives in the consensus path):
  *
- * F1: when an operator CONFIRM side-lock withheld a quant-policy approval, the
- * branch emitted only TRADE_REJECTED_CONSENSUS + TRADE_LIFECYCLE(NO_TRADE):
+ * F1: when an operator CONFIRM side-lock withholds an approval, the
+ * path must emit DESK_NO_TRADE + CHIEF_CONSENSUS_COMPLETED (not just
+ * TRADE_REJECTED_CONSENSUS + TRADE_LIFECYCLE(NO_TRADE)):
  *   - no DESK_NO_TRADE (so the why-no-trade taxonomy had no record of the veto),
  *   - no CHIEF_CONSENSUS_COMPLETED (so manualTradeCoEvaluation's waitForConsensusCompleted
  *     hung to full timeout instead of resolving with the mismatch reason),
@@ -54,7 +54,6 @@ import { deriveMappedCategory } from '../observability/whyNoTradeReport';
 describe('ChiefTraderAgent operator side-lock withholding (real defects F1/F2)', () => {
   beforeEach(() => {
     mockEmit.mockClear();
-    vi.mocked(evaluateQuantExecutionPolicy).mockReset();
   });
 
   function makeAgent(): any {
@@ -81,16 +80,24 @@ describe('ChiefTraderAgent operator side-lock withholding (real defects F1/F2)',
     };
   }
 
-  it('quant side-lock withholding emits DESK_NO_TRADE + CHIEF_CONSENSUS_COMPLETED and corrects lastConsensusOutcome', async () => {
-    vi.mocked(evaluateQuantExecutionPolicy).mockResolvedValue(approvedDecision() as any);
+  // 2026-10-11 (consensus-bypass remediation): the quant policy's direct-approval
+  // branch (and its dedicated side-lock check) is removed. The operator CONFIRM side-lock
+  // now withholds inside the consensus path's own approval branch — which is where
+  // policy-passed quant ideas flow. This test pins the same F1/F2 guarantees through
+  // the consensus path: DESK_NO_TRADE + CHIEF_CONSENSUS_COMPLETED are emitted,
+  // lastConsensusOutcome is corrected (never a phantom approval), the veto is labeled
+  // MANUAL_SIDE_MISMATCH, and no approval leaks downstream.
+  it('consensus side-lock withholding emits DESK_NO_TRADE + CHIEF_CONSENSUS_COMPLETED and corrects lastConsensusOutcome', async () => {
     const agent = makeAgent();
     try {
-      // Operator CONFIRMed SELL; the policy approved BUY -> withhold.
+      // Two independent agents agree BUY at 0.95 — would approve absent the side-lock.
+      agent.recentIdeas = [
+        { traceId: 't1', symbol: 'NVDA', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'tech', receivedAt: Date.now() },
+        { traceId: 't1', symbol: 'NVDA', side: 'BUY', confidence: 0.95, agent: 'NewsAgent', reasoning: 'news', receivedAt: Date.now() },
+      ];
+      // Operator CONFIRMed SELL; the consensus would approve BUY -> withhold.
       agent.registerManualSideExpectation('NVDA', 'SELL', 60000);
-      await agent.evaluateQuantPolicy(
-        { traceId: 't1', symbol: 'NVDA', side: 'BUY', confidence: 0.8, reasoning: 'r', agent: 'QuantEngine' },
-        { strategyId: 's1', lifecycleStatus: 'VALIDATED', origin: 'QUANT_STRATEGY', reason: 'ok' } as any,
-      );
+      await agent.evaluateConsensus('NVDA', 't1');
 
       const emitted = mockEmit.mock.calls.map((c) => c[0]);
       expect(emitted).toContain(EVENTS.DESK_NO_TRADE);

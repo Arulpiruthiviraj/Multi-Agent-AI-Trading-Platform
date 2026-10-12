@@ -699,7 +699,10 @@ export function formatWhyNoTradeReport(r: WhyNoTradeReport): string {
     if (r.quant.risk.reached) {
       lines.push(`Final: ${r.quant.approved && r.quant.risk.approved ? 'TRADE' : 'NO_TRADE'}`);
     } else {
-      lines.push(`Final: ${r.quant.approved ? 'APPROVED_BY_POLICY (RiskEngine outcome not yet persisted for this trace)' : 'NO_TRADE'}`);
+      // 2026-10-11 (consensus-bypass remediation): the policy is a fail-closed prefilter —
+      // it no longer approves. A prefilter pass routes to consensus; "approved" here means
+      // the prefilter's checks passed, not a final trade approval.
+      lines.push(`Final: ${r.quant.approved ? 'POLICY_PREFILTER_PASSED (consensus decision not yet persisted for this trace)' : 'NO_TRADE'}`);
     }
   }
 
