@@ -47,6 +47,61 @@
       "severity": "P1",
       "status": "open",
       "title": "Intraday provider backlog: 76.5%->54.6% fetch timeout rate"
+    },
+    {
+      "date": "2026-10-12",
+      "detectedIn": "prod",
+      "fixRef": "da31759 (merged 8acecbe)",
+      "id": "protective-exit-blocked-by-loss-rate-gates-20261012",
+      "notes": "Sealed protective SELL now bypasses ONLY daily_loss/consecutive_loss/portfolio_drawdown/order_rate_limit (plus news_veto earlier). Not deployed-verified in a real session. Broker-resident stops still absent.",
+      "regressionTest": "src/server/engines/RiskEngine.lossGatesProtectiveExit.test.ts",
+      "rootCause": "Entry-oriented brakes had no side/intent branch, so the position-reducing exit that would stop a loss was rejected once those brakes tripped.",
+      "severity": "P0",
+      "status": "fixed-in-source-deployed-2026-10-12-unverified-in-session"
+    },
+    {
+      "date": "2026-10-12",
+      "detectedIn": "prod",
+      "fixRef": "f43dd1b",
+      "id": "risk-gates-measure-broker-equity-20261012",
+      "notes": "researchEquityRiskBasisEnabled (default true) switches daily_loss/portfolio_drawdown to research P&L on settings.budget. Limits: carried unrealized counted in full; unrealized peak in-process only.",
+      "regressionTest": "src/server/risk/researchEquity.test.ts",
+      "rootCause": "daily_loss and portfolio_drawdown used ~$1M simulated broker equity, so a $20k budget with a $250 limit was not enforced on the research portfolio.",
+      "severity": "P0",
+      "status": "fixed-in-source-deployed-2026-10-12-unverified-in-session"
+    },
+    {
+      "date": "2026-10-12",
+      "detectedIn": "prod",
+      "fixRef": "7c845c9 (merged 8acecbe)",
+      "id": "ibkr-stale-position-cache-20261012",
+      "notes": "Exact adapter path for DDOG not proven (hypothesis: no zero-quantity position event on full exit). S 38 broker=0 vs ledger=38 is a separate, unresolved ledger/broker discrepancy.",
+      "regressionTest": "src/brokers/__tests__/IbkrSocketSession.positionSnapshotPrune.test.ts",
+      "rootCause": "positionEnd handler was empty; positions absent from a completed snapshot were never removed, causing a false POSITION_FILL_CONFLICT that paused trading (and Autobot) after a normal full exit.",
+      "severity": "P1",
+      "status": "fixed-in-source-deployed-2026-10-12-unverified-in-session"
+    },
+    {
+      "date": "2026-10-12",
+      "detectedIn": "prod",
+      "fixRef": "open",
+      "id": "post-reconciliation-220s-freeze-20261012",
+      "notes": "Calibration fix removes the calibration cycle freeze (largest gap 7 s in isolation) but ~220 s freezes after every third RECONCILIATION_MATCH persisted on the fixed build. ARGUS_FREEZE_PROFILER=true is running to capture the next one; cause NOT identified. The referenced regression covers ONLY the calibration-cycle freeze, not this residual freeze; no regression exists for the residual cause.",
+      "regressionTest": "src/server/continuous/CalibrationCandidateBuilder.eventLoop.test.ts",
+      "rootCause": "UNKNOWN",
+      "severity": "P0",
+      "status": "open"
+    },
+    {
+      "date": "2026-10-12",
+      "detectedIn": "prod",
+      "fixRef": "open",
+      "id": "quant-strategies-no-lifecycle-record-20261012",
+      "notes": "20 of 21 strategies have no learning_versions record and resolve to terminal NOT_AUTHORIZED/NO_LIFECYCLE_RECORD; PULLBACK_CONTINUATION is RETIRED. Recording an UNTESTED baseline via recordStrategyLifecycleTransition is the system's own recommended action but changes routing; left for an explicit operator decision.",
+      "regressionTest": "src/server/certification/productionStateCertification.test.ts",
+      "rootCause": "No production lifecycle baseline seeding; certification bridge requires operator review.",
+      "severity": "P1",
+      "status": "open-operator-decision"
     }
   ],
   "version": 1
