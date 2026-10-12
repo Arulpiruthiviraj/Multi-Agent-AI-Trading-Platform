@@ -57,6 +57,7 @@ describe('quant scheduler singleton re-init (2026-10-11 defect 2)', () => {
     const admission = s1.admit({
       symbol: 'DEADX',
       priority: QuantCandidatePriority.P0_URGENT_MOVER,
+      source: 'TEST',
 
     });
     expect(admission).toMatchObject({ accepted: false });
@@ -79,6 +80,7 @@ describe('quant scheduler singleton re-init (2026-10-11 defect 2)', () => {
     const admission = s2.admit({
       symbol: 'LIVE1',
       priority: QuantCandidatePriority.P0_URGENT_MOVER,
+      source: 'TEST',
 
     });
     expect(admission).toMatchObject({ accepted: true });

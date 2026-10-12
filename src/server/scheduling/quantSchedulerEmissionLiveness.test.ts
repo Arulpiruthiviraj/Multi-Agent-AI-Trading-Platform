@@ -77,6 +77,7 @@ describe('quant scheduler emission liveness (2026-10-11 timeliness invariant)', 
     scheduler.admit({
       symbol: 'SLOWX',
       priority: QuantCandidatePriority.P0_URGENT_MOVER,
+      source: 'TEST',
 
     });
     try {
@@ -105,6 +106,7 @@ describe('quant scheduler emission liveness (2026-10-11 timeliness invariant)', 
     scheduler.admit({
       symbol: 'FASTX',
       priority: QuantCandidatePriority.P0_URGENT_MOVER,
+      source: 'TEST',
 
     });
     try {
