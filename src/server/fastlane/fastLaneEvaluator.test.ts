@@ -462,3 +462,45 @@ describe('fastLaneEvaluator lease semantics (2026-10-09 P1 lease fix)', () => {
     }
   });
 });
+
+describe('fastLaneEvaluator coalesced-caller watchdog (2026-10-11 defect 4)', () => {
+  const originalTimeout = tradingSafety.fastLaneEvaluationTimeoutMs;
+
+  beforeEach(() => {
+    (tradingSafety as any).fastLaneEvaluationTimeoutMs = 50;
+  });
+
+  afterEach(() => {
+    (tradingSafety as any).fastLaneEvaluationTimeoutMs = originalTimeout;
+  });
+
+  it('a coalesced caller gets its own watchdog: bounded ERROR, lease NOT released', async () => {
+    const c1 = inject('QQQQQ');
+    // The primary evaluation hangs forever.
+    vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockImplementation(() => new Promise(() => {}) as any);
+
+    // Start the primary evaluation (do not await — it hangs).
+    const primaryPromise = evaluateFastCandidate(c1.id);
+    // Give the primary a moment to acquire the lease.
+    await new Promise((r) => setTimeout(r, 20));
+
+    // A second call for the same candidate coalesces onto the in-flight evaluation
+    // (same symbol → same lease → coalesced caller path).
+    const coalescedResult = await evaluateFastCandidate(c1.id);
+
+    // The coalesced caller is bounded by its own watchdog — it does not hang forever
+    // on the stuck evaluation (the pre-fix code returned the bare settlePromise).
+    expect(coalescedResult.status).toBe('ERROR');
+    expect(coalescedResult.reasonCodes).toContain('COALESCED_CALLER_TIMEOUT');
+
+    // The lease is NOT released by the coalesced timeout — the primary caller still
+    // owns it until the work settles (same held-lease guarantee as the primary watchdog).
+    expect(fastLaneActiveEvaluationCountForTests()).toBe(1);
+    const snapshot = getFastLaneLeaseSnapshot();
+    expect(snapshot.activeLeaseCount).toBe(1);
+    expect(snapshot.leases[0].symbol).toBe('QQQQQ');
+
+    // Cleanup: the primary is still hung; the afterEach reset handles it.
+    void primaryPromise.catch(() => {});
+  });
+});

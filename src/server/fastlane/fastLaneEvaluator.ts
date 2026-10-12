@@ -168,8 +168,21 @@ export async function evaluateFastCandidate(candidateId: string): Promise<FastEv
       return makeResult(candidate, 'ERROR', ['PRIOR_EVALUATION_STILL_IN_FLIGHT']);
     }
     // RUNNING: coalesce concurrent calls for the same symbol onto the same in-flight
-    // evaluation. Each caller races the settle promise against its own watchdog.
-    return existing.settlePromise;
+    // evaluation. Each caller races the settle promise against its own watchdog
+    // (2026-10-11: implemented — the old comment claimed this, but the code returned the
+    // bare settlePromise, so a coalesced caller could hang forever on a stuck
+    // evaluation). On coalesced timeout the caller gets a bounded ERROR result; the
+    // lease is NOT released — the primary caller still owns it until the work settles.
+    let coalescedTimeoutId: ReturnType<typeof setTimeout> | undefined;
+    const coalescedGate = new Promise<FastEvaluationResult>((resolve) => {
+      coalescedTimeoutId = setTimeout(() => {
+        resolve(makeResult(candidate, 'ERROR', ['COALESCED_CALLER_TIMEOUT']));
+      }, tradingSafety.fastLaneEvaluationTimeoutMs);
+    });
+    const settleWithCleanup = existing.settlePromise.finally(() => {
+      if (coalescedTimeoutId !== undefined) clearTimeout(coalescedTimeoutId);
+    });
+    return Promise.race([settleWithCleanup, coalescedGate]);
   }
 
   // Per-symbol cooldown: prevent repeated near-simultaneous detections from re-evaluating the
