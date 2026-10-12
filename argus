@@ -47,7 +47,7 @@ case "$cmd" in
       exec "$ARGUS_ROOT/argus.sh" restart
     fi
     [[ "${1:-}" == "cli" ]] && shift
-    argus_npm_cli restart
+    argus_npm_cli restart "$@"
     ;;
   nuke)
     if argus_wants_help "$@"; then

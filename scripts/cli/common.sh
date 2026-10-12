@@ -157,11 +157,18 @@ EOF
 
 argus_help_restart() {
   cat <<'EOF'
-Usage: argus restart [cli|web]
+Usage: argus restart [cli|web] [--resume | --enable-trading] [--with-ollama] [--reason="..."]
 
 Stops then starts the Argus Engine via the existing lifecycle for whichever mode
 you specify (default cli). "argus restart web" restarts the web-UI dev ecosystem
 instead - it does not restart a cli-mode engine, and vice versa.
+
+One-command restart for the cli engine:
+  argus restart --resume          graceful stop, start, wait for a clean broker reconciliation, and
+                                  resume trading ONLY if it was enabled before (a pause or an
+                                  emergency stop is never undone by a restart)
+  argus restart --enable-trading  same, but resumes regardless of the previous state
+Ollama stays OFF unless --with-ollama. Every server-side safety check still applies to the resume.
 EOF
 }
 
@@ -330,6 +337,8 @@ argus_cmd_start() {
       --prod) mode="prod" ;;
       --dev) mode="dev" ;;
       --enable-trading) extra_args+=("$a") ;;
+      --with-ollama) extra_args+=("$a") ;;
+      --no-watchdog) extra_args+=("$a") ;;
       --reason=*) extra_args+=("$a") ;;
     esac
   done
