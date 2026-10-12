@@ -1066,6 +1066,9 @@ export class ChiefTraderAgent {
       ? triggeringIdeaPrice
       : result.currentPrice;
     let approvedEvidence = evidence;
+    // 2026-10-12: protective-exit seal, propagated ONLY from the genuine risk-exit branch below (agent + PORTFOLIO_EXIT
+    // origin dual-key) and only when it belongs to the exit idea that triggered this round. Never from a discretionary idea.
+    let approvedProtectiveExitSeal: string | undefined;
     let approvedAgreed = agentsAgreed;
     // Phase 7E/7H (MODERATE consensus tier). Stays 'STRONG' - and moderateEligibility stays null -
     // for every case where confidence clears CONSENSUS_APPROVAL_THRESHOLD; the STRONG ladder branches
@@ -1118,6 +1121,8 @@ export class ChiefTraderAgent {
       approvedConfidence = exitIdea.confidence;
       approvedPrice = exitIdea.currentPrice ?? result.currentPrice;
       reason = `[Risk Exit] ${exitIdea.reasoning}`;
+      const exitSeal = (exitIdea as { protectiveExitSeal?: unknown }).protectiveExitSeal;
+      if (typeof exitSeal === 'string' && exitSeal.length > 0 && exitIdea.traceId === traceId) approvedProtectiveExitSeal = exitSeal;
       approvedAgreed = `${RISK_EXIT_AGENT}(wt:${this.resolveWeight(RISK_EXIT_AGENT).toFixed(2)})`;
     } else {
       if (result.side === 'HOLD' || result.confidence <= CONSENSUS_APPROVAL_THRESHOLD) {
@@ -1450,6 +1455,7 @@ export class ChiefTraderAgent {
          evidence: approvedEvidence.map(e => ({ agent: e.agent, side: e.side, confidence: e.confidence, weight: e.weight, reasoning: e.reasoning })),
          supportingQuantDetail: this.buildSupportingQuantDetail(approvedEvidence, approvedPrice),
          decisionTier,
+         ...(approvedProtectiveExitSeal ? { protectiveExitSeal: approvedProtectiveExitSeal } : {}),
        });
 
        eventBus.emit(EVENTS.TRADE_LIFECYCLE, { traceId, symbol, state: 'APPROVED', side: approvedSide, reason });

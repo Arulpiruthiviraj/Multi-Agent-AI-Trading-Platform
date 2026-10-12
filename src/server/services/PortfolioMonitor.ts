@@ -33,6 +33,7 @@
  * ==========================================================
  */
 
+import { mintProtectiveExitSeal, PROTECTIVE_EXIT_AUTHORIZED_MINTER } from '../core/protectiveExitSeal';
 import { eventBus } from '../core/EventBus';
 import { randomUUID } from 'node:crypto';
 import { db } from '../db';
@@ -491,8 +492,9 @@ export class PortfolioMonitorWorker {
       });
       return;
     }
+    const exitTraceId = randomUUID();
     eventBus.emitTradeIdea({
-      traceId: randomUUID(),
+      traceId: exitTraceId,
       symbol: args.symbol,
       side: 'SELL',
       confidence: args.confidence,
@@ -501,6 +503,14 @@ export class PortfolioMonitorWorker {
       agent: agentWeightConfig.riskExitAgent,
       // Phase 3 idea provenance: risk-exit SELL ideas from emitRiskExit - descriptive only, never authoritative.
       origin: 'PORTFOLIO_EXIT',
+      // 2026-10-12: single-use, traceId/symbol/SELL-bound seal minted ONLY here. It is what lets
+      // RiskEngine's news_veto gate tell a protective liquidation from a discretionary SELL; a bare
+      // boolean flag is never read. See core/protectiveExitSeal.ts for the full threat model.
+      protectiveExitSeal: mintProtectiveExitSeal({
+        traceId: exitTraceId,
+        symbol: args.symbol,
+        mintedBy: PROTECTIVE_EXIT_AUTHORIZED_MINTER,
+      }),
     });
     recordPortfolioDecision({
       symbol: args.symbol,

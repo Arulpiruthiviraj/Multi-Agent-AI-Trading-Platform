@@ -41,7 +41,6 @@ import { marketDataWorker } from '../services/MarketDataWorker';
 import { cryptoMarketDataIngestionWorker } from '../services/CryptoMarketDataIngestion';
 import { authorizeMarketDataWebSocket } from './marketDataWsOwnership';
 import { portfolioMonitor } from '../services/PortfolioMonitor';
-import { protectiveOrderService } from '../services/ProtectiveOrderService';
 import { oms } from '../services/OrderManagement'; 
 import { riskAgent } from '../services/RiskAgent'; 
 import { newsEngine } from '../news/NewsEngine';
@@ -106,11 +105,10 @@ export class SystemBootstrap {
     authorizeMarketDataWebSocket('SystemBootstrap');
     marketDataWorker.start();
     portfolioMonitor.start();
-    // Pre-market perfection mission (2026-10-12): broker-native protective stops.
-    // No-ops unless ARGUS_PROTECTIVE_STOPS_ENABLED=true (default false) - the service's
-    // own start() is safe to call unconditionally; every fill handler re-checks the
-    // flag, and the OMS funnel it submits through keeps all existing guards.
-    protectiveOrderService.start();
+    // 2026-10-12: the mission branch referenced a broker-native ProtectiveOrderService that was never
+    // committed (the import did not resolve, so that branch could not compile). Broker-resident protective
+    // orders are a NEW ORDER MECHANISM and need a separate architecture review; they are intentionally NOT
+    // started here. Exit protection remains PortfolioMonitor (software, timer-driven) until that review.
     // Portfolio reconciliation is started at ArgusCoreBoot (independent of Autobot) so an
     // interrupted-session entry hold can clear on in-process RECONCILIATION_MATCH without
     // requiring Autobot on. Idempotent if already started.
@@ -186,7 +184,6 @@ export class SystemBootstrap {
     // were set. marketDataWorker.stop() remains available for process shutdown.
     oms.stop();
     portfolioMonitor.stop();
-    protectiveOrderService.stop();
     // Recon stays up when Autobot is off (same pattern as MarketDataWorker / NewsEngine) so
     // RECONCILIATION_MATCH can release the interrupted-session *entry* hold without enabling
     // Autobot. portfolioReconciliationWorker.stop() remains for process shutdown drain.

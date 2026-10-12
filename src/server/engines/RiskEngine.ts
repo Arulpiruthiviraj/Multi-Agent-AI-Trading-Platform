@@ -12,6 +12,7 @@
  * - Block execution if volatility or drawdowns exceed limits.
  * ==========================================================
  */
+import { verifyAndConsumeProtectiveExitSeal } from '../core/protectiveExitSeal';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { db } from '../db';
@@ -714,7 +715,12 @@ export class RiskEngine {
                     newsImpactOnVetoScale(n.impactScore) > tradingSafety.newsVetoMinImpactScore
                 );
             }
-            recordGate('news_veto', symbolNews.length === 0, { matchingClusters: symbolNews.length, replay: !!replay });
+            // 2026-10-12: a verified protective liquidation is exempt from the direction-blind news veto (the high-impact
+            // news is typically the very reason to exit). Exemption requires a registered, unexpired, single-use seal
+            // minted by the protective path and bound to this exact traceId, symbol and SELL; anything else fails closed.
+            const protectiveExitExempt = symbolNews.length > 0 && !replay && proposal.side === 'SELL'
+                && verifyAndConsumeProtectiveExitSeal(proposal.protectiveExitSeal, { traceId: proposal.traceId, symbol: proposal.symbol, side: proposal.side });
+            recordGate('news_veto', symbolNews.length === 0 || protectiveExitExempt, { matchingClusters: symbolNews.length, replay: !!replay, protectiveExitExempt });
             const newsVetoReason = "High volatility news event detected, overriding AI decision.";
 
             // 4. Position Sizing Math - using actual buying power and portfolio value
