@@ -7,7 +7,8 @@
  *
  * The fix bounds the inner with quantBarsInnerFetchTimeoutMs: a stalled inner now fails
  * FIRST with the distinct HISTORICAL_INNER_FETCH_TIMEOUT, the coalescing entry is released
- * for a fresh attempt, and a late-settling zombie's cache writes are generation-guarded.
+ * for a fresh attempt, and a late-settling zombie's cache writes are entry-identity-guarded
+ * (isCurrentEntry compares the coalescing entry by object identity - 2026-10-12 L1).
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import fs from 'fs';
@@ -133,5 +134,35 @@ describe('HistoricalDataGateway inner-fetch timeout (2026-10-12)', () => {
   it('does not lower the production caller timeout: default inner bound stays well under it', () => {
     expect(originalInnerTimeout).toBeLessThan(originalCallerTimeout);
     expect(originalCallerTimeout).toBe(300000);
+  });
+
+  it('M2: the inner timeout ABORTS the in-flight Alpaca HTTP fetch instead of abandoning it as a zombie', async () => {
+    // No registered provider -> the Alpaca REST path inside ensureBarsInner. The stubbed
+    // fetch hangs (the stalled connection under test) and captures its signal.
+    registerHistoricalBarProvider(null);
+    (historicalDataGateway as any).lastAlpacaFetchAtMs = 0; // no pacing delay before the hang
+    let capturedSignal: AbortSignal | undefined;
+    let fetchStarted!: () => void;
+    const fetchStartedGate = new Promise<void>((r) => { fetchStarted = r; });
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, opts: any) => {
+      capturedSignal = opts?.signal;
+      fetchStarted();
+      return new Promise(() => { /* hang - never resolves */ });
+    }));
+
+    await expect(historicalDataGateway.ensureBars('ABORT1', '1Day', start, now))
+      .rejects.toThrow(/HISTORICAL_INNER_FETCH_TIMEOUT/);
+
+    // The fetch must actually have started (guard against a pace-delay false negative)...
+    const started = await Promise.race([
+      fetchStartedGate.then(() => true),
+      new Promise((r) => setTimeout(() => r(false), 5000)),
+    ]);
+    expect(started).toBe(true);
+    // ...and its signal must be aborted: the timeout cancels the real HTTP request.
+    // (The IBKR path has no cancellation API - documented at the timeout site - and is
+    // intentionally not covered here.)
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal!.aborted).toBe(true);
   });
 });
