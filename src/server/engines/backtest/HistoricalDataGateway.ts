@@ -134,7 +134,7 @@ export class HistoricalDataGateway {
    * would wedge the window forever. A shared rejection is shared
    * honestly - every coalesced caller sees the same error; none gets silent stale data.
    */
-  private inflightEnsureBars = new Map<string, Promise<void>>();
+  private inflightEnsureBars = new Map<string, { promise: Promise<void>; overdue: boolean }>();
 
   /**
    * A request is "present-time" when its window ends at/near now - i.e. endMs is not
@@ -270,38 +270,66 @@ export class HistoricalDataGateway {
   async ensureBars(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<void> {
     const coalesceKey = this.memoryKey(symbol, timeframe, startMs, endMs);
     const inFlight = this.inflightEnsureBars.get(coalesceKey);
-    if (inFlight) return inFlight;
+    if (inFlight) {
+      // 2026-10-11 (#13): caller-side timeout for coalesced waiters. The shared entry
+      // is retained until the inner settles (never deleted by TTL), so an overdue entry
+      // does not cause duplicate provider work — but a waiter should not hang forever
+      // on a stalled inner either. Each waiter races the shared promise against its own
+      // timeout; the shared entry itself is untouched.
+      const callerTimeoutMs = tradingSafety.quantBarsCoalesceEntryMaxAgeMs;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          inFlight.promise,
+          new Promise<void>((_, reject) => {
+            timer = setTimeout(() => {
+              reject(new Error(
+                `[HistoricalDataGateway] COALESCE_CALLER_TIMEOUT for ${symbol} (${timeframe}): ` +
+                `coalesced waiter exceeded ${callerTimeoutMs}ms awaiting the in-flight ensureBars. ` +
+                `The shared entry is retained (no duplicate fetch); this caller is released.`,
+              ));
+            }, callerTimeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+      return;
+    }
     const run = this.ensureBarsInner(symbol, timeframe, startMs, endMs);
-    this.inflightEnsureBars.set(coalesceKey, run);
-    // 2026-10-10 (defect hunt, Lead 6): liveness bound for the coalescing entry. The
-    // inner provider call has no timeout/cancel path (fetch/IBKR), so a stalled call
-    // would otherwise wedge this window's entry FOREVER - every future caller for the
-    // window would await the same dead promise. Past quantBarsCoalesceEntryMaxAgeMs the
-    // entry is evicted with a loud warn; a later caller starts a fresh inner (the zombie
-    // inner, if it ever settles, completes harmlessly - the generation-guarded delete
-    // below never removes a newer entry). unref'd so a wedged entry never holds the
-    // process open on its own.
+    const entry = { promise: run, overdue: false };
+    this.inflightEnsureBars.set(coalesceKey, entry);
+    // 2026-10-11 (#13): liveness bound for the coalescing entry. The inner provider
+    // call has no timeout/cancel path (fetch/IBKR), so a stalled call would otherwise
+    // wedge this window's entry FOREVER. Past quantBarsCoalesceEntryMaxAgeMs the entry
+    // is marked OVERDUE with a loud warn — but RETAINED until the inner settles.
+    // Deleting it (the old behavior) caused duplicate provider work (new callers
+    // started fresh fetches) and let the zombie inner's finally-clause clobber the
+    // newer fetch's cache via a stale generation-guarded delete. Retention + the
+    // caller-side timeout above gives waiters their own bound without deleting the
+    // shared entry. unref'd so a wedged entry never holds the process open on its own.
     const maxAgeMs = tradingSafety.quantBarsCoalesceEntryMaxAgeMs;
-    const evictTimer = setTimeout(() => {
-      if (this.inflightEnsureBars.get(coalesceKey) === run) {
-        this.inflightEnsureBars.delete(coalesceKey);
+    const overdueTimer = setTimeout(() => {
+      const current = this.inflightEnsureBars.get(coalesceKey);
+      if (current === entry && !current.overdue) {
+        current.overdue = true;
         console.warn(
-          `[HistoricalDataGateway] COALESCE_ENTRY_EVICTED for ${symbol} (${timeframe}): ` +
+          `[HistoricalDataGateway] COALESCE_ENTRY_OVERDUE for ${symbol} (${timeframe}): ` +
           `in-flight ensureBars exceeded quantBarsCoalesceEntryMaxAgeMs=${maxAgeMs}ms - the ` +
-          `provider call is stalled (no timeout/cancel path). Entry evicted so future ` +
-          `callers start a fresh fetch instead of hanging forever.`,
+          `provider call is stalled (no timeout/cancel path). Entry RETAINED (not evicted) ` +
+          `until the inner settles; coalesced waiters get their own caller-side timeout.`,
         );
       }
     }, maxAgeMs);
-    if (typeof (evictTimer as unknown as { unref?: unknown }).unref === 'function') {
-      (evictTimer as unknown as { unref: () => void }).unref();
+    if (typeof (overdueTimer as unknown as { unref?: unknown }).unref === 'function') {
+      (overdueTimer as unknown as { unref: () => void }).unref();
     }
     try {
       await run;
     } finally {
-      clearTimeout(evictTimer);
-      // Generation-guarded: never delete a newer entry admitted after a TTL eviction.
-      if (this.inflightEnsureBars.get(coalesceKey) === run) {
+      clearTimeout(overdueTimer);
+      // Generation-guarded: never delete a newer entry.
+      if (this.inflightEnsureBars.get(coalesceKey) === entry) {
         this.inflightEnsureBars.delete(coalesceKey);
       }
     }

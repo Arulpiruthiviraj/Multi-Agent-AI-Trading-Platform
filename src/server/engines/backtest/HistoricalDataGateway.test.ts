@@ -669,13 +669,13 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
       expect(maxInFlight).toBe(1);
     });
 
-    it('evicts a wedged coalescing entry after quantBarsCoalesceEntryMaxAgeMs so a stalled provider fetch cannot hang future callers forever', async () => {
-      // 2026-10-10 (defect hunt, Lead 6): the inner provider call has no timeout/cancel
-      // path, so a stalled fetch (never-resolving promise) used to wedge the window's
-      // coalescing entry forever - every later ensureBars for that window awaited the
-      // same dead promise. The entry must be TTL-evicted so a later caller starts fresh.
+    it('retains (not evicts) a wedged coalescing entry after TTL; waiters get caller-side timeout, no duplicate fetch (2026-10-11 #13)', async () => {
+      // 2026-10-11 (#13): the old behavior DELETED the entry on TTL, causing duplicate
+      // provider work and zombie cache clobbering. Now the entry is marked overdue but
+      // RETAINED until the inner settles; coalesced waiters race it against their own
+      // caller-side timeout instead of hanging forever.
       const savedTtl = tradingSafety.quantBarsCoalesceEntryMaxAgeMs;
-      tradingSafety.quantBarsCoalesceEntryMaxAgeMs = 150; // short TTL: test-only override
+      (tradingSafety as any).quantBarsCoalesceEntryMaxAgeMs = 150; // short TTL: test-only override
       try {
         const now = Date.now();
         const start = now - 90 * 86_400_000;
@@ -684,22 +684,25 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
         vi.stubGlobal('fetch', fetchMock);
         const p1 = historicalDataGateway.ensureBars('WEDGESYM', '1Day', start, now);
         p1.catch(() => {}); // never settles; never an unhandled rejection either
-        const key = historicalDataGateway.memoryKey('WEDGESYM', '1Day', start, now);
+        const key = (historicalDataGateway as any).memoryKey('WEDGESYM', '1Day', start, now);
         // The entry is admitted synchronously, before the inner's first await.
-        expect(historicalDataGateway.inflightEnsureBars.has(key)).toBe(true);
+        expect((historicalDataGateway as any).inflightEnsureBars.has(key)).toBe(true);
         await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
-        // TTL eviction fires even though the inner never settled (with the short test
-        // TTL it may fire while the paced fetch is still queued - either way the dead
-        // entry is gone and no future caller can wedge onto it).
-        await vi.waitFor(() => expect(historicalDataGateway.inflightEnsureBars.has(key)).toBe(false));
-        // A later caller is NOT wedged onto the dead promise: it starts a fresh inner fetch.
+        // TTL fires: entry is marked overdue but RETAINED (not deleted).
+        await vi.waitFor(() => {
+          const entry = (historicalDataGateway as any).inflightEnsureBars.get(key);
+          expect(entry).toBeDefined();
+          expect(entry.overdue).toBe(true);
+        });
+        // A later caller coalesces onto the retained entry (no duplicate fetch)...
         const p2 = historicalDataGateway.ensureBars('WEDGESYM', '1Day', start, now);
-        p2.catch(() => {});
-        // The fresh entry is admitted synchronously (before any await in ensureBars).
-        expect(historicalDataGateway.inflightEnsureBars.has(key)).toBe(true);
-        await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+        // ...but gets its own caller-side timeout instead of hanging forever.
+        await expect(p2).rejects.toThrow(/COALESCE_CALLER_TIMEOUT/);
+        expect(fetchMock).toHaveBeenCalledTimes(1); // no duplicate provider work
+        // The shared entry is still retained (the inner never settled).
+        expect((historicalDataGateway as any).inflightEnsureBars.has(key)).toBe(true);
       } finally {
-        tradingSafety.quantBarsCoalesceEntryMaxAgeMs = savedTtl;
+        (tradingSafety as any).quantBarsCoalesceEntryMaxAgeMs = savedTtl;
       }
     });
 
