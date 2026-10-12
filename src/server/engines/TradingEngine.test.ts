@@ -291,6 +291,89 @@ describe('TradingEngine - trading-safety kill switch (P0)', () => {
     expect(veto.msg).toContain('[gate=duplicate_signal]');
     expect(veto.detail.gate).toBe('duplicate_signal');
   });
+
+  it('H1 (2026-10-12): toggle() rejects out-of-bounds numerics with ok:false and applies nothing', async () => {
+    tradingEngine.state.enabled = false; // belt-and-braces: previous tests clean up, but never rely on it
+    // Per TOGGLE_ALLOWED_FIELDS: negative, NaN, zero-where-positive-required, and absurdly
+    // large values for each numeric entry. Bound values come from config/tradingSafety.json
+    // (unchanged here); this asserts the toggle path enforces them like /config/settings does.
+    const cases: Array<{ field: string; badValues: unknown[] }> = [
+      { field: 'budget', badValues: [-1, 0, NaN, 1e15] },
+      { field: 'maxTradeSize', badValues: [-1, 0, NaN, 1e15] },
+      { field: 'dailyLossLimit', badValues: [-1, 0, NaN, 1e15] },
+      { field: 'takeProfitPct', badValues: [-1, 0, NaN, 1e15] },
+      { field: 'trailingStopPct', badValues: [-1, 0, NaN, 1e15] },
+      { field: 'minAiConfidence', badValues: [-1, NaN, 101, 1e15] },
+    ];
+    for (const { field, badValues } of cases) {
+      const before = (tradingEngine.state as any)[field];
+      for (const value of badValues) {
+        const result = await tradingEngine.toggle({ [field]: value } as any);
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain(field);
+        // A rejected toggle has no side effect: in-memory state untouched...
+        expect((tradingEngine.state as any)[field]).toBe(before);
+        // ...and nothing persisted to the settings row.
+        const [row] = await db.select().from(schema.settings).limit(1);
+        expect((row as any)[field]).toBe(before);
+      }
+    }
+  });
+
+  it('H1 (2026-10-12): toggle() still accepts in-bounds numerics (including boundary mins)', async () => {
+    tradingEngine.state.enabled = false;
+    const snapshot: Record<string, number> = {};
+    for (const f of ['budget', 'maxTradeSize', 'dailyLossLimit', 'takeProfitPct', 'trailingStopPct', 'minAiConfidence']) {
+      snapshot[f] = (tradingEngine.state as any)[f];
+    }
+    // minAiConfidence's configured lower bound is 0 (a 0% confidence floor), not 1 - the
+    // validator must enforce the real bounds, not a blanket "positive" rule.
+    const good = {
+      budget: 50000, maxTradeSize: 3000, dailyLossLimit: 5000,
+      takeProfitPct: 15, trailingStopPct: 5, minAiConfidence: 0,
+    };
+    const result = await tradingEngine.toggle(good as any);
+    expect(result.ok).toBe(true);
+    for (const [field, value] of Object.entries(good)) {
+      expect((tradingEngine.state as any)[field]).toBe(value);
+    }
+    const restore = await tradingEngine.toggle(snapshot as any);
+    expect(restore.ok).toBe(true);
+  });
+
+  it('L12 (2026-10-12): initialize() coerces a corrupted persisted tradingState to TRADING_PAUSED (fail-closed)', async () => {
+    await db.update(schema.settings).set({ tradingState: 'SOME_CORRUPT_VALUE' }).run();
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+    tradingEngine.state.emergencyStopActive = false;
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await tradingEngine.initialize();
+
+    expect(tradingEngine.state.tradingState).toBe('TRADING_PAUSED');
+    expect(tradingEngine.state.emergencyStopActive).toBe(false);
+    const joinedWarnings = warnSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(joinedWarnings).toContain('INVALID tradingState');
+    expect(joinedWarnings).toContain('SOME_CORRUPT_VALUE');
+    warnSpy.mockRestore();
+
+    // The corrupt row is repaired in the DB too, so a restart never flips back to garbage.
+    const [row] = await db.select().from(schema.settings).limit(1);
+    expect(row.tradingState).toBe('TRADING_PAUSED');
+
+    await tradingEngine.setTradingState('TRADING_ENABLED', { reason: 'cleanup', actor: 'tester' });
+  });
+
+  it('L12 (2026-10-12): initialize() leaves valid persisted trading states untouched', async () => {
+    for (const valid of ['TRADING_ENABLED', 'TRADING_PAUSED', 'EMERGENCY_STOP'] as const) {
+      await db.update(schema.settings).set({ tradingState: valid }).run();
+      tradingEngine.state.tradingState = 'TRADING_ENABLED';
+      tradingEngine.state.emergencyStopActive = false;
+      await tradingEngine.initialize();
+      expect(tradingEngine.state.tradingState).toBe(valid);
+      expect(tradingEngine.state.emergencyStopActive).toBe(valid === 'EMERGENCY_STOP');
+    }
+    await tradingEngine.setTradingState('TRADING_ENABLED', { reason: 'cleanup', actor: 'tester' });
+  });
 });
 
 describe('TradingEngine.cancelAllOpenOrders - P1 CANCEL_REQUESTED (2026-10-05)', () => {
