@@ -74,6 +74,7 @@
   "fmpBudgetLockTimeoutMs": 10000,
   "recentCandidatePriorityMaxAgeMs": 300000,
   "confluenceCoordinatorEnabled": true,
+  "researchEquityRiskBasisEnabled": true,
   "confluenceCoordinatorConfidenceThreshold": 0.5,
   "confluenceCoordinatorCooldownMs": 60000,
   "consensusMaxProviders": 2,

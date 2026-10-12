@@ -42,8 +42,14 @@ describe('RiskEngine loss/rate gates vs protective exits', () => {
     const { getTradingDateStr } = await import('../core/TradingCalendar');
     const { BrokerManager } = await import('../../brokers/BrokerManager');
     await db.insert(schema.settings).values({
-      tradingMode: 'Paper', autoBotEnabled: true, budget: 100000, maxTradeSize: 3000,
+      tradingMode: 'Paper', autoBotEnabled: true, budget: 1000, maxTradeSize: 3000,
       peakEquity: 1_000_000_000, maxOrdersPerMinute: 0,
+    });
+    // Research-basis trip: $1,000 budget, a -$200 realized loss today -> 20% drawdown and $200 daily loss.
+    await db.insert(schema.trades).values({
+      id: 'lossgates-seed-sell', symbol: 'MSFT', side: 'SELL', quantity: 1, price: 300, status: 'FILLED',
+      timestamp: new Date().toISOString(), filledAt: new Date().toISOString(), profitLoss: -200,
+      executionEnvironment: 'PAPER', traceId: 'lossgates-seed-trace',
     });
     tradingEngine.state.dayStartDateStr = getTradingDateStr();
     tradingEngine.state.dayStartEquity = 1_000_000_000; // equity far below baseline -> daily_loss trips

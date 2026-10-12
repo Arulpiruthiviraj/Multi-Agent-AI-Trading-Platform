@@ -13,6 +13,7 @@
  * ==========================================================
  */
 import { verifyAndConsumeProtectiveExitSeal } from '../core/protectiveExitSeal';
+import { computeResearchEquity, type ResearchEquitySnapshot } from '../risk/researchEquity';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { db } from '../db';
@@ -529,6 +530,25 @@ export class RiskEngine {
             // time, which would reset this baseline mid-session instead of at the real start of
             // the trading day.
             const equityNow = accountEquity;
+            // 2026-10-12 research-capital basis: daily-loss and drawdown measure Argus's own P&L on
+            // settings.budget, not the ~$1M simulated broker account. Replay keeps its own accounting.
+            let researchSnap: ResearchEquitySnapshot | null = null;
+            if (tradingSafety.researchEquityRiskBasisEnabled && !replay) {
+                try {
+                    const closedRows = await db.select({ profitLoss: schema.trades.profitLoss, filledAt: schema.trades.filledAt })
+                        .from(schema.trades)
+                        .where(and(eq(schema.trades.side, 'SELL'), eq(schema.trades.status, 'FILLED'), eq(schema.trades.executionEnvironment, 'PAPER'), isNotNull(schema.trades.profitLoss)));
+                    const todayNy = getTradingDateStr(new Date(nowMs));
+                    researchSnap = computeResearchEquity({
+                        budget: Number(settings[0]?.budget ?? tradingEngine.state.budget),
+                        closedTrades: closedRows,
+                        positions: (portfolio.positions || []) as any,
+                        isToday: (iso: string) => getTradingDateStr(new Date(iso)) === todayNy,
+                    });
+                } catch (e) {
+                    console.error('[RiskEngine] research-equity basis unavailable - falling back to broker equity (stricter of neither; gate detail records it)', e);
+                }
+            }
             const todayStr = getTradingDateStr(new Date(nowMs));
             if (tradingEngine.state.dayStartDateStr !== todayStr) {
                 // 2026-10-05 P1 fix: the baseline was in-memory only — a mid-day restart
@@ -560,13 +580,13 @@ export class RiskEngine {
                 tradingEngine.state.currentDailyLoss = 0;
             }
             const dayStartEquity = tradingEngine.state.dayStartEquity ?? equityNow;
-            const dailyLoss = Math.max(0, dayStartEquity - equityNow);
+            const dailyLoss = researchSnap ? researchSnap.dailyLoss : Math.max(0, dayStartEquity - equityNow);
             tradingEngine.state.currentDailyLoss = dailyLoss;
             const dailyLossKillSwitchThreshold = dailyLossLimitDollars * tradingSafety.dailyLossKillSwitchFraction;
             const dailyLossRawPassed = dailyLoss < dailyLossKillSwitchThreshold;
             const dailyLossExempt = !dailyLossRawPassed && isSealedProtectiveSell();
             const dailyLossPassed = dailyLossRawPassed || dailyLossExempt;
-            recordGate('daily_loss', dailyLossPassed, { protectiveExitExempt: dailyLossExempt, dailyLoss, threshold: dailyLossKillSwitchThreshold, limit: dailyLossLimitDollars, restrictedLiveModeActive: restrictedLiveCaps.restricted, replay: !!replay });
+            recordGate('daily_loss', dailyLossPassed, { protectiveExitExempt: dailyLossExempt, basis: researchSnap ? 'RESEARCH' : 'BROKER', dailyLoss, threshold: dailyLossKillSwitchThreshold, limit: dailyLossLimitDollars, restrictedLiveModeActive: restrictedLiveCaps.restricted, replay: !!replay });
             const dailyLossReason = `Daily Loss Kill-Switch: -$${dailyLoss.toFixed(2)} reached ${tradingSafety.dailyLossKillSwitchFraction * 100}% of the $${dailyLossLimitDollars}${restrictedLiveCaps.restricted ? ' (restricted live mode cap)' : ''}${replay ? ' (replay config)' : ''} daily loss limit. All new trades blocked until tomorrow or a manual reset.`;
 
             // 2a-2. Consecutive-loss circuit breaker - real realized P&L from the last three
@@ -596,7 +616,11 @@ export class RiskEngine {
             // very different) starting capital can no longer be measured against a stale live peak.
             const maxDrawdownPct = settings[0]?.maxPortfolioDrawdownPct ?? 0.15;
             let peakEquity: number;
-            if (replay) {
+            let drawdownEquity = equityNow;
+            if (researchSnap) {
+                peakEquity = researchSnap.peakEquity;
+                drawdownEquity = researchSnap.equity;
+            } else if (replay) {
                 if (replay.peakEquity == null || equityNow > replay.peakEquity) replay.peakEquity = equityNow;
                 peakEquity = replay.peakEquity;
             } else {
@@ -606,11 +630,11 @@ export class RiskEngine {
                     try { await db.update(schema.settings).set({ peakEquity }).run(); } catch (e) { console.error('[Risk Engine] Failed to persist new peak equity', e); }
                 }
             }
-            const drawdownPct = peakEquity > 0 ? Math.max(0, (peakEquity - equityNow) / peakEquity) : 0;
+            const drawdownPct = peakEquity > 0 ? Math.max(0, (peakEquity - drawdownEquity) / peakEquity) : 0;
             const drawdownRawPassed = drawdownPct < maxDrawdownPct;
             const drawdownExempt = !drawdownRawPassed && isSealedProtectiveSell();
             const drawdownPassed = drawdownRawPassed || drawdownExempt;
-            recordGate('portfolio_drawdown', drawdownPassed, { protectiveExitExempt: drawdownExempt, drawdownPct, maxDrawdownPct, peakEquity, equityNow, replay: !!replay });
+            recordGate('portfolio_drawdown', drawdownPassed, { protectiveExitExempt: drawdownExempt, basis: researchSnap ? 'RESEARCH' : 'BROKER', drawdownPct, maxDrawdownPct, peakEquity, equityNow: drawdownEquity, replay: !!replay });
             const drawdownReason = `Portfolio drawdown ${(drawdownPct * 100).toFixed(1)}% from peak equity $${peakEquity.toFixed(2)} exceeds the configured ${(maxDrawdownPct * 100).toFixed(0)}% limit. All new trades blocked pending manual review.`;
 
             // 2a-4. Order-rate limit - counts real risk_assessments rows created in the last 60
