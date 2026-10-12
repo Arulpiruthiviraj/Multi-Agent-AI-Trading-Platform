@@ -28,6 +28,9 @@ export interface VectorBTStatus {
 }
 
 const FORBIDDEN_KEYS = ['code', 'python', 'script', 'eval', 'exec', 'broker', 'placeOrder', 'submitOrder'];
+// 2026-10-12 defect hunt (L7): grace window between SIGTERM and the SIGKILL escalation,
+// matching RemoteOperationsService's SIGKILL_GRACE_MS exactly.
+const SIGKILL_GRACE_MS = 5000;
 
 export function assertAllowlistedJob(job: string): void {
   if (!researchSafety.allowlistedJobs.includes(job)) {
@@ -60,14 +63,21 @@ export async function runResearchCli(payload: Record<string, unknown>, timeoutMs
     const child = spawn(py, [cliPath()], { stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
     const t = setTimeout(() => {
+      // SIGTERM first, then escalate to SIGKILL after the grace window if the child
+      // ignores it - matches RemoteOperationsService's timeout pattern exactly.
       child.kill('SIGTERM');
+      killTimer = setTimeout(() => {
+        if (!child.killed) child.kill('SIGKILL');
+      }, SIGKILL_GRACE_MS);
       reject(new Error('research python timeout'));
     }, timeoutMs);
     child.stdout.on('data', (d) => { stdout += String(d); });
     child.stderr.on('data', (d) => { stderr += String(d); });
     child.on('error', (err) => {
       clearTimeout(t);
+      if (killTimer) clearTimeout(killTimer);
       resolve({
         ok: false,
         error: err.message,
@@ -76,6 +86,7 @@ export async function runResearchCli(payload: Record<string, unknown>, timeoutMs
     });
     child.on('close', (code) => {
       clearTimeout(t);
+      if (killTimer) clearTimeout(killTimer);
       const trimmed = stdout.trim();
       if (!trimmed) {
         resolve({

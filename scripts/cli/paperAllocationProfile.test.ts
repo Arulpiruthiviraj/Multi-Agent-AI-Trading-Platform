@@ -36,3 +36,35 @@ it('does not claim success when the settings readback disagrees', async () => {
     .mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce(settings);
   await expect(paperAllocationProfile(client, profile.budget, true)).rejects.toThrow('persisted readback differs');
 });
+
+it.each([0, -5, NaN, Infinity])('rejects an invalid budget (%s) before touching any API', async (budget) => {
+  const client = vi.fn();
+  await expect(paperAllocationProfile(client, budget as number)).rejects.toThrow('Invalid PAPER allocation profile.');
+  expect(client).not.toHaveBeenCalled();
+});
+
+it.each([0, -10, NaN])('rejects an unusable order ceiling in settings (maxTradeSize=%s)', async (maxTradeSize) => {
+  const bad = { ...settings, maxTradeSize: maxTradeSize as number };
+  const client = vi.fn().mockResolvedValueOnce(bad).mockResolvedValueOnce(status);
+  await expect(paperAllocationProfile(client, profile.budget)).rejects.toThrow('Current order ceiling unavailable.');
+  expect(client).toHaveBeenCalledTimes(2);
+});
+
+it('refuses when the settings-side mode is LIVE even if runtime status looks PAPER', async () => {
+  const liveSettings = { ...settings, tradingMode: 'LIVE' };
+  const client = vi.fn().mockResolvedValueOnce(liveSettings).mockResolvedValueOnce(status);
+  await expect(paperAllocationProfile(client, profile.budget, true)).rejects.toThrow('No settings changed');
+  expect(client).toHaveBeenCalledTimes(2);
+});
+
+it('refuses when the settings-side autoBotEnabled is true even if runtime status looks disabled', async () => {
+  const enabledSettings = { ...settings, autoBotEnabled: true };
+  const client = vi.fn().mockResolvedValueOnce(enabledSettings).mockResolvedValueOnce(status);
+  await expect(paperAllocationProfile(client, profile.budget, true)).rejects.toThrow('No settings changed');
+  expect(client).toHaveBeenCalledTimes(2);
+});
+
+it('refuses when runtime status is missing entirely', async () => {
+  const client = vi.fn().mockResolvedValueOnce(settings).mockResolvedValueOnce(null);
+  await expect(paperAllocationProfile(client, profile.budget)).rejects.toThrow('No settings changed');
+});

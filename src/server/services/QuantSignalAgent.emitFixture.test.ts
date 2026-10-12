@@ -155,6 +155,62 @@ describe('QuantSignalAgent emit fixture (strategy + EV satisfied)', () => {
     expect(mine.confidence).toBeGreaterThanOrEqual(0.6);
   });
 
+  it('M1: withholds emission when isLiveCheck flips false between the early check and the point of emission', async () => {
+    stubMarketData();
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+
+    const ideas: any[] = [];
+    const noTrades: any[] = [];
+    const onIdea = (p: any) => ideas.push(p);
+    const onNoTrade = (p: any) => noTrades.push(p);
+    eventBus.subscribe('TRADE_IDEA_GENERATED', onIdea);
+    eventBus.subscribe('DESK_NO_TRADE', onNoTrade);
+    try {
+      const agent = new QuantSignalAgent();
+      // The FIRST isLiveCheck() call (the early pre-await check) reports live; every
+      // later call reports expired - simulating the scheduler quarantining the
+      // evaluation in flight, after the early check but before the point of emission.
+      // Without the 2026-10-12 final point-of-emission gate this idea WOULD emit (the
+      // early check passed), so this test discriminates the final gate directly.
+      let calls = 0;
+      const result = await agent.evaluateSymbol('QFIX', { emitIdeas: true, isLiveCheck: () => ++calls <= 1 });
+      expect(result).not.toBeNull();
+      const mine = ideas.find(i => i.symbol === 'QFIX' && i.agent === 'QuantEngine');
+      expect(mine).toBeUndefined();
+      const withheld = noTrades.find(n => n.symbol === 'QFIX' && n.code === 'SCHEDULER_EVALUATION_NOT_LIVE');
+      expect(withheld).toBeDefined();
+      // Exactly two checks: the early pre-await check plus the final point-of-emission
+      // gate, with no await between the final check and the (withheld) emit.
+      expect(calls).toBe(2);
+    } finally {
+      eventBus.unsubscribe('TRADE_IDEA_GENERATED', onIdea);
+      eventBus.unsubscribe('DESK_NO_TRADE', onNoTrade);
+    }
+  });
+
+  it('M1: still emits when isLiveCheck stays live through the point of emission', async () => {
+    stubMarketData();
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+
+    const received: any[] = [];
+    const listener = (idea: any) => received.push(idea);
+    eventBus.subscribe('TRADE_IDEA_GENERATED', listener);
+    try {
+      const agent = new QuantSignalAgent();
+      const result = await agent.evaluateSymbol('QFIX', { emitIdeas: true, isLiveCheck: () => true });
+      expect(result).not.toBeNull();
+      const mine = received.find(i => i.symbol === 'QFIX' && i.agent === 'QuantEngine');
+      expect(mine).toBeDefined();
+      expect(mine.side).toBe('BUY');
+    } finally {
+      eventBus.unsubscribe('TRADE_IDEA_GENERATED', listener);
+    }
+  });
+
   it('withholds emission when the scheduler reports the evaluation not live (2026-10-11 timeliness invariant)', async () => {
     stubMarketData();
     const { tradingEngine } = await import('../engines/TradingEngine');

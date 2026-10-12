@@ -162,6 +162,21 @@ export function stopObservabilityRetentionSweep(): void {
   }
 }
 
+/**
+ * 2026-10-12 (L6): the batch-flush timer was never cleared. Called during the graceful-shutdown
+ * drain BEFORE the SQLite checkpoint/close - clears the timer and performs a final flush of any
+ * pending events so nothing queued in memory is dropped on shutdown. Safe to call when the
+ * queue is empty. (The retention sweep has its own stopObservabilityRetentionSweep(), already
+ * wired into the shutdown drain.)
+ */
+export async function stopObservabilityStore(): Promise<void> {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  await flushObservabilityStore();
+}
+
 /** Test hooks — never used on the live path. */
 export function setObservabilityPersistForTests(fn: ((batch: ObservabilityEventRow[]) => Promise<void>) | null): void {
   persistImpl = fn ?? defaultPersist;

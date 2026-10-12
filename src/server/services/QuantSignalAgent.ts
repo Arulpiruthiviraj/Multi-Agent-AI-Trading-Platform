@@ -1416,86 +1416,107 @@ export class QuantSignalAgent {
       // quant_assessments persistence below (outside this whole if/else) still runs unaffected, so
       // this suppression remains fully visible to missed-opportunity forensics rather than vanishing.
       if (!confluenceGuardSuppresses) {
-      eventBus.emitTradeIdea({
-        traceId, symbol, side: idea.side, confidence: idea.confidence,
-        currentPrice, reasoning: idea.reasoning, agent: 'QuantEngine',
-        origin: 'QUANT_STRATEGY', // Phase 3 idea provenance: validated-quant idea path (real strategyId above; producer allowlist + lifecycle decide authority, not this tag)
-        // Real strategy identity - survives independent of whether this idea ended up EV-backed
-        // or cold-start-bootstrapped (see resolvedStrategyId's own comment above for why the
-        // previous quantDetail.strategyEvaluation.strategy path silently dropped this for the
-        // cold-start case, which is the overwhelming majority of real production volume today).
-        strategyId: resolvedStrategyId,
-        quantDetail: {
-          regime,
-          internalEnsemble,
-          strategyEvaluation: matchedStrategyEvaluation,
-          groupedScores: groupedScores[idea.side],
-          contradictions: matchedStrategyEvaluation?.contradictions ?? [],
-          aiContradictionAnalysis,
-          featureSnapshot: snapshotFromStrategyContext({
-            ctx: strategyContext,
-            evaluations: strategyEvaluations,
-            groupedScores,
-            bars,
-          }),
-          ensembleRanking: ranked.map(e => ({
-            strategy: e.strategy,
-            regimeRelevance: e.regimeRelevance,
-            ensembleScore: e.ensembleScore,
-            setupScore: e.setupScore,
-            confidence: e.confidence,
-          })),
-          dataQuality,
-          newsCatalysts: catalysts.slice(0, 5),
-          tradeThesis: assembleTradeThesis({
-            symbol,
-            ctx: strategyContext,
-            evaluation: matchedStrategyEvaluation,
-            ideaSide: idea.side,
-            reasonsNotToTrade: [
-              ...(matchedStrategyEvaluation?.contradictions ?? []),
-              ...(matchedStrategyEvaluation?.conditionsFailed.map(c => `Unmet: ${c}`) ?? []),
-              ...(catalysts.length === 0 ? ['No contemporaneous news catalyst (not required, but listed as why-not)'] : []),
-            ],
-            relativeStrengthVsSpy: strategyContext.marketContext.relativeStrengthVsSPY?.relativeStrengthPct ?? null,
-            relativeStrengthVsSector: strategyContext.marketContext.relativeStrengthVsSector?.relativeStrengthPct ?? null,
-            vwapDistancePct: strategyContext.volume.vwap.distancePct,
-            catalystContribution: catalysts[0]?.contribution ?? null,
-          }),
-          eliteTraderDecision: buildEliteTraderDecision({
-            symbol,
+      // 2026-10-12 (M1, scheduler timeliness invariant): FINAL single point-of-emission
+      // gate. The options?.isLiveCheck check at the top of this branch ran BEFORE several
+      // awaits (internal-ensemble qualification, feature-snapshot assembly), and the
+      // scheduler's predicate can flip false in between; the late-settle discard only
+      // drops the returned evaluation VALUE - it cannot recall an idea already emitted.
+      // So the predicate is re-checked HERE, immediately before emitTradeIdea, with NO
+      // intervening await, and an evaluation that expired in flight is withheld (honest
+      // DESK_NO_TRADE, same code as the early check) instead of emitting as if current.
+      // isLiveCheck absent => live (legacy callers keep the existing behavior exactly).
+      if (options?.isLiveCheck && !options.isLiveCheck()) {
+        eventBus.emit(EVENTS.DESK_NO_TRADE, {
+          traceId, symbol,
+          code: 'SCHEDULER_EVALUATION_NOT_LIVE',
+          reason: 'Quant strategy candidate withheld at the point of emission: the priority scheduler no longer considers this evaluation live (it expired in flight after the earlier check) - emitting it would present a stale evaluation as current.',
+        });
+        observeSafe(() => structuredLogger.info('quant_idea_withheld_not_live', {
+          category: 'DISCOVERY', eventType: 'QUANT_IDEA_WITHHELD_NOT_LIVE',
+          traceId, symbol, strategy: idea.strategy, side: idea.side,
+        }));
+      } else {
+        eventBus.emitTradeIdea({
+          traceId, symbol, side: idea.side, confidence: idea.confidence,
+          currentPrice, reasoning: idea.reasoning, agent: 'QuantEngine',
+          origin: 'QUANT_STRATEGY', // Phase 3 idea provenance: validated-quant idea path (real strategyId above; producer allowlist + lifecycle decide authority, not this tag)
+          // Real strategy identity - survives independent of whether this idea ended up EV-backed
+          // or cold-start-bootstrapped (see resolvedStrategyId's own comment above for why the
+          // previous quantDetail.strategyEvaluation.strategy path silently dropped this for the
+          // cold-start case, which is the overwhelming majority of real production volume today).
+          strategyId: resolvedStrategyId,
+          quantDetail: {
             regime,
-            evaluation: matchedStrategyEvaluation,
+            internalEnsemble,
+            strategyEvaluation: matchedStrategyEvaluation,
+            groupedScores: groupedScores[idea.side],
+            contradictions: matchedStrategyEvaluation?.contradictions ?? [],
+            aiContradictionAnalysis,
+            featureSnapshot: snapshotFromStrategyContext({
+              ctx: strategyContext,
+              evaluations: strategyEvaluations,
+              groupedScores,
+              bars,
+            }),
+            ensembleRanking: ranked.map(e => ({
+              strategy: e.strategy,
+              regimeRelevance: e.regimeRelevance,
+              ensembleScore: e.ensembleScore,
+              setupScore: e.setupScore,
+              confidence: e.confidence,
+            })),
             dataQuality,
-            catalystContribution: catalysts[0]?.contribution ?? null,
-            relativeStrengthVsSpy: strategyContext.marketContext.relativeStrengthVsSPY?.relativeStrengthPct ?? null,
-            vwapDistancePct: strategyContext.volume.vwap.distancePct,
-            contradictions: matchedStrategyEvaluation?.contradictions,
-            newsEmitsTradeIdeas: newsAgentEmitsTradeIdeas(),
-          }),
-        },
-      });
-      emittedTradeIdea = true;
-      notePipelineAgentSuccess('QuantEngine');
-      // Master Transformation Mandate Part 7/9 (2026-09-13): real strategy-diversity evidence,
-      // reusing internalEnsemble - already computed above for the confluence guard, never a second
-      // Java call - passed through to the Forecast Engine so effectiveIndependentCount/familyCount
-      // on a persisted forecast are the SAME canonical measurement ChiefTrader's own independent-
-      // qualification bar uses, never a duplicate or approximated algorithm.
-      // resolveEnsembleEvidenceForForecast() (internalQuantEnsemble.ts, independently unit tested)
-      // owns the sideMismatch-exclusion decision. Fire-and-forget: this is real telemetry/
-      // provenance, not a gate - it must never add latency or a new failure mode to the live
-      // idea-emission path it rides along with, and it only ever fires at real idea-emission
-      // cadence (bounded by this pipeline's own existing thresholds/cooldowns), never
-      // per-evaluation-cycle.
-      void buildForecast({
-        agentName: 'QuantEngine',
-        strategyId: resolvedStrategyId,
-        symbol,
-        direction: idea.side as 'BUY' | 'SELL',
-        regime: regime.regime,
-        ensembleEvidence: resolveEnsembleEvidenceForForecast(internalEnsemble),
-      }).catch((e) => console.error(`[QuantSignalAgent] Forecast build failed for ${symbol}`, e));
+            newsCatalysts: catalysts.slice(0, 5),
+            tradeThesis: assembleTradeThesis({
+              symbol,
+              ctx: strategyContext,
+              evaluation: matchedStrategyEvaluation,
+              ideaSide: idea.side,
+              reasonsNotToTrade: [
+                ...(matchedStrategyEvaluation?.contradictions ?? []),
+                ...(matchedStrategyEvaluation?.conditionsFailed.map(c => `Unmet: ${c}`) ?? []),
+                ...(catalysts.length === 0 ? ['No contemporaneous news catalyst (not required, but listed as why-not)'] : []),
+              ],
+              relativeStrengthVsSpy: strategyContext.marketContext.relativeStrengthVsSPY?.relativeStrengthPct ?? null,
+              relativeStrengthVsSector: strategyContext.marketContext.relativeStrengthVsSector?.relativeStrengthPct ?? null,
+              vwapDistancePct: strategyContext.volume.vwap.distancePct,
+              catalystContribution: catalysts[0]?.contribution ?? null,
+            }),
+            eliteTraderDecision: buildEliteTraderDecision({
+              symbol,
+              regime,
+              evaluation: matchedStrategyEvaluation,
+              dataQuality,
+              catalystContribution: catalysts[0]?.contribution ?? null,
+              relativeStrengthVsSpy: strategyContext.marketContext.relativeStrengthVsSPY?.relativeStrengthPct ?? null,
+              vwapDistancePct: strategyContext.volume.vwap.distancePct,
+              contradictions: matchedStrategyEvaluation?.contradictions,
+              newsEmitsTradeIdeas: newsAgentEmitsTradeIdeas(),
+            }),
+          },
+        });
+        emittedTradeIdea = true;
+        notePipelineAgentSuccess('QuantEngine');
+        // Master Transformation Mandate Part 7/9 (2026-09-13): real strategy-diversity evidence,
+        // reusing internalEnsemble - already computed above for the confluence guard, never a second
+        // Java call - passed through to the Forecast Engine so effectiveIndependentCount/familyCount
+        // on a persisted forecast are the SAME canonical measurement ChiefTrader's own independent-
+        // qualification bar uses, never a duplicate or approximated algorithm.
+        // resolveEnsembleEvidenceForForecast() (internalQuantEnsemble.ts, independently unit tested)
+        // owns the sideMismatch-exclusion decision. Fire-and-forget: this is real telemetry/
+        // provenance, not a gate - it must never add latency or a new failure mode to the live
+        // idea-emission path it rides along with, and it only ever fires at real idea-emission
+        // cadence (bounded by this pipeline's own existing thresholds/cooldowns), never
+        // per-evaluation-cycle.
+        void buildForecast({
+          agentName: 'QuantEngine',
+          strategyId: resolvedStrategyId,
+          symbol,
+          direction: idea.side as 'BUY' | 'SELL',
+          regime: regime.regime,
+          ensembleEvidence: resolveEnsembleEvidenceForForecast(internalEnsemble),
+        }).catch((e) => console.error(`[QuantSignalAgent] Forecast build failed for ${symbol}`, e));
+      }
       }
       }
       } // closes the isLiveCheck else: a non-live evaluation skips the entire emission path

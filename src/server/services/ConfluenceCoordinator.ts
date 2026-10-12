@@ -93,7 +93,10 @@ export class ConfluenceCoordinator {
   private listening = false;
   private lastTriggeredAt: Map<string, number> = new Map();
   private readonly onTradeIdea = (idea: TradeIdeaPayload) => {
-    void this.maybeTrigger(idea);
+    // 2026-10-12 defect hunt (L5): this fire-and-forget call rejected unhandled when
+    // maybeTrigger itself threw outside its inner per-job handlers. Catch and log so the
+    // listener promise can never reject unhandled.
+    this.maybeTrigger(idea).catch((err: unknown) => observeSafe(() => structuredLogger.error('confluence_trigger_failed', { category: 'CONSENSUS', eventType: 'CONFLUENCE_TRIGGER_FAILED', symbol: String(idea?.symbol ?? ''), error: String((err as { message?: unknown })?.message ?? err) })));
   };
 
   start(): void {
