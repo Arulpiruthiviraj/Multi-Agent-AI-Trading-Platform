@@ -57,6 +57,8 @@
   "aiProviderTimeoutMs": 20000,
   "quantContradictionMaxWaitMs": 8000,
   "quantIntradayFetchMaxWaitMs": 8000,
+  "workCycleSlowWarnMs": 10000,
+  "calibrationFetchPageRows": 2000,
   "quantOnDemandInflightMaxAgeMs": 600000,
   "aiProviderAuthFailureCooldownMs": 300000,
   "aiProviderUnreachableCooldownMs": 300000,

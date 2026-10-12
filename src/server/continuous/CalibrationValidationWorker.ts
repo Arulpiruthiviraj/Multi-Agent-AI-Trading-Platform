@@ -6,6 +6,7 @@
  * ChiefTraderAgent/RiskEngine/OMS/BrokerManager, never emits a trade-affecting event. Starting or
  * stopping this worker has zero effect on live consensus.
  */
+import { timedWorkCycle } from '../observability/workCycle';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 import { runCalibrationValidationCycle } from './CalibrationCandidateBuilder';
 import { createSingleFlightGuard, type SingleFlightGuard } from '../core/singleFlightInterval';
@@ -41,7 +42,7 @@ class CalibrationValidationWorker {
 
   async runOnce(): Promise<void> {
     await this.guard.run(async () => {
-      const results = await runCalibrationValidationCycle();
+      const results = await timedWorkCycle('CalibrationValidationWorker', () => runCalibrationValidationCycle());
       this.lastRunAt = new Date().toISOString();
       this.lastRunCount = results.length;
     });

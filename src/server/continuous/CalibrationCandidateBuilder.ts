@@ -27,7 +27,7 @@
  */
 import { db } from '../db';
 import { agentPredictions, predictionOutcomes, kronosPredictions, agentConfidenceCalibration } from '../db/schema';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, gt, sql } from 'drizzle-orm';
 import { CONFIDENCE_BUCKETS, type ConfidenceBucket, calibratedConfidenceForBucket, bucketMidpoint } from '../services/ConfidenceCalibration';
 import { rawVsEffectiveDirectional, type ClusterableRow } from '../research/effectiveSampleSize';
 import { independenceClusterGapMs, secondaryGroupKey } from '../research/predictionIndependencePolicy';
@@ -76,36 +76,75 @@ interface RawRow {
 
 /** Exported for calibrationDriftReport.ts (Phase 6) - re-fetches the same raw rows this module
  * already builds calibration candidates from, so the drift report never duplicates this query. */
-export async function fetchAgentPredictionRows(agentName: string, bucket: ConfidenceBucket): Promise<RawRow[]> {
-  const rows = await db.select({
-    symbol: agentPredictions.symbol,
-    side: agentPredictions.prediction,
-    timestamp: agentPredictions.timestamp,
-    traceId: agentPredictions.traceId,
-    reasoning: agentPredictions.reasoning,
-    regime: agentPredictions.regime,
-    confidence: agentPredictions.confidence,
-    predictionId: agentPredictions.id,
-    outcome: predictionOutcomes.outcome,
-  })
-    .from(agentPredictions)
-    .innerJoin(predictionOutcomes, and(
-      eq(predictionOutcomes.predictionId, agentPredictions.id),
-      eq(predictionOutcomes.sourceTable, 'agent_predictions'),
-    ))
-    .where(eq(agentPredictions.agentName, agentName));
+/** Yields a real macrotask turn so timers, sockets and health checks can run between SQLite calls. */
+const yieldToEventLoop = (): Promise<void> => new Promise<void>((resolve) => setImmediate(resolve));
 
-  return rows
-    .filter((r) => !r.traceId || !r.traceId.startsWith(TELEMETRY_PULSE_TRACE_PREFIX))
-    .filter((r) => r.confidence >= bucket.low && (r.confidence < bucket.high || bucket.high >= 1))
-    .map((r) => ({
-      symbol: r.symbol,
-      side: r.side,
-      timestampMs: new Date(r.timestamp).getTime(),
-      outcome: r.outcome as 'WIN' | 'LOSS' | 'N_A',
-      reasoning: r.reasoning,
-      regime: r.regime,
-    }));
+interface RawRowWithConfidence extends RawRow {
+  confidence: number;
+}
+
+/**
+ * 2026-10-12 (event-loop stall fix): ALL of one agent's evaluated predictions, loaded ONCE and in small
+ * pages (calibrationFetchPageRows), yielding to the event loop between pages. Previously the SQL filtered
+ * only by agent and this ran once per (agent, bucket) row - 38 full re-loads per 15-minute cycle, as one
+ * uninterrupted synchronous task (~3.5-4 min live, with /health dead and PortfolioMonitor reviews missed).
+ * Ordering is rowid-ascending (insertion order), which preserves the row order downstream tie-handling saw.
+ * The telemetry-pulse exclusion is unchanged.
+ */
+async function loadAgentRowsAll(agentName: string): Promise<RawRowWithConfidence[]> {
+  const pageRows = tradingSafety.calibrationFetchPageRows;
+  const out: RawRowWithConfidence[] = [];
+  let lastRowid = 0;
+  for (;;) {
+    const rows = await db.select({
+      rowid: sql<number>`"agent_predictions"."rowid"`,
+      symbol: agentPredictions.symbol,
+      side: agentPredictions.prediction,
+      timestamp: agentPredictions.timestamp,
+      traceId: agentPredictions.traceId,
+      reasoning: agentPredictions.reasoning,
+      regime: agentPredictions.regime,
+      confidence: agentPredictions.confidence,
+      outcome: predictionOutcomes.outcome,
+    })
+      .from(agentPredictions)
+      .innerJoin(predictionOutcomes, and(
+        eq(predictionOutcomes.predictionId, agentPredictions.id),
+        eq(predictionOutcomes.sourceTable, 'agent_predictions'),
+      ))
+      .where(and(eq(agentPredictions.agentName, agentName), sql`"agent_predictions"."rowid" > ${lastRowid}`))
+      .orderBy(sql`"agent_predictions"."rowid"`)
+      .limit(pageRows);
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      if (r.traceId && r.traceId.startsWith(TELEMETRY_PULSE_TRACE_PREFIX)) continue;
+      out.push({
+        symbol: r.symbol,
+        side: r.side,
+        timestampMs: new Date(r.timestamp).getTime(),
+        outcome: r.outcome as 'WIN' | 'LOSS' | 'N_A',
+        reasoning: r.reasoning,
+        regime: r.regime,
+        confidence: r.confidence,
+      });
+    }
+    lastRowid = Number(rows[rows.length - 1].rowid);
+    if (rows.length < pageRows) break;
+    await yieldToEventLoop();
+  }
+  return out;
+}
+
+function inBucket<T extends { confidence: number }>(rows: T[], bucket: ConfidenceBucket): T[] {
+  return rows.filter((r) => r.confidence >= bucket.low && (r.confidence < bucket.high || bucket.high >= 1));
+}
+
+function stripConfidence(rows: RawRowWithConfidence[]): RawRow[] {
+  return rows.map(({ confidence: _confidence, ...rest }) => rest);
+}
+
+export async function fetchAgentPredictionRows(agentName: string, bucket: ConfidenceBucket): Promise<RawRow[]> {
+  return stripConfidence(inBucket(await loadAgentRowsAll(agentName), bucket));
 }
 
 /**
@@ -114,28 +153,67 @@ export async function fetchAgentPredictionRows(agentName: string, bucket: Confid
  * via a String(id) map rather than a SQL join. Mirrored here rather than introduced fresh.
  */
 /** Exported for calibrationDriftReport.ts (Phase 6) - see fetchAgentPredictionRows above. */
-export async function fetchKronosRows(bucket: ConfidenceBucket): Promise<RawRow[]> {
-  const kronosRows = await db.select().from(kronosPredictions);
-  const inBucket = kronosRows.filter((k) => k.confidence >= bucket.low && (k.confidence < bucket.high || bucket.high >= 1));
-  if (inBucket.length === 0) return [];
+/**
+ * 2026-10-12: Kronos rows that HAVE an outcome, loaded once and paged (narrow columns only - the table also
+ * holds wide predicted_ohlc/JSON columns that the old `select *` dragged into memory 4x per cycle; live: 229k
+ * predictions but only ~8k outcomes). Same join semantics as before: a prediction without an outcome is skipped.
+ */
+async function loadKronosRowsAll(): Promise<RawRowWithConfidence[]> {
+  const pageRows = tradingSafety.calibrationFetchPageRows;
+  const outcomeById = new Map<string, string>();
+  let lastOutcomeId = 0;
+  for (;;) {
+    const page = await db.select({ id: predictionOutcomes.id, predictionId: predictionOutcomes.predictionId, outcome: predictionOutcomes.outcome })
+      .from(predictionOutcomes)
+      .where(and(eq(predictionOutcomes.sourceTable, 'kronos_predictions'), gt(predictionOutcomes.id, lastOutcomeId)))
+      .orderBy(predictionOutcomes.id)
+      .limit(pageRows);
+    if (page.length === 0) break;
+    for (const o of page) outcomeById.set(o.predictionId, o.outcome);
+    lastOutcomeId = page[page.length - 1].id;
+    if (page.length < pageRows) break;
+    await yieldToEventLoop();
+  }
+  if (outcomeById.size === 0) return [];
 
-  const outcomes = await db.select().from(predictionOutcomes).where(eq(predictionOutcomes.sourceTable, 'kronos_predictions'));
-  const outcomeById = new Map(outcomes.map((o) => [o.predictionId, o]));
-
-  const out: RawRow[] = [];
-  for (const k of inBucket) {
-    const o = outcomeById.get(String(k.id));
-    if (!o) continue;
-    out.push({
-      symbol: k.symbol,
-      side: k.prediction,
-      timestampMs: new Date(k.timestamp).getTime(),
-      outcome: o.outcome as 'WIN' | 'LOSS' | 'N_A',
-      reasoning: null,
-      regime: null,
-    });
+  const out: RawRowWithConfidence[] = [];
+  let lastId = 0;
+  for (;;) {
+    const page = await db.select({
+      id: kronosPredictions.id,
+      symbol: kronosPredictions.symbol,
+      prediction: kronosPredictions.prediction,
+      confidence: kronosPredictions.confidence,
+      timestamp: kronosPredictions.timestamp,
+    })
+      .from(kronosPredictions)
+      .where(gt(kronosPredictions.id, lastId))
+      .orderBy(kronosPredictions.id)
+      .limit(pageRows);
+    if (page.length === 0) break;
+    for (const k of page) {
+      const o = outcomeById.get(String(k.id));
+      if (!o) continue;
+      out.push({
+        symbol: k.symbol,
+        side: k.prediction,
+        timestampMs: new Date(k.timestamp).getTime(),
+        outcome: o as 'WIN' | 'LOSS' | 'N_A',
+        reasoning: null,
+        regime: null,
+        confidence: k.confidence,
+      });
+    }
+    lastId = page[page.length - 1].id;
+    if (page.length < pageRows) break;
+    await yieldToEventLoop();
   }
   return out;
+}
+
+/** Exported for calibrationDriftReport.ts (Phase 6) - see fetchAgentPredictionRows above. */
+export async function fetchKronosRows(bucket: ConfidenceBucket): Promise<RawRow[]> {
+  return stripConfidence(inBucket(await loadKronosRowsAll(), bucket));
 }
 
 /** Exported for calibrationDriftReport.ts (Phase 6) - see fetchAgentPredictionRows above. */
@@ -179,56 +257,71 @@ function computeSymbolConcentration(rows: RawRow[]): Array<{ symbol: string; cou
  */
 export async function buildCalibrationCandidates(now: Date = new Date()): Promise<CalibrationCandidate[]> {
   const active = await db.select().from(agentConfidenceCalibration);
-  const candidates: CalibrationCandidate[] = [];
 
-  for (const row of active) {
-    const bucket: ConfidenceBucket = { low: row.bucketLow, high: row.bucketHigh };
-    let rawRows: RawRow[];
+  // 2026-10-12 (event-loop stall fix): group the active rows by agent so each agent's history is loaded ONCE
+  // per cycle (it used to be re-loaded per bucket), process that agent's buckets, then release it before the
+  // next agent. Candidates are still returned in the original active-row order.
+  const rowsByAgent = new Map<string, number[]>();
+  active.forEach((row, index) => {
+    const list = rowsByAgent.get(row.agentName) ?? [];
+    list.push(index);
+    rowsByAgent.set(row.agentName, list);
+  });
+  const slots: Array<CalibrationCandidate | undefined> = new Array(active.length);
+
+  for (const [agentName, indexes] of rowsByAgent) {
+    let agentRows: RawRowWithConfidence[];
     try {
-      rawRows = row.agentName === 'KronosEngine'
-        ? await fetchKronosRows(bucket)
-        : await fetchAgentPredictionRows(row.agentName, bucket);
+      agentRows = agentName === 'KronosEngine' ? await loadKronosRowsAll() : await loadAgentRowsAll(agentName);
     } catch (e) {
-      logErrorSafely(`[CalibrationCandidateBuilder] failed to fetch rows for ${row.agentName} ${bucket.low}-${bucket.high}`, e);
+      logErrorSafely(`[CalibrationCandidateBuilder] failed to fetch rows for ${agentName}`, e);
       continue;
     }
 
-    const clusterable = toClusterableRows(row.agentName, rawRows);
-    const gapMs = independenceClusterGapMs(row.agentName);
-    const stats = rawVsEffectiveDirectional(clusterable, gapMs);
+    for (const index of indexes) {
+      const row = active[index];
+      const bucket: ConfidenceBucket = { low: row.bucketLow, high: row.bucketHigh };
+      const rawRows: RawRow[] = stripConfidence(inBucket(agentRows, bucket));
 
-    const candidateCalibratedConfidence = calibratedConfidenceForBucket(bucket, stats.effectiveWins, stats.effectiveN - stats.effectiveWins);
+      const clusterable = toClusterableRows(row.agentName, rawRows);
+      const gapMs = independenceClusterGapMs(row.agentName);
+      const stats = rawVsEffectiveDirectional(clusterable, gapMs);
 
-    const directional = rawRows.filter((r) => r.outcome !== 'N_A');
-    const timestamps = directional.map((r) => r.timestampMs).sort((a, b) => a - b);
-    const oldestObservationAt = timestamps.length > 0 ? new Date(timestamps[0]).toISOString() : null;
-    const newestObservationAt = timestamps.length > 0 ? new Date(timestamps[timestamps.length - 1]).toISOString() : null;
-    const isStale = timestamps.length > 0 && (now.getTime() - timestamps[timestamps.length - 1]) > continuousIntelligence.calibrationMaxObservationAgeMs;
+      const candidateCalibratedConfidence = calibratedConfidenceForBucket(bucket, stats.effectiveWins, stats.effectiveN - stats.effectiveWins);
 
-    candidates.push({
-      agentName: row.agentName,
-      bucketLow: bucket.low,
-      bucketHigh: bucket.high,
-      rawN: stats.rawN,
-      rawWins: stats.rawWins,
-      rawWinRate: stats.rawInterval.pointEstimate,
-      effectiveN: stats.effectiveN,
-      effectiveWins: stats.effectiveWins,
-      effectiveWinRate: stats.effectiveInterval.pointEstimate,
-      wilsonLower: stats.effectiveInterval.lower,
-      wilsonUpper: stats.effectiveInterval.upper,
-      inflationFactor: stats.inflationFactor,
-      candidateCalibratedConfidence,
-      currentActiveCalibratedConfidence: row.calibratedConfidence,
-      oldestObservationAt,
-      newestObservationAt,
-      isStale,
-      regimeBreakdown: computeRegimeBreakdown(rawRows),
-      symbolConcentration: computeSymbolConcentration(rawRows),
-    });
+      const directional = rawRows.filter((r) => r.outcome !== 'N_A');
+      const timestamps = directional.map((r) => r.timestampMs).sort((a, b) => a - b);
+      const oldestObservationAt = timestamps.length > 0 ? new Date(timestamps[0]).toISOString() : null;
+      const newestObservationAt = timestamps.length > 0 ? new Date(timestamps[timestamps.length - 1]).toISOString() : null;
+      const isStale = timestamps.length > 0 && (now.getTime() - timestamps[timestamps.length - 1]) > continuousIntelligence.calibrationMaxObservationAgeMs;
+
+      slots[index] = {
+        agentName: row.agentName,
+        bucketLow: bucket.low,
+        bucketHigh: bucket.high,
+        rawN: stats.rawN,
+        rawWins: stats.rawWins,
+        rawWinRate: stats.rawInterval.pointEstimate,
+        effectiveN: stats.effectiveN,
+        effectiveWins: stats.effectiveWins,
+        effectiveWinRate: stats.effectiveInterval.pointEstimate,
+        wilsonLower: stats.effectiveInterval.lower,
+        wilsonUpper: stats.effectiveInterval.upper,
+        inflationFactor: stats.inflationFactor,
+        candidateCalibratedConfidence,
+        currentActiveCalibratedConfidence: row.calibratedConfidence,
+        oldestObservationAt,
+        newestObservationAt,
+        isStale,
+        regimeBreakdown: computeRegimeBreakdown(rawRows),
+        symbolConcentration: computeSymbolConcentration(rawRows),
+      };
+      // Per-bucket clustering/sorting is CPU work on potentially large arrays; give the loop a turn after each.
+      await yieldToEventLoop();
+    }
   }
 
-  return candidates;
+  return slots.filter((c): c is CalibrationCandidate => c !== undefined);
 }
 
 export interface CalibrationPromotionResult {

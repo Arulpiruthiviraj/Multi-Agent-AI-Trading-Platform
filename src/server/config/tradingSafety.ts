@@ -227,6 +227,10 @@ export interface TradingSafety {
    * Same 8000ms precedent as quantContradictionMaxWaitMs.
    */
   quantIntradayFetchMaxWaitMs: number;
+  /** 2026-10-12: a periodic background job whose single run takes at least this long (wall clock) is logged as WORK_CYCLE_SLOW with its CPU share. Observability only; added after two ~4 min CPU-bound engine freezes 15 min apart could not be attributed to any job. */
+  workCycleSlowWarnMs: number;
+  /** 2026-10-12: rows per page when CalibrationCandidateBuilder loads prediction history. Each page is one synchronous SQLite call, so this bounds the longest event-loop block of the 15-minute calibration cycle (which previously held the whole engine for ~3.5-4 min as one uninterrupted task). A latency/safety bound, not a trading threshold. */
+  calibrationFetchPageRows: number;
   /**
    * 2026-10-12: LIVENESS BOUND for ConfluenceCoordinator's per-symbol on-demand Quant in-flight
    * guard. A re-trigger is skipped while the previous on-demand evaluation for that symbol is
@@ -839,6 +843,8 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'aiProviderTimeoutMs',
   'quantContradictionMaxWaitMs',
   'quantIntradayFetchMaxWaitMs',
+  'workCycleSlowWarnMs',
+  'calibrationFetchPageRows',
   'quantOnDemandInflightMaxAgeMs',
   'aiProviderAuthFailureCooldownMs',
   'aiProviderUnreachableCooldownMs',
