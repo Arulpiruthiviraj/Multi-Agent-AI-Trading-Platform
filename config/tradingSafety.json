@@ -137,6 +137,8 @@
   "quantBarsTailFreshnessToleranceMs": 259200000,
   "_quantBarsCoalesceEntryMaxAgeMsComment": "2026-10-10 (defect hunt, Lead 6): liveness bound for an ensureBars() in-flight coalescing entry. The inner provider call has no timeout/cancel path (fetch/IBKR), so a stalled provider call would otherwise wedge the window's entry forever and hang every future caller for that window. Past this age the entry is evicted with a loud warn; a later caller starts a fresh inner. Generous on purpose - legitimate multi-page backfills take seconds, not minutes.",
   "quantBarsCoalesceEntryMaxAgeMs": 300000,
+  "_quantBarsInnerFetchTimeoutMsComment": "2026-10-12 (Oct 12 forensic): real bounded timeout for the INNER provider operation inside ensureBarsInner (IBKR/Alpaca), which has no native timeout/cancel path. Must stay well below quantBarsCoalesceEntryMaxAgeMs so a stalled inner fails FIRST with HISTORICAL_INNER_FETCH_TIMEOUT (releasing the coalescing entry) instead of wedging until the caller-side timeout. Liveness bound, not a way to hide the 300s caller timeout.",
+  "quantBarsInnerFetchTimeoutMs": 120000,
   "historicalBarsMemoryCacheMaxEntries": 5000,
   "quantBarsRateLimitBaseBackoffMs": 30000,
   "quantBarsRateLimitMaxBackoffMs": 300000,
