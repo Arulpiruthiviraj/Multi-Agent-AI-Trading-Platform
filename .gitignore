@@ -40,3 +40,4 @@ quant-core-java/target/
 quant-core-java/.mvn/cacerts-with-norton-ca
 .stryker-tmp/
 reports/mutation/
+data/freeze-profiles/
