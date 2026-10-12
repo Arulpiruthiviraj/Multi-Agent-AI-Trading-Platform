@@ -175,9 +175,11 @@ async function main(): Promise<void> {
       iteration: currentIteration,
       rssMb: mu.rss / 1048576,
       heapUsedMb: mu.heapUsed / 1048576,
-      eventLoopP50Ms: eld.percentile(50),
-      eventLoopP95Ms: eld.percentile(95),
-      eventLoopMaxMs: eld.max,
+      // 2026-10-11 (#14): monitorEventLoopDelay returns NANOSECONDS; the fields are
+      // named *Ms, so convert. The old code stored raw nanoseconds (1e6× mislabeled).
+      eventLoopP50Ms: eld.percentile(50) / 1e6,
+      eventLoopP95Ms: eld.percentile(95) / 1e6,
+      eventLoopMaxMs: eld.max / 1e6,
       dbBytes,
       walBytes,
     });
@@ -253,6 +255,30 @@ async function main(): Promise<void> {
 
   const first = samples[0];
   const last = samples[samples.length - 1];
+  // 2026-10-11 (#14): the verdict gates on configured resource bounds IN ADDITION to
+  // zero iteration errors. The old `failedIters.length === 0 ? 'PASS' : 'FAIL'` inferred
+  // PASS merely from zero errors while rssDeltaMb/maxRssMb/maxP95Ms/growthBytes/
+  // maxWalBytes gated nothing. Bounds are env-configured (not literals) so operators
+  // can tighten/loosen per environment without editing the script.
+  const bounds = {
+    maxRssMb: Number(process.env.SOAK_MAX_RSS_MB ?? 2048),
+    maxRssDeltaMb: Number(process.env.SOAK_MAX_RSS_DELTA_MB ?? 512),
+    maxEventLoopP95Ms: Number(process.env.SOAK_MAX_EVENT_LOOP_P95_MS ?? 100),
+    maxDbGrowthBytes: Number(process.env.SOAK_MAX_DB_GROWTH_BYTES ?? 1073741824), // 1 GiB
+    maxWalBytes: Number(process.env.SOAK_MAX_WAL_BYTES ?? 104857600), // 100 MiB
+  };
+  const maxRssMb = Math.max(...samples.map((s) => s.rssMb));
+  const rssDeltaMb = (last?.rssMb ?? 0) - (first?.rssMb ?? 0);
+  const maxP95Ms = Math.max(...samples.map((s) => s.eventLoopP95Ms));
+  const growthBytes = (last?.dbBytes ?? 0) - (first?.dbBytes ?? 0);
+  const maxWalBytes = Math.max(...samples.map((s) => s.walBytes));
+  const boundViolations: string[] = [];
+  if (maxRssMb > bounds.maxRssMb) boundViolations.push(`maxRssMb ${maxRssMb.toFixed(1)} > ${bounds.maxRssMb}`);
+  if (rssDeltaMb > bounds.maxRssDeltaMb) boundViolations.push(`rssDeltaMb ${rssDeltaMb.toFixed(1)} > ${bounds.maxRssDeltaMb}`);
+  if (maxP95Ms > bounds.maxEventLoopP95Ms) boundViolations.push(`maxEventLoopP95Ms ${maxP95Ms.toFixed(1)} > ${bounds.maxEventLoopP95Ms}`);
+  if (growthBytes > bounds.maxDbGrowthBytes) boundViolations.push(`dbGrowthBytes ${growthBytes} > ${bounds.maxDbGrowthBytes}`);
+  if (maxWalBytes > bounds.maxWalBytes) boundViolations.push(`maxWalBytes ${maxWalBytes} > ${bounds.maxWalBytes}`);
+  const stabilityVerdict = failedIters.length === 0 && boundViolations.length === 0 ? 'PASS' : 'FAIL';
   const report = {
     type: 'SOAK_RESULT',
     soakId,
@@ -264,18 +290,18 @@ async function main(): Promise<void> {
     samples: samples.length,
     memory: {
       startRssMb: first?.rssMb, endRssMb: last?.rssMb,
-      maxRssMb: Math.max(...samples.map((s) => s.rssMb)),
-      rssDeltaMb: (last?.rssMb ?? 0) - (first?.rssMb ?? 0),
+      maxRssMb,
+      rssDeltaMb,
       endHeapMb: last?.heapUsedMb,
     },
     eventLoop: {
-      maxP95Ms: Math.max(...samples.map((s) => s.eventLoopP95Ms)),
+      maxP95Ms,
       finalP50Ms: last?.eventLoopP50Ms, finalMaxMs: last?.eventLoopMaxMs,
     },
     db: {
       startBytes: first?.dbBytes, endBytes: last?.dbBytes,
-      growthBytes: (last?.dbBytes ?? 0) - (first?.dbBytes ?? 0),
-      maxWalBytes: Math.max(...samples.map((s) => s.walBytes)),
+      growthBytes,
+      maxWalBytes,
     },
     aiPosture: 'ALL_AI_DOWN_THROUGHOUT (no provider keys in this environment — hardest case for quant-first)',
     activity: {
@@ -283,7 +309,9 @@ async function main(): Promise<void> {
       totalNonFixtureFills: totalFills,
       note: 'Fills are informational only; zero is a legitimate outcome. Activity is proven by quant assessments, idea generation, and consensus evaluations in observability_events.',
     },
-    stabilityVerdict: failedIters.length === 0 ? 'PASS' : 'FAIL',
+    stabilityVerdict,
+    resourceBounds: bounds,
+    boundViolations,
     iterationErrors: failedIters.map((i) => ({ iteration: i.iteration, error: i.error })),
     samplesTail: samples.slice(-5),
   };

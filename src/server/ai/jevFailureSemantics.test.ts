@@ -320,6 +320,12 @@ describe('Jev failure semantics: AI-unavailable-neutral parity for validated qua
     const { bucketFor } = await import('../services/ConfidenceCalibration');
     const { deskIntelligence } = await import('../config/deskIntelligence');
     const { tradingSafety } = await import('../config/tradingSafety');
+    // 2026-10-11: disable the consensus-eval min-interval throttle — sequential
+    // parity scenarios with the same symbol+agent would otherwise hit
+    // `replacedSameAgent && Date.now()-lastEval < interval` and skip evaluation
+    // entirely, hanging the test. The throttle is a production rate-limit, not a
+    // safety gate; disabling it in this isolated test is safe.
+    (tradingSafety as any).consensusEvalMinIntervalMs = 0;
     const { generateTraceId } = await import('../core/traceId');
     const { getTradingDateStr } = await import('../core/TradingCalendar');
     const { SyntheticRandom } = await import('../replay/synthetic/SyntheticRandom');
@@ -425,6 +431,12 @@ describe('Jev failure semantics: AI-unavailable-neutral parity for validated qua
     // fans out to RiskAgent -> OMS, which must not blow up on an uninitialized broker).
     await db.insert(schema.settings).values({
       tradingMode: 'Paper', autoBotEnabled: true, budget: 100000, maxTradeSize: 3000,
+      // 2026-10-11: disable adversarial debate — the parity property under test is
+      // Jev-health vs quant decision, not the debate mechanism. With the consensus
+      // bypass remediated, a single-agent idea would otherwise trigger a debate
+      // (confidence > 0.6) that hangs waiting for AI providers, masking the
+      // INSUFFICIENT_AGENT_PARTICIPATION NO_TRADE this test verifies.
+      adversarialDebateMode: false,
     });
     tradingEngine.state.enabled = true;
     tradingEngine.state.tradingState = 'TRADING_ENABLED';
@@ -479,11 +491,18 @@ describe('Jev failure semantics: AI-unavailable-neutral parity for validated qua
     { label: 'no-api-key', jevBehavior: 'noApiKey' },
   ] as const;
 
+  // 2026-10-11 (consensus-bypass remediation): the pre-2026-10-11 version of this test
+  // asserted approved=true via the remediated direct-approval branch. New behavior: the
+  // single-voice validated quant idea passes the policy prefilter but cannot clear the
+  // min-2-independent-agents floor, so the healthy outcome is a consensus NO_TRADE
+  // (INSUFFICIENT_AGENT_PARTICIPATION). The parity property under test — Jev's health
+  // never changes the quant decision — is preserved: every failure mode must match the
+  // healthy outcome exactly.
   it('parity: validated-quant policy outcome is IDENTICAL across Jev-healthy and every failure mode', async () => {
     const healthy = await runScenario({ label: 'healthy', jevBehavior: 'healthy' });
     expect(healthy.govStatus).toMatch(/CALLED|CACHE_HIT/);
-    expect(healthy.approved).toBe(true);
-    expect(healthy.decisionPolicy).toBe('QUANT_EXECUTION');
+    expect(healthy.approved).toBe(false);
+    expect(healthy.terminalReasonCode).toBe('INSUFFICIENT_AGENT_PARTICIPATION');
     expect(healthy.generativeFallbackCalls).toBe(0);
     console.log(`[jev-failure-semantics] healthy: ${JSON.stringify(healthy)}`);
 

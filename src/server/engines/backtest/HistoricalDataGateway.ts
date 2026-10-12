@@ -134,7 +134,7 @@ export class HistoricalDataGateway {
    * would wedge the window forever. A shared rejection is shared
    * honestly - every coalesced caller sees the same error; none gets silent stale data.
    */
-  private inflightEnsureBars = new Map<string, Promise<void>>();
+  private inflightEnsureBars = new Map<string, { promise: Promise<void>; overdue: boolean }>();
 
   /**
    * A request is "present-time" when its window ends at/near now - i.e. endMs is not
@@ -193,6 +193,14 @@ export class HistoricalDataGateway {
   }
 
   private memoryKey(symbol: string, timeframe: string, startMs: number, endMs: number): string {
+    // 2026-10-12 (D1): hour-bucketed keys to bound memory. 2026-10-11 (#10) used exact
+    // (startMs,endMs) keys to fix a collision bug, but sliding-window callers (quant
+    // path) generated a unique key per call, filling the 5000-entry LRU with ~1.25GB
+    // and OOMing the soak (Worker F D1). Hour bucketing bounds the key space; the
+    // hit-path filter in getBars() preserves #10's correctness — cached bars are
+    // always filtered to the requested [startMs, endMs], so a wider-warmed bucket
+    // never leaks post-cutoff bars to a narrower query. On miss, getBars() fetches
+    // the FULL bucket range so any sub-range query hits.
     const startBucket = Math.floor(startMs / 3_600_000);
     const endBucket = Math.floor(endMs / 3_600_000);
     return `${symbol}|${timeframe}|${startBucket}|${endBucket}`;
@@ -266,38 +274,66 @@ export class HistoricalDataGateway {
   async ensureBars(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<void> {
     const coalesceKey = this.memoryKey(symbol, timeframe, startMs, endMs);
     const inFlight = this.inflightEnsureBars.get(coalesceKey);
-    if (inFlight) return inFlight;
+    if (inFlight) {
+      // 2026-10-11 (#13): caller-side timeout for coalesced waiters. The shared entry
+      // is retained until the inner settles (never deleted by TTL), so an overdue entry
+      // does not cause duplicate provider work — but a waiter should not hang forever
+      // on a stalled inner either. Each waiter races the shared promise against its own
+      // timeout; the shared entry itself is untouched.
+      const callerTimeoutMs = tradingSafety.quantBarsCoalesceEntryMaxAgeMs;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          inFlight.promise,
+          new Promise<void>((_, reject) => {
+            timer = setTimeout(() => {
+              reject(new Error(
+                `[HistoricalDataGateway] COALESCE_CALLER_TIMEOUT for ${symbol} (${timeframe}): ` +
+                `coalesced waiter exceeded ${callerTimeoutMs}ms awaiting the in-flight ensureBars. ` +
+                `The shared entry is retained (no duplicate fetch); this caller is released.`,
+              ));
+            }, callerTimeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+      return;
+    }
     const run = this.ensureBarsInner(symbol, timeframe, startMs, endMs);
-    this.inflightEnsureBars.set(coalesceKey, run);
-    // 2026-10-10 (defect hunt, Lead 6): liveness bound for the coalescing entry. The
-    // inner provider call has no timeout/cancel path (fetch/IBKR), so a stalled call
-    // would otherwise wedge this window's entry FOREVER - every future caller for the
-    // window would await the same dead promise. Past quantBarsCoalesceEntryMaxAgeMs the
-    // entry is evicted with a loud warn; a later caller starts a fresh inner (the zombie
-    // inner, if it ever settles, completes harmlessly - the generation-guarded delete
-    // below never removes a newer entry). unref'd so a wedged entry never holds the
-    // process open on its own.
+    const entry = { promise: run, overdue: false };
+    this.inflightEnsureBars.set(coalesceKey, entry);
+    // 2026-10-11 (#13): liveness bound for the coalescing entry. The inner provider
+    // call has no timeout/cancel path (fetch/IBKR), so a stalled call would otherwise
+    // wedge this window's entry FOREVER. Past quantBarsCoalesceEntryMaxAgeMs the entry
+    // is marked OVERDUE with a loud warn — but RETAINED until the inner settles.
+    // Deleting it (the old behavior) caused duplicate provider work (new callers
+    // started fresh fetches) and let the zombie inner's finally-clause clobber the
+    // newer fetch's cache via a stale generation-guarded delete. Retention + the
+    // caller-side timeout above gives waiters their own bound without deleting the
+    // shared entry. unref'd so a wedged entry never holds the process open on its own.
     const maxAgeMs = tradingSafety.quantBarsCoalesceEntryMaxAgeMs;
-    const evictTimer = setTimeout(() => {
-      if (this.inflightEnsureBars.get(coalesceKey) === run) {
-        this.inflightEnsureBars.delete(coalesceKey);
+    const overdueTimer = setTimeout(() => {
+      const current = this.inflightEnsureBars.get(coalesceKey);
+      if (current === entry && !current.overdue) {
+        current.overdue = true;
         console.warn(
-          `[HistoricalDataGateway] COALESCE_ENTRY_EVICTED for ${symbol} (${timeframe}): ` +
+          `[HistoricalDataGateway] COALESCE_ENTRY_OVERDUE for ${symbol} (${timeframe}): ` +
           `in-flight ensureBars exceeded quantBarsCoalesceEntryMaxAgeMs=${maxAgeMs}ms - the ` +
-          `provider call is stalled (no timeout/cancel path). Entry evicted so future ` +
-          `callers start a fresh fetch instead of hanging forever.`,
+          `provider call is stalled (no timeout/cancel path). Entry RETAINED (not evicted) ` +
+          `until the inner settles; coalesced waiters get their own caller-side timeout.`,
         );
       }
     }, maxAgeMs);
-    if (typeof (evictTimer as unknown as { unref?: unknown }).unref === 'function') {
-      (evictTimer as unknown as { unref: () => void }).unref();
+    if (typeof (overdueTimer as unknown as { unref?: unknown }).unref === 'function') {
+      (overdueTimer as unknown as { unref: () => void }).unref();
     }
     try {
       await run;
     } finally {
-      clearTimeout(evictTimer);
-      // Generation-guarded: never delete a newer entry admitted after a TTL eviction.
-      if (this.inflightEnsureBars.get(coalesceKey) === run) {
+      clearTimeout(overdueTimer);
+      // Generation-guarded: never delete a newer entry.
+      if (this.inflightEnsureBars.get(coalesceKey) === entry) {
         this.inflightEnsureBars.delete(coalesceKey);
       }
     }
@@ -379,7 +415,13 @@ export class HistoricalDataGateway {
           else this.consecutiveRateLimits = 0;
           return;
         }
-        if (existing.length > 0) return;
+        // 2026-10-11 (stale-tail invariant): the IBKR-empty path must run the same
+        // stale-tail check as every other fallback. Returning the cache here without
+        // consulting staleTail re-admits the Oct-9 forensic condition (stale cache
+        // served as fresh). With a stale tail, fall through to Alpaca; the
+        // verifyStaleTailMoved at the bottom still throws DATA_STALE if nothing fresh
+        // ever arrives.
+        if (existing.length > 0 && !staleTail) return;
         // Real root cause (2026-09-10, missed-opportunity-evaluation forensic pass): confirmed
         // live that IBKR's historical-bar API returns empty for many real, liquid US symbols on
         // this account (same market-data-entitlement gap - code 354 "not subscribed" - already
@@ -439,11 +481,15 @@ export class HistoricalDataGateway {
       url.searchParams.set('feed', 'iex');
       if (pageToken) url.searchParams.set('page_token', pageToken);
 
+      // 2026-10-11 (#20): the pagination loop had NO timeout — a stalled connection
+      // hangs forever and wedges the fast-lane/scheduler work it feeds. Use the
+      // existing alpacaRequestTimeoutMs convention.
       const res = await fetch(url.toString(), {
         headers: {
           'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
           'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY,
-        }
+        },
+        signal: AbortSignal.timeout(tradingSafety.alpacaRequestTimeoutMs),
       });
       if (!res.ok) {
         const body = await res.text().catch(() => '');
@@ -537,8 +583,10 @@ export class HistoricalDataGateway {
         url.searchParams.set('feed', 'iex');
         if (pageToken) url.searchParams.set('page_token', pageToken);
 
+        // 2026-10-11 (#20): timeout for the pagination loop (see above).
         const res = await fetch(url.toString(), {
-          headers: { 'APCA-API-KEY-ID': process.env.ALPACA_API_KEY, 'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY }
+          headers: { 'APCA-API-KEY-ID': process.env.ALPACA_API_KEY, 'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY },
+          signal: AbortSignal.timeout(tradingSafety.alpacaRequestTimeoutMs),
         });
         if (!res.ok) return { clean: true, checked: false, issues: [`Could not verify - split-adjusted comparison fetch failed: ${res.status}`] };
         const data = await res.json();
@@ -669,14 +717,22 @@ export class HistoricalDataGateway {
     const key = this.memoryKey(symbol, timeframe, startMs, endMs);
     const hit = this.cacheGet(key);
     if (hit && hit.expiresAt > Date.now()) {
-      return hit.bars;
+      // 2026-10-11 (#10): filter cached bars to the requested [startMs, endMs] on hit.
+      // The cache entry may cover a wider range than this query (e.g. warmed by an
+      // earlier wider query); returning it unfiltered would leak post-cutoff bars.
+      return hit.bars.filter((b) => b.timestamp >= startMs && b.timestamp <= endMs);
     }
+    // 2026-10-12 (D1): fetch the FULL hour-bucket range on miss, so the cached entry
+    // covers any sub-range query within these buckets. The hit-path filter above
+    // narrows to the requested [startMs, endMs].
+    const bucketStartMs = Math.floor(startMs / 3_600_000) * 3_600_000;
+    const bucketEndMs = (Math.floor(endMs / 3_600_000) + 1) * 3_600_000 - 1;
     const rows = await db.select().from(schema.ohlcvBars)
       .where(and(
         eq(schema.ohlcvBars.symbol, symbol),
         eq(schema.ohlcvBars.timeframe, timeframe),
-        gte(schema.ohlcvBars.timestamp, startMs),
-        lte(schema.ohlcvBars.timestamp, endMs)
+        gte(schema.ohlcvBars.timestamp, bucketStartMs),
+        lte(schema.ohlcvBars.timestamp, bucketEndMs)
       ))
       .orderBy(asc(schema.ohlcvBars.timestamp));
     const bars = rows.map(r => ({ timestamp: r.timestamp, open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume }));

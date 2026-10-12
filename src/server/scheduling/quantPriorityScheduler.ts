@@ -145,6 +145,12 @@ export interface QuantStageTimestamps {
   dataFetchStartedAtMs: number | null;
   dataFetchFinishedAtMs: number | null;
   quantStartedAtMs: number | null;
+  // 2026-10-11 (#23): instrumentation to split QUANT_STAGE into worker-acquisition
+  // vs strategy-selection time. workerGrantedAtMs is set when the quant slot is
+  // granted; strategySelectionFinishedAtMs is set via the onStrategySelectionFinished
+  // callback (evaluator reports when its strategy selection completes).
+  workerGrantedAtMs: number | null;
+  strategySelectionFinishedAtMs: number | null;
   javaStartedAtMs: null;
   javaFinishedAtMs: null;
   quantFinishedAtMs: number | null;
@@ -298,7 +304,28 @@ export interface QuantSchedulerDeps {
   /** evaluateSymbol's contract is unchanged - the scheduler is a black-box caller. */
   evaluateSymbol: (
     symbol: string,
-    options?: { emitIdeas?: boolean; cycleCtx?: { cycleId: string; scheduledIndex: number } },
+    options?: {
+      emitIdeas?: boolean;
+      cycleCtx?: { cycleId: string; scheduledIndex: number };
+      /**
+       * 2026-10-11 (scheduler timeliness invariant): liveness predicate the evaluator
+       * must consult immediately before emitting a trade idea. The scheduler's
+       * late-settle discard only drops the returned evaluation VALUE — it cannot
+       * recall an idea the orphaned evaluation already emitted. Mirrors the fast
+       * lane's isLeaseAuthoritative pattern: emission is deferred until the scheduler
+       * confirms this evaluation is still live (not terminal, not watchdog-quarantined,
+       * deadline not exceeded in flight). Evaluators that predate this option treat a
+       * missing predicate as "live" (legacy behavior preserved).
+       */
+      isLiveCheck?: () => boolean;
+      /**
+       * 2026-10-11 (#23): instrumentation callback. The evaluator calls this when its
+       * strategy selection completes, so the scheduler can record
+       * strategySelectionFinishedAtMs and split QUANT_STAGE into worker-acquisition
+       * vs selection time. Optional; evaluators that don't support it simply omit the call.
+       */
+      onStrategySelectionFinished?: () => void;
+    },
   ) => Promise<unknown>;
   /** Cache read (cheap, bounded). Production: historicalDataGateway.getBars. */
   getBars: (symbol: string, timeframe: string, startMs: number, endMs: number) => Promise<SchedulerBar[]>;
@@ -378,13 +405,18 @@ interface TrackedCandidate {
 class PrioritySemaphore {
   private permits: number;
   private seq = 0;
-  private waiters: Array<{ priority: number; seq: number; resolve: (release: () => void) => void }> = [];
+  private waiters: Array<{
+    priority: number;
+    seq: number;
+    resolve: (release: () => void) => void;
+    isCancelled?: () => boolean;
+  }> = [];
 
   constructor(permits: number) {
     this.permits = Math.max(1, Math.floor(permits));
   }
 
-  acquire(priority: number): Promise<() => void> {
+  acquire(priority: number, isCancelled?: () => boolean): Promise<() => void> {
     // Immediate grant only when nobody is waiting - otherwise a newcomer could jump a
     // queued P0.
     if (this.permits > 0 && this.waiters.length === 0) {
@@ -392,7 +424,7 @@ class PrioritySemaphore {
       return Promise.resolve(this.makeRelease());
     }
     return new Promise((resolve) => {
-      this.waiters.push({ priority, seq: this.seq++, resolve });
+      this.waiters.push({ priority, seq: this.seq++, resolve, isCancelled });
       this.waiters.sort((a, b) => a.priority - b.priority || a.seq - b.seq);
     });
   }
@@ -402,7 +434,14 @@ class PrioritySemaphore {
     return () => {
       if (released) return;
       released = true;
-      const next = this.waiters.shift();
+      // 2026-10-11 (#17): shift past cancelled waiters WITHOUT consuming the handoff.
+      // A terminally-transitioned (EXPIRED/EVICTED) candidate parked in waiters must
+      // not receive a permit (wasted handoff); the permit goes to the next live waiter,
+      // or back to the pool if none. Never touch a running task's permit.
+      let next = this.waiters.shift();
+      while (next && next.isCancelled?.()) {
+        next = this.waiters.shift();
+      }
       if (next) {
         next.resolve(this.makeRelease());
       } else {
@@ -662,6 +701,8 @@ export class QuantPriorityScheduler {
         dataFetchStartedAtMs: null,
         dataFetchFinishedAtMs: null,
         quantStartedAtMs: null,
+        workerGrantedAtMs: null,
+        strategySelectionFinishedAtMs: null,
         javaStartedAtMs: null,
         javaFinishedAtMs: null,
         quantFinishedAtMs: null,
@@ -740,6 +781,8 @@ export class QuantPriorityScheduler {
         dataFetchStartedAtMs: null,
         dataFetchFinishedAtMs: null,
         quantStartedAtMs: null,
+        workerGrantedAtMs: null,
+        strategySelectionFinishedAtMs: null,
         javaStartedAtMs: null,
         javaFinishedAtMs: null,
         quantFinishedAtMs: null,
@@ -877,14 +920,20 @@ export class QuantPriorityScheduler {
 
   /**
    * Data-readiness check: cheap cache read only, never a provider call. Mirrors the
-   * gateway's own sufficiency contract EXACTLY (count floor OR coverage ratio, plus
-   * tail freshness for present-time requests) so the scheduler's routing agrees with
-   * what ensureBars() would conclude - the gateway remains the authoritative
-   * enforcer at evaluation time. Historical windows (endMs clearly before now) are
-   * exempt from tail freshness, exactly like the gateway's own check. The tail
-   * tolerance is read from the gateway's own knob (quantBarsTailFreshnessToleranceMs)
-   * rather than a second scheduler-local value: two knobs for the same freshness
-   * definition would let routing and enforcement silently diverge.
+   * gateway's own sufficiency contract (count floor OR coverage ratio, plus tail
+   * freshness) so the scheduler's routing agrees with what ensureBars() would
+   * conclude - the gateway remains the authoritative enforcer at evaluation time.
+   * 2026-10-11: the docstring used to claim "historical windows are exempt from tail
+   * freshness, exactly like the gateway's own check" — dead documentation. This
+   * method hardcodes endMs = nowMs (the scheduler only ever evaluates present-time
+   * windows), so the isPresentTime guard was constant-true and the exemption could
+   * never trigger. The dead guard is removed; tail freshness applies unconditionally
+   * here. The gateway's genuine historical-window exemption (isCacheTailFresh) still
+   * lives in HistoricalDataGateway for the backtest/PIT callers that actually pass a
+   * past endMs. The tail tolerance is read from the gateway's own knob
+   * (quantBarsTailFreshnessToleranceMs) rather than a second scheduler-local value:
+   * two knobs for the same freshness definition would let routing and enforcement
+   * silently diverge.
    */
   private async checkDataReadiness(rec: TrackedCandidate): Promise<{
     sufficient: boolean;
@@ -913,8 +962,10 @@ export class QuantPriorityScheduler {
       return { sufficient: false, reasonCode: 'INSUFFICIENT_BAR_COUNT', barCount, tailTimestampMs };
     }
     const tailToleranceMs = tradingSafety.quantBarsTailFreshnessToleranceMs;
-    const isPresentTime = endMs >= nowMs - tailToleranceMs;
-    if (isPresentTime && tailTimestampMs != null && tailTimestampMs < nowMs - tailToleranceMs) {
+    // 2026-10-11: endMs is always nowMs here (present-time window by construction),
+    // so the old isPresentTime guard was constant-true dead code — removed. Tail
+    // freshness applies unconditionally.
+    if (tailTimestampMs != null && tailTimestampMs < nowMs - tailToleranceMs) {
       return { sufficient: false, reasonCode: 'STALE_TAIL', barCount, tailTimestampMs };
     }
     return { sufficient: true, reasonCode: 'SUFFICIENT', barCount, tailTimestampMs };
@@ -943,7 +994,9 @@ export class QuantPriorityScheduler {
    *  computation holds ONLY a quant slot - never the same slot across both. */
   private async processCandidateInner(rec: TrackedCandidate): Promise<void> {
     // ---- DATA ACQUISITION STAGE (bounded data-fetch pool, no quant slot held) ----
-    const fetchRelease = await this.fetchSem.acquire(rec.priority);
+    // 2026-10-11 (#17): pass isCancelled so a terminally-transitioned candidate parked
+    // in the waiter queue is skipped at handoff (no wasted permit).
+    const fetchRelease = await this.fetchSem.acquire(rec.priority, () => rec.terminalState != null);
     try {
       if (rec.terminalState) return;
       // The gateway's reactive 429 backoff is authoritative: while armed, this
@@ -974,10 +1027,14 @@ export class QuantPriorityScheduler {
     if (rec.terminalState) return;
 
     // ---- COMPUTATION STAGE (bounded quant pool, priority-ordered handoff) ----
-    const quantRelease = await this.quantSem.acquire(rec.priority);
+    // 2026-10-11 (#17): pass isCancelled so a terminally-transitioned candidate parked
+    // in the waiter queue is skipped at handoff (no wasted permit).
+    const quantRelease = await this.quantSem.acquire(rec.priority, () => rec.terminalState != null);
     try {
       if (rec.terminalState) return;
       rec.stages.quantStartedAtMs = this.now();
+      // 2026-10-11 (#23): workerGrantedAtMs marks when the quant worker slot was granted.
+      rec.stages.workerGrantedAtMs = rec.stages.quantStartedAtMs;
       this.emit('QUANT_SCHEDULER_QUANT_STARTED', {
         candidateId: rec.candidateId, symbol: rec.symbol, priority: rec.priority,
         queueWaitMs: (rec.stages.quantStartedAtMs ?? 0) - rec.stages.admittedAtMs,
@@ -1048,7 +1105,22 @@ export class QuantPriorityScheduler {
    * releases the dedup entry. This mirrors the fast-lane hung-lease quarantine
    * (27e17d3): capacity recovery without reintroducing invisible concurrency for
    * duplicate work.
+   *
+   * 2026-10-11 (scheduler timeliness invariant): the liveness predicate handed to
+   * evaluateSymbol as options.isLiveCheck. The evaluator consults it immediately before
+   * emitting a trade idea — the emission layer where the watchdog's late-settle discard
+   * cannot reach (discarding the returned value cannot recall an emitted idea). Mirrors
+   * the fast lane's isLeaseAuthoritative pattern: an evaluation is emission-live only
+   * while the scheduler still considers it current.
    */
+  private isQuantEmissionLive(rec: TrackedCandidate): boolean {
+    if (this.stopped) return false;
+    if (rec.terminalState != null) return false;
+    if (rec.quantQuarantinedAtMs != null) return false;
+    if (rec.deadlineExceededWhileInFlight) return false;
+    return true;
+  }
+
   private async runQuantStageWithWatchdog(
     rec: TrackedCandidate,
   ): Promise<QuantStageOutcome> {
@@ -1065,6 +1137,15 @@ export class QuantPriorityScheduler {
       const evalPromise = this.deps.evaluateSymbol(rec.symbol, {
         emitIdeas: rec.emitIdeas,
         ...(rec.cycleCtx ? { cycleCtx: rec.cycleCtx } : {}),
+        // 2026-10-11 (scheduler timeliness invariant): the evaluator gates idea
+        // emission on this. A watchdog-quarantined or otherwise non-live evaluation
+        // must not emit as if current.
+        isLiveCheck: () => this.isQuantEmissionLive(rec),
+        // 2026-10-11 (#23): the evaluator reports when strategy selection finishes,
+        // so the stage record can split worker-acquisition vs selection time.
+        onStrategySelectionFinished: () => {
+          rec.stages.strategySelectionFinishedAtMs = this.now();
+        },
       }).then(
         (value) => ({ value }) as const,
         (error: unknown) => ({ error }) as const,

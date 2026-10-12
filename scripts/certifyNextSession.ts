@@ -3,7 +3,13 @@
  *
  * Runs the full pre-market release-gate certification against an ISOLATED copy of the
  * production database. The parent process (argus-cli `certify-next-session`) creates the
- * copy with VACUUM INTO from the live DB; this child never touches the live DB.
+ * copy with the sqlite3 online backup API from the live DB; this child never touches the
+ * live DB.
+ *
+ * As of 2026-10-11 the verdict is computed by the release certification driver
+ * (src/server/certification/releaseCertificationDriver.ts), which orchestrates ALL
+ * mandatory checks under the strict rule: a partial probe can NEVER report READY.
+ * Only PASS satisfies; FAIL/NOT_RUN/UNKNOWN/NOT_CERTIFIED force READY=false.
  *
  * Safety:
  * - Read-only with respect to production. Never seeds lifecycle rows, never promotes
@@ -16,7 +22,7 @@
  *
  * Usage (child form):
  *   node --use-system-ca node_modules/tsx/dist/cli.mjs scripts/certifyNextSession.ts \
- *     --isolated-db=/tmp/argus-cert-XXXX/snapshot.db [--json]
+ *     --isolated-db=/tmp/argus-cert-XXXX/snapshot.db [--json] [--with-suites] [--engine-url=http://127.0.0.1:3000]
  *
  * Output: JSON report on stdout with OVERALL_STATUS in {READY, READY_WITH_CONDITIONS, NO_GO}.
  * Exit code: 0 = READY, 2 = READY_WITH_CONDITIONS, 3 = NO_GO, 1 = internal error.
@@ -28,6 +34,12 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { AvailableData } from '../src/server/certification/strategyDataContracts';
+import { getTradingDayStartMs } from '../src/server/core/TradingCalendar';
+import {
+  runReleaseCertification,
+  type ReleaseCheck,
+  type ReleaseCertificationReport,
+} from '../src/server/certification/releaseCertificationDriver';
 
 function sha256Hex(data: string): string {
   return createHash('sha256').update(data, 'utf8').digest('hex');
@@ -35,6 +47,8 @@ function sha256Hex(data: string): string {
 
 async function main() {
   const asJson = process.argv.includes('--json');
+  const withSuites = process.argv.includes('--with-suites');
+  const engineUrlArg = process.argv.find(a => a.startsWith('--engine-url='));
   const dbArg = process.argv.find(a => a.startsWith('--isolated-db='));
   if (!dbArg) {
     console.error('certifyNextSession: --isolated-db=<path> is required (the parent creates it).');
@@ -73,15 +87,18 @@ async function main() {
 
   try {
     // --- Build / config / schema identity -------------------------------------
+    let buildSha: string;
     try {
-      report.buildSha = execSync('git rev-parse HEAD', { cwd: path.resolve('.'), encoding: 'utf8' }).trim();
+      buildSha = execSync('git rev-parse HEAD', { cwd: path.resolve('.'), encoding: 'utf8' }).trim();
     } catch {
-      report.buildSha = 'UNKNOWN (git unavailable)';
+      buildSha = 'UNKNOWN (git unavailable)';
     }
+    report.buildSha = buildSha;
     const safetyCfgPath = path.resolve('config/tradingSafety.json');
     const safetyCfgRaw = fs.readFileSync(safetyCfgPath, 'utf8');
     const safetyCfg = JSON.parse(safetyCfgRaw);
-    report.configHash = sha256Hex(safetyCfgRaw);
+    const configHash = sha256Hex(safetyCfgRaw);
+    report.configHash = configHash;
 
     // --- Layer 3: production-state certification (canonical authorization) ----
     const { certifyProductionState } = await import('../src/server/certification/productionStateCertification');
@@ -122,11 +139,11 @@ async function main() {
       r => r.readiness === 'NOT_READY' && authorizedIds.has(r.strategyId),
     ).map(r => ({ strategyId: r.strategyId, missingRequired: r.missingRequired }));
 
-    try {
-      report.schemaVersion = sqliteDb.prepare('PRAGMA user_version').get() as any;
-    } catch {
-      report.schemaVersion = 'UNKNOWN';
-    }
+    const schemaVersionRaw: any = (() => {
+      try { return sqliteDb.prepare('PRAGMA user_version').get(); } catch { return null; }
+    })();
+    report.schemaVersion = typeof schemaVersionRaw === 'number'
+      ? schemaVersionRaw : (schemaVersionRaw?.user_version ?? 'UNKNOWN');
 
     // --- Strategy registry hash (detects registry drift between builds) -------
     const { STRATEGY_DATA_CONTRACTS } = await import('../src/server/certification/strategyDataContracts');
@@ -137,8 +154,10 @@ async function main() {
         return `${id}:${Object.keys(c.inputs ?? {}).sort().map(k => `${k}=${c.inputs[k]}`).join(',')}`;
       })
       .join('|');
-    report.strategyRegistryHash = sha256Hex(registryFingerprint);
-    report.strategyRegistrySize = Object.keys(STRATEGY_DATA_CONTRACTS).length;
+    const strategyRegistryHash = sha256Hex(registryFingerprint);
+    const strategyRegistrySize = Object.keys(STRATEGY_DATA_CONTRACTS).length;
+    report.strategyRegistryHash = strategyRegistryHash;
+    report.strategyRegistrySize = strategyRegistrySize;
 
     // --- Quant scheduler SLA configuration ------------------------------------
     report.quantSchedulerSla = {
@@ -148,10 +167,6 @@ async function main() {
     };
 
     // --- Stale cache status: probe the isolated DB's bar tails -------------------
-    // The Oct-9 forensic found 508/972 late bar-input records with a newest bar >7d
-    // old. The gateway's stale-tail gate (f9277c7) now refuses to treat such caches
-    // as sufficient; this probe reports the production snapshot's tail health so a
-    // stale production cache is visible BEFORE open instead of discovered live.
     try {
       const tailTolMs = safetyCfg.quantBarsTailFreshnessToleranceMs ?? 259200000;
       const tailRows = sqliteDb.prepare(`
@@ -177,12 +192,11 @@ async function main() {
       report.staleCacheStatus = { error: 'probe failed' };
     }
 
-    // --- PIT replay provenance: is decision_provenance populated? ---------------
-    // The replay-equality itself is suite-owned (PIT replay suite: production calc ==
-    // independent replay calc, no-lookahead enforced). The CLI honestly reports
-    // whether the isolated snapshot carries replayable provenance rows.
+    // --- PIT replay provenance ---------------------------------------------------
+    let pitProvenanceRows: number | null = null;
     try {
       const provCount = (sqliteDb.prepare('SELECT COUNT(*) AS n FROM decision_provenance').get() as any)?.n ?? 0;
+      pitProvenanceRows = provCount;
       const provLatest = sqliteDb.prepare('SELECT MAX(decision_time_ms) AS m FROM decision_provenance').get() as any;
       report.pitReplay = {
         provenanceRows: provCount,
@@ -196,57 +210,67 @@ async function main() {
       report.pitReplay = { error: 'decision_provenance not observable (table missing or probe failed)' };
     }
 
-    // --- Suites that certify areas this CLI cannot measure directly -----------
-    // These are HONEST pointers: the CLI names the exact test file that owns each
-    // area, rather than pretending a static probe certifies runtime behavior.
-    report.delegatedToSuite = {
-      aiIndependence: 'src/server/replay/synthetic/SynthesisDefectSweep.test.ts (ALL_AI_DOWN: authorized quant completes the full spine with every AI provider dead)',
-      riskSpine: 'src/server/certification/productionStateMechanismE2E.test.ts (authorization -> policy -> Chief -> RiskAgent -> RiskEngine -> sizing -> OMS)',
-      reconciliationFixtures: 'src/server/services/PortfolioReconciliation.test.ts (+ warmup/staleSnapshot/syncFailure/tradingBlock/openOrdersAndCash/shortSemantics variants) + src/server/services/OrderManagement.positionEvidence.test.ts (OCT-1 POSITION_FILL_CONFLICT regression)',
-      backup: 'src/server/services/DbBackupService.worker.test.ts',
-      watchdog: 'scripts/lib/argusWatchdogLogic.test.ts (slowness -> no restart before confirmTicks; death -> one restart; storm -> bounded lockout, terminal)',
-      memory: 'src/brokers/paperBrokerOrderRegistry.leak.test.ts (order-registry boundedness + heap growth across paper order lifecycles)',
-      queues: 'src/server/config/dataTransportLimits.test.ts (WS backpressure/keepalive keys)',
-      premarket: 'src/server/premarket/PremarketFocusReport.test.ts (focus-report tiering, PREMARKET_REFRESH_COMPLETED, persisted-report CLI read path)',
-      pitReplay: 'src/server/replay/provenance/decisionProvenance.test.ts (PIT replay equality; no-lookahead enforced)',
-      lateAdmissionTest: 'src/server/scheduling/quantSchedulerForensicRegressions.test.ts (MRNA-style: high-priority mover admitted mid-cycle resolves in seconds; CRCL-style: explicit terminal; COMBINED: late admission + stale cache + slow provider + fast lane)',
-      fastLaneLeaseTest: 'src/server/fastlane/fastLaneEvaluator.test.ts (lease held until settle; caller timeout never releases capacity; bounded hung-work quarantine)',
-      quantSchedulerSla: 'src/server/scheduling/quantPriorityScheduler.test.ts (HIGH start<=30s/complete<=60s p95; NORMAL start<=60s/complete<=120s p95; per-symbol completeness invariant)',
-    };
-
-    // --- Overall verdict -------------------------------------------------------
-    const conditions: string[] = [];
-    let overall: 'READY' | 'READY_WITH_CONDITIONS' | 'NO_GO' = 'READY';
-
-    if (productionState.verdict !== 'QUANT_FIRST_OPERATIONAL') {
-      overall = 'NO_GO';
-      conditions.push(`QUANT_FIRST_OPERATIONALLY_INACTIVE: ${productionState.AUTHORIZED_PAPER_QUANT_STRATEGIES} authorized paper quant strategies (quantPolicyEnabled=${productionState.quantPolicyEnabled}).`);
-    }
-    if (report.dataReadiness.notReadyAuthorized.length > 0) {
-      overall = 'NO_GO';
-      conditions.push(`DATA NOT_READY for authorized strategies: ${report.dataReadiness.notReadyAuthorized.map((r: any) => r.strategyId).join(', ')}.`);
-    }
-    const partiallyReadyAuthorized = readiness.filter(
-      r => r.readiness === 'PARTIALLY_READY' && authorizedIds.has(r.strategyId),
+    // --- Release certification driver (2026-10-11): ALL mandatory checks --------
+    // The driver owns the verdict under the strict rule: only PASS satisfies;
+    // FAIL/NOT_RUN/UNKNOWN/NOT_CERTIFIED force READY=false (a partial probe can
+    // never report READY).
+    const sourceDbPath = process.env.ARGUS_CERT_SOURCE_DB
+      ? path.resolve(process.env.ARGUS_CERT_SOURCE_DB)
+      : path.resolve('data/argus.db');
+    const driverReport: ReleaseCertificationReport = await runReleaseCertification({
+      repoRoot: path.resolve('.'),
+      buildSha,
+      configHash,
+      schemaVersionRaw,
+      strategyRegistryHash,
+      strategyRegistrySize,
+      snapshot: { snapshotPath: isolatedDbPath, sourcePath: sourceDbPath },
+      configEquivalence: {
+        envFilePresent: fs.existsSync(path.resolve('.env')),
+        forcedOverrides: [
+          'SYNTHETIC_SIMULATION=false',
+          'ARGUS_DISABLE_MARKET_DATA_WS=true',
+          'PAPER_TRADING_ONLY=true',
+          `ARGUS_DB_PATH=<isolated snapshot>`,
+        ],
+      },
+      productionState: {
+        TOTAL_STRATEGIES: productionState.TOTAL_STRATEGIES,
+        ENABLED_QUANT_STRATEGIES: productionState.ENABLED_QUANT_STRATEGIES,
+        LIFECYCLE_ROWS: productionState.LIFECYCLE_ROWS,
+        MISSING_LIFECYCLE_ROWS: productionState.MISSING_LIFECYCLE_ROWS,
+        lifecycleStateCounts: productionState.lifecycleStateCounts as unknown as Record<string, number>,
+        AUTHORIZED_PAPER_QUANT_STRATEGIES: productionState.AUTHORIZED_PAPER_QUANT_STRATEGIES,
+        quantPolicyEnabled: productionState.quantPolicyEnabled,
+        paperOnlyEnforced: productionState.paperOnlyEnforced,
+        verdict: productionState.verdict,
+        details: (productionState.details ?? []).map((d: any) => ({
+          strategyId: d.strategyId, authorized: d.authorized, reason: d.reason,
+        })),
+      },
+      dataReadiness: {
+        perStrategy: report.dataReadiness.perStrategy,
+        notReadyAuthorized: report.dataReadiness.notReadyAuthorized,
+        probeDetails: report.dataReadiness.probeDetails,
+      },
+      staleCacheStatus: report.staleCacheStatus,
+      pitProvenanceRows,
+      quantSchedulerSla: {
+        quantCycleIntervalMs: report.quantSchedulerSla.quantCycleIntervalMs,
+        quantMaxConcurrentSymbols: report.quantSchedulerSla.quantMaxConcurrentSymbols,
+      },
+      withSuites,
+      engineBaseUrl: engineUrlArg ? engineUrlArg.slice('--engine-url='.length) : null,
+    });
+    report.releaseCertification = driverReport;
+    // The required CLI fields, flat: every mandatory check by field name.
+    report.fields = Object.fromEntries(
+      driverReport.checks.map((c: ReleaseCheck) => [c.field, { state: c.state, value: c.value, evidence: c.evidence }]),
     );
-    if (partiallyReadyAuthorized.length > 0 && overall === 'READY') {
-      overall = 'READY_WITH_CONDITIONS';
-      conditions.push(`PARTIALLY_READY (degraded, honest) for authorized: ${partiallyReadyAuthorized.map(r => r.strategyId).join(', ')}.`);
-    }
-    if (productionState.MISSING_LIFECYCLE_ROWS > 0) {
-      // Missing lifecycle is already captured by the FAIL invariant above when it drives
-      // authorization to zero; when some strategies ARE authorized, missing rows elsewhere
-      // are still a condition the operator should see.
-      if (overall === 'READY') {
-        overall = 'READY_WITH_CONDITIONS';
-        conditions.push(`${productionState.MISSING_LIFECYCLE_ROWS} strategies have no lifecycle record (terminally NOT_AUTHORIZED; routing falls back to consensus where eligible).`);
-      } else {
-        conditions.push(`${productionState.MISSING_LIFECYCLE_ROWS} strategies have no lifecycle record (terminally NOT_AUTHORIZED).`);
-      }
-    }
-
-    report.conditions = conditions;
-    report.overallStatus = overall;
+    report.conditions = driverReport.conditions;
+    report.overallStatus = driverReport.overallStatus;
+    report.ready = driverReport.ready;
+    report.blockingChecks = driverReport.blockingChecks;
 
     closeDb();
 
@@ -255,7 +279,7 @@ async function main() {
     } else {
       printHuman(report);
     }
-    process.exitCode = overall === 'READY' ? 0 : overall === 'READY_WITH_CONDITIONS' ? 2 : 3;
+    process.exitCode = report.overallStatus === 'READY' ? 0 : report.overallStatus === 'READY_WITH_CONDITIONS' ? 2 : 3;
   } catch (error: any) {
     closeDb();
     const fatal = `certifyNextSession: internal error: ${error?.message || error}\n`;
@@ -283,7 +307,12 @@ function probeAvailableData(db: any): { available: AvailableData; probeDetails: 
     relativeStrengthVsSpy: false,
   };
   const details: Record<string, string> = {};
-  const sessionStartMs = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00.000Z').getTime();
+  // 2026-10-11: session boundary is the market-timezone trading day start
+  // (America/New_York, DST-correct via TradingCalendar.getTradingDayStartMs), not UTC
+  // midnight. The old UTC-midnight boundary was wrong for several hours around each
+  // exchange midnight (e.g. 21:00 EDT Oct 11 is already Oct 12 in UTC, so the probe
+  // looked for "today's" intraday bars in the wrong UTC day).
+  const sessionStartMs = getTradingDayStartMs(new Date());
 
   try {
     const intraday = db.prepare(
@@ -348,29 +377,35 @@ function scanForPriorDayLevels(context: any): boolean {
 }
 
 function printHuman(report: any) {
-  console.log('CERTIFY NEXT SESSION — pre-market release gate');
+  console.log('CERTIFY NEXT SESSION — pre-market release gate (release certification driver)');
   console.log(`generated: ${report.generatedAt}   build: ${String(report.buildSha).slice(0, 12)}   config: ${String(report.configHash).slice(0, 12)}`);
   console.log('');
-  const ls = report.lifecycleSummary;
-  console.log(`lifecycle: ${ls.totalStrategies} strategies | enabled=${ls.enabledQuantStrategies} | rows=${ls.lifecycleRows} | missing=${ls.missingLifecycleRows}`);
-  console.log(`authorized paper quant strategies: ${ls.authorizedPaperQuantStrategies}   verdict: ${ls.verdict}`);
+  const checks: any[] = report.releaseCertification?.checks ?? [];
+  const byState: Record<string, number> = {};
+  for (const c of checks) byState[c.state] = (byState[c.state] ?? 0) + 1;
+  console.log(`mandatory checks: ${checks.length} total | ` +
+    Object.entries(byState).map(([s, n]) => `${s}=${n}`).join(' '));
   console.log('');
-  console.log('data readiness (authorized strategies only):');
-  for (const r of report.dataReadiness.perStrategy) {
-    if (!r.hasQuantAuthority) continue;
-    const missing = r.missingRequired?.length ? ` missing REQUIRED: ${r.missingRequired.join(', ')}` : '';
-    console.log(`  ${r.strategyId}: ${r.readiness}${missing}`);
+  console.log('check                                        state          value/evidence');
+  console.log('─'.repeat(100));
+  for (const c of checks) {
+    const val = c.value === null || c.value === undefined ? ''
+      : typeof c.value === 'object' ? JSON.stringify(c.value).slice(0, 44)
+      : String(c.value).slice(0, 44);
+    console.log(`${c.field.padEnd(42)} ${c.state.padEnd(14)} ${val}`);
   }
-  const unauthNotReady = report.dataReadiness.perStrategy.filter((r: any) => !r.hasQuantAuthority && r.readiness === 'NOT_READY').length;
-  if (unauthNotReady > 0) {
-    console.log(`  (${unauthNotReady} non-authorized strategies also NOT_READY — informational, they cannot trade)`);
-  }
+  console.log('─'.repeat(100));
   console.log('');
   if (report.conditions.length > 0) {
     console.log('conditions:');
-    for (const c of report.conditions) console.log(`  - ${c}`);
+    for (const cond of report.conditions) console.log(`  - ${cond}`);
     console.log('');
   }
+  if ((report.blockingChecks ?? []).length > 0) {
+    console.log(`blocking checks (${report.blockingChecks.length}): ${report.blockingChecks.join(', ')}`);
+    console.log('');
+  }
+  console.log(`READY: ${report.ready}`);
   console.log(`OVERALL_STATUS: ${report.overallStatus}`);
 }
 

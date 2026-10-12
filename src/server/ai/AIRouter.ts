@@ -360,7 +360,7 @@ export class AIRouter {
    * aiStateCacheMaxEntries (500) with oldest-first eviction. Identical inputs produce
    * identical outputs, so no decision-semantics change; no agent is disabled.
    */
-  private readonly routeTaskInFlight = new Map<string, { promise: Promise<RouteTaskResult>; createdAt: number }>();
+  private readonly routeTaskInFlight = new Map<string, { promise: Promise<RouteTaskResult>; createdAt: number; settled: boolean }>();
 
   private routeTaskDedupKey(agentType: string, prompt: string, jsonMode: boolean): string {
     const promptHash = createHash('sha256').update(prompt, 'utf8').digest('hex');
@@ -370,7 +370,12 @@ export class AIRouter {
   private pruneStaleRouteTaskInFlight(now: number): void {
     const ttlMs = aiCallGovernor.aiRouterInflightDedupTtlMs;
     for (const [key, entry] of this.routeTaskInFlight) {
-      if (now - entry.createdAt > ttlMs) this.routeTaskInFlight.delete(key);
+      // 2026-10-11 (#19): prune only if BOTH expired by TTL AND settled. The old code
+      // pruned by TTL alone, but executeRouteTask tries providers sequentially (20s each;
+      // worst case 20s*N exceeds the 30s TTL), so a still-running execution could lose
+      // its dedup entry and a duplicate call would start. A settled entry is safe to
+      // prune even if the TTL hasn't elapsed; an unsettled entry is retained past TTL.
+      if (entry.settled && now - entry.createdAt > ttlMs) this.routeTaskInFlight.delete(key);
     }
   }
 
@@ -382,7 +387,19 @@ export class AIRouter {
       if (oldest.done) break;
       this.routeTaskInFlight.delete(oldest.value);
     }
-    this.routeTaskInFlight.set(key, { promise, createdAt: Date.now() });
+    const entry = { promise, createdAt: Date.now(), settled: false };
+    // 2026-10-11 (#19): track settlement so pruneStaleRouteTaskInFlight only prunes
+    // settled entries (a still-running execution must not lose its dedup entry).
+    // 2026-10-11 (Worker H): use the two-handler .then() form, NOT .finally(). A bare
+    // `promise.finally(cb)` returns a derived promise that rejects when the original
+    // rejects; discarding it is an unhandled rejection that crashes the process under
+    // Node's --unhandled-rejections=throw. The two-handler form settles the derived
+    // promise successfully in both cases - no unhandled rejection is possible.
+    promise.then(
+      () => { entry.settled = true; },
+      () => { entry.settled = true; },
+    );
+    this.routeTaskInFlight.set(key, entry);
     // Attach a no-op rejection handler so a settled-but-unjoined entry never surfaces as an
     // unhandled rejection; real callers still observe the rejection through their own await.
     promise.catch(() => undefined);

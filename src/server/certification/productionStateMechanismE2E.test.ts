@@ -388,15 +388,43 @@ describe('production-state mechanism E2E: critical branches execute (PRODUCTION_
     tickPriceBySymbol = { AAPL: positiveCurrentPrice };
     startBrokerTicker();
 
+    // 2026-10-11 (consensus-bypass remediation): QUANT_EXECUTION now enforces the
+    // standard consensus gate (0.75 strict >, min 2 independent agents) like every
+    // other path. The pre-remediation direct-approval branch (threshold 0, 0 agents)
+    // is gone. This E2E mechanism test therefore provides a second independent
+    // agent (TechnicalAgent, structurally independent of QuantEngine per
+    // evidenceIndependence.ts) agreeing on AAPL/BUY, so the full authorization ->
+    // policy -> consensus -> risk -> OMS -> paper-fill path can be verified under
+    // the correct gate. Single-agent QUANT_EXECUTION correctly yields NO_TRADE
+    // (pinned by ChiefTraderAgent.router.test.ts).
+    const techTraceId = generateTraceId('AAPL');
+    const techIdea = {
+      traceId: techTraceId,
+      symbol: 'AAPL',
+      side: 'BUY',
+      confidence: 0.85,
+      currentPrice: positiveCurrentPrice,
+      reasoning: `TechnicalAgent: trend alignment on AAPL, confidence 0.85. ${FIXTURE_LABEL}`,
+      agent: 'TechnicalAgent',
+      origin: 'TECHNICAL',
+    };
+
     // Drive the SAME production entry point a real idea takes.
+    await chiefTrader.reviewIdea(techIdea);
     await chiefTrader.reviewIdea(idea);
 
     // --- Pipeline must complete first (real modules, real DB writes) ---
     await waitFor(() => approvals.some((a) => a.traceId === traceId), 30000, 'CHIEF_APPROVED_IDEA');
     const approval = approvals.find((a) => a.traceId === traceId);
     expect(approval.side).toBe('BUY');
-    expect(approval.decisionPolicy).toBe('QUANT_EXECUTION');
-    expect(approval.strategyId).toBe(positiveStrategyId);
+    // 2026-10-11 (consensus-bypass remediation): the standard consensus
+    // CHIEF_APPROVED_IDEA event does not carry decisionPolicy/strategyId — those
+    // are routing/authorization concepts verified separately below via
+    // CHIEF_DECISION_POLICY_SELECTED (decisionPolicy=QUANT_EXECUTION) and
+    // STRATEGY_AUTHORIZATION_CHECKED (strategyId + VALIDATED lifecycle). The
+    // pre-remediation bypass emitted a proprietary approval shape carrying them;
+    // asserting them here would pin the removed bypass. TraceId match proves this
+    // approval is for our QuantEngine idea.
 
     await waitFor(async () => {
       const rows = await db.select().from(schema.riskAssessments).where(eq(schema.riskAssessments.traceId, traceId));

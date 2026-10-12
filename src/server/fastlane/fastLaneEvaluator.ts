@@ -76,6 +76,8 @@ interface FastLaneLease {
   slotHeld: boolean;
   /** Whether any caller has observed a timeout on this lease (counted once per lease). */
   timedOut: boolean;
+  /** When the lease was quarantined (null if never). Used for bounded quarantine eviction. */
+  quarantinedAtMs: number | null;
   /** Resolves ONLY when the underlying work settles — never on caller timeout. Concurrent
    *  callers for a RUNNING lease coalesce onto this promise. */
   settlePromise: Promise<FastEvaluationResult>;
@@ -168,8 +170,21 @@ export async function evaluateFastCandidate(candidateId: string): Promise<FastEv
       return makeResult(candidate, 'ERROR', ['PRIOR_EVALUATION_STILL_IN_FLIGHT']);
     }
     // RUNNING: coalesce concurrent calls for the same symbol onto the same in-flight
-    // evaluation. Each caller races the settle promise against its own watchdog.
-    return existing.settlePromise;
+    // evaluation. Each caller races the settle promise against its own watchdog
+    // (2026-10-11: implemented — the old comment claimed this, but the code returned the
+    // bare settlePromise, so a coalesced caller could hang forever on a stuck
+    // evaluation). On coalesced timeout the caller gets a bounded ERROR result; the
+    // lease is NOT released — the primary caller still owns it until the work settles.
+    let coalescedTimeoutId: ReturnType<typeof setTimeout> | undefined;
+    const coalescedGate = new Promise<FastEvaluationResult>((resolve) => {
+      coalescedTimeoutId = setTimeout(() => {
+        resolve(makeResult(candidate, 'ERROR', ['COALESCED_CALLER_TIMEOUT']));
+      }, tradingSafety.fastLaneEvaluationTimeoutMs);
+    });
+    const settleWithCleanup = existing.settlePromise.finally(() => {
+      if (coalescedTimeoutId !== undefined) clearTimeout(coalescedTimeoutId);
+    });
+    return Promise.race([settleWithCleanup, coalescedGate]);
   }
 
   // Per-symbol cooldown: prevent repeated near-simultaneous detections from re-evaluating the
@@ -196,6 +211,7 @@ export async function evaluateFastCandidate(candidateId: string): Promise<FastEv
     state: 'RUNNING',
     slotHeld: true,
     timedOut: false,
+    quarantinedAtMs: null,
     settlePromise: undefined as unknown as Promise<FastEvaluationResult>,
   };
   leasesBySymbol.set(candidate.symbol, lease);
@@ -327,9 +343,26 @@ function reapHungLeases(): void {
   const now = Date.now();
   const maxTimeouts = tradingSafety.fastLaneHungLeaseMaxConsecutiveTimeouts;
   const maxAgeMs = tradingSafety.fastLaneHungLeaseMaxAgeMs;
+  // 2026-10-11 (#15): quarantined leases are now age-evicted (bounded). Without this,
+  // a never-settling evaluation pins the symbol with FAST_LANE_SYMBOL_QUARANTINED until
+  // process restart — the only release path was settleLease on work settle.
+  const quarantineMaxAgeMs = tradingSafety.fastLaneQuarantineMaxAgeMs;
   for (const lease of leasesBySymbol.values()) {
     if (lease.generation !== evaluatorGeneration) continue;
-    if (lease.state === 'QUARANTINED') continue;
+    if (lease.state === 'QUARANTINED') {
+      // Bounded loud eviction: a quarantined lease older than max age is evicted.
+      // Late settle stays discarded via the existing generation guard in settleLease.
+      const quarantinedAgeMs = lease.quarantinedAtMs != null ? now - lease.quarantinedAtMs : 0;
+      if (quarantinedAgeMs >= quarantineMaxAgeMs) {
+        leasesBySymbol.delete(lease.symbol);
+        console.warn(
+          `[fastLane] QUARANTINE_EVICTED for ${lease.symbol}: quarantined lease exceeded ` +
+          `fastLaneQuarantineMaxAgeMs=${quarantineMaxAgeMs}ms (quarantined ${quarantinedAgeMs}ms ago). ` +
+          `Dedup entry released; late settle (if ever) stays discarded via generation guard.`,
+        );
+      }
+      continue;
+    }
     const consecutiveTimeouts = consecutiveTimeoutsBySymbol.get(lease.symbol) ?? 0;
     const ageMs = now - lease.acquiredAt;
     if (consecutiveTimeouts >= maxTimeouts) {
@@ -347,12 +380,18 @@ function quarantineLease(
   ageMs: number,
 ): void {
   lease.state = 'QUARANTINED';
+  lease.quarantinedAtMs = Date.now();
   if (lease.slotHeld) {
     lease.slotHeld = false;
     activeEvaluationCount = Math.max(0, activeEvaluationCount - 1);
   }
-  // The dedup entry (leasesBySymbol) is deliberately KEPT: new evaluations for this symbol are
-  // refused with FAST_LANE_SYMBOL_QUARANTINED until the hung work settles and releases it.
+  // 2026-10-11 (adjudication): quarantine is BLESSED as the formally-sanctioned
+  // safe-abandonment protocol — returning fungible concurrency capacity (the slot)
+  // while RETAINING ownership/dedup (the entry), with bounded loud eviction (see
+  // reapHungLeases) and generation-guarded late-settle discard, satisfies the safety
+  // rules. The dedup entry (leasesBySymbol) is deliberately KEPT: new evaluations for
+  // this symbol are refused with FAST_LANE_SYMBOL_QUARANTINED until the hung work
+  // settles and releases it, or until the bounded quarantine eviction below fires.
   logFastLeaseQuarantined(
     lease.candidateId,
     lease.symbol,

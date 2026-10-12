@@ -154,4 +154,34 @@ describe('QuantSignalAgent emit fixture (strategy + EV satisfied)', () => {
     expect(mine.side).toBe('BUY');
     expect(mine.confidence).toBeGreaterThanOrEqual(0.6);
   });
+
+  it('withholds emission when the scheduler reports the evaluation not live (2026-10-11 timeliness invariant)', async () => {
+    stubMarketData();
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+
+    const ideas: any[] = [];
+    const noTrades: any[] = [];
+    const onIdea = (p: any) => ideas.push(p);
+    const onNoTrade = (p: any) => noTrades.push(p);
+    eventBus.subscribe('TRADE_IDEA_GENERATED', onIdea);
+    eventBus.subscribe('DESK_NO_TRADE', onNoTrade);
+    try {
+      const agent = new QuantSignalAgent();
+      // The fixture WOULD emit (strategy + EV + R:R satisfied, as proven by the test
+      // above), but the scheduler reports this evaluation as no longer live — e.g.
+      // the watchdog quarantined it while in flight. The idea must be withheld, not
+      // emitted to ChiefTrader as if current.
+      const result = await agent.evaluateSymbol('QFIX', { emitIdeas: true, isLiveCheck: () => false });
+      expect(result).not.toBeNull();
+      const mine = ideas.find(i => i.symbol === 'QFIX' && i.agent === 'QuantEngine');
+      expect(mine).toBeUndefined();
+      const withheld = noTrades.find(n => n.symbol === 'QFIX' && n.code === 'SCHEDULER_EVALUATION_NOT_LIVE');
+      expect(withheld).toBeDefined();
+    } finally {
+      eventBus.unsubscribe('TRADE_IDEA_GENERATED', onIdea);
+      eventBus.unsubscribe('DESK_NO_TRADE', onNoTrade);
+    }
+  });
 });

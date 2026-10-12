@@ -44,12 +44,16 @@
  *    gating — so the certified property "AI contradiction never gates" holds either way,
  *    while keeping the "zero AI invocations" assertion airtight).
  *
- * PROVEN (positive path): with EVERY AI provider down, a VALIDATED quant strategy's real
- * triggered idea flows ChiefTrader -> central authorization -> QuantExecutionPolicy ->
- * CHIEF_APPROVED_IDEA (decisionPolicy QUANT_EXECUTION, consensusConfidence null) ->
- * RiskAgent -> RiskEngine (approved, gates recorded) -> OMS -> paper broker BUY fill,
- * then a real PortfolioManager SELL exit through the real ChiefTrader risk-exit path ->
- * RiskEngine -> OMS -> SELL fill, ending flat with realized P&L.
+ * PROVEN (2026-10-11 consensus-bypass remediation): with EVERY AI provider down, a
+ * VALIDATED quant strategy's real triggered idea flows ChiefTrader -> central
+ * authorization -> QuantExecutionPolicy (prefilter PASSES) -> the STANDARD consensus
+ * evidence pool — and is NOT approved: a single QuantEngine voice cannot satisfy the
+ * min-2-independent-agents floor (DESK_NO_TRADE, INSUFFICIENT_AGENT_PARTICIPATION).
+ * The pre-2026-10-11 direct-approval branch (threshold: 0, zero independent agents)
+ * was a silent architectural exception to the standing consensus invariants —
+ * remediated, no exception granted. A validated quant idea now needs a genuine second
+ * independent voice (or the operator-gated quant-independent qualification) to clear
+ * the IDENTICAL gate every other idea faces. Correct NO_TRADE is the certified outcome.
  *
  * PROVEN (negative controls): AI-originated ideas fail closed with AI down (DESK_NO_TRADE,
  * no approval, no AI calls); an UNTESTED-lifecycle strategy falls back to consensus and a
@@ -427,7 +431,14 @@ describe('Phase 17 — AI-offline quant certification (Quant-First Decision Arch
     }, 100);
   }
 
-  it('AI-offline positive path: validated quant idea -> QUANT_EXECUTION -> RiskEngine approval -> OMS -> paper BUY fill', async () => {
+  // 2026-10-11 (consensus-bypass remediation): the pre-2026-10-11 version of this test
+  // certified the bypass end-to-end (direct CHIEF_APPROVED_IDEA with threshold: 0, then
+  // RiskEngine -> OMS -> paper BUY fill). That approval branch is REMOVED. New certified
+  // behavior: the policy prefilter PASSES (real authorization, real policy evaluation),
+  // the idea enters the standard consensus pool, and the round correctly ends in
+  // NO_TRADE — a single QuantEngine voice cannot clear the min-2-independent-agents
+  // floor, and the 0.75 strict-> gate is never skipped. Zero AI involvement throughout.
+  it('AI-offline: validated quant idea passes the policy prefilter but is NOT approved — single voice cannot clear the consensus gate', async () => {
     const { generateTraceId } = (globalThis as any).__cert;
     const traceId = generateTraceId('AAPL');
     const idea = buildQuantIdea('AAPL', positiveEvaluation, traceId);
@@ -440,105 +451,43 @@ describe('Phase 17 — AI-offline quant certification (Quant-First Decision Arch
 
     await chiefTrader.reviewIdea(idea);
 
-    // (a) CHIEF_APPROVED_IDEA with the quant decision-policy provenance.
-    await waitFor(() => approvals.some((a) => a.traceId === traceId), 15000, 'CHIEF_APPROVED_IDEA');
-    const approval = approvals.find((a) => a.traceId === traceId);
-    expect(approval.side).toBe('BUY');
-    expect(approval.decisionPolicy).toBe('QUANT_EXECUTION');
-    expect(approval.consensusConfidence).toBeNull();
-    expect(approval.strategyId).toBe(positiveStrategyId);
-    expect(approval.transactionId).toMatch(/^ARG-/);
-    // The COMPLETED signal for this trace came from the policy branch, not the consensus evaluator.
+    // (a) The policy prefilter passed: the idea entered the consensus evidence pool
+    // (exactly one decision path — no direct approval, no bypass).
+    expect((chiefTrader as any).recentIdeas.filter((i: any) => i.traceId === traceId)).toHaveLength(1);
+    expect(approvals.some((a) => a.traceId === traceId)).toBe(false);
+
+    // (b) The identical consensus gate every other idea faces: single voice ->
+    // INSUFFICIENT_AGENT_PARTICIPATION, never an approval.
+    await waitFor(() => noTrades.some((e) => e.traceId === traceId), 15000, 'DESK_NO_TRADE for quant idea');
+    const noTrade = noTrades.find((e) => e.traceId === traceId);
+    expect(noTrade.terminalReasonCode).toBe('INSUFFICIENT_AGENT_PARTICIPATION');
+    expect(noTrade.reason).toContain('independent evidence group');
+    expect(approvals.some((a) => a.traceId === traceId)).toBe(false);
     const completed = consensusCompleted.find((e) => e.traceId === traceId);
     expect(completed).toBeTruthy();
-    expect(completed.decisionPolicy).toBe('QUANT_EXECUTION');
-    expect(completed.terminalReasonCode).toBe('QUANT_POLICY_APPROVED');
-    // The idea never entered the consensus evidence pool: the router decided it first.
-    expect((chiefTrader as any).recentIdeas.filter((i: any) => i.traceId === traceId)).toHaveLength(0);
+    expect(completed.approved).toBe(false);
+    expect(completed.terminalReasonCode).toBe('INSUFFICIENT_AGENT_PARTICIPATION');
 
-    // (b) Real RiskEngine approval with every gate recorded.
-    await waitFor(async () => {
-      const rows = await db.select().from(schema.riskAssessments).where(eq(schema.riskAssessments.traceId, traceId));
-      return rows.length > 0;
-    }, 15000, 'risk_assessments row');
-    const [assessment] = await db.select().from(schema.riskAssessments).where(eq(schema.riskAssessments.traceId, traceId));
-    const gates = await db.select().from(schema.riskGateResults).where(eq(schema.riskGateResults.traceId, traceId));
-    expect(assessment.approved).toBe(true);
-    expect(assessment.rejectionGate).toBeNull();
-    expect(assessment.maxQuantity).toBeGreaterThan(0);
-    expect(gates.length).toBeGreaterThan(0);
-    expect(gates.every((g: any) => g.passed)).toBe(true);
-    for (const name of ['emergency_stop', 'price_validity', 'data_freshness', 'sufficient_size']) {
-      expect(gates.map((g: any) => g.gateName)).toContain(name);
-    }
-
-    // (c) Zero AI involvement: no calls, no routable provider, decision path never invoked the router.
+    // (c) Zero AI involvement: no calls, no routable provider, no debate attempted
+    // (single voice below any debate path that could consult AI — and AI is down anyway).
     const aiCallRows = await db.select().from(schema.aiCalls);
     expect(aiCallRows).toHaveLength(0);
     expect(await AIRouter.getInstance().hasAnyRoutableProvider()).toBe(false);
     expect(routeConsensusSpy).not.toHaveBeenCalled();
     expect(routeTaskSpy).not.toHaveBeenCalled();
 
-    // (d) Real OMS -> paper broker BUY fill (tick-driven, never a hand-inserted row).
-    await waitFor(async () => {
-      const rows = await db.select().from(schema.trades).where(eq(schema.trades.traceId, traceId));
-      return rows.length > 0 && rows[0].status === 'FILLED' && !!rows[0].brokerOrderId;
-    }, 30000, 'BUY trade FILLED');
-    const [trade] = await db.select().from(schema.trades).where(eq(schema.trades.traceId, traceId));
-    expect(trade.side).toBe('BUY');
-    expect(trade.symbol).toBe('AAPL');
-    expect(trade.quantity).toBeGreaterThan(0);
-    expect(trade.price).toBeGreaterThan(0);
-    expect(trade.quantStrategyId).toBe(positiveStrategyId);
-    expect(trade.executionEnvironment).toBe('PAPER');
-    const fillRows = await db.select().from(schema.fills).where(eq(schema.fills.orderId, trade.id));
-    expect(fillRows.length).toBeGreaterThanOrEqual(1);
-    expect(fillRows.reduce((s: number, r: any) => s + r.quantity, 0)).toBe(trade.quantity);
+    // (d) Nothing reached RiskEngine/OMS: no risk assessment, no trade, no fill.
+    const riskRows = await db.select().from(schema.riskAssessments).where(eq(schema.riskAssessments.traceId, traceId));
+    expect(riskRows).toHaveLength(0);
+    const tradeRows = await db.select().from(schema.trades).where(eq(schema.trades.traceId, traceId));
+    expect(tradeRows).toHaveLength(0);
   }, 90000);
 
-  it('AI-offline round trip: organic PortfolioManager SELL exit closes the position flat with realized P&L', async () => {
-    const { portfolioMonitor } = await import('../services/PortfolioMonitor');
-    const { marketDataWorker } = await import('../services/MarketDataWorker');
-    const [opening] = await db.select().from(schema.trades).where(eq(schema.trades.symbol, 'AAPL'));
-    const { takeProfitPrice } = await import('../services/PortfolioMonitor').then(m =>
-      m.resolvePositionStopTarget('AAPL', opening.price));
-    // Control the market, never inject an exit idea: the real monitor must detect its target.
-    const exitPrice = Math.max(takeProfitPrice + 1, positiveCurrentPrice * 1.03);
-    tickPriceBySymbol = { AAPL: exitPrice };
-    await waitFor(() => marketDataWorker.getLatestPrice('AAPL') === exitPrice, 15000, 'fresh exit quote');
-    const exits: any[] = [];
-    const onIdea = (idea: any) => {
-      if (idea.symbol === 'AAPL' && idea.side === 'SELL' && idea.agent === 'PortfolioManager') exits.push(idea);
-    };
-    eventBus.on(EVENTS.TRADE_IDEA_GENERATED, onIdea);
-    try { await portfolioMonitor.triggerNow(); }
-    finally { eventBus.off(EVENTS.TRADE_IDEA_GENERATED, onIdea); }
-    expect(exits).toHaveLength(1);
-    expect(exits[0].reasoning).toContain('EXIT_CODE=TARGET_REACHED');
-    const traceId = exits[0].traceId;
-
-    // Risk-exit path: approved without debate or a second agent, through the real consensus evaluator.
-    await waitFor(() => approvals.some((a) => a.traceId === traceId), 15000, 'exit CHIEF_APPROVED_IDEA');
-    const approval = approvals.find((a) => a.traceId === traceId);
-    expect(approval.side).toBe('SELL');
-    expect(approvals.filter((a) => a.traceId === traceId)).toHaveLength(1);
-
-    await waitFor(async () => {
-      const rows = await db.select().from(schema.trades).where(eq(schema.trades.traceId, traceId));
-      return rows.length > 0 && rows[0].status === 'FILLED';
-    }, 30000, 'SELL trade FILLED');
-    const [sellTrade] = await db.select().from(schema.trades).where(eq(schema.trades.traceId, traceId));
-    expect(sellTrade.side).toBe('SELL');
-    expect(sellTrade.executionEnvironment).toBe('PAPER');
-    expect(Number.isFinite(sellTrade.profitLoss)).toBe(true);
-    expect(sellTrade.profitLoss).toBeGreaterThan(0);
-
-    // Flat: the broker holds no AAPL shares after the real SELL fill.
-    const positions = await BrokerManager.getInstance().getActiveBroker().positions();
-    const aapl = positions.find((p: any) => p.symbol === 'AAPL');
-    expect(!aapl || aapl.quantity === 0).toBe(true);
-  }, 90000);
-
+  // 2026-10-11 (consensus-bypass remediation): the round-trip test below it was REMOVED.
+  // It depended on the position opened by the remediated direct-approval branch. The
+  // PortfolioManager SELL-exit path itself is unchanged and remains covered by the
+  // risk-exit suites; re-adding a round trip here requires a legitimately-opened
+  // position (two independent voices clearing consensus), not the bypass.
   it('negative control (a): AI-originated idea fails closed with AI down — DESK_NO_TRADE, no approval, no AI calls', async () => {
     const { generateTraceId } = (globalThis as any).__cert;
     const traceId = generateTraceId('NVDA');

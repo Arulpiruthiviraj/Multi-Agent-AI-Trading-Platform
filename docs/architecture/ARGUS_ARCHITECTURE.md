@@ -228,9 +228,97 @@ rows NULL).
 strategy must complete the full path to fill and organic exit while AI-originated ideas fail
 closed. See the test file's header for the certified assertions.
 
+## 2026-10-11: Quant-First consensus-bypass remediation (ChiefTrader policy router)
+
+**Root cause (documented per the defect-closure mission):** the 2026-10-07 policy router's
+`AUTHORIZED_QUANT_POLICY` branch approved directly — `recordConsensusTransaction` +
+`eventBus.emitChiefApproval` with `threshold: 0` ("never compared against") and
+`independentAgreeingAgents: 0` / `requiredAgents: 0`. That was a **silent architectural
+exception to the standing consensus invariants** (strict > 0.75 confidence,
+min-2-independent-agents), structurally skipping the gate every other idea clears.
+Remediated — no exception granted, not preserved or grandfathered.
+
+**What changed.** `ChiefTraderAgent.reviewIdea` still routes `QUANT_STRATEGY`-origin ideas
+through central `resolveQuantStrategyAuthorization()`, but `AUTHORIZED_QUANT_POLICY` now
+runs `evaluateQuantExecutionPolicy()` as a **fail-closed pre-filter only** (renamed to
+`evaluateQuantPolicyPrefilter`, returns boolean): it may **reject** (terminal
+`DESK_NO_TRADE`, `QUANT_POLICY_REJECTED`, precise `QUANT_*` reason code — never
+re-routed), never **approve**. A policy-passed idea falls through to the standard
+consensus intake (`upsertIdea` → `evaluateConsensus`) and must clear the **identical**
+gate as every other idea: weighted confidence strictly > `CONSENSUS_APPROVAL_THRESHOLD`
+(0.75), ≥ `MIN_INDEPENDENT_AGREEING_AGENTS` independent evidence groups, plus every
+veto (debate HOLD, bear HOLD, AI contradiction) and the operator CONFIRM side-lock
+(which the consensus path already enforces). A policy-passed quant idea at < 0.75 or
+with a single voice correctly `NO_TRADE`s (`CONFIDENCE_BELOW_STRONG` /
+`INSUFFICIENT_AGENT_PARTICIPATION`). One idea, one decision — the consensus one.
+
+**What did NOT change.** Consensus bar (0.75 / min-2-agents), RiskEngine (27 gates), OMS
+as sole `.placeOrder(` caller, `LIVE_NO_GO` / `PAPER_TRADING_ONLY`, the
+`CHIEF_APPROVED_IDEA` emitter allowlist, `NOT_ELIGIBLE`/`NOT_AUTHORIZED` terminal
+rejections, `REQUIRES_CONSENSUS` fall-through, risk-exit bypass of the router, the
+`QUANT_INDEPENDENT` consensus tier (disjoint idea set, explicit operator override).
+`QuantExecutionPolicy` itself is untouched — only its *caller* lost the direct-approval
+branch. The `quant_policy_evaluated` observability event still fires (`QUANT_POLICY_APPROVED`
+now means "prefilter checks passed", not a trade approval).
+
 **Investigation (Phases 9/10/11):** `docs/audits/QUANT_FIRST_PHASE9_10_11_INVESTIGATION_2026-10-07.md`
 — fast lane verified inert (zero live ideas; permanently `REQUIRES_CONSENSUS`), exit semantics
 (agent-tagged, not origin-tagged).
+
+## 2026-10-11: Release certification driver + full-session synthetic certification harness (Worker H)
+
+**Release certification driver** (`src/server/certification/releaseCertificationDriver.ts`):
+orchestrates ALL mandatory next-session checks from a manifest. Each check resolves to
+`PASS` / `FAIL` / `NOT_RUN` / `UNKNOWN` / `NOT_CERTIFIED`; **READY is true only if every
+mandatory check is PASS** — a partial probe can never report READY (`FAIL`, `NOT_RUN`,
+`UNKNOWN`, `NOT_CERTIFIED` all force `READY=false`, fail-closed). Suite-delegated checks
+name their owning test files (`delegatedToSuite`) and are actually executed via vitest
+child processes under `--with-suites`; live probes (component health via `--engine-url`)
+resolve to `UNKNOWN` when the engine is unreachable rather than assuming health.
+`argus-cli certify-next-session` (`scripts/certifyNextSession.ts`) runs the driver and
+emits the flat 44-field machine contract (`BUILD_SHA`, `ARTIFACT_HASH`, `CONFIG_HASH`,
+`SCHEMA_VERSION`, `JAVA_ARTIFACT_HASH`, `STRATEGY_REGISTRY_HASH`, `DB_SNAPSHOT_ID`,
+`PRODUCTION_CONFIG_EQUIVALENT`, `LIFECYCLE_SUMMARY`, `AUTHORIZED_PAPER_QUANT_STRATEGIES`,
+`QUANT_POLICY_REACHABILITY`, `JEV_*`, `ALL_AI_DOWN_QUANT`, `HISTORICAL_DATA_FRESHNESS`,
+`INTRADAY_DATA_READINESS`, `MARKET_DATA_HEALTH`, `SUBSCRIPTION_HEALTH`,
+`SCHEDULER_P50/P95/P99/MAX`, `MRNA_SCENARIO`, `CRCL_SCENARIO`, `FAST_LANE`,
+`ASYNC_OWNERSHIP`, `PIT_REPLAY`, `NO_LOOKAHEAD`, `PREMARKET`, `RISK_SPINE`, `OMS`,
+`RECONCILIATION`, `BACKUP`, `WATCHDOG`, `MEMORY`, `QUEUES`, `LISTENERS`, `TIMERS`,
+`WORKERS`, `FULL_SESSION`, `WALL_CLOCK_SOAK`, `OVERALL_STATUS`); exit 0 = READY, 2 =
+READY_WITH_CONDITIONS, 3 = NO_GO (a result, not a bug), 1 = internal error. The production
+DB is snapshotted with the sqlite3 online `.backup` API into an isolated copy — the prior
+raw-copy snapshot fallback was deleted; a failed snapshot fails loud, never falls back.
+
+**Full-session synthetic certification harness** (environment-only fault injection;
+synthetic controls the ENVIRONMENT, never the decision — no forced signals, approvals,
+or fills above the broker boundary):
+- `src/server/replay/synthetic/SessionFaultPlan.ts` — the session fault plan: premarket
+  probes (`RISK_REJECTION_PROBE`, `INVALID_STRATEGY_PROBE`, `VALID_STRATEGY_PROBE`,
+  `STALE_TAIL_PROBE`), bar-level one-shots (`LATE_MOVER`, `NEWS_BURST`, `AI_OUTAGE`,
+  `AI_RECOVERY`, `JEV_OUTAGE_PROBE`, `BACKUP_RUN`), and window faults
+  (`FEED_INTERRUPTION`, `PARTIAL_FILL_LIQUIDITY_CAP`). All production imports are dynamic;
+  faults never steer a decision.
+- `SyntheticSessionEngine` extensions: `faultPlan` application per bar, 30-day-shifted
+  stale-cache tails, `stopAfterBarIndex` / resume-from-`brokerState` for restart
+  certification, feed-interruption tick suppression, idempotent settings seeding, and the
+  **idea-generation-gate proof** (`ideaGenerationGateOpen`): the engine records whether
+  `isLiveIdeaGenerationEnabled()` was true at boot. A session whose restart-safety hold
+  was engaged (stale unclean session marker from a previous crashed run with the same
+  simulationId) or whose trading state was paused silently gates every idea agent — a
+  "no ideas" result then proves nothing. `evaluateCertification` FAILs a held session
+  fail-loud; planned restart stops mark a clean shutdown (`markCleanShutdown()`) so the
+  resume half does not inherit a spurious hold, and the driver uses a unique
+  simulationId per run.
+- `HistoricalReplayBroker.exportState()` / `importState()` — additive broker-state
+  snapshot/restore for restart continuity (positions, cash, orders); no behavior change
+  to the fill path.
+
+Certification artifacts: `docs/testing/ARGUS_FULL_SESSION_SYNTHETIC_CERTIFICATION.md`
+(session design, scenario matrix results, defects found),
+`docs/testing/ARGUS_NEXT_SESSION_CERTIFICATION.md` §11 (production-state run results +
+CLI output). House rule: synthetic calibration fixtures are labeled
+`SYNTHETIC_SEEDED` / `NON_ORGANIC` / `CERTIFICATION_FIXTURE_ONLY` and never presented as
+organic evidence.
 
 ## 2026-10-07: `DbBackupService` retention defect fix (unbounded backup growth filled the disk)
 
@@ -4717,3 +4805,89 @@ Closes the precise gap the Oct-9 forensic exposed: 755 NO_LIFECYCLE_RECORD autho
 Three stages, each with a structural guarantee: evaluateCertification() is PURE over (StrategyEvidence, CertificationSamples, CertificationProvenance) — it reads config/researchSafety.json minimums (minOosTrades 30 for backtest/OOS samples, minWalkForwardWindows 3, the full paper minimum set), treats any "pass" on an insufficient sample as a FAIL, and returns an assessment with a ladder (VALIDATED only on the full gate set; ACTIVE_EXPLORATION when research is complete but paper is accumulating — consensus path, never AI-independent authority; CANDIDATE/SHADOW/UNTESTED below; NONE fail-closed on retired/degraded evidence or unknown strategy). It cannot write: a static test asserts the module holds exactly one recordStrategyLifecycleTransition call site. applyOperatorReview() mints the branded ReviewedCertification only after runtime-validating reviewer identity, decidedAt timestamp, written rationale, and targetStatus == assessed eligibleTarget (the operator may not approve a status the evidence does not support) — the type-level half of "review cannot be skipped". executeCertificationTransition() re-validates brand + review, refuses RETIRED/DEGRADED current status (reversal is the existing reinstateStrategyForEmission -> ROLLED_BACK path, never this bridge), requires current VALIDATED for CHAMPION (comparative promotion only), rejects any target outside the closed runtime vocabulary (the research-side LIVE_CANDIDATE/LIVE_APPROVED statuses are inexpressible here — LIVE authority cannot be produced), then records via the EXISTING recordStrategyLifecycleTransition with a full audit payload (strategyId, old/new status, evidence IDs, scope, sample size, OOS/walk-forward results, gate failures, reason, reviewer provenance, timestamps, build version).
 
 Tested in certificationBridge.test.ts (10/10, isolated temp DB, synthetic CERTIFICATION_FIXTURE_ONLY evidence): insufficient evidence / bad OOS / poor walk-forward -> no authority; RETIRED PULLBACK_CONTINUATION stays retired (assessment fail-closed on retired evidence AND execution refused on terminal current status); legitimate reviewed qualification -> VALIDATED recorded by the workflow itself -> AUTHORIZED_QUANT_POLICY via the real resolver; missing review -> no transition (empty reviewer, bad timestamp, missing rationale, target mismatch, forged unbranded object all throw); LIVE authority impossible (LIVE_APPROVED rejected at review, and the recorded VALIDATED row grants nothing with the paper-only env lock off). No production caller and no schedule: the bridge runs only when an operator deliberately invokes it. productionStateCertification.ts now surfaces the route in its certificationBridge field so the pre-market output names the legitimate path when it reports missing rows. Full operator runbook: docs/testing/LIFECYCLE_CERTIFICATION_BRIDGE.md. No threshold lowered, no alpha/strategy changes, PAPER-only, control-plane code (Java 26 Engine Authority untouched).
+
+## October 11, 2026: Defect-closure mission — architectural consequences (branch `mission/oct8-oct9-closure`)
+
+Mission closeout: `docs/audits/ARGUS_OCT8_OCT9_COMPLETE_HARDENING_REPORT.md` (Worker I), final
+issue matrix `docs/audits/ARGUS_OCT8_OCT9_FINAL_ISSUE_MATRIX.md`, escape registry additions
+`docs/testing/ARGUS_DEFECT_ESCAPE_REGISTRY.md` (Phase 2/3). 26/26 mission defects fixed on the
+repair branch (per-fix commits; full-suite run PENDING coordinator). This appendix records only
+the architectural consequences; per-issue detail lives in the hardening report and register.
+
+### QUANT_EXECUTION consensus remediation — policy is a fail-closed prefilter, not an approver
+
+The 2026-10-07 quant-first policy router's `AUTHORIZED_QUANT_POLICY` branch approved ideas
+directly (`threshold: 0`, `independentAgreeingAgents: 0`) — a silent exception to the standing
+strict >0.75 / min-2-independent-agents consensus invariants. Remediated at 52b6933 (see the
+dedicated section added by that commit, "2026-10-11: Quant-First consensus-bypass
+remediation"): `evaluateQuantPolicy` became `evaluateQuantPolicyPrefilter` (boolean,
+fail-closed — may REJECT with terminal `QUANT_POLICY_REJECTED`, never APPROVE). A
+policy-passed idea falls through to the standard consensus intake (`upsertIdea` →
+`evaluateConsensus`) and clears the IDENTICAL gate as every other idea, including the
+operator CONFIRM side-lock. `lastConsensusOutcome` now records the real invariants.
+No exception granted, not preserved or grandfathered; no threshold/gate lowered; no new
+execution path. The spine shape is now: `TRADE_IDEA_GENERATED` → (policy prefilter may
+reject) → ChiefTrader consensus (strict >0.75, min-2-independent-evidence, vetoes) →
+RiskEngine (27 gates) → PositionSizing → OMS → BrokerManager.
+
+### Quarantine — formally sanctioned safe-abandonment protocol (mission adjudication)
+
+Fast Lane (and the quant priority scheduler's quant stage) quarantine hung work: the
+concurrency slot is returned as fungible capacity while ownership/dedup are RETAINED and the
+late settle is discarded via a generation guard. At 7bd0ddc the mission recorded the
+adjudication in code comments: quarantine is BLESSED as the formally-sanctioned
+safe-abandonment protocol. Returning fungible capacity while retaining ownership/dedup, with
+bounded loud eviction (`fastLaneQuarantineMaxAgeMs`, 3600000ms default, `config/tradingSafety.json`)
+and generation-guarded late-settle discard, satisfies the safety rules. The quarantine state's
+contract is now: (1) capacity is fungible — slot recoverable after bounded age; (2) dedup is
+retained — replacement work refused via `PRIOR_EVALUATION_STILL_IN_FLIGHT`; (3) late settle
+never double-applies — generation guard; (4) eviction is loud and bounded — log + dedup
+release at max age. The same quarantine semantics were adopted by the scheduler's quant-stage
+watchdog (b509d39).
+
+### RiskEngine gate count: 27 (and stale references)
+
+The informational `buying_power_reservation` gate made 27 gates on 2026-10-08 (OCT8-18,
+commit bf926a0). The mission re-verified the 27-gate catalog and the pre-mission review
+confirmed all 27 gates intact. Stale references: `README.md` (lines ~63, ~121) and
+`CLAUDE.md` / repo `AGENTS.md` still say "25 gates" in several spots — flagged for the
+coordinator as needed doc updates (no code change).
+
+### Jev — INERT, certified advisory-only (Worker C certification, mission closeout)
+
+Jev (TypeSafe "System One") is certified as optional, event-driven, advisory-only
+intelligence: `docs/architecture/JEV_INTEGRATION_ARCHITECTURE.md`. INERT — no API key
+configured; every call path short-circuits before any network attempt; external smoke
+NOT_CERTIFIED. The mission fixed Worker C's single certification finding: Phase 2
+escalation `NewsEngine.tryJevFirstAnalysis` now routes through `AICallGovernor` (02217be);
+all Jev call sites are governor-routed. Jev cannot calculate indicators, cannot bypass
+RiskEngine/OMS, cannot place orders, cannot grant lifecycle authorization, cannot override
+the kill switch/reconciliation/stale-data protection — proven by
+`jevCannotCauseOrder.test.ts` (15 tests) and the AI-independence suites. All-AI-down quant
+mechanism remains certified (`AiOfflineQuantCertification.test.ts`, now certifying the
+honest NO_TRADE under the remediated consensus path).
+
+### Quant scheduler SLA (post-mission target state)
+
+The legacy sequential scheduler's observed latencies (admission→completion p50 12.92min /
+p95 63.70min / max 193min, Oct-9 forensic; MRNA first assessed 6h46m after admission) were
+replaced by the bounded priority scheduler (P0/P1/P2/P3; `QUANT_PRIORITY_SCHEDULER_ENABLED`,
+default OFF in `.env.example`; legacy path byte-for-byte unchanged when off; split-brain on
+flag transitions fixed 667e718): HIGH start≤30s p95 / complete≤60s p95; NORMAL start≤60s /
+complete≤120s p95; quant-stage liveness watchdog; `externalInflight` TTL. The mission closed
+three scheduler-scheduler defects (4210cf0): expired/quarantined evaluations can no longer
+emit (at-emit `isLiveCheck` gate → `DESK_NO_TRADE SCHEDULER_EVALUATION_NOT_LIVE`); the
+stopped-singleton silent-dead-cycle path is closed (unconditional re-init); the dead
+data-readiness docstring was corrected. Dead-waiter permit handoff fixed (4c437c4). Stage
+timestamps now split worker acquisition from strategy selection (57dee97), so the SLA can be
+audited rather than treated as a black box.
+
+### New config keys (mission)
+
+- `fastLaneQuarantineMaxAgeMs` (3600000ms) in `config/tradingSafety.json` with an inline
+  comment — resource governor, not a trading threshold. Not env-mapped (no FASTLANE_ env
+  precedent in `.env.example`).
+- `SOAK_MAX_RSS_MB` / `SOAK_MAX_RSS_DELTA_MB` / `SOAK_MAX_EVENT_LOOP_P95_MS` /
+  `SOAK_MAX_DB_GROWTH_BYTES` / `SOAK_MAX_WAL_BYTES` (new env vars in
+  `scripts/soak/threeHourSoakChild.ts`, 72c7169) — NOT yet in `.env.example`; flagged for
+  the coordinator per the every-new-env-field rule.

@@ -659,6 +659,15 @@ export class AICallGovernor {
       timeoutMs,
       ttlMs,
       startedAt,
+      // 2026-10-11 (#18): the singleflight entry is deleted when invoke settles,
+      // not when the timeout race settles. If the timeout wins the race, invoke may
+      // still run until it observes controller.abort(); deleting at race-settle would
+      // let a duplicate request in that window start a second provider call.
+      onInvokeSettled: () => {
+        if (this.inFlight.get(fingerprint) === execPromise) {
+          this.inFlight.delete(fingerprint);
+        }
+      },
     });
     // Register synchronously: every step above this point is synchronous, so a
     // concurrent duplicate request can only arrive after this registration and
@@ -667,7 +676,7 @@ export class AICallGovernor {
     try {
       return await execPromise;
     } finally {
-      if (this.inFlight.get(fingerprint) === execPromise) this.inFlight.delete(fingerprint);
+      // No deletion here — onInvokeSettled handles it when invoke settles.
     }
   }
 
@@ -685,6 +694,7 @@ export class AICallGovernor {
     timeoutMs: number;
     ttlMs: number;
     startedAt: number;
+    onInvokeSettled?: () => void;
   }): Promise<GovernorResult<T>> {
     const {
       capability,
@@ -699,6 +709,7 @@ export class AICallGovernor {
       timeoutMs,
       ttlMs,
       startedAt,
+      onInvokeSettled,
     } = args;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -707,6 +718,12 @@ export class AICallGovernor {
         capability === 'STRUCTURED_DECISION'
           ? this.invokeJev<T>(jevProvider, opts, timeoutMs, controller.signal)
           : this.invokeGenerative<T>(timeoutMs, controller.signal);
+      // 2026-10-11 (#18): delete the singleflight entry when invoke settles, not
+      // when the timeout race settles. Keeps abort-on-timeout; prevents a duplicate
+      // request in the timeout-to-abort-observation window from starting a second call.
+      if (onInvokeSettled) {
+        invoke.finally(onInvokeSettled);
+      }
       // Suppress unhandled-rejection noise if the timeout path wins the race
       // and the provider promise settles later.
       invoke.catch(() => undefined);

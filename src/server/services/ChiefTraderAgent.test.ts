@@ -95,6 +95,28 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     expect(approval.confidence).toBeCloseTo(0.95, 5);
   });
 
+  it('2026-10-11 (#26): exactly-0.75 confidence is REJECTED — the threshold is strict > (never >=)', async () => {
+    // Two independent agents agree (min-2 satisfied), but weighted confidence is
+    // exactly CONSENSUS_APPROVAL_THRESHOLD (0.75). The gate at ChiefTraderAgent.ts:1123
+    // is `confidence <= CONSENSUS_APPROVAL_THRESHOLD` → NO TRADE: the threshold is
+    // strict-greater-than, so exactly-0.75 must NOT approve.
+    agent.recentIdeas = buyPair('AAPL', 0.75);
+
+    await agent.evaluateConsensus('AAPL', 't1');
+
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
+  it('2026-10-11 (#26): just-above-0.75 confidence IS eligible — pins the strict-> boundary from both sides', async () => {
+    // Same two-agent agreement, but confidence a hair above the threshold: the
+    // strict-> gate clears and approval is eligible (all other gates mocked to pass).
+    agent.recentIdeas = buyPair('AAPL', 0.7501);
+
+    await agent.evaluateConsensus('AAPL', 't1');
+
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+  });
+
   // 2026-10-06 (Fast Lane Canonical Integration, Section 7 - "independence must not be inflated",
   // the mandate's own explicit "most important test in this phase"). Uses the REAL, unmodified
   // ChiefTraderAgent in this file's own safely-isolated harness (eventBus/db/AIRouter all mocked -

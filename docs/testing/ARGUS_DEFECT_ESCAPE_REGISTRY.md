@@ -361,6 +361,226 @@ on it. This is a testing-mission Phase 1 document; it records history, it does n
 
 ---
 
+## Phase 2 — October 10 escapes (cross-cutting defect hunt, commits 6294ace..ab30389)
+
+### OCT10_IBKR_WEB_PORTFOLIO_THROW_ESCAPE
+
+- **What happened (found 2026-10-10, fixed 3edf5bc):** The IBKR Web adapter's
+  `portfolio()` and `orders()` THREW on a positions-request failure instead of returning
+  `[]`. A failing request became an exception propagating up the call stack instead of an
+  empty, fail-closed, observable result.
+- **OLD_TEST_GAP:** Broker adapter tests exercised the happy path and malformed payloads;
+  no test failed the underlying positions request and asserted the empty-array contract.
+- **NEW_TEST:** Broker suites (25/25 at the pre-mission review, 2026-10-11) — request
+  failure -> `[]`, never throw.
+- **NEW_RELEASE_INVARIANT:** Broker adapter fail-closed contract — a failing broker
+  request must return the empty result, never throw, or the pre-market gate is red.
+- **Responsible layer:** LAYER 2 (provider contract).
+
+### OCT10_QUESTRADE_SIDE_MISLABEL_ESCAPE
+
+- **What happened (found 2026-10-10, fixed 781bfb3):** The Questrade adapter mapped order
+  sides STC/STO/Short to **BUY**. A BUY-mislabeled short side is a severe order-semantics
+  defect; PAPER_ONLY / LIVE_NO_GO contained the blast radius.
+- **OLD_TEST_GAP:** Side-mapping was assumed correct by construction; no test asserted
+  the exact side mapping for every row type.
+- **NEW_TEST:** Broker suites (25/25) — exact side mapping asserted per row type;
+  malformed rows skipped individually (per-row skip added).
+- **NEW_RELEASE_INVARIANT:** Broker order-semantics contract — every adapter's side
+  mapping is asserted exhaustively in the pre-market gate.
+- **Responsible layer:** LAYER 2 (provider contract).
+
+### OCT10_ALPACA_MALFORMED_ROW_ESCAPE
+
+- **What happened (found 2026-10-10, fixed 1856513):** `AlpacaBroker.orders()` crashed on
+  malformed rows instead of skipping them — one bad row killed the whole read.
+- **OLD_TEST_GAP:** Adapter tests fed only well-formed rows; no malformed-row resilience test.
+- **NEW_TEST:** Broker suites (25/25) — malformed rows skipped, valid rows processed.
+- **NEW_RELEASE_INVARIANT:** Same broker order-semantics contract as above.
+- **Responsible layer:** LAYER 2 (provider contract).
+
+### OCT10_JAVA_JSON_LONG_ESCAPE
+
+- **What happened (found 2026-10-10, fixed 6294ace/170b19c):** Java `Json.write` emitted
+  `Long.MAX_VALUE` for integral doubles >= 2^63 (silent numeric corruption at the TS-Java
+  boundary); malformed JSON numbers/escapes mapped to HTTP 500 instead of
+  `JsonParseException` (400) (a client-input error masquerading as a server failure).
+- **OLD_TEST_GAP:** No boundary tests on numeric serialization at the Java/TS boundary;
+  no status-code assertion for malformed JSON input.
+- **NEW_TEST:** Java defect-hunt tests (6294ace, 170b19c). TS-Java bridge contract now
+  pinned by the static, mutation-checked test (d89945b).
+- **NEW_RELEASE_INVARIANT:** Bridge-contract test runs in the pre-market gate; any
+  serialization/schema drift is red.
+- **Responsible layer:** LAYER 2 (engine boundary).
+
+### OCT10_JAVA_SLASH_SYMBOL_ESCAPE
+
+- **What happened (found 2026-10-10, fixed 4151eab):** Symbols containing `/` were
+  truncated at the slash in path-param handlers.
+- **OLD_TEST_GAP:** No adversarial-symbol tests on path-param routing.
+- **NEW_TEST:** Java defect-hunt tests (4151eab).
+- **NEW_RELEASE_INVARIANT:** Same bridge-contract invariant as above.
+- **Responsible layer:** LAYER 2 (engine boundary).
+
+### OCT10_JAVA_EMA_SEED_ESCAPE
+
+- **What happened (found 2026-10-10, fixed fc8cb23):** Java's stale first-price EMA
+  seeding diverged from the MACDEngine.ts 2026-09-22 SMA-seeded fix — a TS/Java parity
+  propagation was missed, so the two engines seeded their first EMA differently.
+- **OLD_TEST_GAP:** Parity tests existed but did not cover the seeding edge; no
+  automated check that a TS-side parity fix is propagated to Java.
+- **NEW_TEST:** Parity tests (fc8cb23).
+- **NEW_RELEASE_INVARIANT:** TS-Java parity suite in the pre-market gate.
+- **Responsible layer:** LAYER 2 (engine boundary).
+
+### OCT10_SCHEDULER_SPLIT_BRAIN_ESCAPE
+
+- **What happened (found 2026-10-10, fixed 667e718):** Enabling/disabling
+  `QUANT_PRIORITY_SCHEDULER_ENABLED` mid-run could leave the legacy and priority
+  scheduler paths disagreeing about ownership of candidates (split-brain on flag
+  transitions).
+- **OLD_TEST_GAP:** Scheduler tests flipped no flags mid-run; no ownership-handoff test
+  across transitions.
+- **NEW_TEST:** Flag-transition tests (667e718).
+- **NEW_RELEASE_INVARIANT:** Exactly one scheduling authority across flag transitions,
+  asserted in the scheduler suite; the flag stays default OFF in `.env.example`.
+- **Responsible layer:** LAYER 1 (scheduler contract).
+
+### OCT10_COALESCE_WEDGE_ESCAPE
+
+- **What happened (found 2026-10-10, fixed 4262bda; completed 2026-10-11, b215132):**
+  `ensureBars` coalescing entries (`inflightEnsureBars`) had no liveness bound — a
+  stalled provider call would wedge the window's entry FOREVER. The Oct-10 fix added TTL
+  eviction, but the TTL timer DELETED the in-flight entry while the fetch was still
+  pending (TONIGHT-13), causing duplicate provider work + zombie cache clobbering.
+- **OLD_TEST_GAP:** Coalescing tests never stalled the underlying fetch; the TTL fix's
+  own test did not cover delete-while-pending.
+- **NEW_TEST:** Coalescing TTL tests (4262bda); retain-until-settle + caller-side-timeout
+  regression (b215132).
+- **NEW_RELEASE_INVARIANT:** Coalescing entries are liveness-bounded and settle-guarded;
+  the release invariant is that no bounded timeout deletes shared in-flight state.
+- **Responsible layer:** LAYER 1 (data contract) + LAYER 2 (async ownership).
+
+---
+
+## Phase 3 — Mission-night escapes (2026-10-11, defects TONIGHT-01..26)
+
+### OCT11_CONSENSUS_BYPASS_ESCAPE
+
+- **What happened (found 2026-10-11, fixed 52b6933):** The 2026-10-07 quant-first policy
+  router's `AUTHORIZED_QUANT_POLICY` branch approved ideas directly —
+  `recordConsensusTransaction` + `emitChiefApproval` with `threshold: 0` ("never compared
+  against") and `independentAgreeingAgents: 0` / `requiredAgents: 0` — structurally
+  skipping the standing strict >0.75 consensus bar and the min-2-independent-agents
+  floor. It was a silent architectural exception to invariants Arul had explicitly
+  hardened as absolute.
+- **OLD_TEST_GAP:** The spine tests (`quantLiveAuthority.spine.test.ts`,
+  `quantSpineInvariants.test.ts`) asserted the OLD single-grant shape; no test
+  asserted that NO approval path exists with threshold 0.
+- **NEW_TEST:** Router suite rewritten (policy-pass enters the pool; single voice and
+  <0.75 ideas never approved); `quantSpineInvariants` static tests pin "no approval
+  primitives / no threshold: 0"; boundary tests pin exactly-0.75 -> NO TRADE and
+  0.7501 -> eligible (TONIGHT-26, c78e98e).
+- **NEW_RELEASE_INVARIANT:** No idea may be approved without clearing the identical
+  strict >0.75 / min-2-independent-agents gate; static scan for approval primitives
+  outside the consensus path is a pre-market gate.
+- **Responsible layer:** LAYER 5 (release gate) + LAYER 1 (spine invariant).
+
+### OCT11_CACHE_COLLISION_LOOKAHEAD_ESCAPE
+
+- **What happened (found 2026-10-11, fixed ea1c0c1):**
+  `HistoricalDataGateway.memoryKey()` bucketed on whole hours and ignored
+  provider/adjustment/session-mode/data-type; `getBars()` returned cache hits UNFILTERED.
+  A wider query warming the bucket + a narrower same-bucket query returned post-cutoff
+  bars — cache-served lookahead, a point-in-time integrity defect.
+- **OLD_TEST_GAP:** Cache tests warmed and re-queried the SAME window; no test queried a
+  narrower window after a wider one and asserted no post-cutoff bars.
+- **NEW_TEST:** Regression: query T1, query T2>T1 (warm), repeat T1 -> no post-T1 data
+  (ea1c0c1).
+- **NEW_RELEASE_INVARIANT:** Cache identity is exact-window + source-exact; PIT replay
+  fixtures must include cross-window cache warming.
+- **Responsible layer:** LAYER 1 (data contract).
+
+### OCT11_STALE_TAIL_REOPEN_ESCAPE
+
+- **What happened (found 2026-10-11, fixed 1ab3563):** The Oct-10 stale-tail gate
+  (f9277c7) was correct for the non-empty provider path, but the IBKR-empty path
+  (`'if (existing.length > 0) return;'`) served cached bars WITHOUT consulting the
+  staleTail flag — silently re-admitting the Oct-9 forensic condition (508/972 records
+  >7d stale). A fix can re-open a closed defect when a parallel path predates the fix.
+- **OLD_TEST_GAP:** The f9277c7 regression tested the non-empty path only; no
+  stale-cache + IBKR-empty regression.
+- **NEW_TEST:** Regression: IBKR empty + stale cache + empty Alpaca -> DATA_STALE,
+  never READY-as-fresh (1ab3563). Closes OCT9-02 (register).
+- **NEW_RELEASE_INVARIANT:** Every provider-response shape (empty, partial, error)
+  must be exercised against a stale cache in the data-contract suite.
+- **Responsible layer:** LAYER 1 (data contract).
+
+### OCT11_QUARANTINE_PIN_ESCAPE
+
+- **What happened (found 2026-10-11, fixed 7bd0ddc):** `reapHungLeases` skipped
+  QUARANTINED leases — a never-settling evaluation pinned the symbol with
+  `FAST_LANE_SYMBOL_QUARANTINED` until process restart.
+- **OLD_TEST_GAP:** Reaper tests never aged a quarantined lease; no max-age test on the
+  quarantine state.
+- **NEW_TEST:** Regression: quarantined lease older than max age -> evicted (7bd0ddc).
+- **NEW_RELEASE_INVARIANT:** `fastLaneQuarantineMaxAgeMs` (3600000ms default,
+  `config/tradingSafety.json`) — every non-terminal resource state has a bounded age.
+- **Responsible layer:** LAYER 1 (fast-lane contract). Mission adjudication: quarantine
+  is BLESSED as the formally-sanctioned safe-abandonment protocol.
+
+### OCT11_JEV_GOVERNOR_BYPASS_ESCAPE
+
+- **What happened (found 2026-10-11 by Worker C, fixed 02217be):**
+  `NewsEngine.tryJevFirstAnalysis` (Phase 2 escalation) called Jev directly, bypassing
+  `AICallGovernor` — the Phase 1 shadow path was migrated (c991233, OCT8-10) but Phase 2
+  was not. Same defect class, second instance: a fix applied to one call path does not
+  automatically cover its sibling.
+- **OLD_TEST_GAP:** No call-site inventory test asserted every Jev call routes through
+  the governor.
+- **NEW_TEST:** Governor routing pinned (capability, kind, materiality) at 02217be.
+- **NEW_RELEASE_INVARIANT:** Every Jev call site routes through `AICallGovernor`;
+  a static call-site inventory test owns this.
+- **Responsible layer:** LAYER 2 (AI-provider contract).
+
+### OCT11_ASYNC_OWNERSHIP_ESCAPE
+
+- **What happened (found 2026-10-11, fixed 4c437c4/b9975e4/a637a90):** Three
+  async-ownership defects from Worker D's audit: (17) `PrioritySemaphore` granted permits
+  to terminally-transitioned waiters (wasted handoff, over-reported `waitingCount`);
+  (18) `AICallGovernor` singleflight deleted the dedup entry when the timeout RACE
+  settled while `invoke` still ran (duplicate provider call in the window); (19)
+  `AIRouter` dedup pruned entries by TTL alone while sequential 20s-per-provider
+  executions outlived the TTL (duplicate call for long executions).
+- **OLD_TEST_GAP:** Ownership tests asserted the happy handoff/settle, not the
+  race/settle-boundary: no dead-waiter pruning test, no race-vs-invoke settle test,
+  no execution-lifetime-vs-TTL test.
+- **NEW_TEST:** Semaphore waiter-cancellation; governor onInvokeSettled; router
+  settled-flag prune — all at their fix commits.
+- **NEW_RELEASE_INVARIANT:** Async-ownership audit items: every shared in-flight entry
+  has exactly one documented owner and one settle boundary; TTL never deletes live
+  shared state.
+- **Responsible layer:** LAYER 2 (async ownership).
+
+### OCT11_SOAK_UNIT_MISLABEL_ESCAPE
+
+- **What happened (found 2026-10-11, fixed 72c7169):** The soak child stored
+  `monitorEventLoopDelay` percentiles (NANOSECONDS) into fields named `*Ms` with no /1e6
+  conversion — every soak report's event-loop numbers were 1e6x mislabeled — and
+  `stabilityVerdict` was PASS inferred merely from zero iteration errors while resource
+  bounds gated nothing.
+- **OLD_TEST_GAP:** No unit assertion on soak report fields; the verdict's gating
+  inputs were never asserted.
+- **NEW_TEST:** Soak-child regression (72c7169); verdict now gates on
+  SOAK_MAX_RSS_MB / SOAK_MAX_RSS_DELTA_MB / SOAK_MAX_EVENT_LOOP_P95_MS /
+  SOAK_MAX_DB_GROWTH_BYTES / SOAK_MAX_WAL_BYTES with violations in boundViolations.
+- **NEW_RELEASE_INVARIANT:** Soak verdicts are resource-gated; historical soak reports
+  predating 72c7169 are not evidence (units mislabeled, verdict un-gated).
+- **Responsible layer:** LAYER 4 (soak). **Finding for coordinator:** 5 new SOAK_* env
+  vars are not yet in `.env.example`.
+
+---
+
 ## Reading this registry
 
 1. **Every entry is a real escape**, dated, with the honest gap named. "No test exercised X"

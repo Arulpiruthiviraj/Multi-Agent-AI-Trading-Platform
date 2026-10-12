@@ -633,12 +633,19 @@ export class ChiefTraderAgent {
     }
     console.log(`[ChiefTrader] Reviewing ${idea.side} on ${idea.symbol} proposed by ${idea.agent}`);
 
-    // Quant-First Decision Architecture (2026-10-07): ChiefTrader is a policy ROUTER, not a
-    // universal consensus gate. QUANT_STRATEGY-origin ideas are decided here, BEFORE entering
-    // the consensus evidence pool (upsertIdea below): the consensus path can never also decide
-    // them, so one idea gets exactly one decision by construction. Provenance was normalized
-    // at the idea gate; authority is resolved centrally by QuantStrategyAuthorization — never
-    // self-granted by the emitter. Risk exits are excluded: protective exits never require
+    // Quant-First Decision Architecture (2026-10-07, remediated 2026-10-11): ChiefTrader is a
+    // policy ROUTER. QUANT_STRATEGY-origin ideas are authorized centrally here — authority is
+    // resolved by QuantStrategyAuthorization, never self-granted by the emitter. AUTHORIZED
+    // ideas run the deterministic QuantExecutionPolicy as a fail-closed PRE-FILTER (it may
+    // reject, never approve); a policy-passed idea then enters the standard consensus
+    // evidence pool (upsertIdea below) and must clear the IDENTICAL gate as every other
+    // idea: weighted confidence strictly > CONSENSUS_APPROVAL_THRESHOLD (0.75) AND >=
+    // MIN_INDEPENDENT_AGREEING_AGENTS independent evidence groups, plus every veto.
+    // 2026-10-11 remediation note: the router used to approve authorized ideas DIRECTLY
+    // (threshold: 0 "never compared against", independentAgreeingAgents: 0 /
+    // requiredAgents: 0) — a silent architectural exception to the standing consensus
+    // invariants. Remediated, no exception granted: one idea gets exactly one decision,
+    // the consensus one. Risk exits are excluded: protective exits never require
     // strategy authorization and never depend on LLM availability.
     if (!this.isExitShaped(idea) && normalizeTradeIdeaOrigin(idea.origin) === 'QUANT_STRATEGY') {
       const authorization = await resolveQuantStrategyAuthorization(idea);
@@ -669,8 +676,16 @@ export class ChiefTraderAgent {
         });
       });
       if (authorization.authority === 'AUTHORIZED_QUANT_POLICY') {
-        await this.evaluateQuantPolicy(idea, authorization);
-        return;
+        // 2026-10-11 (consensus-bypass remediation): the policy is a fail-closed PRE-FILTER
+        // only — it may reject, never approve. A policy-passed idea falls through to the
+        // standard intake below and must clear the IDENTICAL consensus gate as every other
+        // idea. The pre-2026-10-11 direct-approval branch (threshold: 0 "never compared
+        // against", independentAgreeingAgents: 0 / requiredAgents: 0) was a silent
+        // architectural exception to the standing consensus invariants — remediated, no
+        // exception granted.
+        const policyPassed = await this.evaluateQuantPolicyPrefilter(idea, authorization);
+        if (!policyPassed) return; // terminal QUANT_POLICY_REJECTED NO_TRADE already recorded
+        // Policy passed: fall through — the idea enters the consensus evidence pool below.
       }
       if (authorization.authority === 'NOT_ELIGIBLE' || authorization.authority === 'NOT_AUTHORIZED') {
         // NOT_ELIGIBLE: explicit operator decision removed exposure (DEGRADED/RETIRED) or the
@@ -1478,24 +1493,32 @@ export class ChiefTraderAgent {
   }
 
   /**
-   * Quant-First Decision Architecture (2026-10-07): deterministic policy evaluation for a
-   * centrally-authorized validated quant strategy.
+   * Quant-First Decision Architecture (2026-10-07, remediated 2026-10-11): deterministic
+   * policy evaluation for a centrally-authorized validated quant strategy — now a
+   * fail-closed PRE-FILTER ONLY. Returns true when the policy's check set passes, false
+   * when it rejects (the rejection is terminally recorded here: DESK_NO_TRADE with a
+   * precise quant reason code — a policy-rejected idea is never silently re-routed into
+   * consensus).
    *
-   * This is a DECISION-POLICY branch, not a second order path. Approval converges on the
-   * exact same canonical primitives as the consensus path (recordConsensusTransaction +
-   * eventBus.emitChiefApproval with decisionPolicy='QUANT_EXECUTION'); RiskAgent, RiskEngine,
-   * PositionSizing, OMS, and BrokerManager cannot tell which policy approved, and their
-   * behavior is identical. Rejection is terminal with a precise quant reason code — a
-   * policy-rejected idea is never silently re-routed into consensus.
+   * 2026-10-11 remediation: this method used to APPROVE directly (recordConsensusTransaction
+   * + eventBus.emitChiefApproval with threshold: 0 "never compared against" and
+   * independentAgreeingAgents: 0 / requiredAgents: 0) — a silent architectural exception to
+   * the standing consensus invariants, structurally skipping the 0.75 strict-> gate and the
+   * min-2-independent-agents floor. That approval branch is REMOVED, not preserved or
+   * grandfathered: a policy-passed idea now enters the standard consensus evidence pool
+   * via the router's fall-through and must clear the IDENTICAL gate as every other idea.
+   * No parallel gate is invented here; the consensus path's own gate decides. Correct
+   * NO_TRADE (e.g. a single-voice quant idea, or confidence < 0.75) is the expected
+   * outcome for ideas that cannot clear it.
    *
    * AI providers are never consulted here: AI availability is neutral (recorded as
    * NOT_CONSULTED, with a routability snapshot for observability), never negative evidence.
    * AI contradiction analysis on the idea is advisory only — never a veto.
    */
-  private async evaluateQuantPolicy(
+  private async evaluateQuantPolicyPrefilter(
     idea: { traceId: string, symbol: string, side: string, confidence: number, reasoning: string, agent: string, currentPrice?: number, newsDetails?: any },
     authorization: QuantStrategyAuthorization,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const { traceId, symbol } = idea;
 
     // AI-availability snapshot for observability only: proves the quant path does not depend
@@ -1570,19 +1593,22 @@ export class ChiefTraderAgent {
       });
     });
 
+    // 2026-10-11 remediation: recorded against the REAL standing invariants, not the
+    // removed bypass's threshold: 0 / requiredAgents: 0. The policy evaluation involves
+    // zero independent agreeing agents; the consensus gate below is the only approval bar.
     this.lastConsensusOutcome = {
       at: new Date().toISOString(),
       symbol,
       approved: decision.approved,
       side: decision.approved ? idea.side : 'HOLD',
       independentAgreeingAgents: 0,
-      requiredAgents: 0,
+      requiredAgents: MIN_INDEPENDENT_AGREEING_AGENTS,
       confidence: decision.strategyConfidence ?? 0,
-      threshold: 0,
+      threshold: CONSENSUS_APPROVAL_THRESHOLD,
       reason: decision.reason,
       agentVotes: [{ agent: idea.agent, side: idea.side, confidence: idea.confidence }],
       decisionTier: 'QUANT_EXECUTION',
-      terminalReasonCode: decision.approved ? 'QUANT_POLICY_APPROVED' : 'QUANT_POLICY_REJECTED',
+      terminalReasonCode: decision.approved ? 'QUANT_POLICY_PREFILTER_PASSED' : 'QUANT_POLICY_REJECTED',
     };
 
     if (!decision.approved) {
@@ -1600,123 +1626,16 @@ export class ChiefTraderAgent {
       // Phase-40 AI value channel: decision recorded above (DESK_NO_TRADE). Fire-and-
       // forget advisory AFTER recording — never awaited, never throws into the router.
       this.requestQuantCandidateAdvisory(idea, authorization);
-      return;
+      return false;
     }
 
-    // Operator CONFIRM side-lock applies to quant approvals too: if the operator confirmed a
-    // side for this symbol and the policy approved the opposite, withhold (fail-closed, same
-    // as the consensus path). Can only withhold, never approve.
-    const approvedSide = idea.side;
-    const sideMismatch = this.consumeManualSideMismatch(symbol, approvedSide);
-    if (sideMismatch) {
-      console.log(`[ChiefTrader] QUANT POLICY approval withheld on ${symbol}: ${sideMismatch}`);
-      // 2026-10-08 defect hunt: lastConsensusOutcome was written above with
-      // approved=true; correct it - the approval was withheld, never granted.
-      this.lastConsensusOutcome = {
-        at: new Date().toISOString(),
-        symbol,
-        approved: false,
-        side: 'HOLD',
-        independentAgreeingAgents: 0,
-        requiredAgents: 0,
-        confidence: decision.strategyConfidence ?? 0,
-        threshold: 0,
-        reason: sideMismatch,
-        agentVotes: [{ agent: idea.agent, side: idea.side, confidence: idea.confidence }],
-        decisionTier: 'QUANT_EXECUTION',
-        terminalReasonCode: 'MANUAL_SIDE_MISMATCH',
-      };
-      eventBus.emit(EVENTS.DESK_NO_TRADE, {
-        traceId, symbol, side: approvedSide, confidence: decision.strategyConfidence, reason: sideMismatch,
-        decisionPolicy: 'QUANT_EXECUTION',
-        decisionTier: 'QUANT_EXECUTION',
-        terminalReasonCode: 'MANUAL_SIDE_MISMATCH',
-        strategyId: authorization.strategyId,
-        authorizationReason: authorization.reason,
-      });
-      eventBus.emit(EVENTS.CHIEF_CONSENSUS_COMPLETED, {
-        traceId, symbol, approved: false, confidence: decision.strategyConfidence ?? 0, side: approvedSide,
-        threshold: 0, reason: sideMismatch, decisionPolicy: 'QUANT_EXECUTION',
-        decisionTier: 'QUANT_EXECUTION', terminalReasonCode: 'MANUAL_SIDE_MISMATCH',
-      });
-      eventBus.emit(EVENTS.TRADE_REJECTED_CONSENSUS, {
-        traceId, symbol, side: approvedSide, confidence: decision.strategyConfidence, reason: sideMismatch,
-        decisionPolicy: 'QUANT_EXECUTION',
-      });
-      eventBus.emit(EVENTS.TRADE_LIFECYCLE, { traceId, symbol, state: 'NO_TRADE', reason: sideMismatch, decisionPolicy: 'QUANT_EXECUTION' });
-      return;
-    }
-
-    const approvedConfidence = decision.strategyConfidence ?? idea.confidence;
-    const transactionId = await recordConsensusTransaction({
-      symbol,
-      side: approvedSide as 'BUY' | 'SELL',
-      weightedConfidence: approvedConfidence,
-      // No consensus threshold applies on this path; the policy's own check set is the bar
-      // (persisted in the QUANT_POLICY_APPROVED observability event). Stored as 0 and never
-      // compared against — readers must key off decision_policy.
-      threshold: 0,
-      approved: true,
-      reasoning: `[QuantExecutionPolicy] ${decision.reason}`,
-      debateUsed: false,
-      evidence: [{
-        sourceTraceId: traceId,
-        agent: idea.agent,
-        side: approvedSide as 'BUY' | 'SELL',
-        confidence: idea.confidence,
-        weight: this.resolveWeight(idea.agent),
-        reasoning: idea.reasoning,
-        currentPrice: idea.currentPrice,
-      }],
-      decisionPolicy: 'QUANT_EXECUTION',
-      ideaOrigin: authorization.origin,
-      strategyId: authorization.strategyId ?? undefined,
-      strategyLifecycle: authorization.lifecycleStatus ?? undefined,
-      authorizationReason: authorization.reason,
-    });
-
-    eventBus.emitChiefApproval({
-      transactionId,
-      traceId,
-      symbol,
-      side: approvedSide,
-      confidence: approvedConfidence,
-      currentPrice: idea.currentPrice,
-      reasoning: `[QuantExecutionPolicy] ${decision.reason}`,
-      agentsContext: `QuantExecutionPolicy(${authorization.strategyId})`,
-      evidence: [{ agent: idea.agent, side: approvedSide as 'BUY' | 'SELL', confidence: idea.confidence, weight: this.resolveWeight(idea.agent), reasoning: idea.reasoning }],
-      supportingQuantDetail: this.buildSupportingQuantDetail([{ ...idea } as any], idea.currentPrice),
-      // Decision-policy provenance: RiskAgent stays policy-agnostic; these fields are
-      // observability only. consensusConfidence is explicitly null — consensus was not run.
-      decisionPolicy: 'QUANT_EXECUTION',
-      ideaOrigin: authorization.origin,
-      strategyId: authorization.strategyId,
-      strategyLifecycleStatus: authorization.lifecycleStatus,
-      authorizationReason: authorization.reason,
-      consensusConfidence: null,
-    });
-
-    eventBus.emit(EVENTS.CHIEF_CONSENSUS_COMPLETED, {
-      traceId, symbol, approved: true, confidence: approvedConfidence, side: approvedSide,
-      threshold: 0, reason: decision.reason, decisionPolicy: 'QUANT_EXECUTION',
-      decisionTier: 'QUANT_EXECUTION', terminalReasonCode: 'QUANT_POLICY_APPROVED',
-    });
-    eventBus.emit(EVENTS.TRADE_LIFECYCLE, { traceId, symbol, state: 'APPROVED', side: approvedSide, reason: decision.reason, decisionPolicy: 'QUANT_EXECUTION' });
-
-    // Phase-40 AI value channel: decision recorded above (CHIEF_CONSENSUS_COMPLETED).
-    // Fire-and-forget advisory AFTER recording — never awaited, never throws into
-    // the router, and the result can never alter this or any trading decision.
-    this.requestQuantCandidateAdvisory(idea, authorization);
-
-    // Non-blocking, optional independent second opinion — same non-gating contract as the
-    // consensus path (never awaited, never gates this approval or the RiskEngine call).
-    const openAliceTrigger = shouldTriggerOpenAliceVerification({ confidence: approvedConfidence, disagreementCount: 0 });
-    if (openAliceTrigger.shouldVerify && approvedSide !== 'HOLD') {
-      openAliceVerificationService.requestVerification({
-        traceId, symbol, side: approvedSide as 'BUY' | 'SELL', mode: 'TRADE_VERIFICATION',
-        argusConfidence: approvedConfidence, argusReasoning: decision.reason,
-      });
-    }
+    // 2026-10-11 (consensus-bypass remediation): the direct-approval branch that used to
+    // follow here is REMOVED — see this method's doc comment. A policy pass returns true;
+    // the router falls through to the standard consensus intake, and the IDENTICAL
+    // consensus gate (strict > 0.75, >= 2 independent evidence groups, all vetoes)
+    // decides. The operator CONFIRM side-lock still applies — inside the consensus
+    // path's own approval branch, which this idea now flows through.
+    return true;
   }
 
   /**

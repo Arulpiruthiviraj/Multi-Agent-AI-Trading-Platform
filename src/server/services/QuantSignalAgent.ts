@@ -137,6 +137,27 @@ export type QuantSymbolEvaluation = {
 } | null;
 
 /**
+ * 2026-10-11 (scheduler timeliness invariant): options for evaluateSymbol().
+ * isLiveCheck is consulted immediately before trade-idea emission: the priority
+ * scheduler passes a predicate that is false once the evaluation is no longer live
+ * (terminal state, watchdog-quarantined, or deadline exceeded in flight), so an
+ * expired/quarantined evaluation can never emit as if current. Callers that predate
+ * this option (legacy fan-out, ConfluenceCoordinator, manual CONFIRM, fast lane)
+ * omit it and keep the existing behavior exactly.
+ */
+export interface QuantEvaluateSymbolOptions {
+  emitIdeas?: boolean;
+  cycleCtx?: { cycleId: string; scheduledIndex: number };
+  isLiveCheck?: () => boolean;
+  /**
+   * 2026-10-11 (#23): instrumentation callback. Called when strategy selection
+   * (bestStrategyIdea) completes, so the scheduler can record
+   * strategySelectionFinishedAtMs. Optional; ignored if absent.
+   */
+  onStrategySelectionFinished?: () => void;
+}
+
+/**
  * 2026-09-29 (intraday-bars-for-opening-range fix): pure window math, extracted from
  * evaluateSymbol() so it's directly unit-testable without mocking historicalDataGateway. Bounded to
  * today's real regular session (America/New_York, DST-correct via TradingCalendar.ts) - never more
@@ -485,7 +506,12 @@ export class QuantSignalAgent {
     // path falls back to the legacy fan-out rather than skipping the cycle.
     if (isQuantPrioritySchedulerEnabled()) {
       try {
-        if (!getQuantPriorityScheduler()) this.initPriorityScheduler();
+        // 2026-10-11 (stopped-singleton fix): init UNCONDITIONALLY every cycle.
+        // initQuantPriorityScheduler() retires a stopped singleton (drops it and builds
+        // a fresh one), so the old `if (!getQuantPriorityScheduler())` guard reused a
+        // stopped NON-NULL singleton: every admission returned NOT_ELIGIBLE and the
+        // cycle reported COMPLETED with zero evaluations (silent dead cycles).
+        this.initPriorityScheduler();
         const scheduler = getQuantPriorityScheduler();
         if (scheduler) {
           await this.runCycleViaScheduler(scheduler, symbols, { cycleId, scheduledAtMs, cycleStarted });
@@ -634,7 +660,7 @@ export class QuantSignalAgent {
    * the production evaluation logic can never produce a spine-routed idea one call-frame deeper
    * than the caller intended. Default (undefined) preserves the existing live behavior exactly.
    */
-  async evaluateSymbol(symbol: string, options?: { emitIdeas?: boolean; cycleCtx?: { cycleId: string; scheduledIndex: number } }): Promise<QuantSymbolEvaluation> {
+  async evaluateSymbol(symbol: string, options?: QuantEvaluateSymbolOptions): Promise<QuantSymbolEvaluation> {
     // H2 (2026-10-09, Phase 3 certification): observability wrapper. Emits QUANT_SYMBOL_EVAL_STARTED
     // on entry and QUANT_SYMBOL_EVAL_FINISHED on EVERY exit path (normal, insufficient-bars, thrown
     // error) so a per-symbol evaluation can never again vanish without a trace. cycleCtx is opaque
@@ -671,7 +697,7 @@ export class QuantSignalAgent {
 
   private async evaluateSymbolInternal(
     symbol: string,
-    options: { emitIdeas?: boolean; cycleCtx?: { cycleId: string; scheduledIndex: number } } | undefined,
+    options: QuantEvaluateSymbolOptions | undefined,
     traceId: string,
   ): Promise<QuantSymbolEvaluation> {
     const emitIdeas = options?.emitIdeas !== false;
@@ -950,6 +976,9 @@ export class QuantSignalAgent {
       });
     }
     let strategyIdea = bestStrategyIdea(explorationAdjusted);
+    // 2026-10-11 (#23): report strategy-selection completion for scheduler instrumentation.
+    // Wrapped in try/catch so a faulty callback can never break evaluation.
+    try { options?.onStrategySelectionFinished?.(); } catch { /* instrumentation only */ }
     let matchedStrategyEvaluation = strategyIdea ? strategyEvaluations.find(e => e.strategy === strategyIdea!.strategy) ?? null : null;
     // Real strategy-attribution bug found and fixed (Master Transformation Mandate Part 7 audit,
     // 2026-09-13): captured BEFORE the cold-start-bootstrap branch below nulls
@@ -1125,6 +1154,24 @@ export class QuantSignalAgent {
     // evaluations are returned for the caller to judge, but no idea is ever emitted and no
     // held-idea DESK_NO_TRADE is recorded - an evaluation is not a gated idea.
     if (emitIdeas && idea && isLiveIdeaGenerationEnabled() && isPipelineAgentEnabled('QuantEngine')) {
+      // 2026-10-11 (scheduler timeliness invariant): the scheduler's late-settle discard
+      // only drops the returned evaluation VALUE — it cannot recall an idea this
+      // evaluation already emitted. So emission itself is deferred until the scheduler
+      // confirms the evaluation is still live, mirroring the fast lane's
+      // isLeaseAuthoritative pattern. An EXPIRED/quarantined/deadline-exceeded
+      // evaluation withholds the idea (honest DESK_NO_TRADE, not a held idea) instead
+      // of emitting it to ChiefTrader as if current.
+      if (options?.isLiveCheck && !options.isLiveCheck()) {
+        eventBus.emit(EVENTS.DESK_NO_TRADE, {
+          traceId, symbol,
+          code: 'SCHEDULER_EVALUATION_NOT_LIVE',
+          reason: 'Quant strategy candidate withheld: the priority scheduler no longer considers this evaluation live (terminal state, watchdog quarantine, or assessment deadline exceeded in flight) — emitting it would present a stale evaluation as current.',
+        });
+        observeSafe(() => structuredLogger.info('quant_idea_withheld_not_live', {
+          category: 'DISCOVERY', eventType: 'QUANT_IDEA_WITHHELD_NOT_LIVE',
+          traceId, symbol, strategy: idea.strategy, side: idea.side,
+        }));
+      } else {
       const dataQuality = assessDataQuality(symbol);
       if (dataQuality.tradeBlocked) {
         // Phase 13 (2026-08-31 strategy-starvation remediation): a real, fully-constructed idea
@@ -1310,6 +1357,7 @@ export class QuantSignalAgent {
       }).catch((e) => console.error(`[QuantSignalAgent] Forecast build failed for ${symbol}`, e));
       }
       }
+      } // closes the isLiveCheck else: a non-live evaluation skips the entire emission path
     } else if (emitIdeas && idea) {
       // An eligible strategy candidate can be held before consensus. Persist that distinction
       // instead of making it indistinguishable from an EV rejection or an inactive worker.

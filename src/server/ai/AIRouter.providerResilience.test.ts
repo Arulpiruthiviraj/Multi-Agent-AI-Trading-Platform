@@ -274,6 +274,25 @@ describe('AIRouter provider-resilience fixes (D1/D3/D5)', () => {
   });
 
   describe('D3 follow-up: in-flight coalescing map hygiene', () => {
+    it('a rejected routeTask leaves no unhandled rejection behind (Worker H 2026-10-11: the #19 .finally() settlement tracker discarded its derived promise, which rejected unhandled and crashed the process under --unhandled-rejections=throw)', async () => {
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+      process.on('unhandledRejection', onUnhandled);
+      try {
+        const provider = failingProvider('provider down');
+        aiRouter.registerProvider('d3-unhandled-provider', provider);
+        await expect(
+          aiRouter.routeTask('TestAgent', 'doomed prompt unhandled', 'trace-d3u-1'),
+        ).rejects.toThrow('All AI providers failed');
+        // Let every derived microtask settle; the settlement tracker's derived
+        // promise must not surface as an unhandled rejection.
+        await new Promise((r) => setTimeout(r, 50));
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off('unhandledRejection', onUnhandled);
+      }
+    });
+
     it('the dedup entry is released on rejection: a later identical call retries the provider', async () => {
       const provider = failingProvider('provider down');
       aiRouter.registerProvider('d3-fail-provider', provider);
@@ -308,6 +327,13 @@ describe('AIRouter provider-resilience fixes (D1/D3/D5)', () => {
         const p1 = aiRouter.routeTask('TestAgent', 'stale prompt', 'trace-d3s-1');
         await vi.advanceTimersByTimeAsync(0);
         expect(aiRouter.__routeTaskInFlightSizeForTests()).toBe(1);
+
+        // #19 (2026-10-11): an UNSETTLED entry is retained past the TTL (a still-running
+        // execution must not lose its dedup entry), so let p1 settle before advancing -
+        // the prune below then exercises the settled+expired path the test names.
+        release();
+        await vi.advanceTimersByTimeAsync(0);
+        await p1;
 
         // Gate the second call too so the map state is observable mid-flight
         // (an ungated fast provider would settle before the assertion runs).

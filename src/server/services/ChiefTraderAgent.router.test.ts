@@ -126,7 +126,15 @@ describe('ChiefTraderAgent policy router', () => {
     agent.recentIdeas = [];
   });
 
-  it('routes an authorized quant idea to the policy and emits canonical approval with AI down', async () => {
+  // 2026-10-11 (consensus-bypass remediation): the pre-2026-10-11 version of this test
+  // asserted the bypass — a policy-approved idea emitting CHIEF_APPROVED_IDEA directly
+  // with threshold: 0 and zero independent agents, never entering the consensus pool.
+  // That branch was a silent architectural exception to the standing consensus invariants
+  // (remediated, no exception granted). New behavior: a policy-passed idea enters the
+  // standard consensus evidence pool and must clear the IDENTICAL gate as every other
+  // idea. Here the single QuantEngine voice cannot clear the min-2-independent-agents
+  // floor, so the round correctly ends in NO_TRADE — never an approval.
+  it('a policy-passed quant idea enters the consensus pool and is NOT directly approved (single voice -> NO_TRADE)', async () => {
     resolveQuantStrategyAuthorization.mockResolvedValue(authorized());
     evaluateQuantExecutionPolicy.mockResolvedValue(approvedDecision());
 
@@ -134,19 +142,42 @@ describe('ChiefTraderAgent policy router', () => {
 
     expect(resolveQuantStrategyAuthorization).toHaveBeenCalledTimes(1);
     expect(evaluateQuantExecutionPolicy).toHaveBeenCalledTimes(1);
-    // AI was never consulted for the decision (only a routability snapshot for observability).
+    // AI was never consulted for the prefilter (only a routability snapshot for observability).
     expect(routeConsensus).not.toHaveBeenCalled();
     expect(routeTask).not.toHaveBeenCalled();
-    // Canonical approval: same CHIEF_APPROVED_IDEA event the consensus path emits.
-    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
-    const approval = emitChiefApproval.mock.calls[0][0];
-    expect(approval.decisionPolicy).toBe('QUANT_EXECUTION');
-    expect(approval.consensusConfidence).toBeNull();
-    expect(approval.strategyId).toBe('MOMENTUM_BREAKOUT');
-    expect(approval.side).toBe('BUY');
-    expect(approval.transactionId).toMatch(/^ARG-/);
-    // The idea never entered the consensus evidence pool.
-    expect(agent.recentIdeas).toEqual([]);
+    // No direct approval: the bypass is gone.
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+    // The idea entered the consensus evidence pool — exactly one decision path.
+    expect(agent.recentIdeas.length).toBe(1);
+
+    // Drive the identical consensus gate every other idea faces: a single 0.8 voice
+    // cannot satisfy the min-2-independent-agents floor.
+    await agent.evaluateConsensus('AAPL', 'tq1');
+
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+    const noTrade = emit.mock.calls.find((c: any[]) => c[0] === EVENTS.DESK_NO_TRADE);
+    expect(noTrade).toBeTruthy();
+    expect(noTrade[1].terminalReasonCode).toBe('INSUFFICIENT_AGENT_PARTICIPATION');
+    expect(noTrade[1].reason).toContain('independent evidence group');
+  });
+
+  // Architecture regression: a QUANT_EXECUTION-routed idea below the 0.75 strict->
+  // threshold must not be approved even when the policy prefilter passes it.
+  it('a policy-passed quant idea with confidence < 0.75 is never approved', async () => {
+    resolveQuantStrategyAuthorization.mockResolvedValue(authorized());
+    evaluateQuantExecutionPolicy.mockResolvedValue(approvedDecision());
+
+    await agent.reviewIdea(quantIdea({ confidence: 0.6, traceId: 'tq-low' }));
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+    expect(agent.recentIdeas.length).toBe(1);
+
+    await agent.evaluateConsensus('AAPL', 'tq-low');
+
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+    const noTrade = emit.mock.calls.find((c: any[]) => c[0] === EVENTS.DESK_NO_TRADE);
+    expect(noTrade).toBeTruthy();
+    expect(noTrade[1].terminalReasonCode).toBe('CONFIDENCE_BELOW_STRONG');
+    expect(noTrade[1].reason).toContain('did not clear');
   });
 
   it('a policy rejection is terminal: no approval, precise quant reason, never re-routed to consensus', async () => {
@@ -290,18 +321,28 @@ describe('ChiefTraderAgent policy router', () => {
     expect(noTrade[1].quantReasonCode).toBe('QUANT_POLICY_ERROR');
   });
 
-  it('AI-on parity: with providers available, the quant path still never consults AI', async () => {
-    // AI is UP for this test only — the quant path must remain AI-free regardless.
+  // 2026-10-11 (consensus-bypass remediation): the pre-2026-10-11 version of this test
+  // asserted the bypass's "AI never consulted, direct approval" shape. New contract: the
+  // quant PREFILTER never consults AI for its decision (only a routability snapshot for
+  // observability); a policy-passed idea then enters the standard consensus pool, where
+  // the usual machinery (including the adversarial debate when AI is available and the
+  // confidence trigger fires) applies exactly as for every other idea.
+  it('AI-on parity: the quant prefilter never consults AI; no direct approval', async () => {
+    // AI is UP for this test only — the prefilter must still make zero AI calls.
     hasAnyRoutableProvider.mockResolvedValue(true);
-    routeConsensus.mockResolvedValue({ action: 'TRADE', confidence: 0.9, reasoning: 'ai' } as any);
     resolveQuantStrategyAuthorization.mockResolvedValue(authorized());
     evaluateQuantExecutionPolicy.mockResolvedValue(approvedDecision());
 
-    await agent.reviewIdea(quantIdea());
+    // Confidence 0.5: below the debate trigger, so the consensus intake performs no
+    // debate here — any AI call would have to come from the prefilter itself.
+    await agent.reviewIdea(quantIdea({ confidence: 0.5, traceId: 'tq-aion' }));
 
+    expect(evaluateQuantExecutionPolicy).toHaveBeenCalledTimes(1);
     expect(routeConsensus).not.toHaveBeenCalled();
     expect(routeTask).not.toHaveBeenCalled();
-    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
-    expect(emitChiefApproval.mock.calls[0][0].decisionPolicy).toBe('QUANT_EXECUTION');
+    // No direct approval: the bypass is gone.
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+    // The idea entered the consensus pool — exactly one decision path.
+    expect(agent.recentIdeas.length).toBe(1);
   });
 });

@@ -50,6 +50,13 @@ import { setActiveReplaySession, type ActiveReplaySession, defaultReplayConfig }
 import type { ResearchBar } from '../../research/ohlcvTypes';
 import type { CalibrationSeedSpec, CalibrationSeedResult } from './CalibrationHistorySeeder';
 import type { SyntheticNewsArticleSpec } from './SyntheticInjectableNewsProvider';
+import type { HistoricalReplayBrokerState } from '../../../brokers/HistoricalReplayBroker';
+import {
+  SessionFaultApplier,
+  type SessionFault,
+  type FaultOutcome,
+  type BarFaultContext,
+} from './SessionFaultPlan';
 
 /**
  * Isolation note (2026-09-14, real incident - see below): DecisionTimeline (imports eventBus),
@@ -118,6 +125,42 @@ export interface SyntheticSessionOptions {
    * manual-cycle pattern already used for QuantSignalAgent/PortfolioMonitor.
    */
   newsInjections?: SyntheticNewsArticleSpec[];
+  /**
+   * Session-level fault plan (2026-10-11 full-session certification) - environment-level
+   * faults applied at bar boundaries: late-mover admission, news bursts, AI outage/recovery,
+   * feed interruptions, mid-session backup, liquidity caps, plus premarket/post-close probes.
+   * See SessionFaultPlan.ts: faults control the ENVIRONMENT, never the decision.
+   */
+  faultPlan?: SessionFault[];
+  /**
+   * Symbol configs for late movers admitted mid-session via a LATE_MOVER fault. Their bars are
+   * generated deterministically up front (same seed/scenario) and their prior-day 1Day history
+   * is seeded before boot, but they are not subscribed and their intraday bars are not revealed
+   * until the fault fires - mirroring a real late admission.
+   */
+  lateMoverConfigs?: SyntheticSymbolConfig[];
+  /**
+   * Symbols whose 1Day bar tail is seeded STALE (newest bar ~30 days old) instead of fresh.
+   * Environment control modeling a stale production cache: the real HistoricalDataGateway
+   * stale-tail gate must refuse to treat it as sufficient (STALE_TAIL_PROBE asserts this).
+   */
+  staleCacheSymbols?: string[];
+  /**
+   * Stop the main bar loop after processing this bar index (inclusive) - the session-restart
+   * half of the certification. The engine returns a partial result carrying
+   * brokerState for the resume half.
+   */
+  stopAfterBarIndex?: number;
+  /**
+   * Resume a session previously stopped with stopAfterBarIndex: reuse the same isolated DB
+   * (same simulationId), fast-persist bars below startBarIndex without emitting them, restore
+   * the broker from brokerState, and continue the live loop from startBarIndex. The fault
+   * plan is re-supplied; one-shots below startBarIndex are naturally skipped.
+   */
+  resume?: {
+    startBarIndex: number;
+    brokerState: HistoricalReplayBrokerState;
+  };
 }
 
 export interface MemorySample {
@@ -151,6 +194,20 @@ export interface SyntheticSessionResult {
    *  (commission/spread/slippage). CertificationGate.ts uses it to prove the cost model was
    *  live in the run: fills under a non-zero profile must show deducted costs. */
   costProfile: ReplayCostProfile;
+  /** Fault-plan outcomes, in application order (2026-10-11 full-session certification). */
+  faultOutcomes: FaultOutcome[];
+  /** True when the run stopped early via stopAfterBarIndex (restart certification, first half). */
+  stoppedEarly: boolean;
+  /** Bar index the loop stopped at (inclusive), or null for a complete run. */
+  stoppedAtBarIndex: number | null;
+  /** Broker state snapshot for the resume half (only when stoppedEarly). */
+  brokerState: HistoricalReplayBrokerState | null;
+  /**
+   * Idea-generation gate state at session boot (2026-10-11): true = agents were allowed to
+   * emit ideas; false = the restart-safety hold (or a paused state) silently gated every
+   * idea agent, so a quiet session proves nothing. null = not recorded (older callers).
+   */
+  ideaGenerationGateOpen: boolean | null;
 }
 
 export function defaultSessionStartMs(): number {
@@ -279,7 +336,10 @@ export class SyntheticSessionEngine {
     // building this option - the provider swap worked, articles clustered, but zero NewsAgent
     // ideas ever emitted because newsAgentEmitsTradeIdeas() had already frozen CATALYST_ONLY)
     // would silently no-op this entire option.
-    if (options.newsInjections && options.newsInjections.length > 0) {
+    // 2026-10-11: a NEWS_BURST fault in the session fault plan also requires the injectable
+    // provider + ACTIVE_VOTE mode, so the need-check covers the fault plan too.
+    const faultPlanNeedsNews = new SessionFaultApplier(options.faultPlan ?? []).needsNewsProvider();
+    if ((options.newsInjections && options.newsInjections.length > 0) || faultPlanNeedsNews) {
       process.env.NEWS_AGENT_MODE = 'ACTIVE_VOTE';
     }
     // Per-session teardown guarantee (2026-10-08 memory-leak hunt): the DecisionTimeline's
@@ -305,12 +365,16 @@ export class SyntheticSessionEngine {
       setSessionRecoveryPathForTests(this.sessionMarkerPath);
       const { db } = await import('../../db');
       const schema = await import('../../db/schema');
-      await db.insert(schema.settings).values({
-        tradingMode: 'PAPER', riskLevel: 'Medium', budget: options.initialCash ?? 100_000,
-        strategy: 'ADAPTIVE_MULTI_STRATEGY', maxTradeSize: 3000, dailyLossLimit: 5000,
-        takeProfitPct: 15, trailingStopPct: 5, minAiConfidence: 75, adversarialDebateMode: true,
-        autoBotEnabled: true, tradingState: 'TRADING_ENABLED',
-      } as any);
+      // Idempotent for the resume half of a restart (same isolated DB already has the row).
+      const existingSettings = await db.select().from(schema.settings).limit(1);
+      if (existingSettings.length === 0) {
+        await db.insert(schema.settings).values({
+          tradingMode: 'PAPER', riskLevel: 'Medium', budget: options.initialCash ?? 100_000,
+          strategy: 'ADAPTIVE_MULTI_STRATEGY', maxTradeSize: 3000, dailyLossLimit: 5000,
+          takeProfitPct: 15, trailingStopPct: 5, minAiConfidence: 75, adversarialDebateMode: true,
+          autoBotEnabled: true, tradingState: 'TRADING_ENABLED',
+        } as any);
+      }
 
       // --- Synthetic daily-bar history (closes the gap documented in
       // docs/testing/ARGUS_SYNTHETIC_MARKET_CERTIFICATION.md §4 / ARGUS_SYNTHETIC_CERTIFICATION_RESULT.md
@@ -339,15 +403,56 @@ export class SyntheticSessionEngine {
       // the fact. ---
       {
         const { generateSyntheticPriorDayHistory } = await import('./SyntheticDailyBarProvider');
-        for (const config of universeConfigs) {
+        const staleSet = new Set(options.staleCacheSymbols ?? []);
+        // Late movers get prior-day history seeded before boot too (point-in-time safe: it is
+        // genuinely "prior" data), so no empty-cache poisoning is possible when the fault
+        // admits them mid-session.
+        const allHistoryConfigs = [...universeConfigs, ...(options.lateMoverConfigs ?? [])];
+        for (const config of allHistoryConfigs) {
           const priorDays = generateSyntheticPriorDayHistory(config, scenario, options.seed, sessionStartMs);
-          for (const bar of priorDays) await persistDailyBar(config.symbol, bar);
+          if (staleSet.has(config.symbol)) {
+            // STALE_CACHE_SEED environment control: shift the whole tail ~30 days into the past
+            // so the real HistoricalDataGateway stale-tail gate (quantBarsTailFreshnessToleranceMs)
+            // must refuse to treat it as sufficient. Timestamps stay unique; nothing is relabeled.
+            const SHIFT_MS = 30 * 86_400_000;
+            for (const bar of priorDays) {
+              await persistDailyBar(config.symbol, { ...bar, timestamp: bar.timestamp - SHIFT_MS });
+            }
+          } else {
+            for (const bar of priorDays) await persistDailyBar(config.symbol, bar);
+          }
+        }
+        // The STALE_TAIL_PROBE queries a symbol with no seeded history at all; ensure the probe
+        // symbol truly has no rows (fail-closed must come from the gateway, not from leftover rows).
+        if ((options.faultPlan ?? []).some((f) => f.kind === 'STALE_TAIL_PROBE')) {
+          const { sqliteDb } = await import('../../db');
+          sqliteDb.prepare(`DELETE FROM ohlcv_bars WHERE symbol = 'CERT_STALE_PROBE'`).run();
         }
       }
 
       const { bootArgusCore } = await import('../../core/ArgusCoreBoot');
       await bootArgusCore();
       await sleep(1500); // let boot's own async settle (matches every other harness this session)
+
+      // Idea-generation gate proof (2026-10-11, real finding): a synthetic session whose
+      // restart-safety hold is engaged (stale unclean session marker from a previous crashed
+      // run with the same simulationId) or whose trading state is paused SILENTLY gates every
+      // idea agent for the whole session - a "no ideas" result then proves nothing about the
+      // pipeline. Record the gate state so the certification can fail loud instead of
+      // mistaking a held session for a quiet market. See evaluateCertification().
+      let ideaGenerationGateOpen: boolean | null = null;
+      try {
+        const { isLiveIdeaGenerationEnabled } = await import('../../core/ideaGenerationGate');
+        ideaGenerationGateOpen = isLiveIdeaGenerationEnabled();
+        if (!ideaGenerationGateOpen) {
+          console.warn(
+            '[SyntheticSessionEngine] IDEA GENERATION GATE IS CLOSED at session boot ' +
+            '(restart-safety hold engaged or trading not enabled) - ideas will be held. ' +
+            'If this is not the intended test, use a fresh simulationId (a previous crashed ' +
+            'run with this id left an unclean session marker).',
+          );
+        }
+      } catch { /* gate state unknown - certification treats null as not-recorded */ }
 
       // Determinism fix continued (2026-09-15, Rule 2): FundamentalAgent/MacroAgent are real,
       // network-dependent idea agents (AlphaVantage market data + AIRouter LLM calls to whichever real
@@ -369,6 +474,13 @@ export class SyntheticSessionEngine {
         setPipelineAgentEnabled('MacroAgent', false);
       }
 
+      // Session fault plan (2026-10-11 full-session certification): environment-level faults
+      // only (see SessionFaultPlan.ts). Created after boot so premarket probes run against
+      // the real booted core; bar-level faults are applied inside the main loop below.
+      const faultApplier = new SessionFaultApplier(options.faultPlan ?? []);
+      const faultOutcomes: FaultOutcome[] = [];
+      for (const o of await faultApplier.applyPremarket({ sessionStartMs })) faultOutcomes.push(o);
+
       // Explicit, disclosed methodology change (2026-09-14, operator-authorized) - see
       // CalibrationHistorySeeder.ts's own header for the full disclosure. Runs BEFORE the main loop
       // so any real consensus reached during the session sees an already-established (real,
@@ -386,7 +498,7 @@ export class SyntheticSessionEngine {
       // as every other db-touching import in this file).
       let injectableNewsProvider: import('./SyntheticInjectableNewsProvider').SyntheticInjectableNewsProvider | null = null;
       let newsEngineForInjection: import('../../news/NewsEngine').NewsEngine | null = null;
-      if (options.newsInjections && options.newsInjections.length > 0) {
+      if ((options.newsInjections && options.newsInjections.length > 0) || faultPlanNeedsNews) {
         // NEWS_AGENT_MODE itself was already set at the very top of run() (before bootArgusCore()) -
         // see that comment for why it cannot be set here.
         const { SyntheticInjectableNewsProvider } = await import('./SyntheticInjectableNewsProvider');
@@ -397,7 +509,7 @@ export class SyntheticSessionEngine {
         // real RSS/paid-news providers so this isolated session never reaches the real network, the
         // same isolation guarantee this file already applies to FundamentalAgent/MacroAgent above.
         newsEngine.providerManager.replaceProviders([injectableNewsProvider]);
-        for (const spec of options.newsInjections) injectableNewsProvider.inject(spec);
+        for (const spec of options.newsInjections ?? []) injectableNewsProvider.inject(spec);
       }
 
       // These three imports must stay here (dynamic, after env vars + DB isolation are already in
@@ -408,8 +520,11 @@ export class SyntheticSessionEngine {
 
       // --- Generate the full deterministic session (market data + news) up front. Point-in-time
       // safety is enforced by CONSUMPTION below (strict prefix), not by generation order. ---
+      // 2026-10-11: late-mover configs are generated here too (deterministic, same seed) but
+      // only REVEALED when their LATE_MOVER fault fires - see admitLateSymbol in the loop below.
       const rng = new SyntheticRandom(options.seed);
-      const marketDataEngine = new SyntheticMarketDataEngine(rng, universeConfigs, scenario);
+      const allBarConfigs = [...universeConfigs, ...(options.lateMoverConfigs ?? [])];
+      const marketDataEngine = new SyntheticMarketDataEngine(rng, allBarConfigs, scenario);
       const barsBySymbol = marketDataEngine.generateSession(sessionStartMs, sessionEndMs);
       const newsItems = await seedSyntheticNewsForScenario(scenario, sessionStartMs, universe);
       const newsProvider = buildSyntheticNewsProvider(newsItems);
@@ -440,6 +555,11 @@ export class SyntheticSessionEngine {
         shortSelling: replaySafety.shortSellingDefault,
         fractional: replaySafety.fractionalSharesDefault,
       });
+      // Restart certification, resume half: restore the exact broker state the pre-restart
+      // half exported (positions, cash, working orders, cumulative costs/P&L).
+      if (options.resume) {
+        this.broker.importState(options.resume.brokerState);
+      }
       assertActiveSessionIsSynthetic(this.broker); // post-install proof - refuses to proceed if the broker is not structurally incapable of live orders
 
       const barsBySymbolResearch = new Map<string, ResearchBar[]>();
@@ -530,9 +650,49 @@ export class SyntheticSessionEngine {
       // sequencing (see that file's own comment this was modeled on) - the bar AT t is the fill
       // vehicle for orders placed using the PREVIOUS bar's close as the last known decision price. ---
       const timestamps = Array.from({ length: session.totalBars }, (_, i) => sessionStartMs + i * BAR_INTERVAL_MS);
-      for (let i = 0; i < timestamps.length; i++) {
+      const startBar = options.resume?.startBarIndex ?? 0;
+      const stopAfter = options.stopAfterBarIndex ?? null;
+      // Live universe: grows when a LATE_MOVER fault fires. On resume, symbols admitted before
+      // the restart are pre-admitted (their pre-restart bars were already revealed to the first
+      // half's EventBus; this half continues from the same point).
+      const liveUniverse: string[] = [...universe];
+      const lateAdmissionBar = new Map<string, number>();
+      for (const f of options.faultPlan ?? []) {
+        if (f.kind === 'LATE_MOVER' && f.params?.symbol) lateAdmissionBar.set(f.params.symbol, f.fromBar);
+      }
+      if (startBar > 0) {
+        for (const cfg of options.lateMoverConfigs ?? []) {
+          const adm = lateAdmissionBar.get(cfg.symbol);
+          if (adm !== undefined && adm < startBar && !liveUniverse.includes(cfg.symbol)) {
+            liveUniverse.push(cfg.symbol);
+            revealedBarsBySymbol.set(cfg.symbol, []);
+            marketDataWorker.subscribe(cfg.symbol);
+            session.activeDiscoveredSymbols.add(cfg.symbol);
+          }
+        }
+        // Resume fast-forward (restart certification): persist bars below startBar WITHOUT
+        // emitting them - the pre-restart half already revealed them to its own EventBus, and
+        // re-emitting here would duplicate every tick and every agent reaction for this half's
+        // fresh agents. Per-symbol revealed ranges reproduce exactly what the first half
+        // persisted (late movers: from their admission bar, never before).
+        for (const symbol of liveUniverse) {
+          const bars = barsBySymbol.get(symbol) ?? [];
+          const adm = lateAdmissionBar.get(symbol);
+          const from = adm !== undefined ? Math.max(adm, 0) : 0;
+          const revealed = revealedBarsBySymbol.get(symbol)!;
+          for (let i = from; i < startBar && i < bars.length; i++) {
+            const bar = bars[i];
+            await persistBar(symbol, bar);
+            revealed.push(bar);
+          }
+          const todayBar = rollupTodaysDailyBar(revealed, sessionStartMs);
+          if (todayBar) await persistDailyBar(symbol, todayBar);
+        }
+      }
+
+      for (let i = startBar; i < timestamps.length; i++) {
         const t = timestamps[i];
-        if (i === 0) {
+        if (i === 0 || (i === startBar && startBar > 0)) {
           // reset(), not advance()/setTime() - real found bug (2026-09-14): a separate reset() call
           // BEFORE this loop started left a small but real gap during which further setup work (array
           // construction, etc.) could elapse enough real wall-clock time for this clock's own 1:1
@@ -541,14 +701,37 @@ export class SyntheticSessionEngine {
           // see "the target is before the current time" and throw - reproduced live on a 240-bar
           // VALIDATED_CONVERGENCE_CONTROL run. Calling reset() (unconditional, no backward-guard)
           // here, at the very first moment t is actually used, closes that gap entirely instead of
-          // narrowing it.
+          // narrowing it. The resume half takes the same branch: its clock is fresh in this process.
           this.clock.reset(t);
         } else {
           this.clock.advance(t);
         }
         this.broker.clockNowMs = t;
 
-        for (const symbol of universe) {
+        // Session fault plan (2026-10-11): one-shot faults fire at their bar; window faults
+        // (feed interruption, liquidity cap) are enforced per-bar by the applier.
+        const barFaultCtx: BarFaultContext = {
+          barIndex: i,
+          clockNowMs: t,
+          broker: this.broker,
+          marketDataWorker,
+          newsProvider: injectableNewsProvider,
+          admitLateSymbol: (symbol: string) => {
+            if (liveUniverse.includes(symbol)) return;
+            liveUniverse.push(symbol);
+            revealedBarsBySymbol.set(symbol, []);
+            marketDataWorker.subscribe(symbol);
+            session.activeDiscoveredSymbols.add(symbol);
+            session.discoveredAt.set(symbol, this.clock.now());
+          },
+        };
+        for (const o of await faultApplier.applyForBar(i, barFaultCtx)) faultOutcomes.push(o);
+        // FEED_INTERRUPTION: a delivery outage - bars are still generated and persisted, but no
+        // ticks reach the agents (the ORDER_DURING_OUTAGE timeline invariant then proves no order
+        // fired inside the window).
+        const feedDown = faultApplier.isFeedInterrupted(i);
+
+        for (const symbol of liveUniverse) {
           // A defensive per-bar re-subscribe used to live here (see git history) to fight real
           // MarketUniverseScanner/OpportunityDiscovery subscription churn - since root-caused (2026-
           // 09-14, Step 2) to those real, network-dependent discovery workers never having been kept
@@ -572,7 +755,7 @@ export class SyntheticSessionEngine {
             if (todayBar) await persistDailyBar(symbol, todayBar);
           }
 
-          if (previousBar) {
+          if (previousBar && !feedDown) {
             marketDataWorker.cacheObservedQuote(symbol, previousBar.close, t);
             eventBus.emitMarketData(symbol, previousBar.close, previousBar.volume, new Date(t).toISOString());
           }
@@ -598,18 +781,39 @@ export class SyntheticSessionEngine {
 
         memorySamples.push(sampleMemory(i));
         await sleep(realMsBetweenBars);
+
+        // Restart certification, first half: stop after the configured bar; the resume half
+        // continues from here in a fresh process with the exported broker state.
+        if (stopAfter !== null && i >= stopAfter) {
+          // Planned stop (not a crash): mark a clean shutdown so the resume half does not
+          // inherit a spurious restart-safety entry hold. A real crash would leave the marker
+          // unclean and the hold would (correctly) engage - see the ideaGenerationGateOpen
+          // proof recorded at boot.
+          try {
+            const { markCleanShutdown } = await import('../../core/sessionRecovery');
+            markCleanShutdown();
+          } catch { /* best effort - the resume half fails loud if the hold engages */ }
+          break;
+        }
       }
 
-      // A few extra portfolio-monitor passes at the very end - gives take-profit/stop/trailing exit
-      // logic a real chance to fire against the session's final prices before results are collected,
-      // without which Test B's "position closed" stage could fail purely from insufficient real
-      // trigger opportunities near the end of a short session, not from any real pipeline defect.
-      for (let extra = 0; extra < 3; extra++) {
-        await portfolioMonitor.triggerNow().catch(() => {});
-        await sleep(realMsBetweenBars);
+      const stoppedEarly = stopAfter !== null;
+      if (!stoppedEarly) {
+        // A few extra portfolio-monitor passes at the very end - gives take-profit/stop/trailing exit
+        // logic a real chance to fire against the session's final prices before results are collected,
+        // without which Test B's "position closed" stage could fail purely from insufficient real
+        // trigger opportunities near the end of a short session, not from any real pipeline defect.
+        for (let extra = 0; extra < 3; extra++) {
+          await portfolioMonitor.triggerNow().catch(() => {});
+          await sleep(realMsBetweenBars);
+        }
+        await sleep(REAL_SETTLE_MS); // let the real async chain (debounce -> consensus -> risk -> OMS) drain
+      } else {
+        await sleep(500); // brief drain only - the resume half continues the session
       }
 
-      await sleep(REAL_SETTLE_MS); // let the real async chain (debounce -> consensus -> risk -> OMS) drain
+      // Post-close probes (fault plan).
+      for (const o of await faultApplier.applyPostClose({ sessionStartMs })) faultOutcomes.push(o);
 
       const toMs = (ns: number) => (Number.isFinite(ns) ? ns / 1e6 : null);
 
@@ -617,7 +821,7 @@ export class SyntheticSessionEngine {
         simulationId: options.simulationId,
         scenarioId: options.scenarioId,
         seed: options.seed,
-        universe,
+        universe: liveUniverse,
         sessionStartMs,
         sessionEndMs,
         timeline: this.timeline.getEntries(),
@@ -632,6 +836,11 @@ export class SyntheticSessionEngine {
         dbPath: this.dbPath,
         calibrationSeedResults,
         costProfile: costs,
+        faultOutcomes,
+        stoppedEarly,
+        stoppedAtBarIndex: stoppedEarly ? stopAfter : null,
+        brokerState: stoppedEarly ? this.broker.exportState() : null,
+        ideaGenerationGateOpen,
       };
     } finally {
       // Guaranteed per-session teardown (see the try-open comment above): each step is

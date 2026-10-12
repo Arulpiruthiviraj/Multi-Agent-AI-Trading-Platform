@@ -107,3 +107,58 @@ Tests that seed VALIDATED, insert approvals, or provide perfect fixtures prove *
 (`MECHANISM_E2E`), never **reachability**. A `MECHANISM_E2E` PASS must never be interpreted as
 `PRODUCTION READY`, quoted in a Layer-3 report, or used to satisfy `AUTHORIZED_PAPER_QUANT_STRATEGIES`.
 The gate measures what production state actually authorizes — it never manufactures the answer.
+
+---
+
+## 11. Run record — 2026-10-11/12 (Worker H, `mission/oct8-oct9-closure`)
+
+**Command:** `argus-cli certify-next-session --json` (release certification driver,
+`src/server/certification/releaseCertificationDriver.ts`, via `scripts/certifyNextSession.ts`).
+Production DB snapshotted with the sqlite3 online `.backup` API into an isolated copy
+(the prior raw-copy snapshot fallback was deleted by Worker A — verified still absent;
+a failed snapshot fails loud, never falls back).
+
+**Verdict: NO_GO (exit 3)** — truthful, not a bug. The driver orchestrates all mandatory
+checks; check states are `PASS` / `FAIL` / `NOT_RUN` / `UNKNOWN` / `NOT_CERTIFIED`, and
+**READY requires every mandatory check to be PASS** — a partial probe can never report READY.
+
+| Field (of 44 emitted) | Value |
+|---|---|
+| `OVERALL_STATUS` | `NO_GO` |
+| `AUTHORIZED_PAPER_QUANT_STRATEGIES` | **0** → `FAIL` (`QUANT_FIRST_OPERATIONALLY_INACTIVE`) — genuine: `quantPolicyEnabled=true` but zero strategies clear the real authorization check against real state. A pipeline that *can* execute is not a pipeline *authorized* to execute. |
+| `LIFECYCLE_SUMMARY` | 5 strategies missing lifecycle rows |
+| `QUANT_POLICY_REACHABILITY` | **PASS** — 0 unresolvable (the path is exercisable; authority resolves per real lifecycle state) |
+| `JEV_CONFIGURED` / `JEV_WIRING` / `JEV_GOVERNOR` / `JEV_SCHEMA` / `JEV_FAILURE_MODE` | `false` / governed-but-inert / **PASS** (governor) — Jev has no API key, every flag OFF, never wired into decisions; `decide()` throws `NO_API_KEY` before any network attempt |
+| `ALL_AI_DOWN_QUANT` | Mechanism-certified separately (§12): validated quant idea passes the policy prefilter but is NOT approved — single voice cannot clear the remediated consensus gate (0.75 strict >, min-2-agents) with all AI down |
+| `HISTORICAL_DATA_FRESHNESS` / `INTRADAY_DATA_READINESS` | Production `data/argus.db`: **0 `ohlcv_bars` rows, 0 `quant_assessments`, 0 fills/trades/decision_provenance, 0 trade_lifecycle_transitions** (verified by direct sqlite3 queries) — the gate reports exactly this |
+| `SCHEDULER_P50/P95/P99/MAX` | measured against the production-size universe |
+| `ARTIFACT_HASH` | **PASS** (`dist/server.cjs` hashed) |
+| `JAVA_ARTIFACT_HASH` | `UNKNOWN` (no packaged jar) — fail-closed, not assumed |
+| `BUILD_SHA` / `CONFIG_HASH` / `SCHEMA_VERSION` / `STRATEGY_REGISTRY_HASH` / `DB_SNAPSHOT_ID` / `PRODUCTION_CONFIG_EQUIVALENT` | emitted; the verdict attaches to this exact tuple — any change invalidates it |
+
+**Check states:** 18 PASS / 10 UNKNOWN / 1 FAIL / 16 NOT_RUN; `READY=false`. `UNKNOWN` is
+fail-closed (e.g. engine unreachable for live probes, no packaged Java artifact) — never
+treated as healthy.
+
+**New CLI fields since the 2026-10-09 checklist:** `ARTIFACT_HASH`, `JAVA_ARTIFACT_HASH`,
+`DB_SNAPSHOT_ID`, `PRODUCTION_CONFIG_EQUIVALENT`, `JEV_*` (5 fields), `SCHEDULER_P50/P95/P99/MAX`,
+`FULL_SESSION`, `WALL_CLOCK_SOAK` — all 44 required fields verified emitted
+(`BUILD_SHA` … `OVERALL_STATUS`). Human-readable table output verified (`certify-next-session`
+without `--json`).
+
+## 12. AI-down re-verification (Worker C's caveat)
+
+`src/server/quant/AiOfflineQuantCertification.test.ts` — **4/4 PASS** (2026-10-12):
+Jev + every AI provider unavailable; an authorized TEST-only Quant fixture driven through
+`QuantExecutionPolicy` → ChiefTrader → RiskEngine → PositionSizing → OMS → simulated PAPER broker.
+
+- Validated quant idea **passes the policy prefilter but is NOT approved** — single voice
+  cannot clear the remediated consensus gate (0.75 strict >, min-2-agents). The mechanism
+  works mechanically with zero AI.
+- Negative control (a): AI-originated idea fails closed with AI down — `DESK_NO_TRADE`, no approval, no AI calls.
+- Negative control (b): UNTESTED-lifecycle strategy idea falls back to consensus — single voice, no approval.
+- `triggerMet=false` is terminally rejected.
+
+**This is mechanism certification, not alpha proof.** It certifies that the pipeline functions
+without AI and that the consensus gate holds — it says nothing about whether any strategy is
+profitable.

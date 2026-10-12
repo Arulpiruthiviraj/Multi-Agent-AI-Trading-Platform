@@ -462,3 +462,89 @@ describe('fastLaneEvaluator lease semantics (2026-10-09 P1 lease fix)', () => {
     }
   });
 });
+
+describe('fastLaneEvaluator coalesced-caller watchdog (2026-10-11 defect 4)', () => {
+  const originalTimeout = tradingSafety.fastLaneEvaluationTimeoutMs;
+
+  beforeEach(() => {
+    (tradingSafety as any).fastLaneEvaluationTimeoutMs = 50;
+  });
+
+  afterEach(() => {
+    (tradingSafety as any).fastLaneEvaluationTimeoutMs = originalTimeout;
+  });
+
+  it('a coalesced caller gets its own watchdog: bounded ERROR, lease NOT released', async () => {
+    const c1 = inject('QQQQQ');
+    // The primary evaluation hangs forever.
+    vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockImplementation(() => new Promise(() => {}) as any);
+
+    // Start the primary evaluation (do not await — it hangs).
+    const primaryPromise = evaluateFastCandidate(c1.id);
+    // Give the primary a moment to acquire the lease.
+    await new Promise((r) => setTimeout(r, 20));
+
+    // A second call for the same candidate coalesces onto the in-flight evaluation
+    // (same symbol → same lease → coalesced caller path).
+    const coalescedResult = await evaluateFastCandidate(c1.id);
+
+    // The coalesced caller is bounded by its own watchdog — it does not hang forever
+    // on the stuck evaluation (the pre-fix code returned the bare settlePromise).
+    expect(coalescedResult.status).toBe('ERROR');
+    expect(coalescedResult.reasonCodes).toContain('COALESCED_CALLER_TIMEOUT');
+
+    // The lease is NOT released by the coalesced timeout — the primary caller still
+    // owns it until the work settles (same held-lease guarantee as the primary watchdog).
+    expect(fastLaneActiveEvaluationCountForTests()).toBe(1);
+    const snapshot = getFastLaneLeaseSnapshot();
+    expect(snapshot.activeLeaseCount).toBe(1);
+    expect(snapshot.leases[0].symbol).toBe('QQQQQ');
+
+    // Cleanup: the primary is still hung; the afterEach reset handles it.
+    void primaryPromise.catch(() => {});
+  });
+});
+
+describe('fastLaneEvaluator quarantine eviction (2026-10-11 #15)', () => {
+  it('quarantined lease older than fastLaneQuarantineMaxAgeMs is evicted with loud log', async () => {
+    const origQuarantineMaxAge = (tradingSafety as any).fastLaneQuarantineMaxAgeMs;
+    const origTimeout = tradingSafety.fastLaneEvaluationTimeoutMs;
+    const origMaxTimeouts = (tradingSafety as any).fastLaneHungLeaseMaxConsecutiveTimeouts;
+    (tradingSafety as any).fastLaneQuarantineMaxAgeMs = 100;
+    (tradingSafety as any).fastLaneEvaluationTimeoutMs = 50;
+    (tradingSafety as any).fastLaneHungLeaseMaxConsecutiveTimeouts = 1;
+    try {
+      const c = inject('RRRRR');
+      // Hung evaluation: will timeout once (1 consecutive timeout).
+      vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockImplementation(() => new Promise(() => {}) as any);
+      const result = await evaluateFastCandidate(c.id);
+      expect(result.status).toBe('ERROR');
+      // Lease timed out; quarantine happens lazily on the next admission's reap.
+      let snapshot = getFastLaneLeaseSnapshot();
+      expect(snapshot.leases[0].state).toBe('CALLER_TIMED_OUT');
+
+      // Trigger reap via another admission: 1 consecutive timeout >= max (1) -> QUARANTINED.
+      const cQ = inject('QQQQQ');
+      vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockResolvedValue(null);
+      await evaluateFastCandidate(cQ.id);
+      snapshot = getFastLaneLeaseSnapshot();
+      const rrrrrQ = snapshot.leases.find((l: any) => l.symbol === 'RRRRR');
+      expect(rrrrrQ?.state).toBe('QUARANTINED');
+
+      // Wait past the quarantine max age; trigger reap via another admission.
+      await new Promise((r) => setTimeout(r, 150));
+      const c2 = inject('SSSSS');
+      vi.spyOn(quantSignalAgent, 'evaluateSymbol').mockResolvedValue(null);
+      await evaluateFastCandidate(c2.id);
+
+      // The quarantined lease is evicted (dedup released).
+      snapshot = getFastLaneLeaseSnapshot();
+      const rrrrr = snapshot.leases.find((l: any) => l.symbol === 'RRRRR');
+      expect(rrrrr).toBeUndefined();
+    } finally {
+      (tradingSafety as any).fastLaneQuarantineMaxAgeMs = origQuarantineMaxAge;
+      (tradingSafety as any).fastLaneEvaluationTimeoutMs = origTimeout;
+      (tradingSafety as any).fastLaneHungLeaseMaxConsecutiveTimeouts = origMaxTimeouts;
+    }
+  });
+});
