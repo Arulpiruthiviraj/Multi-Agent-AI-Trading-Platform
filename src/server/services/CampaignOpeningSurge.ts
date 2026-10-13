@@ -144,7 +144,7 @@ export async function runCampaignOpeningSurge(now: Date = new Date()): Promise<{
       const { quantSignalAgent } = await import('./QuantSignalAgent');
       const { isRuntimeFlagEnabled } = await import('../config/effectiveRuntimeConfig');
       if (isRuntimeFlagEnabled('QUANT_ENGINE_ENABLED')) {
-        void quantSignalAgent.evaluateSymbol(symbol);
+        void quantSignalAgent.evaluateSymbol(symbol, { origin: 'ON_DEMAND_CAMPAIGN_SURGE', requestedAtMs: Date.now() });
       }
     } catch {
       /* Quant optional */

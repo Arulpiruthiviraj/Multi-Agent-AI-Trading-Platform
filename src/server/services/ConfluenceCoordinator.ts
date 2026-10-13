@@ -217,6 +217,7 @@ export class ConfluenceCoordinator {
           this.quantEvaluationsInFlight.set(symbol, { startedAt: now, token });
           jobs.push(
             quantSignalAgent.evaluateSymbol(symbol, {
+              origin: 'ON_DEMAND_CONFLUENCE', triggerId: idea?.traceId ?? null, requestedAtMs: now,
               // Generation fence: live only while this evaluation still owns the symbol's slot.
               isLiveCheck: () => this.quantEvaluationsInFlight.get(symbol)?.token === token,
             }).then(

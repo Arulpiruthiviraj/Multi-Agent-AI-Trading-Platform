@@ -393,7 +393,7 @@ async function runEvaluation(
   // result is discarded - never double-applied, never emitted.
   let evaluation: Awaited<ReturnType<typeof quantSignalAgent.evaluateSymbol>>;
   try {
-    evaluation = await quantSignalAgent.evaluateSymbol(symbol, { emitIdeas: false });
+    evaluation = await quantSignalAgent.evaluateSymbol(symbol, { emitIdeas: false, origin: 'ON_DEMAND_FAST_LANE', requestedAtMs: Date.now() });
   } catch (e) {
     if (!isLeaseAuthoritative(lease)) {
       logFastLeaseLateSettleDiscarded(candidateId, symbol, lease.generation);

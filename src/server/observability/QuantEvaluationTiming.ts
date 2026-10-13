@@ -13,6 +13,11 @@ export class QuantEvaluationTiming {
   private stageStarted: number;
   private stage: QuantEvaluationStage = 'PRIMARY_BARS';
   private readonly durations: Partial<Record<QuantEvaluationStage, number>> = {};
+  /** 2026-10-13 data-age provenance recorded by the evaluation body; null = not measured (never invented). */
+  readonly provenance: {
+    dailyLastBarMs: number | null; intradayLastBarMs: number | null;
+    intradayOutcome: 'INTRADAY_NOT_REQUIRED' | 'AVAILABLE' | 'EMPTY' | 'DEADLINE' | 'FETCH_ERROR' | 'WINDOW_UNAVAILABLE' | null;
+  } = { dailyLastBarMs: null, intradayLastBarMs: null, intradayOutcome: null };
   constructor(private readonly now: () => number = () => performance.now()) {
     this.started = this.stageStarted = now();
   }

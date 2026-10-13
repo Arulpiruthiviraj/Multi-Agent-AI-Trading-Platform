@@ -36,6 +36,8 @@ describe('QuantSignalAgent intraday fetch deadline', () => {
     process.env.ALPACA_API_KEY = process.env.ALPACA_API_KEY || 'test-key';
     process.env.ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY || 'test-secret';
     process.env.QUANT_ORB_STRATEGY_ENABLED = 'true';
+    process.env.QUANT_VWAP_REVERSION_ENABLED = 'true';
+    process.env.QUANT_VWAP_STRUCTURE_ENABLED = 'true';
     ({ sqliteDb } = await import('../db'));
     ({ historicalDataGateway } = await import('../engines/backtest/HistoricalDataGateway'));
     ({ tradingSafety } = await import('../config/tradingSafety'));
@@ -47,6 +49,7 @@ describe('QuantSignalAgent intraday fetch deadline', () => {
 
   afterAll(() => {
     if (originalOrb === undefined) delete process.env.QUANT_ORB_STRATEGY_ENABLED; else process.env.QUANT_ORB_STRATEGY_ENABLED = originalOrb;
+    delete process.env.QUANT_VWAP_REVERSION_ENABLED; delete process.env.QUANT_VWAP_STRUCTURE_ENABLED;
     tradingSafety.quantIntradayFetchMaxWaitMs = originalWait.v;
     try { sqliteDb.close(); } catch { /* already closed */ }
     for (const suffix of ['', '-shm', '-wal']) {
@@ -124,4 +127,73 @@ describe('QuantSignalAgent intraday fetch deadline', () => {
     expect(failedPayload?.terminalReason).toBeTruthy();
     expect(failedPayload?.error).toMatch(/synthetic provider unavailable/);
   }, 20_000);
+  it('records evaluation origin, queue age and intraday outcome distinctly for scheduled vs on-demand evaluations', async () => {
+    seedDaily('QORIG');
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-12T15:00:00Z') });
+    tradingSafety.quantIntradayFetchMaxWaitMs = 50;
+    vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['QORIG']);
+    const realEnsure = historicalDataGateway.ensureBars.bind(historicalDataGateway);
+    vi.spyOn(historicalDataGateway, 'ensureBars').mockImplementation((async (symbol: string, tf: string, s: number, e: number) => {
+      if (tf === '1Min') return new Promise<void>(() => { /* stalled */ });
+      return realEnsure(symbol, tf, s, e);
+    }) as any);
+    const logSpy = vi.spyOn(structuredLogger, 'info');
+    const agent = new QuantSignalAgent();
+    const t0 = Date.now();
+    await agent.evaluateSymbol('QORIG', { emitIdeas: false, cycleCtx: { cycleId: 'cyc-1', scheduledIndex: 3, scheduledAtMs: t0 - 5_000 } });
+    await agent.evaluateSymbol('QORIG', { emitIdeas: false, origin: 'ON_DEMAND_CONFLUENCE', triggerId: 'trig-9', requestedAtMs: t0 - 700 });
+    await agent.evaluateSymbol('QORIG', { emitIdeas: false });
+
+    const finished = logSpy.mock.calls.filter((c: any[]) => c[0] === 'quant_symbol_eval_finished').map((c: any[]) => c[1] as any);
+    expect(finished).toHaveLength(3);
+    const [sched, confluence, unspecified] = finished;
+    expect(sched).toMatchObject({ evaluationOrigin: 'SCHEDULED_CYCLE', scheduledCycleId: 'cyc-1', onDemandTriggerId: null, queueAgeMs: 5_000, intradayOutcome: 'DEADLINE', terminalOutcome: 'ASSESSED' });
+    expect(confluence).toMatchObject({ evaluationOrigin: 'ON_DEMAND_CONFLUENCE', scheduledCycleId: null, onDemandTriggerId: 'trig-9', queueAgeMs: 700 });
+    // no requestedAtMs supplied -> null with an explicit reason, never fabricated
+    expect(unspecified).toMatchObject({ evaluationOrigin: 'ON_DEMAND_UNSPECIFIED', queueAgeMs: null, completionAgeMs: null });
+    const started = logSpy.mock.calls.filter((c: any[]) => c[0] === 'quant_symbol_eval_started').map((c: any[]) => c[1] as any);
+    expect(started[2].ageMeasurementNote).toMatch(/not estimated/);
+    for (const f of finished) {
+      expect(f.dailyBarsAgeMs).toEqual(expect.any(Number));
+      expect(f.intradayBarsAgeMs).toBeNull(); // DEADLINE: no intraday bars -> null, not invented
+      expect(f).toHaveProperty('candidateAgeAtStartMs');
+      expect(f).toHaveProperty('candidateAgeAtFinishMs');
+    }
+  }, 30_000);
+
+  it('AVAILABLE 1Min bars are actually passed into the intraday strategies (ORB/VWAP are evaluable, not data-missing)', async () => {
+    seedDaily('QAVAIL');
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-12T15:00:00Z') });
+    vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['QAVAIL']);
+    // real 1Min session bars 09:30-11:00 ET (13:30Z-15:00Z) with a clear opening range then a breakout
+    const ins = sqliteDb.prepare('INSERT OR REPLACE INTO ohlcv_bars (id, symbol, timeframe, timestamp, open, high, low, close, volume, source, provisional) VALUES (?,?,?,?,?,?,?,?,?,?,0)');
+    const open = Date.parse('2026-10-12T13:30:00Z');
+    for (let i = 0; i < 90; i++) {
+      const ts = open + i * 60_000;
+      const base = i < 30 ? 100 + (i % 3) * 0.05 : 100.2 + (i - 30) * 0.05;
+      ins.run(`QAVAIL:1Min:${ts}`, 'QAVAIL', '1Min', ts, base, base + 0.1, base - 0.1, base + 0.02, 50_000 + i * 100, 'ibkr');
+    }
+    const realEnsure = historicalDataGateway.ensureBars.bind(historicalDataGateway);
+    vi.spyOn(historicalDataGateway, 'ensureBars').mockImplementation((async (symbol: string, tf: string, s: number, e: number) => {
+      if (tf === '1Min') return; // bars already present (as after a successful provider fetch)
+      return realEnsure(symbol, tf, s, e);
+    }) as any);
+    const logSpy = vi.spyOn(structuredLogger, 'info');
+    const evaluation = await new QuantSignalAgent().evaluateSymbol('QAVAIL', { emitIdeas: false });
+    expect(evaluation).not.toBeNull();
+    const avail = logSpy.mock.calls.find((c: any[]) => c[0] === 'quant_bar_input_availability' && c[1]?.timeframe === '1Min');
+    expect((avail?.[1] as any)?.outcome).toBe('AVAILABLE');
+    const orb = evaluation!.strategyEvaluations.find((e: any) => e.strategy === 'OPENING_RANGE_BREAKOUT') as any;
+    expect(orb).toBeDefined();
+    const orbText = JSON.stringify([orb.conditionsFailed, orb.contradictions]);
+    expect(orbText).not.toMatch(/daily-granularity|No opening range/i);
+    for (const id of ['VWAP_MEAN_REVERSION', 'VWAP_VOLUME_STRUCTURE']) {
+      const v = evaluation!.strategyEvaluations.find((e: any) => e.strategy === id) as any;
+      expect(v, id).toBeDefined();
+      expect(JSON.stringify([v.conditionsFailed, v.contradictions]), id).not.toMatch(/daily-granularity|intraday bars|unavailable/i);
+    }
+    const finished = logSpy.mock.calls.filter((c: any[]) => c[0] === 'quant_symbol_eval_finished').map((c: any[]) => c[1] as any).pop();
+    expect(finished.intradayOutcome).toBe('AVAILABLE');
+    expect(finished.intradayBarsAgeMs).toEqual(expect.any(Number));
+  }, 30_000);
 });

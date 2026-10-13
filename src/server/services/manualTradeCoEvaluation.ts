@@ -139,7 +139,7 @@ export async function runManualTradeCoEvaluation(opts: {
           agentNotes.push('QuantEngine:disabled');
           return;
         }
-        const r = await quantSignalAgent.evaluateSymbol(symbol);
+        const r = await quantSignalAgent.evaluateSymbol(symbol, { origin: 'ON_DEMAND_MANUAL', requestedAtMs: Date.now() });
         agentNotes.push(r ? 'QuantEngine:evaluated' : 'QuantEngine:no_bars_or_idea');
       } catch (e: any) {
         agentNotes.push(`QuantEngine:error:${e?.message || e}`);

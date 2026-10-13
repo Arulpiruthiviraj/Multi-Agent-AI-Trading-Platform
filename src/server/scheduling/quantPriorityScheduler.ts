@@ -307,6 +307,8 @@ export interface QuantSchedulerDeps {
     options?: {
       emitIdeas?: boolean;
       cycleCtx?: { cycleId: string; scheduledIndex: number };
+      /** 2026-10-13: when the scheduler admitted the candidate; evaluateSymbol derives queueAgeMs from it. */
+      requestedAtMs?: number;
       /**
        * 2026-10-11 (scheduler timeliness invariant): liveness predicate the evaluator
        * must consult immediately before emitting a trade idea. The scheduler's
@@ -1137,6 +1139,7 @@ export class QuantPriorityScheduler {
       const evalPromise = this.deps.evaluateSymbol(rec.symbol, {
         emitIdeas: rec.emitIdeas,
         ...(rec.cycleCtx ? { cycleCtx: rec.cycleCtx } : {}),
+        requestedAtMs: rec.stages.admittedAtMs,
         // 2026-10-11 (scheduler timeliness invariant): the evaluator gates idea
         // emission on this. A watchdog-quarantined or otherwise non-live evaluation
         // must not emit as if current.

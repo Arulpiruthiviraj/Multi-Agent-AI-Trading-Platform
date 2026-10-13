@@ -148,9 +148,25 @@ export type QuantSymbolEvaluation = {
  * this option (legacy fan-out, ConfluenceCoordinator, manual CONFIRM, fast lane)
  * omit it and keep the existing behavior exactly.
  */
+/**
+ * 2026-10-13: explicit origin of an evaluation. Scheduled-cycle and on-demand evaluations have very different
+ * latency populations (Oct 13: 87.6% on-demand, scheduled refresh ~18 min vs on-demand ~100 s) and must never be
+ * pooled into one "per-symbol refresh interval". `cycleCtx` implies SCHEDULED_CYCLE; an on-demand caller that does
+ * not say who it is is recorded honestly as ON_DEMAND_UNSPECIFIED.
+ */
+export type QuantEvaluationOrigin =
+  | 'SCHEDULED_CYCLE' | 'ON_DEMAND_CONFLUENCE' | 'ON_DEMAND_MANUAL' | 'ON_DEMAND_FAST_LANE'
+  | 'ON_DEMAND_CAMPAIGN_SURGE' | 'ON_DEMAND_UNSPECIFIED';
+
 export interface QuantEvaluateSymbolOptions {
   emitIdeas?: boolean;
-  cycleCtx?: { cycleId: string; scheduledIndex: number };
+  cycleCtx?: { cycleId: string; scheduledIndex: number; scheduledAtMs?: number };
+  /** Who asked for this evaluation. */
+  origin?: QuantEvaluationOrigin;
+  /** Correlates an on-demand request (e.g. the triggering idea's traceId); null when none exists. */
+  triggerId?: string | null;
+  /** When the evaluation was requested/admitted (ms epoch). Absent -> queueAge is reported null, not guessed. */
+  requestedAtMs?: number;
   isLiveCheck?: () => boolean;
   /**
    * 2026-10-11 (#23): instrumentation callback. Called when strategy selection
@@ -624,7 +640,7 @@ export class QuantSignalAgent {
           // H2: cycle context (cycleId + position in the universe snapshot) rides along so the
           // per-symbol STARTED/FINISHED events can be joined back to this cycle. No behavior
           // change - evaluateSymbol treats cycleCtx as opaque correlation metadata.
-          const result = await this.evaluateSymbol(symbol, { cycleCtx: { cycleId, scheduledIndex: i } });
+          const result = await this.evaluateSymbol(symbol, { cycleCtx: { cycleId, scheduledIndex: i, scheduledAtMs } });
           outcome = result ? 'ASSESSED' : 'NO_ASSESSMENT';
           if (result) { anySuccess = true; completedSymbols.push(symbol); }
         } catch (e: any) {
@@ -739,9 +755,19 @@ export class QuantSignalAgent {
     const traceId = generateTraceId(symbol);
     const cycleId: string | null = options?.cycleCtx?.cycleId ?? null;
     const scheduledIndex: number | null = options?.cycleCtx?.scheduledIndex ?? null;
+    const evaluationOrigin: QuantEvaluationOrigin = options?.origin ?? (options?.cycleCtx ? 'SCHEDULED_CYCLE' : 'ON_DEMAND_UNSPECIFIED');
+    const onDemandTriggerId: string | null = evaluationOrigin === 'SCHEDULED_CYCLE' ? null : (options?.triggerId ?? null);
+    const requestedAtMs: number | null = options?.requestedAtMs ?? options?.cycleCtx?.scheduledAtMs ?? null;
+    const startedAtMs = Date.now();
+    const queueAgeMs: number | null = requestedAtMs === null ? null : Math.max(0, startedAtMs - requestedAtMs);
+    // Age of the freshest observed price for the candidate when the evaluation starts (null = never ticked).
+    const candidateAgeAtStartMs: number | null = marketDataWorker.getLatestPriceAgeMs(symbol);
     observeSafe(() => structuredLogger.info('quant_symbol_eval_started', {
       category: 'DISCOVERY', eventType: 'QUANT_SYMBOL_EVAL_STARTED',
       cycleId, traceId, symbol, scheduledIndex,
+      evaluationOrigin, scheduledCycleId: cycleId, onDemandTriggerId,
+      requestedAtMs, startedAtMs, queueAgeMs, candidateAgeAtStartMs,
+      ageMeasurementNote: requestedAtMs === null ? 'requestedAtMs not supplied by caller; queueAgeMs is null, not estimated' : null,
     }));
     let outcome: 'ASSESSED' | 'INSUFFICIENT_BARS' | 'RATE_LIMITED' | 'SUPERSEDED_CANCELLED' | 'ERROR' = 'ERROR';
     const timing = new QuantEvaluationTiming();
@@ -774,9 +800,19 @@ export class QuantSignalAgent {
       errorCode = classifyQuantEvalError(e);
       throw e;
     } finally {
+      const finishedAtMsNow = Date.now();
       observeSafe(() => structuredLogger.info('quant_symbol_eval_finished', {
         category: 'DISCOVERY', eventType: 'QUANT_SYMBOL_EVAL_FINISHED',
         cycleId, traceId, symbol, outcome, errorKind, ...timing.snapshot(),
+        evaluationOrigin, scheduledCycleId: cycleId, onDemandTriggerId,
+        requestedAtMs, startedAtMs, finishedAtMs: finishedAtMsNow, queueAgeMs,
+        evaluationLatencyMs: finishedAtMsNow - startedAtMs,
+        completionAgeMs: requestedAtMs === null ? null : Math.max(0, finishedAtMsNow - requestedAtMs),
+        candidateAgeAtStartMs, candidateAgeAtFinishMs: marketDataWorker.getLatestPriceAgeMs(symbol),
+        dailyBarsAgeMs: timing.provenance.dailyLastBarMs === null ? null : Math.max(0, finishedAtMsNow - timing.provenance.dailyLastBarMs),
+        intradayBarsAgeMs: timing.provenance.intradayLastBarMs === null ? null : Math.max(0, finishedAtMsNow - timing.provenance.intradayLastBarMs),
+        intradayOutcome: timing.provenance.intradayOutcome,
+        terminalOutcome: outcome,
         errorCode,
         // Last stage that COMPLETED; on an error exit the failing stage is the one after it.
         lastCompletedStage: stageTimer.openStageAfter(),
@@ -814,6 +850,7 @@ export class QuantSignalAgent {
     const bars: Bar[] = await historicalDataGateway.getBars(symbol, TIMEFRAME, startMs, endMs);
     throwIfSuperseded(options, symbol, traceId, 'primaryBars');
     stageTimer?.mark('primaryBars');
+    timing.provenance.dailyLastBarMs = bars[bars.length - 1]?.timestamp ?? null;
     observeSafe(() => structuredLogger.info('quant_bar_input_availability', {
       category: 'DISCOVERY', eventType: 'QUANT_BAR_INPUT_AVAILABILITY', symbol, traceId,
       timeframe: TIMEFRAME, requestedStartMs: startMs, requestedEndMs: endMs,
@@ -861,6 +898,7 @@ export class QuantSignalAgent {
     // 2026-10-04 (opening-range session-anchoring fix): the real regular-session open for the
     // opening-range anchor - computed from the same fetch window so it always matches the bars.
     let intradaySessionOpenMs: number | undefined;
+    if (!isExperimentalStrategyLive('OPENING_RANGE_BREAKOUT')) timing.provenance.intradayOutcome = 'INTRADAY_NOT_REQUIRED';
     if (isExperimentalStrategyLive('OPENING_RANGE_BREAKOUT')) {
       try {
         const window = computeIntradayFetchWindow(endMs);
@@ -892,9 +930,12 @@ export class QuantSignalAgent {
               firstBarTimestamp: null, lastBarTimestamp: null, outcome: 'DEADLINE',
               terminalReason: 'INTRADAY_FETCH_DEADLINE',
             }));
+            timing.provenance.intradayOutcome = 'DEADLINE';
           } else if ('value' in intradayOutcome) {
             intradayBars = intradayOutcome.value;
             intradaySessionOpenMs = window.sessionOpenMs;
+            timing.provenance.intradayOutcome = intradayBars.length > 0 ? 'AVAILABLE' : 'EMPTY';
+            timing.provenance.intradayLastBarMs = intradayBars[intradayBars.length - 1]?.timestamp ?? null;
             observeSafe(() => structuredLogger.info('quant_bar_input_availability', {
               category: 'DISCOVERY', eventType: 'QUANT_BAR_INPUT_AVAILABILITY', symbol, traceId,
               timeframe: INTRADAY_TIMEFRAME, requestedStartMs: window.startMs, requestedEndMs: window.endMs,
@@ -913,9 +954,11 @@ export class QuantSignalAgent {
             firstBarTimestamp: null, lastBarTimestamp: null, outcome: 'WINDOW_UNAVAILABLE',
             terminalReason: 'INTRADAY_SESSION_WINDOW_UNAVAILABLE',
           }));
+          timing.provenance.intradayOutcome = 'WINDOW_UNAVAILABLE';
         }
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
+        timing.provenance.intradayOutcome = 'FETCH_ERROR';
         observeSafe(() => structuredLogger.info('quant_bar_input_availability', {
           category: 'DISCOVERY', eventType: 'QUANT_BAR_INPUT_AVAILABILITY', symbol, traceId,
           timeframe: INTRADAY_TIMEFRAME, requestedStartMs: null, requestedEndMs: endMs,
