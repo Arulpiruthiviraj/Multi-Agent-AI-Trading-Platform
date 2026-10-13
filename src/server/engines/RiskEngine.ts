@@ -1151,6 +1151,9 @@ export class RiskEngine {
         if (!persisted) {
             releasePendingCapitalReservation(proposal.traceId);
             eventBus.emit(EVENTS.RISK_BLOCK, {
+                traceId: proposal.traceId,
+                symbol: proposal.symbol,
+                side: proposal.side,
                 gate: 'risk_assessment_persist',
                 reasoning: 'RISK_ASSESSMENT_PERSIST_FAILED: assessment was not written; OMS will not execute.',
                 recommendedFix: 'Inspect SQLite risk_assessments insert errors. Do not bypass RiskEngine.',
