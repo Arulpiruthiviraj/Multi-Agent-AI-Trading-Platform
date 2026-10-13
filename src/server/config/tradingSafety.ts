@@ -321,6 +321,10 @@ export interface TradingSafety {
    * rate-limit headroom. Fail-closed on 429 still aborts the remainder of the cycle.
    */
   quantMaxConcurrentSymbols: number;
+  /** 2026-10-13: max age (from the cycle's scheduled time) at which a scheduled symbol may still START; later symbols are CAPACITY_DEFERRED. */
+  quantScheduledMaxQueueAgeMs: number;
+  /** 2026-10-13: a non-held symbol whose last evaluation finished within this window is skipped by the scheduled cycle (SUPERSEDED_BY_RECENT_EVALUATION). */
+  quantScheduledSkipIfEvaluatedWithinMs: number;
   /**
    * 2026-10-09 (P2 scheduler mission, Task C): env-var name gating the bounded
    * priority quant scheduler (src/server/scheduling/quantPriorityScheduler.ts). Off by
@@ -866,6 +870,8 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'quantLookbackDays',
   'quantCycleIntervalMs',
   'quantMaxConcurrentSymbols',
+  'quantScheduledMaxQueueAgeMs',
+  'quantScheduledSkipIfEvaluatedWithinMs',
   'quantSchedulerQuantWorkerPoolSize',
   'quantSchedulerDataFetchPoolSize',
   'quantSchedulerMaxQueueDepth',

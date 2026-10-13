@@ -546,6 +546,18 @@ export class QuantSignalAgent {
   // Control-plane fairness only: resume with symbols not reached before provider backoff.
   // No strategy score, confidence, subscription cap or provider pacing is changed.
   private nextCycleSymbol: string | null = null;
+  /** Last ASSESSED completion per symbol (any origin) - lets the scheduled cycle skip work an on-demand run just did. */
+  private lastEvaluationFinishedAtMs = new Map<string, number>();
+
+  /** Symbols with an open position. Fail-open to empty (ordering/priority only; never a safety gate). */
+  private async getHeldSymbols(): Promise<Set<string>> {
+    try {
+      const rows = await db.select({ symbol: schema.portfolio.symbol, quantity: schema.portfolio.quantity }).from(schema.portfolio);
+      return new Set(rows.filter((r) => (r.quantity ?? 0) > 0).map((r) => String(r.symbol).toUpperCase()));
+    } catch {
+      return new Set();
+    }
+  }
 
   private async runCycle(): Promise<void> {
     // H1 (2026-10-09, Phase 3 certification): per-cycle observability. cycleId correlates the
@@ -557,12 +569,19 @@ export class QuantSignalAgent {
     const active = marketDataWorker.getActiveSymbols();
     // Prefer liquid names that Quant needs most often — still only evaluates subscribed symbols.
     const priority = ['SPY', 'QQQ', 'NVDA', 'HOOD', 'COIN', 'AMD', 'RIOT', 'AAPL', 'MSFT', 'META'];
+    // 2026-10-13: held positions first (they are the evaluations whose staleness matters most); then the
+    // existing liquid-priority names; then the rest. Ordering only - never changes any evaluation outcome.
+    const held = await this.getHeldSymbols();
     const ordered = [
+      ...active.filter((s) => held.has(s.toUpperCase())),
       ...priority.filter((s) => active.includes(s) || active.includes(s.toUpperCase())),
       ...active.filter((s) => !priority.includes(s.toUpperCase()) && !priority.includes(s)),
     ].map((s) => s.toUpperCase()).filter((s, i, arr) => arr.indexOf(s) === i);
-    const resumeAt = this.nextCycleSymbol ? Math.max(0, ordered.indexOf(this.nextCycleSymbol)) : 0;
-    const symbols = [...ordered.slice(resumeAt), ...ordered.slice(0, resumeAt)];
+    // Held positions always lead; only the remainder rotates to resume where a deferred/aborted cycle stopped.
+    const heldOrdered = ordered.filter((s) => held.has(s));
+    const restOrdered = ordered.filter((s) => !held.has(s));
+    const resumeAt = this.nextCycleSymbol ? Math.max(0, restOrdered.indexOf(this.nextCycleSymbol)) : 0;
+    const symbols = [...heldOrdered, ...restOrdered.slice(resumeAt), ...restOrdered.slice(0, resumeAt)];
     const cycleStarted = Date.now();
 
     if (symbols.length === 0) {
@@ -623,6 +642,9 @@ export class QuantSignalAgent {
     let nextIndex = 0;
     let abortRateLimit = false;
     let anySuccess = false;
+    // 2026-10-13: explicit terminal states for work the cycle did NOT evaluate (never a silent drop).
+    let deferFromIndex: number | null = null;
+    const skippedRecentSymbols: string[] = [];
     const attemptedSymbols: string[] = [];
     const completedSymbols: string[] = [];
     const workers = Array.from({ length: concurrency }, async () => {
@@ -630,6 +652,29 @@ export class QuantSignalAgent {
         const i = nextIndex++;
         if (i >= symbols.length) return;
         const symbol = symbols[i];
+        if (deferFromIndex !== null) return;
+        const isHeld = held.has(symbol);
+        const queueAgeNow = Date.now() - scheduledAtMs;
+        if (!isHeld && queueAgeNow > tradingSafety.quantScheduledMaxQueueAgeMs) {
+          deferFromIndex = i;
+          observeSafe(() => structuredLogger.info('quant_symbols_capacity_deferred', {
+            category: 'DISCOVERY', eventType: 'QUANT_SYMBOLS_CAPACITY_DEFERRED', cycleId,
+            terminalState: 'CAPACITY_DEFERRED', deferredFromSymbol: symbol, deferredFromIndex: i,
+            deferredCount: symbols.length - i, queueAgeMs: queueAgeNow, maxQueueAgeMs: tradingSafety.quantScheduledMaxQueueAgeMs,
+            reasoning: `Scheduled cycle reached ${symbol} ${queueAgeNow}ms after its scheduled time (bound ${tradingSafety.quantScheduledMaxQueueAgeMs}ms); the remaining ${symbols.length - i} symbols are deferred to the next cycle (resume at ${symbol}) rather than evaluated obsolete.`,
+          }));
+          return;
+        }
+        const lastDoneAt = this.lastEvaluationFinishedAtMs.get(symbol);
+        if (!isHeld && lastDoneAt !== undefined && Date.now() - lastDoneAt < tradingSafety.quantScheduledSkipIfEvaluatedWithinMs) {
+          skippedRecentSymbols.push(symbol);
+          observeSafe(() => structuredLogger.info('quant_symbol_superseded_by_recent_evaluation', {
+            category: 'DISCOVERY', eventType: 'QUANT_SYMBOL_SUPERSEDED_BY_RECENT_EVALUATION', cycleId, symbol,
+            terminalState: 'SUPERSEDED_BY_RECENT_EVALUATION', lastEvaluationAgeMs: Date.now() - lastDoneAt,
+            skipWindowMs: tradingSafety.quantScheduledSkipIfEvaluatedWithinMs,
+          }));
+          continue;
+        }
         attemptedSymbols.push(symbol);
         const attemptStarted = Date.now();
         let outcome = 'ERROR';
@@ -667,12 +712,16 @@ export class QuantSignalAgent {
       }
     });
     await Promise.all(workers);
-    const notAttemptedSymbols = symbols.slice(attemptedSymbols.length);
+    // Deferred / rate-limit-aborted tail only; symbols skipped as recently evaluated are NOT "not attempted".
+    const notAttemptedSymbols = deferFromIndex !== null
+      ? symbols.slice(deferFromIndex)
+      : symbols.slice(attemptedSymbols.length + skippedRecentSymbols.length);
     this.nextCycleSymbol = notAttemptedSymbols[0] ?? null;
     observeSafe(() => structuredLogger.info('quant_cycle_completed', {
       category: 'DISCOVERY', eventType: 'QUANT_CYCLE_COMPLETED',
       cycleId, durationMs: Date.now() - cycleStarted, concurrency, attemptedSymbols, completedSymbols,
-      notAttemptedSymbols, reason: abortRateLimit ? 'PROVIDER_BACKOFF' : 'COMPLETED',
+      notAttemptedSymbols, skippedRecentSymbols,
+      reason: abortRateLimit ? 'PROVIDER_BACKOFF' : deferFromIndex !== null ? 'CAPACITY_DEFERRED' : 'COMPLETED',
     }));
     if (anySuccess) {
       notePipelineAgentSuccess('QuantEngine');
@@ -801,6 +850,7 @@ export class QuantSignalAgent {
       throw e;
     } finally {
       const finishedAtMsNow = Date.now();
+      if (outcome === 'ASSESSED') this.lastEvaluationFinishedAtMs.set(symbol, finishedAtMsNow);
       observeSafe(() => structuredLogger.info('quant_symbol_eval_finished', {
         category: 'DISCOVERY', eventType: 'QUANT_SYMBOL_EVAL_FINISHED',
         cycleId, traceId, symbol, outcome, errorKind, ...timing.snapshot(),
