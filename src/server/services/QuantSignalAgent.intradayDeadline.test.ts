@@ -96,8 +96,9 @@ describe('QuantSignalAgent intraday fetch deadline', () => {
       && call[1]?.timeframe === '1Min'
       && call[1]?.outcome === 'DEADLINE');
     expect(deadlineAvailability).toBeDefined();
-    expect(deadlineAvailability?.[1]?.terminalReason).toBe('INTRADAY_FETCH_DEADLINE');
-    expect(deadlineAvailability?.[1]?.barCount).toBe(0);
+    const deadlinePayload = deadlineAvailability?.[1] as any;
+    expect(deadlinePayload?.terminalReason).toBe('INTRADAY_FETCH_DEADLINE');
+    expect(deadlinePayload?.barCount).toBe(0);
   }, 20_000);
 
   it('records FETCH_ERROR distinctly from NO_SETUP when the 1Min provider fails', async () => {
@@ -119,7 +120,8 @@ describe('QuantSignalAgent intraday fetch deadline', () => {
       && call[1]?.timeframe === '1Min'
       && call[1]?.outcome === 'FETCH_ERROR');
     expect(failedAvailability).toBeDefined();
-    expect(failedAvailability?.[1]?.terminalReason).toBeTruthy();
-    expect(failedAvailability?.[1]?.error).toMatch(/synthetic provider unavailable/);
+    const failedPayload = failedAvailability?.[1] as any;
+    expect(failedPayload?.terminalReason).toBeTruthy();
+    expect(failedPayload?.error).toMatch(/synthetic provider unavailable/);
   }, 20_000);
 });
