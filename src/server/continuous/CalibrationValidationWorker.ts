@@ -10,11 +10,15 @@ import { timedWorkCycle } from '../observability/workCycle';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 import { runCalibrationValidationCycle } from './CalibrationCandidateBuilder';
 import { createSingleFlightGuard, type SingleFlightGuard } from '../core/singleFlightInterval';
+import { tradingSafety } from '../config/tradingSafety';
+import { classifyMarketSession } from '../replay/marketSession';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 
 class CalibrationValidationWorker {
   private intervalId: NodeJS.Timeout | null = null;
   private lastRunAt: string | null = null;
   private lastRunCount: number = 0;
+  private deferredCycles = 0;
   // Real gap found and fixed (2026-09-15, post-forensic-audit timer sweep): runOnce() calls
   // runCalibrationValidationCycle(), which iterates every tracked (agent, bucket) pair and, per
   // pair, calls ChampionChallengerService.createShadowVersion()/promoteToCandidate() - an overlap
@@ -40,7 +44,22 @@ class CalibrationValidationWorker {
     }
   }
 
+  /** True when this cycle must not run now: regular session + deferral enabled. Pure over its inputs for tests. */
+  shouldDeferNow(nowMs: number = Date.now()): boolean {
+    return tradingSafety.calibrationValidationDeferDuringRegularSession
+      && classifyMarketSession(nowMs, 'America/New_York', false) === 'REGULAR';
+  }
+
   async runOnce(): Promise<void> {
+    if (this.shouldDeferNow()) {
+      this.deferredCycles++;
+      observeSafe(() => structuredLogger.info('calibration_validation_deferred', {
+        category: 'SYSTEM', eventType: 'CALIBRATION_VALIDATION_DEFERRED', component: 'CalibrationValidationWorker',
+        deferredCycles: this.deferredCycles,
+        reasoning: 'Regular session: observational calibration validation skipped so the trading-critical event loop is not shared with 20-77s of research CPU. Runs outside the regular session.',
+      }));
+      return;
+    }
     await this.guard.run(async () => {
       const results = await timedWorkCycle('CalibrationValidationWorker', () => runCalibrationValidationCycle());
       this.lastRunAt = new Date().toISOString();

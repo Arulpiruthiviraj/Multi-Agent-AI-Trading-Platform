@@ -296,6 +296,8 @@ export interface TradingSafety {
    * disagreementPenalty, or any RiskEngine/OMS/broker behavior.
    */
   confluenceCoordinatorEnabled: boolean;
+  /** 2026-10-13: skip observational CalibrationValidationWorker cycles during the regular session (see config comment). */
+  calibrationValidationDeferDuringRegularSession: boolean;
   /** 2026-10-12: daily-loss and drawdown gates measure research P&L on settings.budget instead of broker equity. */
   researchEquityRiskBasisEnabled: boolean;
   /** Minimum TechnicalAgent confidence (0-1) required to trigger a confluence check. */
@@ -1034,6 +1036,9 @@ function loadTradingSafety(): TradingSafety {
   }
   if (typeof raw.researchEquityRiskBasisEnabled !== 'boolean') {
     throw new Error('config/tradingSafety.json missing boolean field: researchEquityRiskBasisEnabled');
+  }
+  if (typeof raw.calibrationValidationDeferDuringRegularSession !== 'boolean') {
+    throw new Error('config/tradingSafety.json missing boolean field: calibrationValidationDeferDuringRegularSession');
   }
   if (typeof raw.confluenceCoordinatorEnabled !== 'boolean') {
     throw new Error('config/tradingSafety.json missing boolean field: confluenceCoordinatorEnabled');

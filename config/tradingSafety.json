@@ -75,6 +75,8 @@
   "fmpBudgetLockTimeoutMs": 10000,
   "recentCandidatePriorityMaxAgeMs": 300000,
   "confluenceCoordinatorEnabled": true,
+  "_calibrationValidationDeferComment": "2026-10-13: CalibrationValidationWorker is observational research (never touches live calibration) but ran 20-77s of main-thread CPU (64-97%) every 15 min DURING the regular session on Oct 13, directly competing with market data, PortfolioMonitor and RiskEngine for the single Node event loop. While true the cycle is skipped (explicit CALIBRATION_VALIDATION_DEFERRED event) during the regular session and runs outside it. Interim workload isolation until the work moves to a child process.",
+  "calibrationValidationDeferDuringRegularSession": true,
   "researchEquityRiskBasisEnabled": true,
   "confluenceCoordinatorConfidenceThreshold": 0.5,
   "confluenceCoordinatorCooldownMs": 60000,
