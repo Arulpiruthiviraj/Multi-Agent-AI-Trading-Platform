@@ -38,7 +38,7 @@ export const HISTORICAL_INTENT_PRIORITY: Record<HistoricalIntent, 0 | 1 | 2 | 3>
 
 export type SchedulerOutcome =
   | 'SUCCESS' | 'EMPTY' | 'TIMEOUT' | 'ERROR'
-  | 'DROPPED_QUEUE_FULL' | 'DROPPED_QUEUE_STALE' | 'DISCARDED_ABANDONED' | 'CANCELLED_ABANDONED' | 'PREEMPTED_REQUEUED';
+  | 'DROPPED_QUEUE_FULL' | 'DROPPED_QUEUE_STALE' | 'DISCARDED_ABANDONED' | 'CANCELLED_ABANDONED' | 'PREEMPTED_REQUEUED' | 'NEGATIVE_CACHED';
 
 export interface HistoricalJob {
   key: string;
@@ -77,6 +77,13 @@ export interface SchedulerLimits {
   abandonedCancelGraceMs: number;
   /** A preempted request is re-queued at most this many times, then rejected. */
   maxPreemptions: number;
+  /**
+   * Negative cache for P2/P3 (never P0/P1): once a historical window times out or comes back empty, the SAME window is not asked
+   * of IBKR again until an exponentially growing backoff expires (base, 2x per consecutive failure, capped). A success clears it.
+   * Oct 13: 63 of 81 background requests in 11 minutes were timeouts / empties / errors on windows IBKR cannot serve, re-issued
+   * every evaluator cycle - an infinite workload generator holding the single wire. Bounded (maxEntries, oldest evicted).
+   */
+  negativeCache?: { baseMs: number; maxMs: number; maxEntries: number };
 }
 
 export interface SchedulerDeps<T> {
@@ -117,8 +124,9 @@ export interface SchedulerStats {
   oldestQueuedAgeMsByPriority: [number | null, number | null, number | null, number | null];
   counters: {
     submitted: number; coalesced: number; promoted: number; droppedQueueFull: number; expired: number;
-    discardedAbandoned: number; cancelledAbandoned: number; preempted: number; completed: number;
+    discardedAbandoned: number; cancelledAbandoned: number; preempted: number; completed: number; negativeCached: number;
   };
+  negativeCacheEntries: number;
   maxDepthObserved: number;
 }
 
@@ -130,9 +138,10 @@ export class HistoricalRequestScheduler<T> {
   private readonly setTimer: (fn: () => void, ms: number) => unknown;
   private readonly clearTimer: (h: unknown) => void;
   private maxDepthObserved = 0;
+  private readonly negCache = new Map<string, { failures: number; blockedUntilMs: number }>();
   private readonly counters = {
     submitted: 0, coalesced: 0, promoted: 0, droppedQueueFull: 0, expired: 0,
-    discardedAbandoned: 0, cancelledAbandoned: 0, preempted: 0, completed: 0,
+    discardedAbandoned: 0, cancelledAbandoned: 0, preempted: 0, completed: 0, negativeCached: 0,
   };
 
   constructor(private readonly deps: SchedulerDeps<T>, private readonly limits: SchedulerLimits) {
@@ -165,6 +174,14 @@ export class HistoricalRequestScheduler<T> {
       this.maybePreemptFor(existing.priority);
       this.pump();
       return waiterPromise;
+    }
+    if (priority >= 2 && this.limits.negativeCache) {
+      const neg = this.negCache.get(job.key);
+      if (neg && neg.blockedUntilMs > this.now()) {
+        this.counters.negativeCached++;
+        this.emitDropped(job, priority, 'NEGATIVE_CACHED', this.queues[priority].length);
+        return Promise.reject(new Error(`IBKR_HISTORICAL_NEGATIVE_CACHED: ${job.symbol} ${job.timeframe} (${job.intent}) failed ${neg.failures}x; not re-requested for ${Math.ceil((neg.blockedUntilMs - this.now()) / 1000)}s.`));
+      }
     }
     const depthAtEnqueue = this.queues[priority].length;
     if (depthAtEnqueue >= this.limits.maxQueued[priority]) {
@@ -275,6 +292,23 @@ export class HistoricalRequestScheduler<T> {
     } catch { /* ignore */ }
   }
 
+  private noteResult(item: Item<T>, result: 'OK' | 'FAIL'): void {
+    const cfg = this.limits.negativeCache;
+    if (!cfg || item.priority < 2) return; // live classes are never negative-cached: recovery must be observed immediately
+    const key = item.job.key;
+    if (result === 'OK') { this.negCache.delete(key); return; }
+    const prev = this.negCache.get(key);
+    const failures = (prev?.failures ?? 0) + 1;
+    const blockMs = Math.min(cfg.maxMs, cfg.baseMs * 2 ** Math.min(failures - 1, 16));
+    this.negCache.delete(key); // re-insert at the tail: Map order = oldest first for bounded eviction
+    this.negCache.set(key, { failures, blockedUntilMs: this.now() + blockMs });
+    while (this.negCache.size > cfg.maxEntries) {
+      const oldest = this.negCache.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.negCache.delete(oldest);
+    }
+  }
+
   private nextItem(): Item<T> | null {
     for (let p = 0 as 0 | 1 | 2 | 3; p <= 3; p = (p + 1) as 0 | 1 | 2 | 3) {
       const q = this.queues[p];
@@ -344,11 +378,13 @@ export class HistoricalRequestScheduler<T> {
     this.counters.completed++;
     if (res.ok === true) {
       const n = this.deps.barCount((res as { ok: true; value: T }).value);
+      this.noteResult(item, n > 0 ? 'OK' : 'FAIL');
       this.emit(item, n > 0 ? 'SUCCESS' : 'EMPTY', serviceMs, n);
       this.resolveAll(item, (res as { ok: true; value: T }).value);
     } else {
       const error = (res as { ok: false; error: Error }).error;
       const abandoned = this.liveWaiters(item) === 0;
+      if (!abandoned && !/cancelled/i.test(error.message)) this.noteResult(item, 'FAIL');
       this.emit(item, abandoned ? 'CANCELLED_ABANDONED' : /timeout/i.test(error.message) ? 'TIMEOUT' : 'ERROR', serviceMs, 0);
       this.rejectAll(item, error);
     }
@@ -367,6 +403,7 @@ export class HistoricalRequestScheduler<T> {
       oldestQueuedAgeMsByPriority: ages,
       counters: { ...this.counters },
       maxDepthObserved: this.maxDepthObserved,
+      negativeCacheEntries: this.negCache.size,
     };
   }
 }

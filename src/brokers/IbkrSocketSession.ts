@@ -403,6 +403,11 @@ export class IbkrSocketSession {
       preemptGraceMs: continuousIntelligence.ibkrHistPreemptGraceMs,
       abandonedCancelGraceMs: continuousIntelligence.ibkrHistAbandonedCancelGraceMs,
       maxPreemptions: continuousIntelligence.ibkrHistMaxPreemptions,
+      negativeCache: {
+        baseMs: continuousIntelligence.ibkrHistNegativeCacheBaseMs,
+        maxMs: continuousIntelligence.ibkrHistNegativeCacheMaxMs,
+        maxEntries: continuousIntelligence.ibkrHistNegativeCacheMaxEntries,
+      },
     },
   );
 

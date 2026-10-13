@@ -231,3 +231,84 @@ describe('HistoricalRequestScheduler: bounded work', () => {
     expect(s.oldestQueuedAgeMsByPriority[1]).toBe(3_000);
   });
 });
+
+describe('HistoricalRequestScheduler: negative cache (backfill churn)', () => {
+  const NEG = { baseMs: 600_000, maxMs: 6 * 3_600_000, maxEntries: 5 };
+  const failNext = async (h: ReturnType<typeof harness>, j: HistoricalJob, how: 'empty' | 'error') => {
+    const p = settle(h.sched.submit(j));
+    await h.flush();
+    const d = h.started[h.started.length - 1];
+    if (how === 'empty') d.resolve([]); else d.reject(new Error('IBKR historicalData timeout for X'));
+    await h.flush();
+    return p;
+  };
+
+  it('a research window that times out / comes back empty is NOT asked of IBKR again until the backoff expires; the wait doubles per consecutive failure', async () => {
+    const h = harness({ negativeCache: NEG });
+    const j = job('OLDWIN', 'RESEARCH_BACKFILL', 100, 200);
+    expect(await failNext(h, j, 'error')).toMatchObject({ ok: false });
+    expect(h.started).toHaveLength(1);
+    // inside the base backoff: rejected immediately, nothing reaches the wire
+    h.advance(NEG.baseMs - 1_000);
+    const blocked = await settle(h.sched.submit(j));
+    expect(blocked).toMatchObject({ ok: false });
+    expect((blocked as any).e).toMatch(/NEGATIVE_CACHED/);
+    expect(h.started).toHaveLength(1);
+    expect(h.timings.some((r) => r.outcome === 'NEGATIVE_CACHED')).toBe(true);
+    // after the base backoff it is tried again; a second failure doubles the wait
+    h.advance(2_000);
+    expect(await failNext(h, j, 'empty')).toMatchObject({ ok: true, v: [] }); // an EMPTY result is delivered to its caller; it is the NEXT identical request that is blocked
+    expect(h.started).toHaveLength(2);
+    h.advance(NEG.baseMs * 2 - 5_000);
+    expect((await settle(h.sched.submit(j)) as any).e).toMatch(/NEGATIVE_CACHED/);
+    expect(h.started).toHaveLength(2);
+    expect(h.sched.getStats().counters.negativeCached).toBe(2);
+  });
+
+  it('a success clears the entry; the cap bounds the wait; the cache is bounded (oldest evicted)', async () => {
+    const h = harness({ negativeCache: { ...NEG, maxMs: 700_000 } });
+    const j = job('FLAKY', 'RECENT_CACHE_REFRESH', 1, 2);
+    await failNext(h, j, 'error');
+    h.advance(NEG.baseMs + 1_000);
+    const ok = settle(h.sched.submit(j));
+    await h.flush(); h.started[h.started.length - 1].resolve([1, 2]); await h.flush();
+    expect(await ok).toMatchObject({ ok: true });
+    expect(h.sched.getStats().negativeCacheEntries).toBe(0);
+    // cap: many consecutive failures never wait longer than maxMs
+    const k = job('CAPPED', 'RESEARCH_BACKFILL', 3, 4);
+    for (let i = 0; i < 6; i++) { await failNext(h, k, 'error'); h.advance(700_001); }
+    const probe = settle(h.sched.submit(k));
+    await h.flush();
+    expect(h.started.length).toBeGreaterThan(5); // still being retried at the cap interval, not blocked forever
+    h.started[h.started.length - 1].resolve([1]); await probe;
+    // bounded
+    for (let i = 0; i < 12; i++) await failNext(h, job(`W${i}`, 'RESEARCH_BACKFILL', 10 + i, 20 + i), 'error');
+    expect(h.sched.getStats().negativeCacheEntries).toBeLessThanOrEqual(NEG.maxEntries);
+  });
+
+  it('live classes are NEVER negative-cached: a failing current-session request is retried immediately', async () => {
+    const h = harness({ negativeCache: NEG });
+    for (const intent of ['QUANT_ON_DEMAND', 'QUANT_SCHEDULED', 'POSITION_DATA'] as const) {
+      const j = job(`LIVE_${intent}`, intent, 7, 8);
+      await failNext(h, j, 'error');
+      const again = settle(h.sched.submit(j));
+      await h.flush();
+      expect(h.started[h.started.length - 1].job.intent).toBe(intent); // reached the wire again
+      h.started[h.started.length - 1].resolve([1]); await again;
+    }
+    expect(h.sched.getStats().counters.negativeCached).toBe(0);
+  });
+
+  it('a cancelled (preempted/abandoned) request is not counted as a failed window', async () => {
+    const h = harness({ negativeCache: NEG });
+    const j = job('PREEMPTED', 'RESEARCH_BACKFILL', 5, 6);
+    const p = settle(h.sched.submit(j));
+    await h.flush();
+    h.advance(1_000);
+    void settle(h.sched.submit(job('LIVE', 'QUANT_ON_DEMAND', 9, 10)));
+    await h.flush();
+    expect(h.started[0].cancelled).toBe(true);
+    expect(h.sched.getStats().negativeCacheEntries).toBe(0);
+    void p;
+  });
+});

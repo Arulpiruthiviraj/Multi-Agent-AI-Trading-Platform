@@ -30,6 +30,10 @@ export interface ContinuousIntelligenceConfig {
   ibkrHistAbandonedCancelGraceMs: number;
   ibkrHistMaxPreemptions: number;
   ibkrHistForegroundWindowMaxAgeMs: number;
+  /** 2026-10-13 negative cache for P2/P3 historical windows that keep failing (base, cap, bound). */
+  ibkrHistNegativeCacheBaseMs: number;
+  ibkrHistNegativeCacheMaxMs: number;
+  ibkrHistNegativeCacheMaxEntries: number;
   screenerEvalCooldownMs: number;
   screenerMinHistoryBars: number;
   screenerMinReturnPct: number;
@@ -390,6 +394,9 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     ibkrHistAbandonedCancelGraceMs: requireNumber(raw.ibkrHistAbandonedCancelGraceMs, 'ibkrHistAbandonedCancelGraceMs'),
     ibkrHistMaxPreemptions: requireNumber(raw.ibkrHistMaxPreemptions, 'ibkrHistMaxPreemptions'),
     ibkrHistForegroundWindowMaxAgeMs: requireNumber(raw.ibkrHistForegroundWindowMaxAgeMs, 'ibkrHistForegroundWindowMaxAgeMs'),
+    ibkrHistNegativeCacheBaseMs: requireNumber(raw.ibkrHistNegativeCacheBaseMs, 'ibkrHistNegativeCacheBaseMs'),
+    ibkrHistNegativeCacheMaxMs: requireNumber(raw.ibkrHistNegativeCacheMaxMs, 'ibkrHistNegativeCacheMaxMs'),
+    ibkrHistNegativeCacheMaxEntries: requireNumber(raw.ibkrHistNegativeCacheMaxEntries, 'ibkrHistNegativeCacheMaxEntries'),
     screenerEvalCooldownMs: requireNumber(raw.screenerEvalCooldownMs, 'screenerEvalCooldownMs'),
     screenerMinHistoryBars: requireNumber(raw.screenerMinHistoryBars, 'screenerMinHistoryBars'),
     screenerMinReturnPct: requireNumber(raw.screenerMinReturnPct, 'screenerMinReturnPct'),
