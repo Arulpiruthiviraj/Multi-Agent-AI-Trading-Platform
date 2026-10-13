@@ -73,6 +73,7 @@ async function main() {
     sessionDurationMinutes: spec.durationMinutes,
     universeSize: spec.symbols,
     initialCash: spec.initialCash ?? 100_000,
+    riskProfile: spec.riskProfile,
     faultPlan: spec.faultPlan,
     lateMoverConfigs: spec.lateMoverConfigs,
     staleCacheSymbols: spec.staleCacheSymbols,

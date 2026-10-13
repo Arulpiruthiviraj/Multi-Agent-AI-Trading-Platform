@@ -35,6 +35,8 @@ export interface FullSessionSpec {
   stopAfterBarIndex?: number;
   /** Argus research capital AND simulated broker cash (default 100k for legacy runs). */
   initialCash?: number;
+  /** Per-trade cap and daily-loss limit for the session's replay risk config (see SyntheticSessionOptions.riskProfile). */
+  riskProfile?: { maxPositionSizeUsd?: number; maxDailyLossUsd?: number };
   resume?: { startBarIndex: number; brokerState: HistoricalReplayBrokerState };
   /**
    * Operator-gated cold-start bootstrap (2026-10-11): when true, the parent sets
@@ -155,6 +157,8 @@ export function buildMultiTradeDaySpec(outputPath: string, seed = 424242): FullS
     faultPlan: [],
     coldStartBootstrap: true,
     initialCash: 20_000,
+    // $20K research capital with the production per-trade ($3,000) and daily-loss ($250) profile
+    riskProfile: { maxPositionSizeUsd: 3_000, maxDailyLossUsd: 250 },
     requireTradeForCertification: true,
     outputPath,
     label: 'KNOWN_OPPORTUNITY_PLATFORM_FIXTURE: multi-trade RTH day, $20K research capital (mechanical capability, not alpha)',

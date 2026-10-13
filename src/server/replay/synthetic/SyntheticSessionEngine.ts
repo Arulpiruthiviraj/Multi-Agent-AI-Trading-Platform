@@ -102,6 +102,13 @@ export interface SyntheticSessionOptions {
   universeSize?: number;
   sessionDurationMinutes?: number;
   initialCash?: number;
+  /**
+   * Research-capital risk profile for the session (2026-10-13). Before this, every synthetic session silently ran on the replay
+   * default allocation ($3,000 - visible as "allocated $3000" in argus_capital_allocation rejections), so capital-reuse, per-symbol
+   * caps and multi-position behaviour were never exercised at the real $20K research scale. When `initialCash` is supplied the
+   * replay config's allocationBudget/initialCapital/buyingPower follow it; these two add the per-trade and daily-loss limits.
+   */
+  riskProfile?: { maxPositionSizeUsd?: number; maxDailyLossUsd?: number };
   /** Real seconds : simulated seconds. Governs only how fast the clock ITSELF reports simulated
    *  time to consumers (SessionLifecycle, RiskEngine's market_hours-via-classifyMarketSession) -
    *  does not change the real wall-clock pacing of bar delivery (see REAL_MS_BETWEEN_BARS above). */
@@ -570,7 +577,12 @@ export class SyntheticSessionEngine {
       const session: ActiveReplaySession = {
         replayId: options.simulationId,
         status: 'RUNNING',
-        config: defaultReplayConfig({ symbols: universe, timezone: replaySafety.defaultTimezone, randomSeed: options.seed, agents: ['TechnicalAgent', 'QuantEngine', 'ChiefTrader', 'RiskAgent'] }),
+        config: defaultReplayConfig({
+          symbols: universe, timezone: replaySafety.defaultTimezone, randomSeed: options.seed, agents: ['TechnicalAgent', 'QuantEngine', 'ChiefTrader', 'RiskAgent'],
+          ...(options.initialCash !== undefined ? { allocationBudget: options.initialCash, initialCapital: options.initialCash, buyingPower: options.initialCash } : {}),
+          ...(options.riskProfile?.maxPositionSizeUsd !== undefined ? { maxPositionSize: options.riskProfile.maxPositionSizeUsd } : {}),
+          ...(options.riskProfile?.maxDailyLossUsd !== undefined ? { maxDailyLoss: options.riskProfile.maxDailyLossUsd } : {}),
+        }),
         clock: this.clock,
         cutoff,
         broker: this.broker,
