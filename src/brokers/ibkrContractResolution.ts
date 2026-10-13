@@ -134,8 +134,14 @@ function queryContractDetailsOnce(
       if (id !== reqId) return;
       finish(() => resolve(results));
     };
-    const onErr = (err: Error, _code: number, id: number | undefined) => {
+    const onErr = (err: Error, code: number, id: number | undefined) => {
       if (id !== reqId) return;
+      // 2026-10-13: real IBKR answers reqContractDetails for a contract it does not know with an ERROR (code 200,
+      // "No security definition has been found") on that reqId, NOT with an empty result set. That is "zero matches
+      // for THIS candidate" - the caller must go on to the next candidate (e.g. "BRK B" after "BRK.B"). Rejecting here
+      // aborted resolution on the first candidate (uncached ERROR), so BRK.B kept re-subscribing with the unresolved
+      // dotted symbol and hit code 200 every ~5 minutes all session (Oct 13 audit). Any other code still rejects.
+      if (code === 200) { finish(() => resolve([])); return; }
       finish(() => reject(err instanceof Error ? err : new Error(String(err))));
     };
     ib.on(EventName.contractDetails, onDetails);

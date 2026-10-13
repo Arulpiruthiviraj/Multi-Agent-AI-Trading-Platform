@@ -1,0 +1,7 @@
+{
+  "$comment": "2026-10-13 canonical-identifier policy for symbols that may reach an IBKR STK (equity) request. Reviewed config, not a UI knob. Oct 13 audit: 82 IBKR code-200 historical rejections in 2h came from NULL, NONE, DIAGTEST<ts>, DIAGPIPE<ts>, USDJPY (FX), SPX (index) and company-name strings - none of them equities, all of them passing a pure ticker-regex. This list REJECTS identifiers that are provably not routable equities (placeholders, test-only diagnostics, FX pairs, cash indices); it is not a blacklist of 'bad tickers' - anything else that merely is not a security is caught by IBKR's own reqContractDetails answer (cached as NOT_FOUND).",
+  "reservedPlaceholderTokens": ["NULL", "NONE", "NAN", "NA", "N/A", "UNDEFINED", "UNKNOWN", "TEST", "TBD", "TICKER", "SYMBOL", "NIL"],
+  "testOnlyDiagnosticPrefixPatterns": ["^DIAG[A-Z]*[0-9]{6,}$"],
+  "cashIndexIdentifiers": ["SPX", "NDX", "VIX", "RUT", "DJI", "DJIA", "COMP", "NYA"],
+  "fxCurrencyCodes": ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "NZD", "CNH", "MXN", "SEK", "NOK", "HKD", "SGD"]
+}

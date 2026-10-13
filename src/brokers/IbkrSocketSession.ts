@@ -4,6 +4,7 @@
  * This module never opens a browser and never speaks Client Portal :5000.
  */
 import { recordIbkrContractNotFound } from './ibkrContractResolution';
+import { classifyEquityRouting } from '../server/data/symbolFormat';
 import {
   IBApi,
   EventName,
@@ -1330,6 +1331,12 @@ export class IbkrSocketSession {
         `IBKR contract for ${sym} could not be uniquely resolved (${resolution.status}) - refusing to `
         + `subscribe or place an order under an unverified contract guess.`,
       );
+    }
+    // 2026-10-13 (default, unresolved path only - a contract IBKR itself qualified is used as returned): typed/canonical identifier gate before ANY STK request (streaming, historical, orders): placeholders,
+    // test-only diagnostics, FX pairs and cash indices are not equities and only earn IBKR code-200 rejections.
+    const routing = classifyEquityRouting(sym);
+    if (routing.routable === false) {
+      throw new Error(`IBKR STK request refused for ${JSON.stringify(sym.slice(0, 64))}: not a routable equity identifier (${routing.reason}).`);
     }
     return {
       symbol: sym,

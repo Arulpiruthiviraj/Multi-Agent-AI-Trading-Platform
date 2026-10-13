@@ -10,6 +10,45 @@
  */
 const TICKER_FORMAT = /^[A-Z0-9]{1,16}([./-][A-Z0-9]{1,16})?$/;
 
+import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
+
+interface SymbolRoutingConfig {
+  reservedPlaceholderTokens: string[];
+  testOnlyDiagnosticPrefixPatterns: string[];
+  cashIndexIdentifiers: string[];
+  fxCurrencyCodes: string[];
+}
+const routing = loadRepoConfigJson<SymbolRoutingConfig>('symbolRouting.json');
+const RESERVED = new Set(routing.reservedPlaceholderTokens.map((s) => s.toUpperCase()));
+const DIAGNOSTIC_PATTERNS = routing.testOnlyDiagnosticPrefixPatterns.map((p) => new RegExp(p));
+const CASH_INDEXES = new Set(routing.cashIndexIdentifiers.map((s) => s.toUpperCase()));
+const FX_PAIR = new RegExp(`^(?:${routing.fxCurrencyCodes.join('|')})(?:${routing.fxCurrencyCodes.join('|')})$`);
+
+export type EquityRoutingVerdict =
+  | { routable: true }
+  | { routable: false; reason: 'NOT_A_STRING' | 'MALFORMED' | 'RESERVED_PLACEHOLDER' | 'TEST_ONLY_DIAGNOSTIC' | 'CASH_INDEX' | 'FX_PAIR' };
+
+/**
+ * 2026-10-13: may this identifier be sent to IBKR as a STK (equity) contract? Stricter than the pure format gate:
+ * it also rejects placeholder tokens (NULL/NONE), test-only diagnostic symbols (DIAGTEST<ts>), cash indices (SPX)
+ * and FX pairs (USDJPY) - identifiers whose asset class is provably not US equity. Configuration: config/symbolRouting.json.
+ */
+export function classifyEquityRouting(raw: unknown): EquityRoutingVerdict {
+  if (typeof raw !== 'string') return { routable: false, reason: 'NOT_A_STRING' };
+  const s = raw.toUpperCase();
+  // Most specific reason first: a 21-character DIAGTEST<ts> is also over-length, but "test-only diagnostic" is the useful answer.
+  if (DIAGNOSTIC_PATTERNS.some((re) => re.test(s))) return { routable: false, reason: 'TEST_ONLY_DIAGNOSTIC' };
+  if (!isPlausibleHistoricalSymbol(raw)) return { routable: false, reason: 'MALFORMED' };
+  if (RESERVED.has(s)) return { routable: false, reason: 'RESERVED_PLACEHOLDER' };
+  if (CASH_INDEXES.has(s)) return { routable: false, reason: 'CASH_INDEX' };
+  if (s.length === 6 && FX_PAIR.test(s)) return { routable: false, reason: 'FX_PAIR' };
+  return { routable: true };
+}
+
+export function isRoutableEquitySymbol(raw: unknown): boolean {
+  return classifyEquityRouting(raw).routable;
+}
+
 /** Stricter check for rows read back from storage: Argus normalizes symbols to upper case on ingestion, so a
  *  mixed-case value ("Walmart", " Archer Aviation") is a legacy pre-DEF-24 extraction, never a real ticker. */
 export function isCanonicalStoredSymbol(raw: unknown): boolean {

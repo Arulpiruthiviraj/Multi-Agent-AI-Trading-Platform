@@ -88,4 +88,41 @@ describe('IbkrSocketSession contract resolution (2026-09-20 remediation)', () =>
 
     expect(socket.reqContractDetails).toHaveBeenCalled();
   });
+
+  it('real-IBKR shape: an unknown first candidate answers ERROR 200 on its reqId; resolution falls through to "BRK B" and RESOLVES (was: aborted with an uncached ERROR)', async () => {
+    const s = session(); const socket = await connect(s);
+    socket.reqContractDetails.mockImplementation((reqId: number, contract: any) => {
+      queueMicrotask(() => {
+        if (contract.symbol === 'BRK.B') {
+          socket.emit(EventName.error, new Error('No security definition has been found for the request'), 200, reqId);
+        } else {
+          socket.emit(EventName.contractDetails, reqId, { contract: { symbol: 'BRK B', secType: 'STK', exchange: 'SMART', primaryExch: 'NYSE', currency: 'USD', conId: 72063691 } });
+          socket.emit(EventName.contractDetailsEnd, reqId);
+        }
+      });
+    });
+    const outcome = await s.resolveContract('BRK.B');
+    expect(outcome.status).toBe('RESOLVED');
+    expect(socket.reqContractDetails.mock.calls.map((c: any[]) => c[1].symbol)).toEqual(['BRK.B', 'BRK B']);
+    s.subscribeMarketData('BRK.B');
+    const call = socket.reqMktData.mock.calls.find((c: any[]) => c[1]?.conId === 72063691);
+    expect(call[1]).toMatchObject({ symbol: 'BRK B', primaryExch: 'NYSE' });
+  });
+
+  it('real-IBKR shape: every candidate answers ERROR 200 -> NOT_FOUND is CACHED so the junk symbol stops being re-sent; other error codes are not swallowed', async () => {
+    const s = session(); const socket = await connect(s);
+    socket.reqContractDetails.mockImplementation((reqId: number) => {
+      queueMicrotask(() => socket.emit(EventName.error, new Error('No security definition has been found for the request'), 200, reqId));
+    });
+    expect((await s.resolveContract('NONE')).status).toBe('NOT_FOUND');
+    expect(() => s.subscribeMarketData('NONE')).toThrow(/could not be uniquely resolved/);
+    const callsAfterFirst = socket.reqContractDetails.mock.calls.length;
+    expect((await s.resolveContract('NONE')).status).toBe('NOT_FOUND');
+    expect(socket.reqContractDetails.mock.calls.length).toBe(callsAfterFirst); // cached: not asked again
+
+    socket.reqContractDetails.mockImplementation((reqId: number) => {
+      queueMicrotask(() => socket.emit(EventName.error, new Error('Not connected'), 504, reqId));
+    });
+    expect((await s.resolveContract('OTHER')).status).toBe('ERROR'); // transient/other codes still surface as ERROR, uncached
+  });
 });
