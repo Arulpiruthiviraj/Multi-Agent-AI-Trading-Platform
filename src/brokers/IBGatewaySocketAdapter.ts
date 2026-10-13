@@ -3,6 +3,7 @@
  * Primary IBKR path — silent auth on 4002/7497, no browser.
  * Orders still only via OMS → BrokerManager.getActiveBroker().placeOrder().
  */
+import type { HistoricalDataTimingDetail } from './ibkrHistoricalScheduler';
 import { BrokerPlugin, BrokerCapabilities, Order, Position, Portfolio } from './BrokerAdapter';
 import { assertIbkrSessionAllowsOrder } from './ibkrAccountClassification';
 import { loadIbkrConnection, ibkrSocketPortCandidates } from '../server/config/ibkrConnection';
@@ -57,12 +58,7 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
     this.session.setHistoricalDataErrorHandler(handler);
   }
 
-  setHistoricalDataTimingHandler(handler: ((detail: {
-    symbol: string; timeframe: string; startMs: number; endMs: number;
-    queueWaitMs: number; serviceMs: number; totalMs: number;
-    outcome: 'SUCCESS' | 'EMPTY' | 'TIMEOUT' | 'ERROR' | 'DROPPED_QUEUE_FULL' | 'DROPPED_QUEUE_STALE'; barCount: number;
-    queueDepthAtEnqueue: number;
-  }) => void) | null): void {
+  setHistoricalDataTimingHandler(handler: ((detail: HistoricalDataTimingDetail) => void) | null): void {
     this.session.setHistoricalDataTimingHandler(handler);
   }
 

@@ -4,6 +4,10 @@
  * This module never opens a browser and never speaks Client Portal :5000.
  */
 import { recordIbkrContractNotFound } from './ibkrContractResolution';
+import {
+  HistoricalRequestScheduler, type HistoricalDataTimingDetail, type ExecControl, type SchedulerStats,
+} from './ibkrHistoricalScheduler';
+import { currentHistoricalIntent, inferHistoricalIntent } from '../server/data/historicalRequestIntent';
 import { classifyEquityRouting } from '../server/data/symbolFormat';
 import {
   IBApi,
@@ -368,9 +372,44 @@ export class IbkrSocketSession {
   private marketDataSubscriptionHandler: ((symbol: string) => void) | null = null;
   private nextHistReqId = 50_000;
   /** Serialize historical requests — IB paces hist data; avoid storms. */
-  private histChain: Promise<unknown> = Promise.resolve();
-  /** Requests waiting for their turn in histChain (not yet running). */
-  private histWaiting = 0;
+  /**
+   * 2026-10-13: intent-priority historical request scheduler (replaces the single FIFO promise chain, whose head-of-line
+   * blocking by weeks-old research windows starved live Quant requests - see ibkrHistoricalScheduler.ts).
+   */
+  private readonly histScheduler = new HistoricalRequestScheduler<Bar[]>(
+    {
+      exec: (job, ctl) => this.requestHistoricalBarsOnce(job.symbol, job.timeframe, job.startMs, job.endMs, ctl),
+      barCount: (bars) => bars.length,
+      onTiming: (rec) => {
+        try {
+          this.historicalDataTimingHandler?.({
+            symbol: rec.job.symbol, timeframe: rec.job.timeframe, startMs: rec.job.startMs, endMs: rec.job.endMs,
+            queueWaitMs: rec.queueWaitMs, serviceMs: rec.serviceMs, totalMs: rec.totalMs, outcome: rec.outcome,
+            barCount: rec.barCount, queueDepthAtEnqueue: rec.queueDepthAtEnqueue, intent: rec.intent,
+            priority: rec.priority, coalescedWaiters: rec.coalescedWaiters,
+          });
+        } catch { /* diagnostics must never affect historical delivery */ }
+      },
+    },
+    {
+      maxQueued: {
+        0: continuousIntelligence.ibkrHistMaxQueuedP0, 1: continuousIntelligence.ibkrHistMaxQueuedP1,
+        2: continuousIntelligence.ibkrHistMaxQueuedP2, 3: continuousIntelligence.ibkrHistMaxQueuedP3,
+      },
+      maxQueueWaitMs: {
+        0: continuousIntelligence.ibkrHistQueueWaitMsP0, 1: continuousIntelligence.ibkrHistQueueWaitMsP1,
+        2: continuousIntelligence.ibkrHistQueueWaitMsP2, 3: continuousIntelligence.ibkrHistQueueWaitMsP3,
+      },
+      preemptGraceMs: continuousIntelligence.ibkrHistPreemptGraceMs,
+      abandonedCancelGraceMs: continuousIntelligence.ibkrHistAbandonedCancelGraceMs,
+      maxPreemptions: continuousIntelligence.ibkrHistMaxPreemptions,
+    },
+  );
+
+  /** Queue depth by class, oldest queued age, counters (coalesced / expired / preempted / ...). Read-only diagnostics. */
+  getHistoricalQueueStats(): SchedulerStats {
+    return this.histScheduler.getStats();
+  }
   /** Separate ID space from market-data/historical reqIds - see resolveContract(). */
   private nextContractReqId = 900_000;
   /** 2026-09-20 forensic-audit remediation (part B): reqHistoricalData errors previously only
@@ -382,12 +421,7 @@ export class IbkrSocketSession {
     durationStr: string; barSize: string; whatToShow: string;
   }) => void) | null = null;
   /** Diagnostics-only latency split for the serialized historical request chain. */
-  private historicalDataTimingHandler: ((detail: {
-    symbol: string; timeframe: string; startMs: number; endMs: number;
-    queueWaitMs: number; serviceMs: number; totalMs: number;
-    outcome: 'SUCCESS' | 'EMPTY' | 'TIMEOUT' | 'ERROR' | 'DROPPED_QUEUE_FULL' | 'DROPPED_QUEUE_STALE'; barCount: number;
-    queueDepthAtEnqueue: number;
-  }) => void) | null = null;
+  private historicalDataTimingHandler: ((detail: HistoricalDataTimingDetail) => void) | null = null;
   /** 2026-09-20 forensic-audit remediation (part D): IBKR delayed tick fields (66-69) - see
    *  tickPrice handler below. Deliberately separate from tickHandler (the live-quote sink
    *  MarketDataWorker/RiskEngine/OMS ultimately consume) - delayed data must never silently enter
@@ -517,12 +551,7 @@ export class IbkrSocketSession {
     this.historicalDataErrorHandler = handler;
   }
 
-  setHistoricalDataTimingHandler(handler: ((detail: {
-    symbol: string; timeframe: string; startMs: number; endMs: number;
-    queueWaitMs: number; serviceMs: number; totalMs: number;
-    outcome: 'SUCCESS' | 'EMPTY' | 'TIMEOUT' | 'ERROR' | 'DROPPED_QUEUE_FULL' | 'DROPPED_QUEUE_STALE'; barCount: number;
-    queueDepthAtEnqueue: number;
-  }) => void) | null): void {
+  setHistoricalDataTimingHandler(handler: ((detail: HistoricalDataTimingDetail) => void) | null): void {
     this.historicalDataTimingHandler = handler;
   }
 
@@ -1473,63 +1502,16 @@ export class IbkrSocketSession {
    * Never fabricates bars — empty / timeout / error throws or returns [].
    */
   requestHistoricalBars(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<Bar[]> {
-    const enqueuedAtMs = Date.now();
-    const queueDepthAtEnqueue = this.histWaiting;
-    const emitTiming = (detail: Parameters<NonNullable<typeof this.historicalDataTimingHandler>>[0]) => {
-      try { this.historicalDataTimingHandler?.(detail); } catch { /* diagnostics must never affect historical delivery */ }
-    };
-    // 2026-10-13: bound the serialized chain. Before this, a Quant caller that gave up at its 8s deadline left its
-    // request behind every other one, and with ~50 evaluations/min the chain only grew (zombie backlog).
-    if (queueDepthAtEnqueue >= continuousIntelligence.ibkrHistoricalMaxQueuedRequests) {
-      emitTiming({ symbol, timeframe, startMs, endMs, queueWaitMs: 0, serviceMs: 0, totalMs: 0, outcome: 'DROPPED_QUEUE_FULL', barCount: 0, queueDepthAtEnqueue });
-      return Promise.reject(new Error(`IBKR_HISTORICAL_QUEUE_FULL: ${queueDepthAtEnqueue} requests already waiting (max ${continuousIntelligence.ibkrHistoricalMaxQueuedRequests}); ${symbol} ${timeframe} not queued.`));
-    }
-    this.histWaiting++;
-    const run = async (): Promise<Bar[]> => {
-      this.histWaiting = Math.max(0, this.histWaiting - 1);
-      const startedAtMs = Date.now();
-      if (timeframe !== '1Day' && startedAtMs - enqueuedAtMs > continuousIntelligence.ibkrIntradayHistoricalMaxQueueWaitMs) {
-        emitTiming({ symbol, timeframe, startMs, endMs, queueWaitMs: startedAtMs - enqueuedAtMs, serviceMs: 0, totalMs: startedAtMs - enqueuedAtMs, outcome: 'DROPPED_QUEUE_STALE', barCount: 0, queueDepthAtEnqueue });
-        throw new Error(`IBKR_HISTORICAL_QUEUE_STALE: ${symbol} ${timeframe} waited ${startedAtMs - enqueuedAtMs}ms (max ${continuousIntelligence.ibkrIntradayHistoricalMaxQueueWaitMs}ms); dropped unserved.`);
-      }
-      try {
-        const bars = await this.requestHistoricalBarsOnce(symbol, timeframe, startMs, endMs);
-        const finishedAtMs = Date.now();
-        try {
-          this.historicalDataTimingHandler?.({
-            symbol, timeframe, startMs, endMs,
-            queueWaitMs: Math.max(0, startedAtMs - enqueuedAtMs),
-            serviceMs: Math.max(0, finishedAtMs - startedAtMs),
-            totalMs: Math.max(0, finishedAtMs - enqueuedAtMs),
-            outcome: bars.length > 0 ? 'SUCCESS' : 'EMPTY',
-            barCount: bars.length,
-            queueDepthAtEnqueue,
-          });
-        } catch { /* diagnostics must never affect historical delivery */ }
-        return bars;
-      } catch (e) {
-        const finishedAtMs = Date.now();
-        const message = e instanceof Error ? e.message : String(e);
-        try {
-          this.historicalDataTimingHandler?.({
-            symbol, timeframe, startMs, endMs,
-            queueWaitMs: Math.max(0, startedAtMs - enqueuedAtMs),
-            serviceMs: Math.max(0, finishedAtMs - startedAtMs),
-            totalMs: Math.max(0, finishedAtMs - enqueuedAtMs),
-            outcome: /timeout/i.test(message) ? 'TIMEOUT' : 'ERROR',
-            barCount: 0,
-            queueDepthAtEnqueue,
-          });
-        } catch { /* diagnostics must never affect historical delivery */ }
-        throw e;
-      }
-    };
-    const next = this.histChain.then(run, run);
-    this.histChain = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+    const nowMs = Date.now();
+    const declared = currentHistoricalIntent();
+    const intent = declared?.intent
+      ?? inferHistoricalIntent(endMs, nowMs, continuousIntelligence.ibkrHistForegroundWindowMaxAgeMs);
+    // Identical requests share one provider request. A window ending near "now" is bucketed to the minute (its end moves
+    // every call); an old window is keyed exactly.
+    const nearNow = endMs >= nowMs - continuousIntelligence.ibkrHistForegroundWindowMaxAgeMs;
+    const endKey = nearNow ? Math.floor(endMs / 60_000) * 60_000 : endMs;
+    const key = `${symbol.toUpperCase()}|${timeframe}|${startMs}|${endKey}`;
+    return this.histScheduler.submit({ key, symbol, timeframe, startMs, endMs, intent }, { signal: declared?.signal });
   }
 
   private requestHistoricalBarsOnce(
@@ -1537,6 +1519,7 @@ export class IbkrSocketSession {
     timeframe: string,
     startMs: number,
     endMs: number,
+    ctl?: ExecControl,
   ): Promise<Bar[]> {
     if (!this.ib || !this.connected) {
       return Promise.reject(new Error('IBKR socket session is not connected for historical bars.'));
@@ -1626,6 +1609,12 @@ export class IbkrSocketSession {
 
       ib.on(EventName.historicalData, onBar);
       ib.on(EventName.error, onErr);
+      // 2026-10-13: lets the scheduler cancel this request when it is preempted by live-session work or nobody waits for it
+      // any more (IBKR supports cancelHistoricalData; the partial bars are discarded - never presented as a result).
+      ctl?.setCancel(() => {
+        try { ib.cancelHistoricalData(reqId); } catch { /* ignore */ }
+        finish(() => reject(new Error(`IBKR_HISTORICAL_CANCELLED for ${symbol} (${timeframe}): preempted or abandoned by the scheduler`)));
+      });
 
       try {
         // endDateTime "" = now; formatDate 2 = epoch seconds in `time`

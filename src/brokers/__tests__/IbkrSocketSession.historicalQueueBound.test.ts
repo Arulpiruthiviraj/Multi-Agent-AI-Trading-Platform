@@ -34,52 +34,66 @@ afterEach(async () => { vi.useRealTimers(); for (const s of sessions.splice(0)) 
 
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 
-describe('IBKR historical chain is bounded (2026-10-13)', () => {
-  it('rejects immediately once ibkrHistoricalMaxQueuedRequests are already waiting, with a DROPPED_QUEUE_FULL timing record', async () => {
+describe('IBKR historical requests are intent-prioritized and bounded (2026-10-13)', () => {
+  it('rejects immediately once the class queue bound is reached, with a DROPPED_QUEUE_FULL timing record, and sends nothing extra to the provider', async () => {
     const s = session(); const socket = await connect(s);
     const timings: any[] = [];
     s.setHistoricalDataTimingHandler((d) => timings.push(d));
-    const max = continuousIntelligence.ibkrHistoricalMaxQueuedRequests;
+    const max = continuousIntelligence.ibkrHistMaxQueuedP2;
     const now = Date.now();
-    // first request occupies the chain (never answered); `max` more wait behind it
-    const settled: Promise<unknown>[] = [];
-    const caught = (p: Promise<unknown>) => { const q = p.then(() => 'ok', (e) => String(e)); settled.push(q); return q; };
-    caught(s.requestHistoricalBars('AAA', '1Day', now - 86_400_000, now));
+    const pending: Promise<unknown>[] = [];
+    pending.push(s.requestHistoricalBars('AAA', '1Day', now - 86_400_000, now).catch(() => 'x')); // undeclared intent + current window -> RECENT_CACHE_REFRESH (P2)
     await flush();
-    for (let i = 0; i < max; i++) caught(s.requestHistoricalBars(`B${i}`, '1Day', now - 86_400_000, now));
+    for (let i = 0; i < max; i++) pending.push(s.requestHistoricalBars(`B${i}`, '1Day', now - 86_400_000, now).catch(() => 'x'));
     await flush();
     expect(socket.reqHistoricalData).toHaveBeenCalledTimes(1);
-    const overflow = await s.requestHistoricalBars('OVERFLOW', '1Min', now - 3_600_000, now).then(() => 'ok', (e) => String(e));
+    const overflow = await s.requestHistoricalBars('OVERFLOW', '1Day', now - 86_400_000, now).then(() => 'ok', (e) => String(e));
     expect(overflow).toMatch(/IBKR_HISTORICAL_QUEUE_FULL/);
-    expect(timings.find((t) => t.symbol === 'OVERFLOW')).toMatchObject({ outcome: 'DROPPED_QUEUE_FULL', queueDepthAtEnqueue: max });
-    expect(socket.reqHistoricalData).toHaveBeenCalledTimes(1); // nothing extra was sent to the provider
+    expect(timings.find((t) => t.symbol === 'OVERFLOW')).toMatchObject({ outcome: 'DROPPED_QUEUE_FULL', queueDepthAtEnqueue: max, priority: 2 });
+    expect(socket.reqHistoricalData).toHaveBeenCalledTimes(1);
+    expect(s.getHistoricalQueueStats().depthByPriority[2]).toBe(max);
   });
 
-  it('an INTRADAY request that waited past ibkrIntradayHistoricalMaxQueueWaitMs is dropped unserved; a daily request is not', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-10-13T14:00:00Z'));
+  it('a live-session request (declared intent) is served BEFORE queued older-window research requests, and the old windows are classified as backfill', async () => {
     const s = session(); const socket = await connect(s);
     const timings: any[] = [];
     s.setHistoricalDataTimingHandler((d) => timings.push(d));
     const now = Date.now();
-    const first = s.requestHistoricalBars('AAA', '1Day', now - 86_400_000, now).then(() => 'ok', (e) => String(e));
+    const weeksAgo = now - 21 * 86_400_000;
+    // first request occupies the wire; two weeks-old research windows queue behind it
+    const first = s.requestHistoricalBars('HOLD', '1Min', now - 3_600_000, now).catch(() => 'x');
     await flush();
-    const intraday = s.requestHistoricalBars('BBB', '1Min', now - 3_600_000, now).then(() => 'ok', (e) => String(e));
-    const daily = s.requestHistoricalBars('CCC', '1Day', now - 86_400_000, now).then(() => 'ok', (e) => String(e));
+    const old1 = s.requestHistoricalBars('OLDA', '1Min', weeksAgo, weeksAgo + 3_600_000).catch(() => 'x');
+    const old2 = s.requestHistoricalBars('OLDB', '1Min', weeksAgo, weeksAgo + 3_600_000).catch(() => 'x');
+    const { runWithHistoricalIntent } = await import('../../server/data/historicalRequestIntent');
+    const live = runWithHistoricalIntent('QUANT_ON_DEMAND', () => s.requestHistoricalBars('SPY', '1Min', now - 3_600_000, now)).catch(() => 'x');
     await flush();
-    vi.setSystemTime(Date.now() + continuousIntelligence.ibkrIntradayHistoricalMaxQueueWaitMs + 1_000);
-    // answer AAA (finish) so the chain advances
-    const firstReq = socket.reqHistoricalData.mock.calls[0][0];
-    socket.emit(EventName.historicalData, firstReq, 'finished', 0, 0, 0, 0, 0);
-    await first;
-    expect(await intraday).toMatch(/IBKR_HISTORICAL_QUEUE_STALE/);
-    expect(timings.find((t) => t.symbol === 'BBB')).toMatchObject({ outcome: 'DROPPED_QUEUE_STALE', serviceMs: 0 });
-    // daily CCC is serviced (reqHistoricalData invoked for it), not dropped by age
+    // answer HOLD
+    const reqOf = (n: number) => socket.reqHistoricalData.mock.calls[n][0];
+    socket.emit(EventName.historicalData, reqOf(0), 'finished', 0, 0, 0, 0, 0);
+    await first; await flush();
+    // the next request on the wire is the live SPY one, not OLDA
+    const sentSymbols = socket.reqHistoricalData.mock.calls.map((c: any[]) => c[1]?.symbol);
+    expect(sentSymbols.slice(0, 2)).toEqual(['HOLD', 'SPY']);
+    socket.emit(EventName.historicalData, reqOf(1), 'finished', 0, 0, 0, 0, 0);
+    await live; await flush();
+    expect(socket.reqHistoricalData.mock.calls.map((c: any[]) => c[1]?.symbol)[2]).toBe('OLDA');
+    expect(timings.find((t) => t.symbol === 'SPY')).toMatchObject({ intent: 'QUANT_ON_DEMAND', priority: 1 });
+    void old1; void old2;
+  });
+
+  it('timing records carry intent, priority and coalesced waiter count', async () => {
+    const s = session(); const socket = await connect(s);
+    const timings: any[] = [];
+    s.setHistoricalDataTimingHandler((d) => timings.push(d));
+    const now = Date.now();
+    const { runWithHistoricalIntent } = await import('../../server/data/historicalRequestIntent');
+    const a = runWithHistoricalIntent('QUANT_SCHEDULED', () => s.requestHistoricalBars('DUP', '1Min', now - 3_600_000, now));
+    const b = runWithHistoricalIntent('QUANT_ON_DEMAND', () => s.requestHistoricalBars('DUP', '1Min', now - 3_600_000, now + 5_000));
     await flush();
-    expect(socket.reqHistoricalData.mock.calls.map((c: any[]) => c[1]?.symbol ?? c[1])).toBeDefined();
-    expect(socket.reqHistoricalData).toHaveBeenCalledTimes(2); // AAA + CCC; BBB never reached the provider
-    const cccReq = socket.reqHistoricalData.mock.calls[1][0];
-    socket.emit(EventName.historicalData, cccReq, 'finished', 0, 0, 0, 0, 0);
-    expect(await daily).toBe('ok');
+    expect(socket.reqHistoricalData).toHaveBeenCalledTimes(1); // coalesced: one provider request
+    socket.emit(EventName.historicalData, socket.reqHistoricalData.mock.calls[0][0], 'finished', 0, 0, 0, 0, 0);
+    await Promise.all([a, b]); await flush();
+    expect(timings.find((t) => t.symbol === 'DUP')).toMatchObject({ coalescedWaiters: 1, priority: 1 });
   });
 });

@@ -17,10 +17,19 @@ export interface ContinuousIntelligenceConfig {
   exitIdeaCooldownMs: number;
   /** 2026-10-13: a protective-exit trace that owns a symbol but has NO trades row after this long (never reached OMS: dropped, crashed, swallowed) is an orphan and is released. A trace with a live non-terminal order is never released by age. */
   exitOwnershipOrphanGraceMs: number;
-  /** 2026-10-13: bound on requests WAITING in IbkrSocketSession's serialized historical chain. Past it a new request is rejected immediately (IBKR_HISTORICAL_QUEUE_FULL) instead of lengthening an unbounded chain behind callers that already gave up. */
-  ibkrHistoricalMaxQueuedRequests: number;
-  /** 2026-10-13: an INTRADAY historical request that waited longer than this before its turn is dropped unserved (IBKR_HISTORICAL_QUEUE_STALE): its caller's deadline long passed and the bars it would return are already obsolete. Daily requests are never dropped by age. */
-  ibkrIntradayHistoricalMaxQueueWaitMs: number;
+  /** 2026-10-13 IBKR historical scheduler limits (see config/continuousIntelligence.json comment). */
+  ibkrHistMaxQueuedP0: number;
+  ibkrHistMaxQueuedP1: number;
+  ibkrHistMaxQueuedP2: number;
+  ibkrHistMaxQueuedP3: number;
+  ibkrHistQueueWaitMsP0: number;
+  ibkrHistQueueWaitMsP1: number;
+  ibkrHistQueueWaitMsP2: number;
+  ibkrHistQueueWaitMsP3: number;
+  ibkrHistPreemptGraceMs: number;
+  ibkrHistAbandonedCancelGraceMs: number;
+  ibkrHistMaxPreemptions: number;
+  ibkrHistForegroundWindowMaxAgeMs: number;
   screenerEvalCooldownMs: number;
   screenerMinHistoryBars: number;
   screenerMinReturnPct: number;
@@ -369,8 +378,18 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     maxNewSubscriptionsPerCycle: requireNumber(raw.maxNewSubscriptionsPerCycle, 'maxNewSubscriptionsPerCycle'),
     exitIdeaCooldownMs: requireNumber(raw.exitIdeaCooldownMs, 'exitIdeaCooldownMs'),
     exitOwnershipOrphanGraceMs: requireNumber(raw.exitOwnershipOrphanGraceMs, 'exitOwnershipOrphanGraceMs'),
-    ibkrHistoricalMaxQueuedRequests: requireNumber(raw.ibkrHistoricalMaxQueuedRequests, 'ibkrHistoricalMaxQueuedRequests'),
-    ibkrIntradayHistoricalMaxQueueWaitMs: requireNumber(raw.ibkrIntradayHistoricalMaxQueueWaitMs, 'ibkrIntradayHistoricalMaxQueueWaitMs'),
+    ibkrHistMaxQueuedP0: requireNumber(raw.ibkrHistMaxQueuedP0, 'ibkrHistMaxQueuedP0'),
+    ibkrHistMaxQueuedP1: requireNumber(raw.ibkrHistMaxQueuedP1, 'ibkrHistMaxQueuedP1'),
+    ibkrHistMaxQueuedP2: requireNumber(raw.ibkrHistMaxQueuedP2, 'ibkrHistMaxQueuedP2'),
+    ibkrHistMaxQueuedP3: requireNumber(raw.ibkrHistMaxQueuedP3, 'ibkrHistMaxQueuedP3'),
+    ibkrHistQueueWaitMsP0: requireNumber(raw.ibkrHistQueueWaitMsP0, 'ibkrHistQueueWaitMsP0'),
+    ibkrHistQueueWaitMsP1: requireNumber(raw.ibkrHistQueueWaitMsP1, 'ibkrHistQueueWaitMsP1'),
+    ibkrHistQueueWaitMsP2: requireNumber(raw.ibkrHistQueueWaitMsP2, 'ibkrHistQueueWaitMsP2'),
+    ibkrHistQueueWaitMsP3: requireNumber(raw.ibkrHistQueueWaitMsP3, 'ibkrHistQueueWaitMsP3'),
+    ibkrHistPreemptGraceMs: requireNumber(raw.ibkrHistPreemptGraceMs, 'ibkrHistPreemptGraceMs'),
+    ibkrHistAbandonedCancelGraceMs: requireNumber(raw.ibkrHistAbandonedCancelGraceMs, 'ibkrHistAbandonedCancelGraceMs'),
+    ibkrHistMaxPreemptions: requireNumber(raw.ibkrHistMaxPreemptions, 'ibkrHistMaxPreemptions'),
+    ibkrHistForegroundWindowMaxAgeMs: requireNumber(raw.ibkrHistForegroundWindowMaxAgeMs, 'ibkrHistForegroundWindowMaxAgeMs'),
     screenerEvalCooldownMs: requireNumber(raw.screenerEvalCooldownMs, 'screenerEvalCooldownMs'),
     screenerMinHistoryBars: requireNumber(raw.screenerMinHistoryBars, 'screenerMinHistoryBars'),
     screenerMinReturnPct: requireNumber(raw.screenerMinReturnPct, 'screenerMinReturnPct'),
