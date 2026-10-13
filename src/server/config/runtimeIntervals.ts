@@ -143,6 +143,8 @@ export interface RuntimeIntervals {
    *  aligned with pitDecisionLedgerRetentionDays — both are decision-audit records; the
    *  provenance row is what lets a past decision be replayed identically. */
   decisionProvenanceRetentionDays: number;
+  historicalRequestTelemetryRetentionDays: number;
+  intradayAvailabilityRetentionDays: number;
   /** 2026-10-10 defect hunt (Track 1, soak-path retention): a 180-sim-minute SOAK_3H
    *  synthetic session wrote rows to consensus_debate_predictions (27), consensus_decisions
    *  (8), consensus_evidence (10) and reconciliation_events (1) with no prune path anywhere
@@ -214,6 +216,8 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'agentReasoningLogsRetentionDays', 'transactionTracesRetentionDays',
   'sessionLifecycleSnapshotsRetentionDays', 'tradeLifecycleTransitionsRetentionDays',
   'decisionProvenanceRetentionDays',
+  'historicalRequestTelemetryRetentionDays',
+  'intradayAvailabilityRetentionDays',
   'consensusDebatePredictionsRetentionDays', 'consensusDecisionsRetentionDays',
   'consensusEvidenceRetentionDays', 'reconciliationEventsRetentionDays',
   'portfolioSnapshotsRetentionDays', 'aiUsageRetentionDays',

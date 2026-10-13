@@ -43,6 +43,8 @@ const REQUIRED_RETENTION_TABLES = [
   // 2026-10-09 (certification mission item 1 - OCT9_PIT_PROVENANCE_ESCAPE): per-Quant-decision
   // PIT replay provenance.
   'decision_provenance',
+  'historical_request_telemetry',
+  'intraday_data_availability',
   // 2026-10-10 defect hunt (Track 1, soak-path retention): a 180-sim-minute SOAK_3H
   // synthetic session wrote to these four tables with no prune path anywhere in the
   // codebase (27/8/10/1 rows per iteration) - the same defect class as

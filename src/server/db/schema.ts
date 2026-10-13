@@ -33,7 +33,7 @@
  * ==========================================================
  */
 
-import { sqliteTable, text, integer, real, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, real, index, uniqueIndex, primaryKey } from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable('users', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -2522,3 +2522,62 @@ export const reflectionSessionMetrics = sqliteTable('reflection_session_metrics'
   primaryPrecision: real('primary_precision'),
   createdAt: text('created_at').notNull(),
 });
+
+// 2026-10-13: historical-bar request telemetry and the intraday availability registry (see migration 0100).
+export const historicalRequestTelemetry = sqliteTable('historical_request_telemetry', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  requestId: text('request_id').notNull(),
+  traceId: text('trace_id'),
+  symbol: text('symbol').notNull(),
+  provider: text('provider').notNull(),
+  timeframe: text('timeframe').notNull(),
+  windowStartMs: integer('window_start_ms').notNull(),
+  windowEndMs: integer('window_end_ms').notNull(),
+  asOfMs: integer('as_of_ms').notNull(),
+  role: text('role').notNull(),
+  cacheHit: integer('cache_hit', { mode: 'boolean' }).notNull().default(false),
+  cacheBarCount: integer('cache_bar_count'),
+  cacheLatestBarMs: integer('cache_latest_bar_ms'),
+  cacheCoverage: real('cache_coverage'),
+  ibkrQueueWaitMs: real('ibkr_queue_wait_ms'),
+  ibkrServiceMs: real('ibkr_service_ms'),
+  alpacaQueueWaitMs: real('alpaca_queue_wait_ms'),
+  alpacaServiceMs: real('alpaca_service_ms'),
+  coalesceWaitMs: real('coalesce_wait_ms'),
+  cacheNormalizationMs: real('cache_normalization_ms'),
+  totalMs: real('total_ms').notNull(),
+  barsReturned: integer('bars_returned'),
+  validBars: integer('valid_bars'),
+  terminalStatus: text('terminal_status').notNull(),
+  reason: text('reason'),
+  fellBack: integer('fell_back', { mode: 'boolean' }).notNull().default(false),
+  processEpoch: text('process_epoch'),
+  buildSha: text('build_sha'),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  createdIdx: index('idx_hist_req_telemetry_created').on(table.createdAt),
+  symbolIdx: index('idx_hist_req_telemetry_symbol').on(table.symbol, table.createdAt),
+}));
+
+export const intradayDataAvailability = sqliteTable('intraday_data_availability', {
+  symbol: text('symbol').notNull(),
+  provider: text('provider').notNull(),
+  timeframe: text('timeframe').notNull(),
+  sessionDate: text('session_date').notNull(),
+  status: text('status').notNull(),
+  lastBarMs: integer('last_bar_ms'),
+  barCount: integer('bar_count'),
+  expectedBarCount: integer('expected_bar_count'),
+  coverage: real('coverage'),
+  lastCheckedMs: integer('last_checked_ms').notNull(),
+  lastSuccessMs: integer('last_success_ms'),
+  lastFailureMs: integer('last_failure_ms'),
+  consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+  lastReason: text('last_reason'),
+  lastRequestTotalMs: real('last_request_total_ms'),
+  buildSha: text('build_sha'),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.symbol, table.provider, table.timeframe, table.sessionDate] }),
+  updatedIdx: index('idx_intraday_availability_updated').on(table.updatedAt),
+}));

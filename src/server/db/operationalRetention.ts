@@ -360,6 +360,14 @@ export async function sweepStagedNewsCatalystsTerminalRetention(nowMs = Date.now
  * exactly this class of static import). The SQL itself is trivial; only the module load is
  * deferred, and it is the leaf provenance module, not the agent that emits the rows.
  */
+export async function sweepHistoricalRequestTelemetryRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('historical_request_telemetry', 'created_at', runtimeIntervals.historicalRequestTelemetryRetentionDays, nowMs);
+}
+
+export async function sweepIntradayAvailabilityRetention(nowMs = Date.now()): Promise<number> {
+  return sweepIsoTextTable('intraday_data_availability', 'updated_at', runtimeIntervals.intradayAvailabilityRetentionDays, nowMs);
+}
+
 export async function sweepDecisionProvenanceRetention(nowMs = Date.now()): Promise<number> {
   try {
     const { sweepDecisionProvenanceRetention: sweep } = await import('../replay/provenance/decisionProvenance');
@@ -525,6 +533,8 @@ export const RETENTION_SWEEPERS: RetentionSweeper[] = [
   // 2026-10-09 (certification mission item 1 - OCT9_PIT_PROVENANCE_ESCAPE): per-Quant-decision
   // PIT replay provenance. Same coverage-test guarantee as every table above.
   { table: 'decision_provenance', sweep: sweepDecisionProvenanceRetention },
+  { table: 'historical_request_telemetry', sweep: sweepHistoricalRequestTelemetryRetention },
+  { table: 'intraday_data_availability', sweep: sweepIntradayAvailabilityRetention },
   // 2026-10-10 defect hunt (Track 1, soak-path retention): the 180-sim-minute SOAK_3H
   // session wrote to these four tables with no prune path. Same coverage-test guarantee.
   { table: 'consensus_debate_predictions', sweep: sweepConsensusDebatePredictionsRetention },

@@ -3,6 +3,7 @@
  * Orders still enter only through OMS → BrokerManager.getActiveBroker().placeOrder().
  * This module never opens a browser and never speaks Client Portal :5000.
  */
+import { histRequestStore } from '../server/data/historicalRequestTelemetry';
 import {
   IBApi,
   EventName,
@@ -1447,7 +1448,18 @@ export class IbkrSocketSession {
    * Never fabricates bars — empty / timeout / error throws or returns [].
    */
   requestHistoricalBars(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<Bar[]> {
-    const run = () => this.requestHistoricalBarsOnce(symbol, timeframe, startMs, endMs);
+    // 2026-10-13: attribute time to the global serial historical queue vs provider service time. The request
+    // context (AsyncLocalStorage) is set by HistoricalDataGateway; absent for other callers (no effect).
+    const telCtx = histRequestStore.getStore();
+    const enqueuedAt = performance.now();
+    const run = () => {
+      const startedAt = performance.now();
+      if (telCtx) telCtx.ibkrQueueWaitMs = startedAt - enqueuedAt;
+      return this.requestHistoricalBarsOnce(symbol, timeframe, startMs, endMs).then(
+        (bars) => { if (telCtx) telCtx.ibkrServiceMs = performance.now() - startedAt; return bars; },
+        (err) => { if (telCtx) telCtx.ibkrServiceMs = performance.now() - startedAt; throw err; },
+      );
+    };
     const next = this.histChain.then(run, run);
     this.histChain = next.then(
       () => undefined,

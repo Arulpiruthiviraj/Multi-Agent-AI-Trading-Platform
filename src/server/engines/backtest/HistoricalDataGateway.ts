@@ -12,6 +12,7 @@
  * backoff is armed; callers may still evaluate from cache — never fabricate bars.
  * ==========================================================
  */
+import { histRequestStore, newHistRequestContext, finalizeHistRequest, type HistRequestContext } from '../../data/historicalRequestTelemetry';
 import { db, sqliteDb } from '../../db';
 import * as schema from '../../db/schema';
 import { and, eq, gte, lte, asc, ne, sql } from 'drizzle-orm';
@@ -302,10 +303,12 @@ export class HistoricalDataGateway {
    * fetch (inflightEnsureBars) instead of each firing a redundant one back-to-back.
    * Never fabricates bars.
    */
-  async ensureBars(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<void> {
+  async ensureBars(symbol: string, timeframe: string, startMs: number, endMs: number, opts?: { traceId?: string | null }): Promise<void> {
     const coalesceKey = this.memoryKey(symbol, timeframe, startMs, endMs);
     const inFlight = this.inflightEnsureBars.get(coalesceKey);
     if (inFlight) {
+      const waiterCtx = newHistRequestContext({ symbol, timeframe, startMs, endMs, role: 'COALESCED', traceId: opts?.traceId ?? null });
+      const waitStart = performance.now();
       // 2026-10-11 (#13): caller-side timeout for coalesced waiters. The shared entry
       // is retained until the inner settles (never deleted by TTL), so an overdue entry
       // does not cause duplicate provider work — but a waiter should not hang forever
@@ -326,11 +329,19 @@ export class HistoricalDataGateway {
             }, callerTimeoutMs);
           }),
         ]);
+        waiterCtx.coalesceWaitMs = performance.now() - waitStart;
+        this.finalizeTelemetry(waiterCtx, 'OK', null);
+      } catch (coalesceErr) {
+        waiterCtx.coalesceWaitMs = performance.now() - waitStart;
+        this.finalizeTelemetry(waiterCtx, this.terminalFromError(coalesceErr), String((coalesceErr as Error)?.message ?? coalesceErr));
+        throw coalesceErr;
       } finally {
         if (timer !== undefined) clearTimeout(timer);
       }
       return;
     }
+    const ownerCtx = newHistRequestContext({ symbol, timeframe, startMs, endMs, role: 'OWNER', traceId: opts?.traceId ?? null, expectedBars: expectedBarCountForWindow(timeframe, startMs, endMs) });
+    let ownerFinalized = false;
     // 2026-10-12 (M2): the inner-timeout race owns an AbortController, aborted BEFORE the
     // timeout rejection is delivered so the inner's real network work is cancelled, not just
     // abandoned. The Alpaca REST path below honors the signal. The IBKR path CANNOT be
@@ -349,11 +360,16 @@ export class HistoricalDataGateway {
     // to bound - the entry is removed on settle at the release site below.
     const entry: { promise: Promise<void>; overdue: boolean } = { promise: Promise.resolve(), overdue: false };
     const isCurrentEntry = () => this.inflightEnsureBars.get(coalesceKey) === entry;
-    const inner = this.ensureBarsInner(symbol, timeframe, startMs, endMs, isCurrentEntry, innerAbort.signal);
+    const inner = histRequestStore.run(ownerCtx, () => this.ensureBarsInner(symbol, timeframe, startMs, endMs, isCurrentEntry, innerAbort.signal));
     // A rejected zombie must never surface as an unhandled rejection after the timeout below
     // wins the race: attach a no-op catch to the raw inner promise. Its late cache writes are
     // already entry-identity-guarded; its late errors are intentionally dropped (the timeout error
     // is what callers observed).
+    // Late settlement after the owner already finalized (inner timeout / caller released): record it once.
+    inner.then(
+      () => { if (ownerFinalized) this.finalizeTelemetry(ownerCtx, 'LATE_SETTLEMENT', 'inner settled after the request was already finalized'); },
+      (e) => { if (ownerFinalized) this.finalizeTelemetry(ownerCtx, 'LATE_SETTLEMENT', String((e as Error)?.message ?? e)); },
+    );
     inner.catch(() => {});
     // 2026-10-12 (Oct 12 forensic): real bounded timeout on the INNER provider operation.
     // A stalled inner previously wedged this window's entry until the 300s caller-side
@@ -418,6 +434,12 @@ export class HistoricalDataGateway {
     }
     try {
       await run;
+      ownerFinalized = true;
+      this.finalizeTelemetry(ownerCtx, ownerCtx.cacheHit ? 'CACHE_HIT' : 'OK', null);
+    } catch (ownerErr) {
+      ownerFinalized = true;
+      this.finalizeTelemetry(ownerCtx, this.terminalFromError(ownerErr), String((ownerErr as Error)?.message ?? ownerErr));
+      throw ownerErr;
     } finally {
       clearTimeout(overdueTimer);
       // Generation-guarded: never delete a newer entry.
@@ -425,6 +447,30 @@ export class HistoricalDataGateway {
         this.inflightEnsureBars.delete(coalesceKey);
       }
     }
+  }
+
+  private terminalFromError(e: unknown): string {
+    const m = String((e as Error)?.message ?? e);
+    if (/HISTORICAL_INNER_FETCH_TIMEOUT/.test(m)) return 'HISTORICAL_INNER_FETCH_TIMEOUT';
+    if (/COALESCE_CALLER_TIMEOUT/.test(m)) return 'COALESCE_CALLER_TIMEOUT';
+    if (/DATA_STALE/.test(m)) return 'DATA_STALE';
+    if (/No historical bars available/.test(m)) return 'NO_DATA';
+    return 'ERROR';
+  }
+
+  /** Fail-open telemetry sink (never throws, never delays the data request). */
+  private finalizeTelemetry(ctx: HistRequestContext, terminalStatus: string, reason: string | null): void {
+    try {
+      finalizeHistRequest(
+        ctx,
+        { terminalStatus, reason },
+        {
+          freshnessToleranceMs: tradingSafety.quantBarsTailFreshnessToleranceMs,
+          delayedMaxMs: tradingSafety.quantBarsTailFreshnessToleranceMs * 8,
+          minCoverage: tradingSafety.quantBarsCacheMinCoverageRatio,
+        },
+      );
+    } catch { /* fail-open */ }
   }
 
   /**
@@ -443,9 +489,18 @@ export class HistoricalDataGateway {
     // request instead of abandoning it as a zombie fetch.
     abortSignal?: AbortSignal,
   ): Promise<void> {
+    const telCtx = histRequestStore.getStore();
+    const cacheT0 = performance.now();
     const existing = await this.getBars(symbol, timeframe, startMs, endMs);
     const expected = expectedBarCountForWindow(timeframe, startMs, endMs);
     const coverage = existing.length / expected;
+    if (telCtx) {
+      telCtx.cacheNormalizationMs = performance.now() - cacheT0;
+      telCtx.cacheBarCount = existing.length;
+      telCtx.cacheLatestBarMs = existing.length > 0 ? existing[existing.length - 1].timestamp : null;
+      telCtx.cacheCoverage = coverage;
+      telCtx.expectedBars = expected;
+    }
     const minBars = tradingSafety.regimeMinBars;
     const sufficient =
       existing.length >= minBars
@@ -463,6 +518,7 @@ export class HistoricalDataGateway {
 
     if (sufficient && !staleTail) {
       this.consecutiveRateLimits = 0;
+      if (telCtx) { telCtx.cacheHit = true; telCtx.provider = 'cache'; telCtx.validBars = existing.length; }
       return;
     }
     if (staleTail) {
@@ -504,7 +560,16 @@ export class HistoricalDataGateway {
     const provider = getRegisteredHistoricalBarProvider();
     if (provider?.id === 'ibkr_gateway') {
       try {
+        if (telCtx) telCtx.provider = 'ibkr';
         const fetched = await provider.fetchBars(symbol, timeframe, startMs, endMs);
+        if (telCtx) {
+          telCtx.barsReturned = fetched.length;
+          telCtx.validBars = fetched.filter((b) => Number.isFinite(b.timestamp) && Number.isFinite(b.close) && b.close > 0).length;
+          if (fetched.length > 0) {
+            telCtx.cacheLatestBarMs = Math.max(...fetched.map((b) => b.timestamp));
+            telCtx.cacheCoverage = telCtx.validBars / expected;
+          }
+        }
         if (fetched.length > 0) {
           // 2026-10-12 (zombie guard): a late-settling inner whose entry was already
           // released+regenerated must not clobber the newer attempt's cache rows.
@@ -542,6 +607,7 @@ export class HistoricalDataGateway {
         // giving up" pattern as this session's FundamentalAgent/MacroAgent AlphaVantage->FMP/FRED
         // fallback. Still never fabricates a bar - if Alpaca also has nothing, the existing
         // no-data throw below still fires.
+        if (telCtx) telCtx.fellBack = true;
         console.warn(`[HistoricalDataGateway] IBKR historical bars empty for ${symbol} (${timeframe}) - falling back to Alpaca.`);
       } catch (e: any) {
         // Stale-tail path: never silently fall back to stale cached bars when the provider
@@ -553,6 +619,7 @@ export class HistoricalDataGateway {
           );
           return;
         }
+        if (telCtx) telCtx.fellBack = true;
         console.warn(`[HistoricalDataGateway] IBKR hist failed for ${symbol} (${timeframe}) - falling back to Alpaca: ${e?.message || e}`);
       }
     }
@@ -571,7 +638,9 @@ export class HistoricalDataGateway {
       throw new Error('Historical backfill requires ALPACA_API_KEY/ALPACA_SECRET_KEY - no other real historical data source is wired into Argus.');
     }
 
+    const alpacaPaceT0 = performance.now();
     await this.paceAlpacaFetch();
+    if (telCtx) { telCtx.provider = 'alpaca'; telCtx.alpacaQueueWaitMs = performance.now() - alpacaPaceT0; telCtx.alpacaServiceMs = 0; telCtx.barsReturned = 0; telCtx.validBars = 0; }
 
     let pageToken: string | undefined;
     let fetchedAny = false;
@@ -595,6 +664,7 @@ export class HistoricalDataGateway {
       // AbortSignal so HISTORICAL_INNER_FETCH_TIMEOUT cancels this real HTTP request
       // instead of abandoning it as a zombie fetch.
       const pageTimeoutSignal = AbortSignal.timeout(tradingSafety.alpacaRequestTimeoutMs);
+      const alpacaPageT0 = performance.now();
       const res = await fetch(url.toString(), {
         headers: {
           'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
@@ -622,6 +692,16 @@ export class HistoricalDataGateway {
       this.consecutiveRateLimits = 0;
       const data = await res.json();
       const bars: any[] = data.bars || [];
+      if (telCtx) {
+        telCtx.alpacaServiceMs = (telCtx.alpacaServiceMs ?? 0) + (performance.now() - alpacaPageT0);
+        telCtx.barsReturned = (telCtx.barsReturned ?? 0) + bars.length;
+        telCtx.validBars = (telCtx.validBars ?? 0) + bars.filter((b: any) => Number.isFinite(b?.c) && b.c > 0).length;
+        if (bars.length > 0) {
+          const lastTs = new Date(bars[bars.length - 1].t).getTime();
+          if (Number.isFinite(lastTs)) telCtx.cacheLatestBarMs = Math.max(telCtx.cacheLatestBarMs ?? 0, lastTs);
+          telCtx.cacheCoverage = (telCtx.validBars ?? 0) / expected;
+        }
+      }
       if (bars.length > 0) {
         fetchedAny = true;
         const mapped: Bar[] = bars.map((b: any) => {

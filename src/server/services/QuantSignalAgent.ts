@@ -21,6 +21,7 @@
  * opted in sees zero behavior change.
  * ==========================================================
  */
+import { newHistRequestContext, finalizeHistRequest } from '../data/historicalRequestTelemetry';
 import { awaitWithinDeadline } from '../quant/awaitWithinDeadline';
 import { createQuantEvalStageTimer, classifyQuantEvalError, type QuantEvalStageTimer } from '../quant/evalStageTiming';
 import { generateTraceId } from '../core/traceId';
@@ -858,13 +859,19 @@ export class QuantSignalAgent {
     // method exists for.
     timing.enter('INTRADAY_BARS');
     let intradayBars: Bar[] | undefined;
+    // 2026-10-13: explicit, persisted 1Min availability outcome per evaluation (previously only 1Day was recorded).
+    let intradayAvailability: { outcome: string; barCount: number; firstBarMs: number | null; lastBarMs: number | null; waitedMs: number | null; startMs: number | null; endMs: number | null } =
+      { outcome: 'INTRADAY_NOT_REQUIRED', barCount: 0, firstBarMs: null, lastBarMs: null, waitedMs: null, startMs: null, endMs: null };
     // 2026-10-04 (opening-range session-anchoring fix): the real regular-session open for the
     // opening-range anchor - computed from the same fetch window so it always matches the bars.
     let intradaySessionOpenMs: number | undefined;
     if (isExperimentalStrategyLive('OPENING_RANGE_BREAKOUT')) {
       try {
         const window = computeIntradayFetchWindow(endMs);
+        if (!window) intradayAvailability = { ...intradayAvailability, outcome: 'INTRADAY_WINDOW_NOT_OPEN' };
         if (window) {
+          const intradayWaitT0 = performance.now();
+          intradayAvailability = { ...intradayAvailability, outcome: 'INTRADAY_PENDING', startMs: window.startMs, endMs: window.endMs };
           // 2026-10-12 (live forensic): bounded wait. The 1Min cache never met the 0.85 coverage bar
           // live, so every evaluation entered the global paced provider queue and stalled ~300 s
           // here. Past quantIntradayFetchMaxWaitMs the evaluation proceeds as it already does when
@@ -872,7 +879,7 @@ export class QuantSignalAgent {
           // running underneath (never cancelled or duplicated) and its bars serve a later evaluation.
           const intradayFetch = (async () => {
             try {
-              await historicalDataGateway.ensureBars(symbol, INTRADAY_TIMEFRAME, window.startMs, window.endMs);
+              await historicalDataGateway.ensureBars(symbol, INTRADAY_TIMEFRAME, window.startMs, window.endMs, { traceId });
             } catch (e: any) {
               const msg = String(e?.message || e);
               if (!/429|rate-limited|Too Many Requests/i.test(msg)) throw e;
@@ -880,7 +887,16 @@ export class QuantSignalAgent {
             return historicalDataGateway.getBars(symbol, INTRADAY_TIMEFRAME, window.startMs, window.endMs);
           })();
           const intradayOutcome = await awaitWithinDeadline(intradayFetch, tradingSafety.quantIntradayFetchMaxWaitMs);
+          intradayAvailability.waitedMs = performance.now() - intradayWaitT0;
           if (intradayOutcome.timedOut) {
+            intradayAvailability.outcome = 'INTRADAY_TIMED_OUT';
+            try {
+              // Caller-side deadline: persisted as its own request row + availability = TIMED_OUT (never "no setup").
+              const dlCtx = newHistRequestContext({ symbol, timeframe: INTRADAY_TIMEFRAME, startMs: window.startMs, endMs: window.endMs, role: 'CALLER_DEADLINE', traceId });
+              dlCtx.provider = 'caller';
+              dlCtx.t0 = performance.now() - (intradayAvailability.waitedMs ?? 0);
+              finalizeHistRequest(dlCtx, { terminalStatus: 'CALLER_DEADLINE', reason: `evaluation stopped waiting after ${tradingSafety.quantIntradayFetchMaxWaitMs}ms` }, { freshnessToleranceMs: tradingSafety.quantBarsTailFreshnessToleranceMs, delayedMaxMs: tradingSafety.quantBarsTailFreshnessToleranceMs * 8, minCoverage: tradingSafety.quantBarsCacheMinCoverageRatio });
+            } catch { /* fail-open */ }
             observeSafe(() => structuredLogger.info('quant_intraday_fetch_deadline', {
               category: 'DISCOVERY', eventType: 'QUANT_INTRADAY_FETCH_DEADLINE', symbol, traceId,
               reasoning: `Intraday ${INTRADAY_TIMEFRAME} fetch exceeded ${tradingSafety.quantIntradayFetchMaxWaitMs}ms; evaluation proceeds without intraday bars (opening range unavailable this cycle). Fetch continues in the background.`,
@@ -888,14 +904,34 @@ export class QuantSignalAgent {
           } else if ('value' in intradayOutcome) {
             intradayBars = intradayOutcome.value;
             intradaySessionOpenMs = window.sessionOpenMs;
+            const iv = intradayOutcome.value ?? [];
+            intradayAvailability = {
+              ...intradayAvailability,
+              outcome: iv.length > 0 ? 'INTRADAY_USABLE' : 'INTRADAY_EMPTY',
+              barCount: iv.length,
+              firstBarMs: iv.length > 0 ? iv[0].timestamp : null,
+              lastBarMs: iv.length > 0 ? iv[iv.length - 1].timestamp : null,
+            };
           }
         }
       } catch (e) {
         console.warn(`[QuantSignalAgent] ${symbol}: intraday bar fetch for opening-range evaluation failed (non-fatal - falling back to daily-bar-only support/resistance features)`, e);
         intradayBars = undefined;
+        intradayAvailability = { ...intradayAvailability, outcome: 'INTRADAY_FETCH_FAILED' };
       }
     }
 
+    observeSafe(() => structuredLogger.info('quant_bar_input_availability', {
+      category: 'DISCOVERY', eventType: 'QUANT_BAR_INPUT_AVAILABILITY', symbol, traceId,
+      timeframe: INTRADAY_TIMEFRAME,
+      outcome: intradayAvailability.outcome,
+      barCount: intradayAvailability.barCount,
+      firstBarTimestamp: intradayAvailability.firstBarMs,
+      lastBarTimestamp: intradayAvailability.lastBarMs,
+      requestedStartMs: intradayAvailability.startMs,
+      requestedEndMs: intradayAvailability.endMs,
+      waitedMs: intradayAvailability.waitedMs === null ? null : Math.round(intradayAvailability.waitedMs),
+    }));
     stageTimer?.mark('intradayFetch');
     // 2026-10-12 (cooperative cancellation): the intraday fetch above is already deadline-bounded
     // (awaitWithinDeadline never cancels the underlying fetch - it keeps running underneath for a
