@@ -2309,7 +2309,11 @@ const commands: Record<string, () => Promise<void>> = {
         // unusable there). Read-only on the source; copies in pages without blocking the live writer.
         const { default: BetterSqlite3 } = await import('better-sqlite3');
         const src = new BetterSqlite3(sourcePath, { readonly: true, fileMustExist: true });
-        try { await src.backup(snapshotDb); } finally { src.close(); }
+        // 2026-10-13: the default 100-pages-per-step backup RESTARTS whenever another connection writes between steps. The
+        // live engine writes continuously, so on the 18.7 GB production DB the copy never finished (observed: snapshot
+        // stuck at ~2 GB for 30+ minutes, CLI at 100% CPU) - the original cause of this gate's unusable exit. After the first
+        // step, copy every remaining page in ONE step (a single WAL read snapshot): consistent, never restarted by writers.
+        try { await src.backup(snapshotDb, { progress: ({ totalPages }) => totalPages }); } finally { src.close(); }
       } catch (apiError: any) {
         try {
           execFileSync('sqlite3', [sourcePath, `.backup '${snapshotDb.replace(/'/g, "''")}'`], { stdio: 'pipe' });
