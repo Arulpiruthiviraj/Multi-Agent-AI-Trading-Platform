@@ -198,14 +198,17 @@ export async function runReleaseCertification(input: ReleaseDriverInput): Promis
     typeof schemaNum === 'number' ? 'PASS' : 'UNKNOWN',
     schemaNum,
     'PRAGMA user_version on the isolated snapshot (migrations applied at open)');
-  const jarCandidates = ['quant-core-java/target/*.jar'];
   let jarPath: string | null = null;
   try {
-    const { execSync } = await import('node:child_process');
-    const out = execSync('ls quant-core-java/target/*.jar 2>/dev/null | head -1', { cwd: input.repoRoot, encoding: 'utf8' }).trim();
-    if (out) jarPath = path.join(input.repoRoot, out);
+    const targetDir = path.join(input.repoRoot, 'quant-core-java', 'target');
+    const jars = fs.existsSync(targetDir)
+      ? fs.readdirSync(targetDir, { withFileTypes: true })
+          .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.jar'))
+          .map((entry) => entry.name)
+          .sort()
+      : [];
+    if (jars.length > 0) jarPath = path.join(targetDir, jars[0]);
   } catch { /* none */ }
-  void jarCandidates;
   if (jarPath && fs.existsSync(jarPath)) {
     need('JAVA_ARTIFACT_HASH', 'PASS', sha256File(jarPath), `sha256 of packaged Java quant core ${jarPath}`);
   } else {
