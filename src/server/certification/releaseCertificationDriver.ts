@@ -112,6 +112,8 @@ export interface ReleaseDriverInput {
   suiteTimeoutMs?: number;
   /** Base URL of a running engine for live probes (e.g. http://127.0.0.1:3000). Null = no live probe. */
   engineBaseUrl?: string | null;
+  /** Authentication headers for local runtime probes. Values are request-only and never emitted in evidence. */
+  liveProbeHeaders?: Record<string, string>;
   liveProbeTimeoutMs?: number;
 }
 
@@ -155,12 +157,17 @@ function runSuiteFile(repoRoot: string, testFile: string, timeoutMs: number): { 
   }
 }
 
-async function probeEngineJson(baseUrl: string, urlPath: string, timeoutMs: number): Promise<any | null> {
+async function probeEngineJson(
+  baseUrl: string,
+  urlPath: string,
+  timeoutMs: number,
+  headers: Record<string, string> = {},
+): Promise<any | null> {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      const res = await fetch(`${baseUrl}${urlPath}`, { signal: ctrl.signal });
+      const res = await fetch(`${baseUrl}${urlPath}`, { signal: ctrl.signal, headers });
       if (!res.ok) return null;
       return await res.json();
     } finally {
@@ -360,7 +367,7 @@ export async function runReleaseCertification(input: ReleaseDriverInput): Promis
   // --- Live probes (engine must be up; otherwise UNKNOWN, fail-closed) ------------------
   const liveTimeout = input.liveProbeTimeoutMs ?? 5000;
   if (input.engineBaseUrl) {
-    const compHealth: any = await probeEngineJson(input.engineBaseUrl, '/api/v2/runtime/component-health', liveTimeout);
+    const compHealth: any = await probeEngineJson(input.engineBaseUrl, '/api/v2/runtime/component-health', liveTimeout, input.liveProbeHeaders);
     if (compHealth) {
       const comps: Array<{ component: string; status: string; detail: string }> =
         compHealth.components ?? compHealth ?? [];
@@ -370,7 +377,7 @@ export async function runReleaseCertification(input: ReleaseDriverInput): Promis
         md ?? null,
         `live component-health from ${input.engineBaseUrl}: Market Data=${md?.status ?? 'absent'} (${md?.detail ?? 'no detail'})`);
       // SUBSCRIPTION_HEALTH: derive from the market-data worker state endpoint when available.
-      const subHealth: any = await probeEngineJson(input.engineBaseUrl, '/api/v2/runtime/market/status', liveTimeout);
+      const subHealth: any = await probeEngineJson(input.engineBaseUrl, '/api/v2/runtime/market/status', liveTimeout, input.liveProbeHeaders);
       need('SUBSCRIPTION_HEALTH',
         subHealth ? 'PASS' : 'UNKNOWN',
         subHealth,
@@ -384,7 +391,7 @@ export async function runReleaseCertification(input: ReleaseDriverInput): Promis
         `engine not reachable at ${input.engineBaseUrl} - subscription health is runtime-only; refusing to certify statically`);
     }
     // Scheduler latency: only measurable live. Look for a scheduler stats endpoint; else UNKNOWN.
-    const schedStats: any = await probeEngineJson(input.engineBaseUrl, '/api/v2/scheduling/quant/stats', liveTimeout);
+    const schedStats: any = await probeEngineJson(input.engineBaseUrl, '/api/v2/scheduling/quant/stats', liveTimeout, input.liveProbeHeaders);
     if (schedStats && typeof schedStats === 'object' && schedStats.p50 !== undefined) {
       need('SCHEDULER_P50', 'PASS', schedStats.p50, 'live quant scheduler p50 cycle latency (ms)');
       need('SCHEDULER_P95', 'PASS', schedStats.p95 ?? null, 'live quant scheduler p95 cycle latency (ms)');
