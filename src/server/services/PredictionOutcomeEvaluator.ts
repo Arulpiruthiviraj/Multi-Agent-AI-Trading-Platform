@@ -22,8 +22,8 @@
 import { db } from '../db';
 import { runWithHistoricalIntent } from '../data/historicalRequestIntent';
 import { agentPredictions, kronosPredictions, predictionOutcomes, newsPredictions } from '../db/schema';
-import { countOffThread } from '../db/offThreadCount';
-import { and, eq, gt, isNull, ne, notLike, or, asc, sql } from 'drizzle-orm';
+import { countOffThread, selectRowsOffThread } from '../db/offThreadCount';
+import { and, eq, gt, isNull, ne, notLike, or, asc, sql, getTableColumns } from 'drizzle-orm';
 import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
 import { tradingSafety } from '../config/tradingSafety';
 import { resolveEvaluationDueMs } from '../news/NewsPredictionEvaluation';
@@ -274,24 +274,33 @@ export class PredictionOutcomeEvaluator {
         // dropped from the anti-join - caught by this file's own test suite before this shipped.
         or(isNull(agentPredictions.traceId), notLike(agentPredictions.traceId, `${TELEMETRY_PULSE_TRACE_PREFIX}%`)),
       );
-      const fetchAgentPage = () => db
-        .select({ p: agentPredictions })
-        .from(agentPredictions)
-        .leftJoin(predictionOutcomes, and(
-          eq(predictionOutcomes.predictionId, agentPredictions.id),
-          eq(predictionOutcomes.sourceTable, 'agent_predictions'),
-        ))
-        .where(and(agentPendingCondition, this.agentScanAfter ? or(
-          gt(agentPredictions.timestamp, this.agentScanAfter.timestamp),
-          and(eq(agentPredictions.timestamp, this.agentScanAfter.timestamp), gt(agentPredictions.id, this.agentScanAfter.id)),
-        ) : undefined))
-        .orderBy(asc(agentPredictions.timestamp), asc(agentPredictions.id))
-        .limit(batchSize);
-      let pendingAgent = await fetchAgentPage();
-      if (pendingAgent.length === 0 && this.agentScanAfter) {
+      // 2026-10-13: the pending-page SELECT runs on the read-only worker thread. On the 19 GB DB this single statement was a
+      // 48 s SYNCHRONOUS main-thread block (SLOW_SQL_STATEMENT) while the repaired engine sat idle - 100x PortfolioMonitor's
+      // safety cadence. Same SQL, same rows, decoded with each column's own driver mapping. null (worker failure/deadline) =
+      // skip this cycle's page; it never falls back to the main thread and never resets the scan cursor.
+      const agentCols = getTableColumns(agentPredictions);
+      const fetchAgentPage = async (): Promise<Array<{ p: typeof agentPredictions.$inferSelect }> | null> => {
+        const rows = await selectRowsOffThread(db
+          .select(agentCols)
+          .from(agentPredictions)
+          .leftJoin(predictionOutcomes, and(
+            eq(predictionOutcomes.predictionId, agentPredictions.id),
+            eq(predictionOutcomes.sourceTable, 'agent_predictions'),
+          ))
+          .where(and(agentPendingCondition, this.agentScanAfter ? or(
+            gt(agentPredictions.timestamp, this.agentScanAfter.timestamp),
+            and(eq(agentPredictions.timestamp, this.agentScanAfter.timestamp), gt(agentPredictions.id, this.agentScanAfter.id)),
+          ) : undefined))
+          .orderBy(asc(agentPredictions.timestamp), asc(agentPredictions.id))
+          .limit(batchSize), agentCols);
+        return rows === null ? null : rows.map((p) => ({ p: p as typeof agentPredictions.$inferSelect }));
+      };
+      let pendingAgentPage = await fetchAgentPage();
+      if (pendingAgentPage !== null && pendingAgentPage.length === 0 && this.agentScanAfter) {
         this.agentScanAfter = null;
-        pendingAgent = await fetchAgentPage();
+        pendingAgentPage = await fetchAgentPage();
       }
+      const pendingAgent = pendingAgentPage ?? [];
       stats.rowsFetched += pendingAgent.length;
       stats.batches += 1;
       // Real backlog size, not just this cycle's bounded window - operator correctness audit
@@ -387,21 +396,27 @@ export class PredictionOutcomeEvaluator {
         eq(predictionOutcomes.predictionId, sql<string>`cast(${kronosPredictions.id} as text)`),
         eq(predictionOutcomes.sourceTable, 'kronos_predictions'),
       );
-      const fetchKronosPage = () => db
-        .select({ k: kronosPredictions })
-        .from(kronosPredictions)
-        .leftJoin(predictionOutcomes, kronosJoinCondition)
-        .where(and(isNull(predictionOutcomes.id), this.kronosScanAfter ? or(
-          gt(kronosPredictions.timestamp, this.kronosScanAfter.timestamp),
-          and(eq(kronosPredictions.timestamp, this.kronosScanAfter.timestamp), gt(kronosPredictions.id, this.kronosScanAfter.id)),
-        ) : undefined))
-        .orderBy(asc(kronosPredictions.timestamp), asc(kronosPredictions.id))
-        .limit(batchSize);
-      let pendingKronos = await fetchKronosPage();
-      if (pendingKronos.length === 0 && this.kronosScanAfter) {
+      // 2026-10-13: off-thread for the same reason as the agent page above (34-37 s synchronous main-thread blocks observed).
+      const kronosCols = getTableColumns(kronosPredictions);
+      const fetchKronosPage = async (): Promise<Array<{ k: typeof kronosPredictions.$inferSelect }> | null> => {
+        const rows = await selectRowsOffThread(db
+          .select(kronosCols)
+          .from(kronosPredictions)
+          .leftJoin(predictionOutcomes, kronosJoinCondition)
+          .where(and(isNull(predictionOutcomes.id), this.kronosScanAfter ? or(
+            gt(kronosPredictions.timestamp, this.kronosScanAfter.timestamp),
+            and(eq(kronosPredictions.timestamp, this.kronosScanAfter.timestamp), gt(kronosPredictions.id, this.kronosScanAfter.id)),
+          ) : undefined))
+          .orderBy(asc(kronosPredictions.timestamp), asc(kronosPredictions.id))
+          .limit(batchSize), kronosCols);
+        return rows === null ? null : rows.map((k) => ({ k: k as typeof kronosPredictions.$inferSelect }));
+      };
+      let pendingKronosPage = await fetchKronosPage();
+      if (pendingKronosPage !== null && pendingKronosPage.length === 0 && this.kronosScanAfter) {
         this.kronosScanAfter = null;
-        pendingKronos = await fetchKronosPage();
+        pendingKronosPage = await fetchKronosPage();
       }
+      const pendingKronos = pendingKronosPage ?? [];
       stats.rowsFetched += pendingKronos.length;
       stats.batches += 1;
       const kronosRemainingCount = await countOffThread(db

@@ -246,7 +246,10 @@ export async function fetchAgentConfidenceScores(symbols: string[], lookbackMs: 
   try {
     const rows = await db.select({ symbol: agentPredictions.symbol, confidence: agentPredictions.confidence, timestamp: agentPredictions.timestamp })
       .from(agentPredictions)
-      .where(inArray(agentPredictions.symbol, symbols))
+      // 2026-10-13: bound the lookback IN SQL. This selected every agent_predictions row for ~100 symbols across ALL history
+      // (a single 42 s synchronous main-thread query on the 19 GB DB) and then discarded rows older than `since` in JS. The
+      // JS filter below is kept; the result set is identical, only the rows that were always thrown away are no longer read.
+      .where(and(inArray(agentPredictions.symbol, symbols), gte(agentPredictions.timestamp, since)))
       .orderBy(desc(agentPredictions.timestamp));
     const latestBySymbol = new Map<string, number>();
     for (const row of rows) {
