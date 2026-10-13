@@ -17,9 +17,45 @@ export type PortfolioDecisionState =
   | 'NO_BASIS';
 
 const lastExitEmitAt = new Map<string, number>();
+const lastExitTraceBySymbol = new Map<string, string>();
+let riskListenerInstalled = false;
 
 export function resetPortfolioIntelForTests() {
   lastExitEmitAt.clear();
+  lastExitTraceBySymbol.clear();
+}
+
+/**
+ * 2026-10-13 (S protective exit): a protective SELL rejected by RiskEngine at 09:14 (premarket spread 75 bps > 50)
+ * was suppressed for the full 5-minute exitIdeaCooldownMs and only retried at 09:19, by which time the spread had been
+ * acceptable for minutes. The cooldown exists to stop a SECOND exit idea while the first is still in flight; a
+ * RiskEngine rejection means nothing is pending at the broker, so the symbol may retry after the much shorter
+ * exitIdeaRejectedRetryMs (never immediately: still bounded by the 60 s monitor cadence). Approved / filled / pending
+ * exits keep the full cooldown, so there is still never a duplicate exit order.
+ */
+export function noteExitEmission(symbol: string, traceId: string): void {
+  lastExitTraceBySymbol.set(symbol.toUpperCase(), traceId);
+  if (riskListenerInstalled) return;
+  riskListenerInstalled = true;
+  eventBus.on(EVENTS.RISK_ASSESSMENT_COMPLETED, (assessment: any) => {
+    try {
+      if (!assessment || assessment.approved !== false || assessment.side !== 'SELL') return;
+      const key = String(assessment.symbol ?? '').toUpperCase();
+      if (!key || lastExitTraceBySymbol.get(key) !== assessment.traceId) return;
+      releaseExitCooldownAfterRejection(key);
+    } catch { /* never let a telemetry/cooldown helper affect the risk path */ }
+  });
+}
+
+export function releaseExitCooldownAfterRejection(symbol: string, now = Date.now()): void {
+  const key = symbol.toUpperCase();
+  const last = lastExitEmitAt.get(key);
+  if (last === undefined) return;
+  const earliestRetryAt = last + continuousIntelligence.exitIdeaRejectedRetryMs;
+  const cooldownEnd = last + continuousIntelligence.exitIdeaCooldownMs;
+  if (earliestRetryAt >= cooldownEnd) return; // retry window is not shorter than the cooldown: nothing to do
+  // Re-anchor so canEmitPortfolioExitIdea() allows the next attempt exitIdeaRejectedRetryMs after the REJECTION.
+  lastExitEmitAt.set(key, Math.min(last, now - (continuousIntelligence.exitIdeaCooldownMs - continuousIntelligence.exitIdeaRejectedRetryMs)));
 }
 
 /**

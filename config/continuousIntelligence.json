@@ -10,6 +10,7 @@
   "maxActiveSubscriptions": 12,
   "maxNewSubscriptionsPerCycle": 20,
   "exitIdeaCooldownMs": 300000,
+  "exitIdeaRejectedRetryMs": 60000,
   "screenerEvalCooldownMs": 60000,
   "screenerMinHistoryBars": 8,
   "screenerMinReturnPct": 0.015,

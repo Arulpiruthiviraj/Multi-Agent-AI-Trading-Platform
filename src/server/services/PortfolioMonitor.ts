@@ -50,6 +50,7 @@ import { computeVolumeFeatures } from '../quant/indicators/volume';
 import { evaluateThesisInvalidation, parseStoredThesis } from '../quant/analysis/ThesisInvalidation';
 import {
   canEmitPortfolioExitIdea,
+  noteExitEmission,
   ensureHoldingSubscribed,
   pruneExitCooldownsForFlatSymbols,
   recordPortfolioDecision,
@@ -493,6 +494,7 @@ export class PortfolioMonitorWorker {
       return;
     }
     const exitTraceId = randomUUID();
+    noteExitEmission(args.symbol, exitTraceId);
     eventBus.emitTradeIdea({
       traceId: exitTraceId,
       symbol: args.symbol,

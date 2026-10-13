@@ -15,6 +15,8 @@ export interface ContinuousIntelligenceConfig {
   maxActiveSubscriptions: number;
   maxNewSubscriptionsPerCycle: number;
   exitIdeaCooldownMs: number;
+  /** 2026-10-13: after a protective exit idea is REJECTED by RiskEngine (nothing pending at the broker) the symbol may re-emit after this long instead of the full exitIdeaCooldownMs. */
+  exitIdeaRejectedRetryMs: number;
   screenerEvalCooldownMs: number;
   screenerMinHistoryBars: number;
   screenerMinReturnPct: number;
@@ -362,6 +364,7 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     maxActiveSubscriptions: requireNumber(raw.maxActiveSubscriptions, 'maxActiveSubscriptions'),
     maxNewSubscriptionsPerCycle: requireNumber(raw.maxNewSubscriptionsPerCycle, 'maxNewSubscriptionsPerCycle'),
     exitIdeaCooldownMs: requireNumber(raw.exitIdeaCooldownMs, 'exitIdeaCooldownMs'),
+    exitIdeaRejectedRetryMs: requireNumber(raw.exitIdeaRejectedRetryMs, 'exitIdeaRejectedRetryMs'),
     screenerEvalCooldownMs: requireNumber(raw.screenerEvalCooldownMs, 'screenerEvalCooldownMs'),
     screenerMinHistoryBars: requireNumber(raw.screenerMinHistoryBars, 'screenerMinHistoryBars'),
     screenerMinReturnPct: requireNumber(raw.screenerMinReturnPct, 'screenerMinReturnPct'),
