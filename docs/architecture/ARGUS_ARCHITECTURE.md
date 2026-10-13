@@ -5064,3 +5064,13 @@ PortfolioMonitor
 The throttle may be released only by the same `traceId + symbol` that owns it. An unrelated discretionary SELL cannot unlock another protective close. An approved or partially-filled close remains single-flight even after the wall-clock cooldown expires, preventing duplicate liquidation attempts. This is not a RiskEngine bypass and does not weaken `sell_position_exists`, sizing, price/session/freshness checks, reconciliation, OMS idempotency, or broker constraints.
 
 Broker-resident stops are still not part of this architecture. Process outage, missing market data, or an event-loop stall can therefore still delay software-only protection; that is an explicit remaining reliability boundary.
+
+
+## 2026-10-13 — Recurring maintenance-freeze closure
+
+The earlier architecture note saying the ~220 s residual freeze was unnamed is superseded by later October 12 forensics. The recurring catastrophic stall had two independently demonstrated synchronous-work defects:
+
+1. Calibration candidate construction repeatedly reloaded large prediction histories per confidence bucket. The repaired builder loads once, pages reads, narrows Kronos columns and yields between pages/buckets while preserving calibration output.
+2. The larger 200–325 s recurrence was traced to the Kronos pending-outcome count: `prediction_outcomes.prediction_id` is TEXT while `kronos_predictions.id` is INTEGER. Comparing them directly prevented SQLite from using the unique `(prediction_id, source_table)` index. Casting the Kronos id to TEXT restored the indexed lookup.
+
+The production-scale regression explicitly proves the old join plan loses the index while the repaired query uses it and returns the identical count. Runtime evidence on 2026-10-13 main@`5f7f398` crossed at least five expected maintenance cycles without recurrence of the 200–325 s stall; the audited event-stream maximum gap was 11 s. This closes the **catastrophic recurring-freeze root cause**, not all maintenance latency: CalibrationValidationWorker still consumed tens of CPU-seconds per cycle and slow synchronous SQLite statements remain observable. Worker/process isolation is therefore a reliability improvement candidate, not evidence that the root cause is still unknown.
