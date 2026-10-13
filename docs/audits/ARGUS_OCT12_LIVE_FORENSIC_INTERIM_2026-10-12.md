@@ -143,3 +143,27 @@ Tags: [C] confirmed, [S] strongly supported, [H] hypothesis, [U] unknown.
 **One-command CLI (`cli/single-command-lifecycle`, main@caf7895).** [C] `./argus restart --resume` was run for real: it read the pre-state (`TRADING_PAUSED`), printed that trading would stay paused, stopped gracefully, started, waited and printed the health report, in 72 s with no manual env vars; Ollama stayed off (0 processes). This proved the "never undo a pause" rule on a real pause. The earlier findings that drove it: 150 s start timeout vs ~160 s boot (false failure, exit 1), manual `ARGUS_SKIP_OLLAMA`, immediate resume into the post-boot valuation blip, and bash wrappers dropping flags. 15 unit tests (`scripts/cli/lifecycle.test.ts`).
 
 **Branch status.** [C] `complete/protective-exit-seal` (1908ae7) is merged into main@283c8dd and was running 15:29–16:05; its news_veto exemption is therefore live for protective exits. The remaining gate-by-intent changes (daily loss, consecutive loss, drawdown, exit rate) are proposed in `docs/testing/ARGUS_PAPER_CAPITAL_AND_PROTECTIVE_EXIT_CERTIFICATION.md` and not applied.
+
+## Addendum 10 — Evening repairs, next-session readiness (16:20–20:15 ET)
+Tags: [C] confirmed, [S] strongly supported, [H] hypothesis, [U] unknown.
+
+**Deployed (PID 6504, main@6d08dd2 + later docs/soak commits; PAPER, LIVE_NO_GO, trading ENABLED, Autobot on, budget $20,000, daily-loss limit $250).**
+- [C] Protective-exit gate intent (da31759): a sealed protective SELL passes `daily_loss`, `consecutive_loss`, `portfolio_drawdown`, `order_rate_limit` (and `news_veto`); unsealed SELL, BUY, forged seal and all mandatory gates unchanged. Test fails on the old RiskEngine (1 of 5 red), passes now. Not yet exercised in a real session.
+- [C] Research-capital basis (`researchEquityRiskBasisEnabled`, default true): daily loss and drawdown measure Argus P&L on `settings.budget`; gate detail records `basis`. Limits: carried unrealized counted in full; unrealized peak in-process only [C].
+- [C] IBKR position-snapshot pruning (7c845c9). [H] it explains the DDOG false conflict; the exact adapter path was not proven.
+- [C] Reconciliation: missing valuation marks while the US session is CLOSED no longer count toward a pause (6d08dd2). Root cause of tonight's trap [C]: the broker holds S 38 (verified via the broker portfolio view), which has no mark after hours; two consecutive unmarked cycles produce a $100 mismatch equal to the $100 significance threshold, which pauses trading and turns Autobot off. Test fails on the old code; existing valuation tests were clock-pinned. PRE_MARKET/REGULAR/AFTER_HOURS still escalate.
+- [C] Autobot-false-after-restart is designed behavior: it was disabled at 19:57:54Z, the same second reconciliation paused trading for the DDOG conflict; resume does not re-enable it.
+- [C] Freeze profiler (default-on, 6 s threshold, `data/freeze-profiles/`): validated against a deliberate 12 s main-thread block (profile named the blocking function). The residual ~220 s freeze cause is still [U]; one ~60-80 s unresponsive window at 19:28 ET (during the soak, with the engine otherwise idle) produced no profile because the earlier build predated the fix.
+- [C] TimesFM shadow scaffolding (disabled, model not installed, Ollama not applicable); see ARGUS_TIMESFM_FORECASTING_INTEGRATION.md.
+
+**Certification on 589d1e4:** full suite 826/826 files, 6808 tests; tsc clean; build OK. Later commits were verified by targeted suites only (reconciliation, observability, TimesFM) and a typecheck.
+
+**75-minute wall-clock soak (isolated DB, all AI down, 29 iterations, 0 failed): stabilityVerdict = FAIL [C].** Event-loop p95 peaked at 730 ms against the 100 ms bound; final max 531 ms; RSS 306→324 MB (max 375 MB); the isolated soak DB grew to 870 MB. It overlapped two real-engine restarts on a 16 GB host, so it neither proves nor rules out a product stall [U], but it is recorded as a FAIL and not reinterpreted. The launcher's end-of-soak proof failed with `spawn npx ENOENT` (Windows) — fixed to run vitest via node; the proof test passes when run directly (4/4).
+
+**Open before/at tomorrow's open:**
+1. [U] Residual ~220 s freeze cause. A freeze delays the 60 s software stops; there are no broker-resident stops. Release-gate: NOT_CERTIFIED.
+2. [C] Quant-first inactive: 20/21 strategies have no lifecycle record (terminal NOT_AUTHORIZED); PULLBACK_CONTINUATION RETIRED. Recording an UNTESTED baseline is the system's suggested action and needs an operator decision.
+3. [C] Ledger carries an S BUY of 38 (filled 15:01 ET) with no sell; the broker holds S 38 (unmarked after hours). S was not flattened at EOD because the DDOG-triggered pause blocked it. Position is carried overnight under software-only protection.
+4. [U] Not done: provider-timeout storm / restart-with-open-position / full-universe / combined-failure synthetic scenarios, mutation tests, release-certification binding, intraday-provider root cause (54% deadlines), TimesFM install and Chronos comparison.
+
+**Verdict for 2026-10-13: READY_WITH_CONDITIONS for supervised PAPER — NOT certified for unattended operation.** Conditions: watch the first 30 minutes (PortfolioMonitor review gaps, `data/freeze-profiles/`, reconciliation), S carried, soak FAIL unresolved.
