@@ -121,4 +121,51 @@ describe('RiskEngine loss/rate gates vs protective exits', () => {
     const g = await gates(traceId);
     expect(g.sell_position_exists.passed).toBe(false);
   });
+
+  it('TRADING_PAUSED blocks entries but allows a genuine sealed PortfolioMonitor protective SELL through gate 0', async () => {
+    tradingEngine.state.tradingState = 'TRADING_PAUSED';
+    tradingEngine.state.emergencyStopActive = false;
+    try {
+      const traceId = 'lossgates-paused-sealed';
+      await riskEngine.evaluateRisk({ traceId, symbol: SYM, side: 'SELL', currentPrice: 150, protectiveExitSeal: seal(traceId) });
+      const g = await gates(traceId);
+      expect(g.emergency_stop.passed).toBe(true);
+      expect(g.emergency_stop.detail.pausedProtectiveExitAllowed).toBe(true);
+    } finally {
+      tradingEngine.state.tradingState = 'TRADING_ENABLED';
+      tradingEngine.state.emergencyStopActive = false;
+    }
+  });
+
+  it('TRADING_PAUSED still blocks an unsealed SELL and a BUY', async () => {
+    tradingEngine.state.tradingState = 'TRADING_PAUSED';
+    tradingEngine.state.emergencyStopActive = false;
+    try {
+      const sellTrace = 'lossgates-paused-unsealed';
+      await riskEngine.evaluateRisk({ traceId: sellTrace, symbol: SYM, side: 'SELL', currentPrice: 150 });
+      expect((await gates(sellTrace)).emergency_stop.passed).toBe(false);
+
+      const buyTrace = 'lossgates-paused-buy';
+      await riskEngine.evaluateRisk({ traceId: buyTrace, symbol: SYM, side: 'BUY', currentPrice: 150, protectiveExitSeal: seal(buyTrace) });
+      expect((await gates(buyTrace)).emergency_stop.passed).toBe(false);
+    } finally {
+      tradingEngine.state.tradingState = 'TRADING_ENABLED';
+      tradingEngine.state.emergencyStopActive = false;
+    }
+  });
+
+  it('EMERGENCY_STOP remains absolute even for a genuine sealed protective SELL', async () => {
+    tradingEngine.state.tradingState = 'EMERGENCY_STOP';
+    tradingEngine.state.emergencyStopActive = true;
+    try {
+      const traceId = 'lossgates-emergency-sealed';
+      await riskEngine.evaluateRisk({ traceId, symbol: SYM, side: 'SELL', currentPrice: 150, protectiveExitSeal: seal(traceId) });
+      const g = await gates(traceId);
+      expect(g.emergency_stop.passed).toBe(false);
+      expect(g.emergency_stop.detail.pausedProtectiveExitAllowed).toBe(false);
+    } finally {
+      tradingEngine.state.tradingState = 'TRADING_ENABLED';
+      tradingEngine.state.emergencyStopActive = false;
+    }
+  });
 });
