@@ -81,6 +81,15 @@ export function releasePortfolioExitCooldownForTrace(symbol: unknown, traceId: u
   return true;
 }
 
+// Pre-Chief rejection/rate-limit must also release ownership. emitTradeIdea can fail at the
+// contract/asset/rate gate before RiskEngine ever sees the trace.
+eventBus.on(EVENTS.TRADE_IDEA_REJECTED, (rejection: any) => {
+  releasePortfolioExitCooldownForTrace(rejection?.symbol, rejection?.traceId);
+});
+eventBus.on(EVENTS.IDEA_RATE_LIMITED, (limited: any) => {
+  releasePortfolioExitCooldownForTrace(limited?.symbol, limited?.traceId);
+});
+
 eventBus.on(EVENTS.RISK_ASSESSMENT_COMPLETED, (assessment: any) => {
   if (assessment?.approved === false) {
     releasePortfolioExitCooldownForTrace(assessment.symbol, assessment.traceId);
