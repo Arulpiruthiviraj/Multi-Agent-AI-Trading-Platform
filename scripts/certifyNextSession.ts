@@ -40,6 +40,7 @@ import {
   type ReleaseCheck,
   type ReleaseCertificationReport,
 } from '../src/server/certification/releaseCertificationDriver';
+import { buildCliAuthHeaders, defaultSessionFilePath } from './cli/cliSession';
 
 function sha256Hex(data: string): string {
   return createHash('sha256').update(data, 'utf8').digest('hex');
@@ -283,6 +284,11 @@ async function main() {
       },
       withSuites,
       engineBaseUrl: engineUrlArg ? engineUrlArg.slice('--engine-url='.length) : null,
+      liveProbeHeaders: engineUrlArg
+        ? buildCliAuthHeaders({
+            sessionPath: process.env.ARGUS_CLI_SESSION_FILE || defaultSessionFilePath(path.resolve('.')),
+          })
+        : undefined,
     });
     report.releaseCertification = driverReport;
 
