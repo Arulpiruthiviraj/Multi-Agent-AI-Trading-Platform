@@ -473,7 +473,7 @@ Numbers below are the production `tradingSafety.json` / settings defaults as of 
 
 | # | Gate | Fail-closed rule |
 |---|---|---|
-| 1 | `emergency_stop` | Pass iff `tradingState === 'TRADING_ENABLED'`. `TRADING_PAUSED` and `EMERGENCY_STOP` both block. Replay forces ENABLED for research clock. |
+| 1 | `emergency_stop` | Pass iff `tradingState === 'TRADING_ENABLED'`. `EMERGENCY_STOP` and a `FULL` `TRADING_PAUSED` (automated safety pauses) block everything. **2026-10-13:** an `ENTRIES_ONLY` pause (operator pause, shutdown drain, boot restart-safety pause; persisted across restart) blocks new entries but a sealed protective SELL still passes this gate - every other gate and OMS idempotency still apply; not a bypass. Replay forces ENABLED for research clock. |
 | 2 | `autobot_enabled` | New **BUY** requires Autobot on. **SELL**/exits are not blocked by Autobot-off. |
 | 3 | `same_symbol_cooldown` | BUY blocked if a FILLED same-symbol trade within `sameSymbolCooldownMs` (300000). |
 | 4 | `post_loss_cooldown` | BUY blocked for `postLossCooldownMs` (900000) after a losing fill. |
