@@ -435,25 +435,28 @@ export const MULTI_TRADE_DAY: ScenarioProfile = {
     { type: 'GAP', atOffsetMs: 0, gapPct: 0.02, symbols: ['AAPL', 'NVDA'] },
   ],
   symbolSegments: {
-    // Amplified impulse + pullback cycles. Positions only close when a REAL exit trigger fires (hard stop, 5% trailing stop from the
-    // peak, 15% target, thesis invalidation), so each cycle's pullback is deep enough to exist as a genuine exit trigger. Outcomes
-    // (win / loss / no entry) are whatever the real pipeline produces; the paths never tell it what to do.
+    // Long persistent legs followed by sharp reversals. A saw-tooth with frequent shallow cycles only ever produced stop-outs (run
+    // 2026-10-13: both round trips losers) because the system enters on confirmed strength and the next pullback stops it out. Here an
+    // early entry can ride a sustained leg to a trailing-stop profit, a late entry meets the crash and takes the loss - both outcomes
+    // exist in the environment; which one Argus gets is its own doing.
     AAPL: [
       seg(0, 8, 'HIGH_VOL', 0.0010, 1.6, 2.3),
-      ...saw(8, 400, { upMin: 40, downMin: 22, upDrift: 0.0010, downDrift: -0.0026, vol: 1.1, upVolume: 1.8, downVolume: 1.4 }),
+      seg(8, 150, 'TRENDING_UP', 0.0007, 1.1, 1.8), seg(150, 180, 'TRENDING_DOWN', -0.0030, 1.3, 2.0),
+      seg(180, 260, 'SIDEWAYS', 0.00002, 0.6, 1.0), seg(260, 400, 'TRENDING_UP', 0.0006, 1.1, 1.7),
     ],
     NVDA: [
       seg(0, 8, 'HIGH_VOL', 0.0010, 1.6, 2.3),
-      ...saw(8, 400, { upMin: 30, downMin: 30, upDrift: 0.0010, downDrift: -0.0022, vol: 1.2, upVolume: 1.8, downVolume: 1.6 }),
+      seg(8, 60, 'TRENDING_UP', 0.0010, 1.2, 1.9), seg(60, 120, 'TRENDING_DOWN', -0.0020, 1.3, 2.0),
+      seg(120, 250, 'TRENDING_UP', 0.0007, 1.1, 1.8), seg(250, 280, 'TRENDING_DOWN', -0.0030, 1.3, 2.0), seg(280, 400, 'SIDEWAYS', 0.00002, 0.6, 1.0),
     ],
     MSFT: [
-      seg(0, 60, 'SIDEWAYS', 0.00002, 0.6, 0.9),
-      ...saw(60, 400, { upMin: 50, downMin: 20, upDrift: 0.0008, downDrift: -0.0030, vol: 1.1, upVolume: 1.8, downVolume: 1.4 }),
+      seg(0, 90, 'SIDEWAYS', 0.00002, 0.6, 0.9),
+      seg(90, 220, 'TRENDING_UP', 0.0007, 1.1, 1.8), seg(220, 250, 'TRENDING_DOWN', -0.0030, 1.3, 2.0), seg(250, 400, 'TRENDING_UP', 0.0006, 1.1, 1.7),
     ],
-    QQQ: saw(0, 400, { upMin: 25, downMin: 25, upDrift: 0.0008, downDrift: -0.0008, vol: 1.0, upVolume: 1.2, downVolume: 1.2 }),
+    QQQ: saw(0, 400, { upMin: 25, downMin: 25, upDrift: 0.0006, downDrift: -0.0006, vol: 1.0, upVolume: 1.2, downVolume: 1.2 }),
     SPY: [
-      seg(0, 120, 'SIDEWAYS', 0.00001, 0.6, 0.9),
-      ...saw(120, 400, { upMin: 35, downMin: 35, upDrift: 0.0009, downDrift: -0.0020, vol: 1.1, upVolume: 1.6, downVolume: 1.5 }),
+      seg(0, 8, 'HIGH_VOL', 0.0006, 1.4, 2.0),
+      seg(8, 100, 'TRENDING_UP', 0.0006, 1.1, 1.7), seg(100, 130, 'TRENDING_DOWN', -0.0025, 1.3, 2.0), seg(130, 400, 'TRENDING_UP', 0.0004, 1.0, 1.4),
     ],
   },
 };
