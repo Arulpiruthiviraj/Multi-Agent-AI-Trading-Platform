@@ -155,8 +155,8 @@ describe('ConfluenceCoordinator on-demand Quant in-flight guard (Oct-12 live for
     fakeEventBus.emit('TRADE_IDEA_GENERATED', technicalIdea({ symbol: 'MSFT', traceId: 't3' }));
     await flush();
     expect(evaluateSymbol).toHaveBeenCalledTimes(2);
-    expect(evaluateSymbol).toHaveBeenCalledWith('AAPL', { isLiveCheck: expect.any(Function) }); // symbol + generation fence ONLY: no side/confidence channel
-    expect(evaluateSymbol).toHaveBeenCalledWith('MSFT', { isLiveCheck: expect.any(Function) }); // symbol + generation fence ONLY: no side/confidence channel
+    expect(evaluateSymbol).toHaveBeenCalledWith('AAPL', expect.objectContaining({ isLiveCheck: expect.any(Function), origin: 'ON_DEMAND_CONFLUENCE', triggerId: expect.stringMatching(/^confl_/), requestedAtMs: expect.any(Number) })); // symbol + generation fence ONLY: no side/confidence channel
+    expect(evaluateSymbol).toHaveBeenCalledWith('MSFT', expect.objectContaining({ isLiveCheck: expect.any(Function), origin: 'ON_DEMAND_CONFLUENCE', triggerId: expect.stringMatching(/^confl_/), requestedAtMs: expect.any(Number) })); // symbol + generation fence ONLY: no side/confidence channel
   });
 
   it('does not alter other on-demand agents: Kronos still triggers while Quant is in flight', async () => {

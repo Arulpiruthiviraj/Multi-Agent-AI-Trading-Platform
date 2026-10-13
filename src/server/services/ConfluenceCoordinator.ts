@@ -167,6 +167,7 @@ export class ConfluenceCoordinator {
     const skipped: string[] = [];
 
     const jobs: Array<Promise<void>> = [];
+    let quantRequestId: string | null = null;
 
     // 2026-09-22: fan out to the OTHER two deterministic/local agents, never back to whichever
     // one produced the triggering idea (that agent will naturally re-evaluate this symbol on its
@@ -215,9 +216,13 @@ export class ConfluenceCoordinator {
             }));
           }
           this.quantEvaluationsInFlight.set(symbol, { startedAt: now, token });
+          quantRequestId = `confl_${symbol}_${now}_${Math.random().toString(36).slice(2, 8)}`;
           jobs.push(
             quantSignalAgent.evaluateSymbol(symbol, {
-              origin: 'ON_DEMAND_CONFLUENCE', triggerId: idea?.traceId ?? null, requestedAtMs: now,
+              // Independence is structural: the request id is a FRESH opaque correlation token, deliberately NOT the
+              // triggering idea's traceId (which would be a lookup key to that idea's side/confidence). The link between
+              // the two is recorded once, here, in CONFLUENCE_COORDINATOR_TRIGGERED.quantRequestId.
+              origin: 'ON_DEMAND_CONFLUENCE', triggerId: quantRequestId, requestedAtMs: now,
               // Generation fence: live only while this evaluation still owns the symbol's slot.
               isLiveCheck: () => this.quantEvaluationsInFlight.get(symbol)?.token === token,
             }).then(
@@ -300,6 +305,7 @@ export class ConfluenceCoordinator {
         decisionId: idea.traceId,
         triggeredAgents: triggered,
         skippedAgents: skipped,
+        quantRequestId,
       });
     });
 

@@ -83,7 +83,7 @@ describe('CampaignOpeningSurge optional Quant re-eval (unfenced evaluateSymbol)'
     expect(result.hits[0].reasons).toContain('ORB_ABOVE');
     // The behavioral effect of the unfenced call: the quant agent re-evaluates the symbol.
     expect(evaluateSymbol).toHaveBeenCalledTimes(1);
-    expect(evaluateSymbol).toHaveBeenCalledWith('STUB');
+    expect(evaluateSymbol).toHaveBeenCalledWith('STUB', { origin: 'ON_DEMAND_CAMPAIGN_SURGE', requestedAtMs: expect.any(Number) });
     // The surge still emits its observability-only event (subscribe + confluence nudge path,
     // never a trade idea).
     expect(surgeEvents).toHaveLength(1);
@@ -112,6 +112,6 @@ describe('CampaignOpeningSurge optional Quant re-eval (unfenced evaluateSymbol)'
 
     expect(result.ran).toBe(true);
     expect(result.hits).toHaveLength(1);
-    expect(evaluateSymbol).toHaveBeenCalledWith('STUB');
+    expect(evaluateSymbol).toHaveBeenCalledWith('STUB', { origin: 'ON_DEMAND_CAMPAIGN_SURGE', requestedAtMs: expect.any(Number) });
   });
 });

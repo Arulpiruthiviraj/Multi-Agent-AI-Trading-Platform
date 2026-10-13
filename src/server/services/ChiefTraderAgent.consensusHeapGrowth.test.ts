@@ -114,7 +114,10 @@ describe('ChiefTraderAgent consensus-round heap retention (warmup vs leak)', () 
       // Poll for completion rather than fixed flushes: the serialized evaluation chain
       // (queue -> DB writes -> forensic capture) needs an unbounded number of ticks.
       const deadline = Date.now() + 10000;
-      while (agent.pendingDebateFailClosed.size !== 0 && Date.now() < deadline) {
+      // 2026-10-13: poll until EVERY per-round structure has drained (the assertions below are about full drain). The
+      // fail-closed entry is consumed one tick before the serialized queue entry is released, so polling only the first
+      // made this test a race that passed or failed with unrelated timing changes.
+      while ((agent.pendingDebateFailClosed.size !== 0 || agent.consensusQueues.size !== 0 || agent.consensusAggregationTimers.size !== 0 || agent.pendingDebates.size !== 0) && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 10));
       }
       expect(agent.pendingDebateFailClosed.size).toBe(0);

@@ -169,7 +169,7 @@ describe('fastLaneEvaluator (research/paper only, no execution authority)', () =
       fakeEvaluation([{ strategy: 'MOMENTUM_BREAKOUT', side: 'BUY', triggerMet: true, confidence: 0.8 }]) as any,
     );
     await evaluateFastCandidate(c.id);
-    expect(spy).toHaveBeenCalledWith('IIIII', { emitIdeas: false });
+    expect(spy).toHaveBeenCalledWith('IIIII', { emitIdeas: false, origin: 'ON_DEMAND_FAST_LANE', requestedAtMs: expect.any(Number) });
   });
 
   it('D4 (2026-10-09 P1 lease fix): a hung evaluation hits the watchdog - the caller is released, but the lease (slot + dedup) is HELD until the work settles', async () => {
