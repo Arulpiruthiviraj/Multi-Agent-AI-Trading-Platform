@@ -273,6 +273,72 @@ function mapIbkrStatusToTrackedStatus(ibStatus: string, filledQuantity: number, 
   return 'PENDING';
 }
 
+export type HistoricalRequestPriority = 'LIVE_CRITICAL' | 'LIVE_QUANT' | 'CACHE_REFRESH' | 'BACKGROUND';
+
+export interface HistoricalRequestOptions {
+  priority?: HistoricalRequestPriority;
+  /** Maximum time this request may wait before provider service starts. Expired work is rejected,
+   * never sent to IBKR after its caller's decision deadline has already passed. */
+  maxQueueWaitMs?: number;
+}
+
+type HistoricalQueueItem = {
+  key: string;
+  symbol: string;
+  timeframe: string;
+  startMs: number;
+  endMs: number;
+  priority: HistoricalRequestPriority;
+  enqueuedAtMs: number;
+  expiresAtMs: number;
+  sequence: number;
+  queueDepthAtEnqueue: number;
+  resolve: (bars: Bar[]) => void;
+  reject: (error: Error) => void;
+};
+
+const HISTORICAL_QUEUE_MAX = 256;
+const HISTORICAL_PRIORITY_WEIGHT: Record<HistoricalRequestPriority, number> = {
+  LIVE_CRITICAL: 0,
+  LIVE_QUANT: 1,
+  CACHE_REFRESH: 2,
+  BACKGROUND: 3,
+};
+
+function inferHistoricalRequestPriority(timeframe: string, endMs: number, nowMs = Date.now()): HistoricalRequestPriority {
+  const intraday = timeframe === '1Min' || timeframe === '1T' || timeframe === '5Min';
+  // Current-session/very-recent intraday work is latency-sensitive. Old intraday windows are
+  // research/backfill and must never sit ahead of live Quant work on IBKR's paced historical lane.
+  if (intraday && endMs >= nowMs - 12 * 60 * 60 * 1000) return 'LIVE_QUANT';
+  if (!intraday && endMs >= nowMs - 36 * 60 * 60 * 1000) return 'CACHE_REFRESH';
+  return 'BACKGROUND';
+}
+
+function defaultHistoricalQueueWaitMs(priority: HistoricalRequestPriority): number {
+  if (priority === 'LIVE_CRITICAL') return 5_000;
+  if (priority === 'LIVE_QUANT') return 7_000; // Quant caller's current deadline is 8 s.
+  if (priority === 'CACHE_REFRESH') return 30_000;
+  return 60_000;
+}
+
+/**
+ * Build the IBKR historical duration from the requested window without inflating short intraday
+ * requests to 30 days. Daily behavior deliberately retains a 30-day minimum because existing
+ * daily Quant lookbacks rely on that broad request/cache behavior.
+ */
+export function buildIbkrHistoricalDuration(timeframe: string, startMs: number, endMs: number): string {
+  const spanMs = Math.max(1_000, endMs - startMs);
+  const spanSeconds = Math.max(1, Math.ceil(spanMs / 1_000));
+  const spanDays = Math.max(1, Math.ceil(spanMs / 86_400_000));
+  const intraday = timeframe === '1Min' || timeframe === '1T' || timeframe === '5Min';
+  if (intraday) {
+    if (spanSeconds <= 86_400) return `${Math.max(60, spanSeconds)} S`;
+    if (spanDays <= 365) return `${spanDays} D`;
+    return '2 Y';
+  }
+  return spanDays <= 365 ? `${Math.min(365, Math.max(spanDays, 30))} D` : '2 Y';
+}
+
 export class IbkrSocketSession {
   private ib: IBApi | null = null;
   private cfg: IbkrConnectionConfig;
@@ -365,8 +431,16 @@ export class IbkrSocketSession {
   private connectionGeneration = 0;
   private marketDataSubscriptionHandler: ((symbol: string) => void) | null = null;
   private nextHistReqId = 50_000;
-  /** Serialize historical requests — IB paces hist data; avoid storms. */
-  private histChain: Promise<unknown> = Promise.resolve();
+  /**
+   * IBKR historical requests are still single-service (pacing-safe), but no longer one FIFO promise
+   * chain. A bounded priority queue prevents weeks-old research/backfill from starving current-
+   * session Quant requests. Equivalent requests coalesce, and work that expires before service is
+   * never sent to IBKR.
+   */
+  private historicalQueue: HistoricalQueueItem[] = [];
+  private historicalQueueRunning = false;
+  private historicalRequestsByKey = new Map<string, Promise<Bar[]>>();
+  private historicalQueueSequence = 0;
   /** Separate ID space from market-data/historical reqIds - see resolveContract(). */
   private nextContractReqId = 900_000;
   /** 2026-09-20 forensic-audit remediation (part B): reqHistoricalData errors previously only
@@ -381,7 +455,8 @@ export class IbkrSocketSession {
   private historicalDataTimingHandler: ((detail: {
     symbol: string; timeframe: string; startMs: number; endMs: number;
     queueWaitMs: number; serviceMs: number; totalMs: number;
-    outcome: 'SUCCESS' | 'EMPTY' | 'TIMEOUT' | 'ERROR'; barCount: number;
+    outcome: 'SUCCESS' | 'EMPTY' | 'TIMEOUT' | 'ERROR' | 'EXPIRED' | 'QUEUE_REJECTED'; barCount: number;
+    priority?: HistoricalRequestPriority; queueDepthAtEnqueue?: number; queueDepthAtStart?: number;
   }) => void) | null = null;
   /** 2026-09-20 forensic-audit remediation (part D): IBKR delayed tick fields (66-69) - see
    *  tickPrice handler below. Deliberately separate from tickHandler (the live-quote sink
@@ -515,7 +590,8 @@ export class IbkrSocketSession {
   setHistoricalDataTimingHandler(handler: ((detail: {
     symbol: string; timeframe: string; startMs: number; endMs: number;
     queueWaitMs: number; serviceMs: number; totalMs: number;
-    outcome: 'SUCCESS' | 'EMPTY' | 'TIMEOUT' | 'ERROR'; barCount: number;
+    outcome: 'SUCCESS' | 'EMPTY' | 'TIMEOUT' | 'ERROR' | 'EXPIRED' | 'QUEUE_REJECTED'; barCount: number;
+    priority?: HistoricalRequestPriority; queueDepthAtEnqueue?: number; queueDepthAtStart?: number;
   }) => void) | null): void {
     this.historicalDataTimingHandler = handler;
   }
@@ -1460,46 +1536,150 @@ export class IbkrSocketSession {
    * Real daily (or mapped) OHLCV via IB Gateway reqHistoricalData.
    * Never fabricates bars — empty / timeout / error throws or returns [].
    */
-  requestHistoricalBars(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<Bar[]> {
+  requestHistoricalBars(
+    symbol: string,
+    timeframe: string,
+    startMs: number,
+    endMs: number,
+    options: HistoricalRequestOptions = {},
+  ): Promise<Bar[]> {
+    const sym = String(symbol || '').toUpperCase();
+    const priority = options.priority ?? inferHistoricalRequestPriority(timeframe, endMs);
     const enqueuedAtMs = Date.now();
-    const run = async (): Promise<Bar[]> => {
-      const startedAtMs = Date.now();
-      try {
-        const bars = await this.requestHistoricalBarsOnce(symbol, timeframe, startMs, endMs);
-        const finishedAtMs = Date.now();
-        try {
-          this.historicalDataTimingHandler?.({
-            symbol, timeframe, startMs, endMs,
-            queueWaitMs: Math.max(0, startedAtMs - enqueuedAtMs),
-            serviceMs: Math.max(0, finishedAtMs - startedAtMs),
-            totalMs: Math.max(0, finishedAtMs - enqueuedAtMs),
-            outcome: bars.length > 0 ? 'SUCCESS' : 'EMPTY',
-            barCount: bars.length,
-          });
-        } catch { /* diagnostics must never affect historical delivery */ }
-        return bars;
-      } catch (e) {
-        const finishedAtMs = Date.now();
-        const message = e instanceof Error ? e.message : String(e);
-        try {
-          this.historicalDataTimingHandler?.({
-            symbol, timeframe, startMs, endMs,
-            queueWaitMs: Math.max(0, startedAtMs - enqueuedAtMs),
-            serviceMs: Math.max(0, finishedAtMs - startedAtMs),
-            totalMs: Math.max(0, finishedAtMs - enqueuedAtMs),
-            outcome: /timeout/i.test(message) ? 'TIMEOUT' : 'ERROR',
-            barCount: 0,
-          });
-        } catch { /* diagnostics must never affect historical delivery */ }
-        throw e;
+    const maxQueueWaitMs = Math.max(1, options.maxQueueWaitMs ?? defaultHistoricalQueueWaitMs(priority));
+    const key = `${sym}|${timeframe}|${startMs}|${endMs}`;
+
+    const existing = this.historicalRequestsByKey.get(key);
+    if (existing) return existing;
+
+    // A live request may evict queued background work when the bounded queue is full. Never evict
+    // another live request; fail closed instead of creating an unbounded broker backlog.
+    if (this.historicalQueue.length >= HISTORICAL_QUEUE_MAX) {
+      if (HISTORICAL_PRIORITY_WEIGHT[priority] <= HISTORICAL_PRIORITY_WEIGHT.LIVE_QUANT) {
+        let victimIndex = -1;
+        let victimWeight = -1;
+        for (let i = 0; i < this.historicalQueue.length; i++) {
+          const weight = HISTORICAL_PRIORITY_WEIGHT[this.historicalQueue[i].priority];
+          if (weight > victimWeight) {
+            victimWeight = weight;
+            victimIndex = i;
+          }
+        }
+        if (victimIndex >= 0 && victimWeight > HISTORICAL_PRIORITY_WEIGHT.LIVE_QUANT) {
+          const [victim] = this.historicalQueue.splice(victimIndex, 1);
+          this.historicalRequestsByKey.delete(victim.key);
+          victim.reject(new Error(`IBKR historical queue evicted stale lower-priority work for ${victim.symbol} (${victim.timeframe})`));
+          try {
+            this.historicalDataTimingHandler?.({
+              symbol: victim.symbol, timeframe: victim.timeframe, startMs: victim.startMs, endMs: victim.endMs,
+              queueWaitMs: Math.max(0, Date.now() - victim.enqueuedAtMs), serviceMs: 0,
+              totalMs: Math.max(0, Date.now() - victim.enqueuedAtMs), outcome: 'QUEUE_REJECTED', barCount: 0,
+              priority: victim.priority, queueDepthAtEnqueue: victim.queueDepthAtEnqueue, queueDepthAtStart: this.historicalQueue.length,
+            });
+          } catch { /* diagnostics only */ }
+        }
       }
-    };
-    const next = this.histChain.then(run, run);
-    this.histChain = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+    }
+    if (this.historicalQueue.length >= HISTORICAL_QUEUE_MAX) {
+      const error = new Error(`IBKR historical queue full (${HISTORICAL_QUEUE_MAX}); refusing unbounded backlog for ${sym} (${timeframe})`);
+      try {
+        this.historicalDataTimingHandler?.({
+          symbol: sym, timeframe, startMs, endMs, queueWaitMs: 0, serviceMs: 0, totalMs: 0,
+          outcome: 'QUEUE_REJECTED', barCount: 0, priority,
+          queueDepthAtEnqueue: this.historicalQueue.length, queueDepthAtStart: this.historicalQueue.length,
+        });
+      } catch { /* diagnostics only */ }
+      return Promise.reject(error);
+    }
+
+    let resolveRequest!: (bars: Bar[]) => void;
+    let rejectRequest!: (error: Error) => void;
+    const promise = new Promise<Bar[]>((resolve, reject) => {
+      resolveRequest = resolve;
+      rejectRequest = (error) => reject(error);
+    });
+    this.historicalRequestsByKey.set(key, promise);
+    void promise.finally(() => {
+      if (this.historicalRequestsByKey.get(key) === promise) this.historicalRequestsByKey.delete(key);
+    }).catch(() => { /* cleanup branch intentionally consumes its own rejection */ });
+
+    const queueDepthAtEnqueue = this.historicalQueue.length;
+    this.historicalQueue.push({
+      key, symbol: sym, timeframe, startMs, endMs, priority, enqueuedAtMs,
+      expiresAtMs: enqueuedAtMs + maxQueueWaitMs,
+      sequence: this.historicalQueueSequence++,
+      queueDepthAtEnqueue,
+      resolve: resolveRequest,
+      reject: rejectRequest,
+    });
+    this.pumpHistoricalQueue();
+    return promise;
+  }
+
+  private pumpHistoricalQueue(): void {
+    if (this.historicalQueueRunning) return;
+    this.historicalQueueRunning = true;
+    void (async () => {
+      try {
+        while (this.historicalQueue.length > 0) {
+          this.historicalQueue.sort((a, b) =>
+            HISTORICAL_PRIORITY_WEIGHT[a.priority] - HISTORICAL_PRIORITY_WEIGHT[b.priority]
+            || a.sequence - b.sequence);
+          const item = this.historicalQueue.shift()!;
+          const startedAtMs = Date.now();
+          const queueWaitMs = Math.max(0, startedAtMs - item.enqueuedAtMs);
+          if (startedAtMs > item.expiresAtMs) {
+            const error = new Error(`IBKR historical request expired in queue for ${item.symbol} (${item.timeframe}) after ${queueWaitMs}ms`);
+            try {
+              this.historicalDataTimingHandler?.({
+                symbol: item.symbol, timeframe: item.timeframe, startMs: item.startMs, endMs: item.endMs,
+                queueWaitMs, serviceMs: 0, totalMs: queueWaitMs, outcome: 'EXPIRED', barCount: 0,
+                priority: item.priority, queueDepthAtEnqueue: item.queueDepthAtEnqueue,
+                queueDepthAtStart: this.historicalQueue.length,
+              });
+            } catch { /* diagnostics only */ }
+            item.reject(error);
+            continue;
+          }
+
+          try {
+            const bars = await this.requestHistoricalBarsOnce(
+              item.symbol, item.timeframe, item.startMs, item.endMs, item.priority,
+            );
+            const finishedAtMs = Date.now();
+            try {
+              this.historicalDataTimingHandler?.({
+                symbol: item.symbol, timeframe: item.timeframe, startMs: item.startMs, endMs: item.endMs,
+                queueWaitMs, serviceMs: Math.max(0, finishedAtMs - startedAtMs),
+                totalMs: Math.max(0, finishedAtMs - item.enqueuedAtMs),
+                outcome: bars.length > 0 ? 'SUCCESS' : 'EMPTY', barCount: bars.length,
+                priority: item.priority, queueDepthAtEnqueue: item.queueDepthAtEnqueue,
+                queueDepthAtStart: this.historicalQueue.length,
+              });
+            } catch { /* diagnostics only */ }
+            item.resolve(bars);
+          } catch (e) {
+            const finishedAtMs = Date.now();
+            const message = e instanceof Error ? e.message : String(e);
+            try {
+              this.historicalDataTimingHandler?.({
+                symbol: item.symbol, timeframe: item.timeframe, startMs: item.startMs, endMs: item.endMs,
+                queueWaitMs, serviceMs: Math.max(0, finishedAtMs - startedAtMs),
+                totalMs: Math.max(0, finishedAtMs - item.enqueuedAtMs),
+                outcome: /timeout/i.test(message) ? 'TIMEOUT' : 'ERROR', barCount: 0,
+                priority: item.priority, queueDepthAtEnqueue: item.queueDepthAtEnqueue,
+                queueDepthAtStart: this.historicalQueue.length,
+              });
+            } catch { /* diagnostics only */ }
+            item.reject(e instanceof Error ? e : new Error(String(e)));
+          }
+        }
+      } finally {
+        this.historicalQueueRunning = false;
+        // A request can be queued between the final loop check and clearing the flag.
+        if (this.historicalQueue.length > 0) this.pumpHistoricalQueue();
+      }
+    })();
   }
 
   private requestHistoricalBarsOnce(
@@ -1507,6 +1687,7 @@ export class IbkrSocketSession {
     timeframe: string,
     startMs: number,
     endMs: number,
+    priority: HistoricalRequestPriority,
   ): Promise<Bar[]> {
     if (!this.ib || !this.connected) {
       return Promise.reject(new Error('IBKR socket session is not connected for historical bars.'));
@@ -1519,13 +1700,18 @@ export class IbkrSocketSession {
       );
     }
 
-    const spanDays = Math.max(1, Math.ceil((endMs - startMs) / 86_400_000));
-    const durationStr = spanDays <= 365 ? `${Math.min(365, Math.max(spanDays, 30))} D` : '2 Y';
+    const durationStr = buildIbkrHistoricalDuration(timeframe, startMs, endMs);
     const contract = this.stockContract(symbol);
     const reqId = this.nextHistReqId++;
     const ib = this.ib;
     const bars: Bar[] = [];
-    const timeoutMs = Math.max(15_000, this.cfg.connectTimeoutMs);
+    // Live Quant callers currently stop waiting after 8 s. End the underlying IBKR request first
+    // so a timed-out decision cannot leave a 15+ second zombie occupying the only paced lane.
+    const timeoutMs = priority === 'LIVE_CRITICAL'
+      ? 4_500
+      : priority === 'LIVE_QUANT'
+        ? Math.min(7_000, Math.max(2_000, this.cfg.connectTimeoutMs))
+        : Math.max(15_000, this.cfg.connectTimeoutMs);
 
     return new Promise<Bar[]>((resolve, reject) => {
       let settled = false;
