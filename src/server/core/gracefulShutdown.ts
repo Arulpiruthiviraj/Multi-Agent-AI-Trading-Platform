@@ -97,6 +97,8 @@ async function performDrain(handles: ShutdownHandles): Promise<void> {
     await tradingEngine.setTradingState('TRADING_PAUSED', {
       reason: 'Process shutdown drain — no new orders until restart recovery.',
       actor: 'gracefulShutdown',
+      // Persisted as ENTRIES_ONLY so the next boot does not block protective exits of a carried position.
+      pauseKind: 'ENTRIES_ONLY',
     });
   } catch (e) {
     failed('[gracefulShutdown] Failed to pause trading', e);

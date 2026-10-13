@@ -50,7 +50,7 @@ import {
 } from '../core/activityLog';
 import { db } from '../db';
 import * as schema from '../db/schema';
-import { and, eq, isNotNull, notInArray } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, notInArray } from 'drizzle-orm';
 import { system } from '../core/SystemBootstrap';
 import { LIVE_TRADING_CONFIRMATION_PHRASE, armLiveTrading, disarmLiveTrading } from '../core/LiveTradingConfirmation';
 import { tradingSafety } from '../config/tradingSafety';
@@ -67,6 +67,29 @@ import { validateSettingsBounds } from '../core/settingsValidation';
 import { getTimeHHMMInZone, TRADING_TIMEZONE } from '../core/TradingCalendar';
 
 export type TradingState = 'TRADING_ENABLED' | 'TRADING_PAUSED' | 'EMERGENCY_STOP';
+
+/**
+ * 2026-10-13: what a TRADING_PAUSED state blocks. FULL (the default and every pre-existing pause) blocks every order,
+ * including protective exits - exactly the behavior that blocked the S end-of-day flatten on Oct 12. ENTRIES_ONLY is set
+ * ONLY by the boot restart-safety pause when `tradingSafety.restartSafetyEntriesOnlyPause` is true: new entries stay
+ * blocked until an operator resumes, but a sealed protective SELL (minted by PortfolioMonitor, bound to trace+symbol)
+ * may still pass RiskEngine's emergency_stop gate - every other gate (position existence, quantity, price, session,
+ * freshness, reconciliation) still applies. EMERGENCY_STOP is never affected. In-memory only: a restart returns to FULL.
+ */
+export type PauseKind = 'FULL' | 'ENTRIES_ONLY';
+
+/**
+ * 2026-10-13: the pause kind must survive a restart (a clean-shutdown pause is persisted as TRADING_PAUSED; the next boot
+ * must not silently turn it into a FULL pause that also blocks protective exits of a carried position). `settings` has no
+ * kind column, so the kind rides in the immutable kill_switch_events reason of the transition that set the pause.
+ */
+export const PAUSE_KIND_MARKER_PREFIX = ' [pauseKind=';
+export function withPauseKindMarker(reason: string, kind: PauseKind): string {
+    return kind === 'ENTRIES_ONLY' ? `${reason}${PAUSE_KIND_MARKER_PREFIX}ENTRIES_ONLY]` : reason;
+}
+export function parsePauseKindFromReason(reason: string | null | undefined): PauseKind {
+    return typeof reason === 'string' && reason.includes(`${PAUSE_KIND_MARKER_PREFIX}ENTRIES_ONLY]`) ? 'ENTRIES_ONLY' : 'FULL';
+}
 
 // Fields a client is allowed to change via the generic toggle()/config-update path. Deliberately
 // excludes tradingState/emergencyStopActive (must go through setTradingState(), which is
@@ -115,6 +138,7 @@ export interface AutoBotState {
     regimeState?: any;
     emergencyStopActive: boolean;
     tradingState: TradingState;
+    pauseKind: PauseKind;
     dayStartEquity: number | null;
     dayStartDateStr: string | null;
     // AutoTradeScheduler.ts: when true, that background worker owns `enabled` and drives it
@@ -142,6 +166,7 @@ class TradingEngine {
             currentDailyLoss: 0,
             emergencyStopActive: false,
             tradingState: 'TRADING_ENABLED',
+            pauseKind: 'FULL',
             dayStartEquity: null,
             dayStartDateStr: null,
             autoTradeScheduleEnabled: false,
@@ -383,6 +408,15 @@ class TradingEngine {
                     }
                 }
                 this.state.emergencyStopActive = this.state.tradingState === 'EMERGENCY_STOP';
+                this.state.pauseKind = 'FULL';
+                if (this.state.tradingState === 'TRADING_PAUSED') {
+                    try {
+                        const last = await db.select({ reason: schema.killSwitchEvents.reason }).from(schema.killSwitchEvents)
+                            .where(eq(schema.killSwitchEvents.toState, 'TRADING_PAUSED'))
+                            .orderBy(desc(schema.killSwitchEvents.id)).limit(1);
+                        this.state.pauseKind = parsePauseKindFromReason(last[0]?.reason);
+                    } catch { /* unknown -> FULL: fail closed */ }
+                }
                 if (this.state.tradingState !== 'TRADING_ENABLED') {
                     console.warn(`[TradingEngine] Restored from a non-enabled trading state: ${this.state.tradingState}. Explicit reactivation required.`);
                 }
@@ -629,10 +663,12 @@ class TradingEngine {
      */
     public async setTradingState(
         newState: TradingState,
-        opts: { reason: string; actor: string; cancelOpenOrders?: boolean }
+        opts: { reason: string; actor: string; cancelOpenOrders?: boolean; pauseKind?: PauseKind }
     ): Promise<{ ok: true; fromState: TradingState; toState: TradingState; cancelledOrderIds: string[] }> {
         const fromState = this.state.tradingState;
         this.state.tradingState = newState;
+        // Only an explicit ENTRIES_ONLY request on a PAUSE narrows the pause; any other transition resets to FULL.
+        this.state.pauseKind = newState === 'TRADING_PAUSED' && opts.pauseKind === 'ENTRIES_ONLY' ? 'ENTRIES_ONLY' : 'FULL';
         this.state.emergencyStopActive = newState === 'EMERGENCY_STOP'; // kept in sync for RiskEngine/UI back-compat
 
         let cancelledOrderIds: string[] = [];
@@ -659,7 +695,7 @@ class TradingEngine {
             await db.insert(schema.killSwitchEvents).values({
                 fromState,
                 toState: newState,
-                reason: opts.reason,
+                reason: newState === 'TRADING_PAUSED' ? withPauseKindMarker(opts.reason, this.state.pauseKind) : opts.reason,
                 actor: opts.actor,
                 cancelledOrderIds: JSON.stringify(cancelledOrderIds),
                 createdAt: new Date().toISOString(),

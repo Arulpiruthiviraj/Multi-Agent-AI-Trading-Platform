@@ -303,8 +303,28 @@ export class RiskEngine {
             // softer halt than EMERGENCY_STOP (no forced order cancellation) but it still means
             // no new trades, which is the entire point of pausing.
             const replay = getActiveReplaySession();
+            // 2026-10-12 gate-by-intent: loss/rate gates exist to stop NEW exposure. A verified,
+            // single-use protective-exit seal (minted only by PortfolioMonitor.emitRiskExit, bound to
+            // this trace+symbol+SELL) lets the position-REDUCING order past those four gates only; every
+            // mandatory gate (sell_position_exists, sufficient_size, price_validity, market_hours,
+            // data_freshness, emergency_stop) still applies. Verified once and memoized because the
+            // seal is consumed on first verification and news_veto needs the same answer.
+            let sealedProtectiveSell: boolean | null = null;
+            const isSealedProtectiveSell = (): boolean => {
+                if (sealedProtectiveSell === null) {
+                    sealedProtectiveSell = !replay && proposal.side === 'SELL'
+                        && verifyAndConsumeProtectiveExitSeal(proposal.protectiveExitSeal, { traceId: proposal.traceId, symbol: proposal.symbol, side: proposal.side });
+                }
+                return sealedProtectiveSell;
+            };
+
             const tradingState = replay ? 'TRADING_ENABLED' : tradingEngine.state.tradingState;
-            recordGate('emergency_stop', tradingState === 'TRADING_ENABLED', { tradingState, emergencyStopActive: tradingEngine.state.emergencyStopActive, replay: !!replay });
+            // 2026-10-13: an ENTRIES_ONLY pause (boot restart-safety, opt-in) blocks new entries but lets a sealed protective
+            // SELL through THIS gate only. FULL pauses (every other pause source) and EMERGENCY_STOP are unchanged.
+            const pauseKind = (tradingEngine.state as any).pauseKind ?? 'FULL';
+            const entriesOnlyExitExempt = !replay && tradingState === 'TRADING_PAUSED' && pauseKind === 'ENTRIES_ONLY'
+                && proposal.side === 'SELL' && isSealedProtectiveSell();
+            recordGate('emergency_stop', tradingState === 'TRADING_ENABLED' || entriesOnlyExitExempt, { tradingState, pauseKind, protectiveExitExempt: entriesOnlyExitExempt, emergencyStopActive: tradingEngine.state.emergencyStopActive, replay: !!replay });
             const emergencyStopReason = tradingState === 'EMERGENCY_STOP'
                 ? "Emergency stop is active. All new trades are blocked until resumed."
                 : "Trading is paused. All new trades are blocked until resumed.";
@@ -515,21 +535,6 @@ export class RiskEngine {
             if (reservedBuyNotional > 0) {
               recordGate('buying_power_reservation', true, { reservedBuyNotional, buyingPowerAfterReservation: buyingPower });
             }
-
-            // 2026-10-12 gate-by-intent: loss/rate gates exist to stop NEW exposure. A verified,
-            // single-use protective-exit seal (minted only by PortfolioMonitor.emitRiskExit, bound to
-            // this trace+symbol+SELL) lets the position-REDUCING order past those four gates only; every
-            // mandatory gate (sell_position_exists, sufficient_size, price_validity, market_hours,
-            // data_freshness, emergency_stop) still applies. Verified once and memoized because the
-            // seal is consumed on first verification and news_veto needs the same answer.
-            let sealedProtectiveSell: boolean | null = null;
-            const isSealedProtectiveSell = (): boolean => {
-                if (sealedProtectiveSell === null) {
-                    sealedProtectiveSell = !replay && proposal.side === 'SELL'
-                        && verifyAndConsumeProtectiveExitSeal(proposal.protectiveExitSeal, { traceId: proposal.traceId, symbol: proposal.symbol, side: proposal.side });
-                }
-                return sealedProtectiveSell;
-            };
 
             // 2a. Daily loss circuit breaker - tracks real broker equity against a start-of-day
             // baseline captured the first time we evaluate risk each calendar day. Uses the real

@@ -80,7 +80,7 @@ const { emitOrderExecution } = vi.hoisted(() => ({ emitOrderExecution: vi.fn() }
 
 const { mockBrokerHolder } = vi.hoisted(() => ({ mockBrokerHolder: { broker: null as any, byId: {} as Record<string, any> } }));
 const { setTradingState } = vi.hoisted(() => ({ setTradingState: vi.fn(async () => {}) }));
-const { tradingEngineState } = vi.hoisted(() => ({ tradingEngineState: { tradingState: 'TRADING_ENABLED' as string } }));
+const { tradingEngineState } = vi.hoisted(() => ({ tradingEngineState: { tradingState: 'TRADING_ENABLED' as string, pauseKind: 'FULL' as string } }));
 const { preparePosition } = vi.hoisted(() => ({ preparePosition: vi.fn(() => null as string | null) }));
 
 // These tests isolate OMS orchestration. Atomic inventory/P&L and stale-position safety are
@@ -346,6 +346,33 @@ describe('OrderManagementService.executeOrder', () => {
     const finalRow = getFinalTradeRow();
     expect(finalRow.status).toBe('REJECTED');
     expect(finalRow.reasoning).toContain('KILL_SWITCH_ENGAGED_AT_SUBMIT');
+  });
+
+  // 2026-10-13: ENTRIES_ONLY pause blocks new entries but not position-reducing SELLs; FULL pause and EMERGENCY_STOP block everything.
+  it('ENTRIES_ONLY pause: a SELL is submitted, a BUY is refused', async () => {
+    const placeOrder = vi.fn(async () => ({ id: 'order-eo', status: 'FILLED', filledQuantity: 10, averageFillPrice: 100 }));
+    mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => [{ symbol: 'AAPL', quantity: 10 }]) };
+    tradingEngineState.tradingState = 'TRADING_PAUSED';
+    tradingEngineState.pauseKind = 'ENTRIES_ONLY';
+    try {
+      await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'eo-buy-trace');
+      expect(placeOrder).not.toHaveBeenCalled();
+      expect(getFinalTradeRow().reasoning).toContain('KILL_SWITCH_ENGAGED_AT_SUBMIT');
+      await oms.executeOrder('AAPL', 'SELL', 10, 'reasoning', 'eo-sell-trace');
+      expect(placeOrder).toHaveBeenCalledTimes(1);
+      expect(placeOrder.mock.calls[0][0]).toMatchObject({ symbol: 'AAPL', side: 'SELL' });
+    } finally { tradingEngineState.pauseKind = 'FULL'; tradingEngineState.tradingState = 'TRADING_ENABLED'; }
+  });
+
+  it('FULL pause and EMERGENCY_STOP refuse a SELL too', async () => {
+    const placeOrder = vi.fn(async () => ({ id: 'order-full', status: 'FILLED', filledQuantity: 10, averageFillPrice: 100 }));
+    mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => [{ symbol: 'AAPL', quantity: 10 }]) };
+    for (const [state, kind] of [['TRADING_PAUSED', 'FULL'], ['EMERGENCY_STOP', 'ENTRIES_ONLY']] as const) {
+      tradingEngineState.tradingState = state; tradingEngineState.pauseKind = kind;
+      await oms.executeOrder('AAPL', 'SELL', 10, 'reasoning', `full-${state}-sell`);
+      expect(placeOrder).not.toHaveBeenCalled();
+    }
+    tradingEngineState.pauseKind = 'FULL'; tradingEngineState.tradingState = 'TRADING_ENABLED';
   });
 
   it('submits normally when trading state is unaffected (kill-switch re-check is not a false positive)', async () => {

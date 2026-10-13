@@ -92,8 +92,11 @@ systemRouter.post("/system/pause", tradingLimiter, async (req: Request & { actor
   try {
     const reason = (req.body?.reason && String(req.body.reason).trim()) || 'Manually paused.';
     const actor = req.actor || 'unknown';
-    const result = await tradingEngine.setTradingState('TRADING_PAUSED', { reason, actor });
-    res.json({ status: "ok", tradingState: result.toState });
+    // 2026-10-13: an operator pause blocks NEW entries; a sealed protective exit of an open position still runs through the
+    // normal RiskEngine + OMS path. `fullPause: true` requests the old behavior (block everything, protective exits too).
+    const pauseKind = req.body?.fullPause === true ? 'FULL' : 'ENTRIES_ONLY';
+    const result = await tradingEngine.setTradingState('TRADING_PAUSED', { reason, actor, pauseKind });
+    res.json({ status: "ok", tradingState: result.toState, pauseKind });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

@@ -645,7 +645,13 @@ export class OrderManagementService {
       // research clock - see RiskEngine.ts's emergency_stop gate and CLAUDE.md's gate table).
       if (!replayActive) {
         const { tradingEngine } = await import('../engines/TradingEngine');
-        if (tradingEngine.state.tradingState !== 'TRADING_ENABLED') {
+        // 2026-10-13: under an ENTRIES_ONLY pause a SELL (position-reducing; it reached OMS only through RiskEngine, whose
+        // emergency_stop gate admits only a sealed protective exit in this state) may be submitted. EMERGENCY_STOP and FULL
+        // pauses still refuse everything, and a BUY is always refused.
+        const entriesOnlySell = tradingEngine.state.tradingState === 'TRADING_PAUSED'
+          && (tradingEngine.state as any).pauseKind === 'ENTRIES_ONLY'
+          && side === 'SELL';
+        if (tradingEngine.state.tradingState !== 'TRADING_ENABLED' && !entriesOnlySell) {
           const reason = 'KILL_SWITCH_ENGAGED_AT_SUBMIT';
           await db.update(trades).set({ status: 'REJECTED', reasoning: `${reasoning} ${reason}` }).where(eq(trades.id, orderId));
           observeSafe(() => structuredLogger.warn('order_kill_switch_refused', {
