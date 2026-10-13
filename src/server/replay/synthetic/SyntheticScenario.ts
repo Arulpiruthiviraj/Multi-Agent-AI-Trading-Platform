@@ -435,28 +435,25 @@ export const MULTI_TRADE_DAY: ScenarioProfile = {
     { type: 'GAP', atOffsetMs: 0, gapPct: 0.02, symbols: ['AAPL', 'NVDA'] },
   ],
   symbolSegments: {
-    // sawtooth helper: repeated impulse + pullback cycles keep RSI oscillating in a tradeable band (a straight ramp pins RSI at
-    // 85+ and the existing mean-reversion rules then correctly refuse to chase it - see VALIDATED_CONVERGENCE_CONTROL's header).
+    // Amplified impulse + pullback cycles. Positions only close when a REAL exit trigger fires (hard stop, 5% trailing stop from the
+    // peak, 15% target, thesis invalidation), so each cycle's pullback is deep enough to exist as a genuine exit trigger. Outcomes
+    // (win / loss / no entry) are whatever the real pipeline produces; the paths never tell it what to do.
     AAPL: [
       seg(0, 8, 'HIGH_VOL', 0.0010, 1.6, 2.3),
-      ...saw(8, 400, { upMin: 22, downMin: 7, upDrift: 0.0007, downDrift: -0.0006, vol: 1.2, upVolume: 1.8, downVolume: 1.2 }),
+      ...saw(8, 400, { upMin: 40, downMin: 22, upDrift: 0.0010, downDrift: -0.0026, vol: 1.1, upVolume: 1.8, downVolume: 1.4 }),
     ],
     NVDA: [
       seg(0, 8, 'HIGH_VOL', 0.0010, 1.6, 2.3),
-      ...saw(8, 120, { upMin: 22, downMin: 7, upDrift: 0.0007, downDrift: -0.0006, vol: 1.2, upVolume: 1.8, downVolume: 1.2 }),
-      // the trend FAILS: sustained decline with only brief bounces (a long entry made in the first two hours is a loser)
-      ...saw(120, 400, { upMin: 4, downMin: 26, upDrift: 0.0004, downDrift: -0.0008, vol: 1.3, upVolume: 1.3, downVolume: 1.9 }),
+      ...saw(8, 400, { upMin: 30, downMin: 30, upDrift: 0.0010, downDrift: -0.0022, vol: 1.2, upVolume: 1.8, downVolume: 1.6 }),
     ],
     MSFT: [
-      seg(0, 100, 'SIDEWAYS', 0.00002, 0.6, 0.9),
-      ...saw(100, 400, { upMin: 22, downMin: 7, upDrift: 0.0007, downDrift: -0.0006, vol: 1.2, upVolume: 1.8, downVolume: 1.2 }),
+      seg(0, 60, 'SIDEWAYS', 0.00002, 0.6, 0.9),
+      ...saw(60, 400, { upMin: 50, downMin: 20, upDrift: 0.0008, downDrift: -0.0030, vol: 1.1, upVolume: 1.8, downVolume: 1.4 }),
     ],
-    QQQ: saw(0, 400, { upMin: 10, downMin: 10, upDrift: 0.0004, downDrift: -0.0004, vol: 1.0, upVolume: 1.1, downVolume: 1.1 }),
+    QQQ: saw(0, 400, { upMin: 25, downMin: 25, upDrift: 0.0008, downDrift: -0.0008, vol: 1.0, upVolume: 1.2, downVolume: 1.2 }),
     SPY: [
-      seg(0, 190, 'SIDEWAYS', 0.00001, 0.6, 0.9),
-      ...saw(190, 260, { upMin: 22, downMin: 7, upDrift: 0.0007, downDrift: -0.0006, vol: 1.2, upVolume: 1.8, downVolume: 1.2 }),
-      ...saw(260, 330, { upMin: 4, downMin: 26, upDrift: 0.0004, downDrift: -0.0008, vol: 1.3, upVolume: 1.3, downVolume: 1.9 }),
-      ...saw(330, 400, { upMin: 22, downMin: 7, upDrift: 0.0006, downDrift: -0.0005, vol: 1.1, upVolume: 1.5, downVolume: 1.1 }),
+      seg(0, 120, 'SIDEWAYS', 0.00001, 0.6, 0.9),
+      ...saw(120, 400, { upMin: 35, downMin: 35, upDrift: 0.0009, downDrift: -0.0020, vol: 1.1, upVolume: 1.6, downVolume: 1.5 }),
     ],
   },
 };
