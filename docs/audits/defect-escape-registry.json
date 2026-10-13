@@ -3,13 +3,13 @@
     {
       "date": "2026-10-12",
       "detectedIn": "prod",
-      "fixRef": "95838c6 (calibration cycle loads each agent once, paged, with yields; running since 14:54 ET)",
+      "fixRef": "283c8dd calibration paging/yields + later runtime verification",
       "id": "event-loop-stall-20261012",
-      "notes": "Root cause: the 15-minute CalibrationValidationWorker cycle (attributed by learning_versions cycle-start timestamps; reproduced at production shape: old 11.6 s single block, fixed 1.86 s / 177 ms max gap). Runtime evidence on the fixed build: second full cycle 19:11:35Z, max event gap 7 s (old 218 s), PortfolioMonitor reviewed DDOG every ~2 min through it. ONE cycle observed; four are required before closing. heapSnapshotEnabled=false; backups and WAL checkpoints ruled out.",
+      "notes": "Calibration repair preserved numerical output and added real event-loop yields. On 2026-10-13 main@5f7f398 runtime evidence covered >=5 expected maintenance cycles with no 200+ s event gap; CalibrationValidationWorker cycles remained CPU-heavy but yielded (longest event-stream gap 11 s in the audited window).",
       "regressionTest": "src/server/continuous/CalibrationCandidateBuilder.eventLoop.test.ts",
-      "rootCause": "~3-minute event-loop freeze 13:32-13:35 ET on prod PID 7244; /health timeouts, CPU ~10%, self-recovered. Cause UNKNOWN: candidates are v8.writeHeapSnapshot (heapSnapshotEnabled=false in shipped config, needs deploy-side check) and a synchronous better-sqlite3 commit tail.",
+      "rootCause": "CalibrationValidationWorker repeatedly reloaded large agent/Kronos histories synchronously per confidence bucket; this was one independently reproduced event-loop blocking defect, but not the later 200-325 s residual freeze.",
       "severity": "P0",
-      "status": "open",
+      "status": "fixed-runtime-verified-2026-10-13",
       "title": "Event-loop stall: ~3-minute freeze on prod PID 7244"
     },
     {
@@ -53,11 +53,11 @@
       "detectedIn": "prod",
       "fixRef": "da31759 (merged 8acecbe)",
       "id": "protective-exit-blocked-by-loss-rate-gates-20261012",
-      "notes": "Sealed protective SELL now bypasses ONLY daily_loss/consecutive_loss/portfolio_drawdown/order_rate_limit (plus news_veto earlier). Not deployed-verified in a real session. Broker-resident stops still absent.",
+      "notes": "Sealed protective SELL bypasses ONLY daily_loss/consecutive_loss/portfolio_drawdown/order_rate_limit (plus news_veto earlier); mandatory position/order/session gates remain. Runtime 2026-10-13: S protective SELL passed RiskEngine and OMS and filled at IBKR PAPER at 09:19 ET after the spread gate cleared. Broker-resident stops remain absent.",
       "regressionTest": "src/server/engines/RiskEngine.lossGatesProtectiveExit.test.ts",
       "rootCause": "Entry-oriented brakes had no side/intent branch, so the position-reducing exit that would stop a loss was rejected once those brakes tripped.",
       "severity": "P0",
-      "status": "fixed-in-source-deployed-2026-10-12-unverified-in-session"
+      "status": "fixed-runtime-exercised-2026-10-13"
     },
     {
       "date": "2026-10-12",
@@ -84,13 +84,13 @@
     {
       "date": "2026-10-12",
       "detectedIn": "prod",
-      "fixRef": "open",
+      "fixRef": "30ef8c7 (Kronos INTEGER/TEXT join fix) + 5f7f398 runtime",
       "id": "post-reconciliation-220s-freeze-20261012",
-      "notes": "Calibration fix removes the calibration cycle freeze (largest gap 7 s in isolation) but ~220 s freezes after every third RECONCILIATION_MATCH persisted on the fixed build. ARGUS_FREEZE_PROFILER=true is running to capture the next one; cause NOT identified. The referenced regression covers ONLY the calibration-cycle freeze, not this residual freeze; no regression exists for the residual cause.",
-      "regressionTest": "src/server/continuous/CalibrationCandidateBuilder.eventLoop.test.ts",
-      "rootCause": "UNKNOWN",
+      "notes": "CPU profile attributed 308 s self time to one better-sqlite3 .all(); slow-SQL named the pending-count statement. Read-only live DB comparison: old query ~231,858 ms, cast form ~142 ms. 2026-10-13 runtime main@5f7f398 observed >=5 would-be freeze cycles with no 200-325 s recurrence; longest event gap 11 s. This closes the catastrophic recurring-freeze class, not all slow SQL or maintenance CPU.",
+      "regressionTest": "src/server/services/PredictionOutcomeEvaluator.kronosJoinPlan.test.ts",
+      "rootCause": "PredictionOutcomeEvaluator's Kronos pending-count LEFT JOIN compared prediction_outcomes.prediction_id TEXT to kronos_predictions.id INTEGER, defeating the unique index and causing one synchronous better-sqlite3 count to take ~231.9 s on the production DB. cast(kronos_predictions.id as text) restores the indexed lookup.",
       "severity": "P0",
-      "status": "open"
+      "status": "fixed-runtime-verified-2026-10-13"
     },
     {
       "date": "2026-10-12",
@@ -102,6 +102,18 @@
       "rootCause": "No production lifecycle baseline seeding; certification bridge requires operator review.",
       "severity": "P1",
       "status": "open-operator-decision"
+    },
+    {
+      "date": "2026-10-13",
+      "detectedIn": "prod",
+      "fixRef": "repair/oct13-protective-exit-retry (PR #2)",
+      "id": "protective-exit-retry-throttle-20261013",
+      "notes": "Observed S protective close: first risk-exit at ~09:14 ET rejected by extended_hours_execution_policy; PortfolioMonitor's generic 300 s exitIdeaCooldown suppressed retries until ~09:19 ET. Repair binds cooldown ownership to the exact protective trace, keeps approved/PENDING/PARTIALLY_FILLED closes single-flight, and releases only on exact-trace Risk rejection/persist failure or terminal broker FILLED/REJECTED/CANCELED. No RiskEngine bypass or threshold change. Branch-only until merged/deployed; exact-SHA CI and runtime verification required.",
+      "regressionTest": "src/server/continuous/continuousIntelligence.test.ts",
+      "rootCause": "canEmitPortfolioExitIdea committed a symbol timestamp before Risk/OMS outcome and had no outcome-aware release path, so a failed protective close was throttled for the full generic five-minute idea cooldown.",
+      "severity": "P0",
+      "status": "fixed-on-branch-ci-pending-runtime-unverified",
+      "title": "Protective exit retry suppressed for five minutes after Risk rejection"
     }
   ],
   "version": 1
