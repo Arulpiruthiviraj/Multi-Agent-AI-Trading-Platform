@@ -56,6 +56,16 @@ export interface StrategyEvaluation {
    * trigger into a trade idea. Required - every strategy must declare it honestly.
    */
   triggerMet: boolean;
+  /**
+   * 2026-10-13: what `triggerMet` MEANS for this strategy. 'EVENT' (default when absent): a discrete event occurred on
+   * this bar (a break, a sweep, a gap, an oscillator extreme). 'STATE': a persistent condition currently holds that
+   * defines the setup (MA stack ordering, price within a band of a range boundary, a signed relative-strength reading).
+   * A STATE trigger is true for as long as the state lasts and therefore fires on most observations - on Oct 13 MA_CROSSOVER
+   * reported triggerMet on 7,209 of 7,209 evaluations. It is persisted so analytics can separate "event fired" from "state
+   * held" and never read a STATE trigger's firing rate as signal frequency. Telemetry/semantics only: no gate, threshold or
+   * confidence cap is derived from this field.
+   */
+  triggerKind?: 'EVENT' | 'STATE';
   conditionsMet: string[];
   conditionsFailed: string[];
   contradictions: string[]; // real internal conflicts (e.g. bullish momentum but price below VWAP), distinct from a simple unmet condition

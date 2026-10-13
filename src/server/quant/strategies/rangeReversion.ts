@@ -70,6 +70,8 @@ export const rangeReversion: StrategyDefinition = {
       confidence: setupScore / 100,
       // Price sitting at the range boundary IS this setup - mid-range price has nothing to fade.
       triggerMet: nearBoundary !== null && Math.abs(nearBoundary.pct) <= NEAR_BOUNDARY_PCT,
+      // Proximity to a range boundary is a level-relative STATE (true on every bar price sits near it), not a reversal event.
+      triggerKind: 'STATE',
       conditionsMet,
       conditionsFailed,
       contradictions,

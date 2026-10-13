@@ -75,6 +75,8 @@ export const maCrossover: StrategyDefinition = {
       confidence: setupScore / 100,
       // The MA stack IS this setup - without it there is no crossover regime to trade.
       triggerMet: bullish ? goldenStack : deathStack,
+      // The SMA50-vs-SMA200 ORDERING (a state that persists for weeks), not the cross itself - see the module header.
+      triggerKind: 'STATE',
       conditionsMet,
       conditionsFailed,
       contradictions,

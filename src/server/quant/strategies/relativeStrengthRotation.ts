@@ -107,6 +107,8 @@ export const relativeStrengthRotation: StrategyDefinition = {
       confidence: setupScore / 100,
       // Directional relative strength IS this setup - without the RS input there is nothing to rotate on.
       triggerMet: rsNum !== null && (bullish ? rsNum > 0 : rsNum < 0),
+      // The SIGN of relative strength vs SPY is a continuous reading, true for roughly half of all observations by construction.
+      triggerKind: 'STATE',
       conditionsMet,
       conditionsFailed,
       contradictions,
