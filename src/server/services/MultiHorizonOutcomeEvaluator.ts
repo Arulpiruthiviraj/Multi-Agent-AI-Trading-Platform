@@ -17,10 +17,10 @@
  * ==========================================================
  */
 import { runWithHistoricalIntent } from '../data/historicalRequestIntent';
-import { countOffThread } from '../db/offThreadCount';
+import { countOffThread, selectRowsOffThread } from '../db/offThreadCount';
 import { db } from '../db';
 import { agentPredictions, kronosPredictions, predictionOutcomeHorizons } from '../db/schema';
-import { and, eq, inArray, isNull, ne, notLike, or, asc, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, ne, notLike, or, asc, sql, getTableColumns } from 'drizzle-orm';
 import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
 import { multiHorizonOutcomeTracking, type MultiHorizonDefinition } from '../config/multiHorizonOutcomeTracking';
 import { TELEMETRY_PULSE_TRACE_PREFIX } from '../core/telemetryPulse';
@@ -188,13 +188,16 @@ export class MultiHorizonOutcomeEvaluator {
       or(eq(agentPredictions.prediction, 'BUY'), eq(agentPredictions.prediction, 'SELL')),
       or(isNull(agentPredictions.traceId), notLike(agentPredictions.traceId, `${TELEMETRY_PULSE_TRACE_PREFIX}%`)),
     );
-    const pendingAgent = await db
-      .select({ p: agentPredictions })
+    // 2026-10-13: pending-page SELECT on the read-only worker (an 8.8 s synchronous main-thread block remained here after the
+    // PredictionOutcomeEvaluator pages were moved). null = skip this cycle's page; never a main-thread fallback.
+    const agentCols = getTableColumns(agentPredictions);
+    const pendingAgent = ((await selectRowsOffThread(db
+      .select(agentCols)
       .from(agentPredictions)
       .leftJoin(predictionOutcomeHorizons, agentJoinCondition)
       .where(agentPendingCondition)
       .orderBy(asc(agentPredictions.timestamp))
-      .limit(batchSize);
+      .limit(batchSize), agentCols)) ?? []).map((p) => ({ p: p as typeof agentPredictions.$inferSelect }));
     stats.rowsFetched += pendingAgent.length;
     stats.batches += 1;
     const agentRemainingCount = await countOffThread(db
@@ -259,13 +262,14 @@ export class MultiHorizonOutcomeEvaluator {
         isNull(predictionOutcomeHorizons.id),
         or(eq(kronosPredictions.prediction, 'BUY'), eq(kronosPredictions.prediction, 'SELL')),
       );
-      const pendingKronos = await db
-        .select({ k: kronosPredictions })
+      const kronosCols = getTableColumns(kronosPredictions);
+      const pendingKronos = ((await selectRowsOffThread(db
+        .select(kronosCols)
         .from(kronosPredictions)
         .leftJoin(predictionOutcomeHorizons, kronosJoinCondition)
         .where(kronosPendingCondition)
         .orderBy(asc(kronosPredictions.timestamp))
-        .limit(batchSize);
+        .limit(batchSize), kronosCols)) ?? []).map((k) => ({ k: k as typeof kronosPredictions.$inferSelect }));
       stats.rowsFetched += pendingKronos.length;
       stats.batches += 1;
       const kronosRemainingCount = await countOffThread(db
