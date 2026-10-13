@@ -9,6 +9,7 @@
  * event_traces (the permanent decision record, deliberately never pruned). Mirrors
  * ObservabilityStore.ts's sweep pattern exactly rather than inventing a new one.
  */
+import { deleteExpiredByRowidWindows } from './retentionBatch';
 import { sqliteDb } from './index';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 
@@ -219,13 +220,14 @@ async function sweepIsoTextTable(
   const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
   let totalDeleted = 0;
   try {
-    const deleteBatch = sqliteDb.prepare(
-      `DELETE FROM ${table} WHERE ${keyColumn} IN (SELECT ${keyColumn} FROM ${table} WHERE ${column} < ? LIMIT ?)`
-    );
+    // 2026-10-12: rowid-window deletes (retentionBatch.ts) - the old IN-subselect scanned the whole table per batch.
+    void keyColumn;
+    let idleWindows = 0;
     for (let i = 0; i < maxBatches; i++) {
-      const result = deleteBatch.run(cutoffIso, batchSize);
-      totalDeleted += result.changes;
-      if (result.changes < batchSize) break;
+      const { deleted, windows, lastWindowHadExpired } = deleteExpiredByRowidWindows(sqliteDb, table, column, cutoffIso, batchSize, 1);
+      totalDeleted += deleted;
+      if (windows === 0) break;
+      if (!lastWindowHadExpired) { idleWindows += 1; if (idleWindows >= 2) break; } else { idleWindows = 0; }
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
     return totalDeleted;
@@ -270,13 +272,13 @@ async function sweepEpochMsTable(
   let totalDeleted = 0;
   try {
     // 2026-10-10: prepare() inside the try - "never throws" contract (see sweepIsoTextTable).
-    const deleteBatch = sqliteDb.prepare(
-      `DELETE FROM ${table} WHERE ${keyColumn} IN (SELECT ${keyColumn} FROM ${table} WHERE ${timeColumn} < ? LIMIT ?)`
-    );
+    void keyColumn;
+    let idleWindows = 0;
     for (let i = 0; i < maxBatches; i++) {
-      const result = deleteBatch.run(cutoffMs, batchSize);
-      totalDeleted += result.changes;
-      if (result.changes < batchSize) break;
+      const { deleted, windows, lastWindowHadExpired } = deleteExpiredByRowidWindows(sqliteDb, table, timeColumn, cutoffMs, batchSize, 1);
+      totalDeleted += deleted;
+      if (windows === 0) break;
+      if (!lastWindowHadExpired) { idleWindows += 1; if (idleWindows >= 2) break; } else { idleWindows = 0; }
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
     return totalDeleted;

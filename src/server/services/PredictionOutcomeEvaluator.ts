@@ -354,7 +354,13 @@ export class PredictionOutcomeEvaluator {
     // the agent_predictions loop above), so no extra exclusion filters are needed.
     const runKronosPage = async () => {
       const kronosJoinCondition = and(
-        eq(predictionOutcomes.predictionId, kronosPredictions.id),
+        // 2026-10-12 ROOT CAUSE of the recurring ~4-5 minute event-loop freeze (SLOW_SQL_STATEMENT: this exact
+        // count(*) join blocked the main thread for 231,858 ms). kronos_predictions.id is INTEGER while
+        // prediction_outcomes.prediction_id is TEXT; comparing them directly makes SQLite apply numeric affinity
+        // to the text column, so the unique (prediction_id, source_table) index cannot be used and each of the
+        // ~238k kronos rows scanned ~82k outcome rows. Casting the integer to text restores the index lookup
+        // (same query: 142 ms). Row-for-row identical - ids are decimal integers with no leading zeros.
+        eq(predictionOutcomes.predictionId, sql<string>`cast(${kronosPredictions.id} as text)`),
         eq(predictionOutcomes.sourceTable, 'kronos_predictions'),
       );
       const fetchKronosPage = () => db

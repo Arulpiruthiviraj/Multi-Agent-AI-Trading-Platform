@@ -719,13 +719,13 @@ export async function sweepDecisionProvenanceRetention(nowMs = Date.now()): Prom
     // table is missing (e.g. a stale isolated copy), and the sweeper contract is "never
     // throws, returns a partial count" — a persistently failing sweep must be loud (the
     // console.error below), not a crash.
-    const deleteBatch = sqliteDb.prepare(
-      `DELETE FROM ${DECISION_PROVENANCE_TABLE} WHERE id IN (SELECT id FROM ${DECISION_PROVENANCE_TABLE} WHERE created_at < ? LIMIT ?)`,
-    );
+    const { deleteExpiredByRowidWindows } = await import('../../db/retentionBatch');
+    let idleWindows = 0;
     for (let i = 0; i < maxBatches; i++) {
-      const result = deleteBatch.run(cutoffIso, batchSize);
-      totalDeleted += result.changes;
-      if (result.changes < batchSize) break;
+      const { deleted, windows, lastWindowHadExpired } = deleteExpiredByRowidWindows(sqliteDb, DECISION_PROVENANCE_TABLE, 'created_at', cutoffIso, batchSize, 1);
+      totalDeleted += deleted;
+      if (windows === 0) break;
+      if (!lastWindowHadExpired) { idleWindows += 1; if (idleWindows >= 2) break; } else { idleWindows = 0; }
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
     return totalDeleted;
