@@ -1049,6 +1049,31 @@ describe('RiskEngine.evaluateRisk', () => {
     expect(assessment.reasoning).toMatch(/\$101/);
   });
 
+  it('enforces a $20,000 Argus allocation independently of $1M broker equity/buying power', async () => {
+    mockTradingEngine.state.budget = 20_000;
+    setTableRows(schema.settings, [{
+      riskLevel: 'Balanced',
+      maxTradeSize: 6_000,
+      budget: 20_000,
+      maxOpenPositions: 10,
+    }]);
+    mockBrokerHolder.broker = makeBroker(basePortfolio({
+      cash: 985_000,
+      buyingPower: 1_000_000,
+      equity: 1_000_000,
+      positions: [{ symbol: 'DDOG', quantity: 50, averagePrice: 300 }], // $15,000 research exposure
+    }));
+
+    await riskEngine.evaluateRisk({ traceId: 'cap-20k-vs-1m', symbol: 'MSFT', side: 'BUY', currentPrice: 100 });
+
+    const assessment = lastAssessment();
+    expect(assessment.approved).toBe(false);
+    expect(assessment.rejectionGate).toBe('argus_capital_allocation');
+    expect(assessment.reasoning).toMatch(/Remaining Argus allocation = \$5000\.00/);
+    expect(assessment.reasoning).toMatch(/allocated \$20000\.00/);
+    expect(assessment.reasoning).toMatch(/Broker buying power is irrelevant/);
+  });
+
   it('approves a $60 BUY against $100 unused allocation, then rejects a second $50 BUY', async () => {
     mockTradingEngine.state.budget = 100;
     setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 60, budget: 100 }]);
