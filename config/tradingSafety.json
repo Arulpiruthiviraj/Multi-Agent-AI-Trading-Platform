@@ -22,6 +22,7 @@
   "marketDataRejectLogDedupMs": 60000,
   "marketClockCacheMs": 60000,
   "maxConsecutiveLosses": 3,
+  "consecutiveLossLookbackMs": 172800000,
   "correlationLookbackMs": 7776000000,
   "disagreementPenalty": 0.5,
   "consensusApprovalThreshold": 0.75,

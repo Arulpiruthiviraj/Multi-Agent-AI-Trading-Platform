@@ -120,6 +120,13 @@ async function hasConsecutiveLosses(): Promise<boolean> {
         .orderBy(desc(schema.trades.timestamp))
         .limit(MAX_CONSECUTIVE_LOSSES * 4))
         .filter((t: any) => t.executionEnvironment !== 'REPLAY' && t.executionEnvironment !== 'BACKTEST' && !String(t.traceId || '').startsWith(replaySafety.replayTracePrefix))
+        // 2026-10-12: a loss streak only counts while it is recent. The breaker used to look at the last N closed
+        // trades of ANY age, so three old losses (DDOG + two Oct-7 OKTA closes) blocked every new BUY with no way
+        // to clear it - only a new winning close can, and no entry could be opened to produce one.
+        .filter((t: any) => {
+            const ms = Date.parse(String(t.timestamp));
+            return Number.isFinite(ms) && Date.now() - ms <= tradingSafety.consecutiveLossLookbackMs;
+        })
         .slice(0, MAX_CONSECUTIVE_LOSSES);
     if (recentClosed.length < MAX_CONSECUTIVE_LOSSES) return false;
     return recentClosed.every(t => (t.profitLoss ?? 0) < 0);

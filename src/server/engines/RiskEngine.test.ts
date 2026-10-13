@@ -226,7 +226,7 @@ describe('RiskEngine.evaluateRisk', () => {
     setTableRows(schema.trades, Array.from({ length: n }, (_, i) => ({
       status: 'FILLED',
       profitLoss: -10,
-      timestamp: `2026-01-${String(n - i).padStart(2, '0')}`,
+      timestamp: new Date(Date.now() - (i + 1) * 60_000).toISOString(),
     })));
 
     await riskEngine.evaluateRisk({ traceId: 't3', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
@@ -236,11 +236,32 @@ describe('RiskEngine.evaluateRisk', () => {
     expect(assessment.reasoning).toMatch(/consecutive losing trades/);
   });
 
+  it('2026-10-12: a loss streak OLDER than the look-back no longer blocks new entries (the DDOG/OKTA entry deadlock)', async () => {
+    const n = tradingSafety.maxConsecutiveLosses;
+    const old = Date.now() - tradingSafety.consecutiveLossLookbackMs - 3_600_000;
+    setTableRows(schema.trades, Array.from({ length: n }, (_, i) => ({
+      status: 'FILLED', profitLoss: -10, timestamp: new Date(old - i * 60_000).toISOString(),
+    })));
+    await riskEngine.evaluateRisk({ traceId: 't3-old', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+    expect(lastAssessment().reasoning).not.toMatch(/consecutive losing trades/);
+  });
+
+  it('2026-10-12: losses split across the look-back boundary (fewer than N recent) do not trip the breaker', async () => {
+    const n = tradingSafety.maxConsecutiveLosses;
+    const rows = Array.from({ length: n }, (_, i) => ({
+      status: 'FILLED', profitLoss: -10,
+      timestamp: new Date(i === 0 ? Date.now() - 60_000 : Date.now() - tradingSafety.consecutiveLossLookbackMs - (i + 1) * 3_600_000).toISOString(),
+    }));
+    setTableRows(schema.trades, rows);
+    await riskEngine.evaluateRisk({ traceId: 't3-split', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+    expect(lastAssessment().reasoning).not.toMatch(/consecutive losing trades/);
+  });
+
   it('does not trip the consecutive-loss breaker if the most recent loss streak is broken by a win', async () => {
     setTableRows(schema.trades, [
-      { status: 'FILLED', profitLoss: 10, timestamp: '2026-01-03' },
-      { status: 'FILLED', profitLoss: -5, timestamp: '2026-01-02' },
-      { status: 'FILLED', profitLoss: -1, timestamp: '2026-01-01' },
+      { status: 'FILLED', profitLoss: 10, timestamp: new Date(Date.now() - 1 * 60_000).toISOString() },
+      { status: 'FILLED', profitLoss: -5, timestamp: new Date(Date.now() - 2 * 60_000).toISOString() },
+      { status: 'FILLED', profitLoss: -1, timestamp: new Date(Date.now() - 3 * 60_000).toISOString() },
     ]);
 
     await riskEngine.evaluateRisk({ traceId: 't4', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });

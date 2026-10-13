@@ -45,6 +45,8 @@ export interface TradingSafety {
   marketDataRejectLogDedupMs: number;
   marketClockCacheMs: number;
   maxConsecutiveLosses: number;
+  /** 2026-10-12: only closed trades inside this look-back count toward the consecutive-loss breaker (otherwise a streak of old losses blocks every new entry forever, since only a new winning close can clear it). */
+  consecutiveLossLookbackMs: number;
   correlationLookbackMs: number;
   disagreementPenalty: number;
   consensusApprovalThreshold: number;
@@ -801,6 +803,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'marketDataRejectLogDedupMs',
   'marketClockCacheMs',
   'maxConsecutiveLosses',
+  'consecutiveLossLookbackMs',
   'correlationLookbackMs',
   'disagreementPenalty',
   'consensusApprovalThreshold',

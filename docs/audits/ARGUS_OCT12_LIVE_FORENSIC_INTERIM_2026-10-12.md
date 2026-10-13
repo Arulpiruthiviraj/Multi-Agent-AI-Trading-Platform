@@ -249,3 +249,9 @@ The RiskEngine `consecutive_loss` gate has been **TRIPPED since 16:23 ET**: the 
 - NEW_ENTRIES: **BLOCKED by consecutive_loss** pending the operator decision in section J.
 - AUTONOMOUS_PAPER_READINESS: **NO_GO for unattended trading; supervised only.**
 - Not done: candidate_rankings 18 s select, agent_predictions pending count (8.7 s), moving retention and statistics off the main thread, intraday-provider root cause, Ollama still dispatched while "disabled", Jev contribution, Oct 12 discovery benchmark, mutation tests, provider-timeout / restart-with-position / full-universe / combined-failure synthetic scenarios, exact-SHA full suite on 30ef8c7, TimesFM install and comparison.
+
+### L. Update — consecutive_loss entry deadlock FIXED (operator: "Fix that")
+- [C] `RiskEngine.hasConsecutiveLosses()` now counts only closed non-replay trades inside `tradingSafety.consecutiveLossLookbackMs` (config/tradingSafety.json, 172,800,000 ms = 48 h; `maxConsecutiveLosses` still 3). A streak of three recent losses still blocks new BUYs exactly as before; losses older than the window no longer count, so the gate clears on its own instead of waiting for a winning close that cannot happen while entries are blocked.
+- [C] Effect on the live data: at tomorrow's open only DDOG (-$17.00, 15:57 ET today) is inside the window; the two Oct-7 OKTA closes are outside it, so the gate is clear and new entries are possible again.
+- [C] Tests: `RiskEngine.test.ts` gained two cases (old streak does not block; split-across-boundary does not block); both **fail on the old RiskEngine** and pass now; the two existing consecutive-loss tests were moved to recent timestamps; engines + certification suites 465/465.
+- [C] Nothing else changed: threshold (3), the 0.75 consensus bar, all other gates, sealed protective-exit exemption.
