@@ -792,6 +792,15 @@ export class BrokerManager {
             whatToShow: detail.whatToShow,
           });
         });
+        mdBroker.setHistoricalDataTimingHandler((detail) => {
+          structuredLogger.info('IBKR historical-data timing', {
+            category: 'MARKET_DATA',
+            eventType: 'IBKR_HISTORICAL_DATA_TIMING',
+            component: 'BrokerManager',
+            requestType: 'HISTORICAL',
+            ...detail,
+          });
+        });
         // 2026-09-20 remediation (part D): IBKR delayed ticks (field 66-69) - diagnostics store
         // only, NEVER routed through setQuoteSink's live sink (MarketDataWorker.ingestIbkrQuote
         // feeds RiskEngine/PositionSizing/OMS pricing - delayed data must never silently reach it).
@@ -892,6 +901,7 @@ export class BrokerManager {
               mdBroker.setMarketDataErrorHandler(null);
               mdBroker.setMarketDataSubscriptionHandler(null);
               mdBroker.setHistoricalDataErrorHandler(null);
+              mdBroker.setHistoricalDataTimingHandler(null);
               mdBroker.setDelayedTickHandler(null);
               mdBroker.setSubscriptionLifecycleHandler(null);
             },
