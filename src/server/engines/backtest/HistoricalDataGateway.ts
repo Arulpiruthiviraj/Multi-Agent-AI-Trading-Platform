@@ -12,6 +12,7 @@
  * backoff is armed; callers may still evaluate from cache — never fabricate bars.
  * ==========================================================
  */
+import { isPlausibleHistoricalSymbol } from '../../data/symbolFormat';
 import { db, sqliteDb } from '../../db';
 import * as schema from '../../db/schema';
 import { and, eq, gte, lte, asc, ne, sql } from 'drizzle-orm';
@@ -303,6 +304,10 @@ export class HistoricalDataGateway {
    * Never fabricates bars.
    */
   async ensureBars(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<void> {
+    if (!isPlausibleHistoricalSymbol(symbol)) {
+      // Never reaches a provider queue; malformed extractions (news-derived names, NULL/NONE) are not tickers.
+      throw new Error(`[HistoricalDataGateway] INVALID_SYMBOL: ${JSON.stringify(String(symbol).slice(0, 64))} is not a plausible ticker - no provider request made.`);
+    }
     const coalesceKey = this.memoryKey(symbol, timeframe, startMs, endMs);
     const inFlight = this.inflightEnsureBars.get(coalesceKey);
     if (inFlight) {

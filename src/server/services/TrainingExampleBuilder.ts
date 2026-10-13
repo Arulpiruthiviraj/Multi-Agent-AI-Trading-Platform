@@ -20,6 +20,7 @@
  * decision, rather than building a second evaluation mechanism.
  * ==========================================================
  */
+import { isCanonicalStoredSymbol } from '../data/symbolFormat';
 import { timedWorkCycle } from '../observability/workCycle';
 import { db } from '../db';
 import { transactions, consensusDecisions, consensusEvidence, agentPredictions, trainingExamples } from '../db/schema';
@@ -63,6 +64,10 @@ export class TrainingExampleBuilder {
     for (const txn of txns) {
       if (existingIds.has(txn.id)) continue; // kept as a defensive no-op
       if (!txn.finalDecision) continue; // NO_CONSENSUS transactions have no decision to label
+      // 2026-10-13: legacy pre-DEF-24 rows carry company names (" Archer Aviation", "Walmart") as symbols. They can never
+      // be labeled, so they were retried every 15-minute cycle forever, sending malformed 1Min requests to IBKR (10 code-200
+      // rejections on Oct 13). Skip them without touching a provider.
+      if (!isCanonicalStoredSymbol(txn.symbol)) continue;
 
       const decision = await db.select().from(consensusDecisions).where(eq(consensusDecisions.transactionId, txn.id)).get();
       if (!decision) continue;
