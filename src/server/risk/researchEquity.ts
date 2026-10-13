@@ -16,12 +16,17 @@
  * drawdown can UNDER-state a pre-restart unrealized peak. Pure functions + one bounded read-only DB query.
  */
 export interface ResearchTradeRow { profitLoss: number | null; filledAt: string | null }
+/** One FILLED PAPER order's real broker commission (BUY or SELL). NULL = no real evidence: counted as 0, never guessed. */
+export interface ResearchFeeRow { commission: number | null; filledAt: string | null }
 export interface ResearchPositionRow { quantity: number; entryPrice: number | null; currentPrice: number | null; unrealizedPnl: number | null }
 
 export interface ResearchEquitySnapshot {
   budget: number;
   realizedAllTime: number;
   realizedToday: number;
+  /** 2026-10-13: real commissions (entry + exit) already deducted from equity/dailyLoss; trades.profit_loss itself stays GROSS. */
+  feesAllTime: number;
+  feesToday: number;
   unrealized: number;
   unrealizedUnvaluedPositions: number;
   equity: number;
@@ -44,18 +49,33 @@ export function resetResearchPeakForTests(): void { runningPeak = null; }
 export function computeResearchEquity(input: {
   budget: number;
   closedTrades: ResearchTradeRow[];
+  /** Optional: when supplied, equity / daily loss / drawdown are NET of these real commissions. */
+  fills?: ResearchFeeRow[];
   positions: ResearchPositionRow[];
   isToday: (filledAtIso: string) => boolean;
 }): ResearchEquitySnapshot {
   const closed = input.closedTrades
     .filter((t) => Number.isFinite(t.profitLoss as number) && typeof t.filledAt === 'string')
     .sort((a, b) => (a.filledAt as string).localeCompare(b.filledAt as string));
+  const feeEvents = (input.fills ?? [])
+    .filter((f) => Number.isFinite(f.commission as number) && typeof f.filledAt === 'string')
+    .map((f) => ({ at: f.filledAt as string, delta: -(f.commission as number) }));
+  const events = [
+    ...closed.map((t) => ({ at: t.filledAt as string, delta: t.profitLoss as number })),
+    ...feeEvents,
+  ].sort((a, b) => a.at.localeCompare(b.at));
   let cum = 0;
   let realizedToday = 0;
+  let feesAllTime = 0;
+  let feesToday = 0;
+  for (const f of feeEvents) {
+    feesAllTime += -f.delta;
+    if (input.isToday(f.at)) feesToday += -f.delta;
+  }
   let curvePeak = input.budget;
-  for (const t of closed) {
-    cum += t.profitLoss as number;
-    if (input.isToday(t.filledAt as string)) realizedToday += t.profitLoss as number;
+  for (const e of events) {
+    cum += e.delta;
+    if (input.isToday(e.at)) realizedToday += e.delta;
     curvePeak = Math.max(curvePeak, input.budget + cum);
   }
   let unrealized = 0;
@@ -72,6 +92,8 @@ export function computeResearchEquity(input: {
     budget: input.budget,
     realizedAllTime: cum,
     realizedToday,
+    feesAllTime,
+    feesToday,
     unrealized,
     unrealizedUnvaluedPositions: unvalued,
     equity,

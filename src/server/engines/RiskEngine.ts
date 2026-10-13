@@ -550,10 +550,16 @@ export class RiskEngine {
                     const closedRows = await db.select({ profitLoss: schema.trades.profitLoss, filledAt: schema.trades.filledAt })
                         .from(schema.trades)
                         .where(and(eq(schema.trades.side, 'SELL'), eq(schema.trades.status, 'FILLED'), eq(schema.trades.executionEnvironment, 'PAPER'), isNotNull(schema.trades.profitLoss)));
+                    // 2026-10-13: trades.profit_loss is GROSS of commissions; the brakes must see NET. Real commissions of every FILLED PAPER
+                    // order (BUY and SELL) are deducted; NULL commission (no real evidence) counts as 0 and is never guessed.
+                    const feeRows = await db.select({ commission: schema.trades.commission, filledAt: schema.trades.filledAt })
+                        .from(schema.trades)
+                        .where(and(eq(schema.trades.status, 'FILLED'), eq(schema.trades.executionEnvironment, 'PAPER'), isNotNull(schema.trades.commission)));
                     const todayNy = getTradingDateStr(new Date(nowMs));
                     researchSnap = computeResearchEquity({
                         budget: Number(settings[0]?.budget ?? tradingEngine.state.budget),
                         closedTrades: closedRows,
+                        fills: feeRows,
                         positions: (portfolio.positions || []) as any,
                         isToday: (iso: string) => getTradingDateStr(new Date(iso)) === todayNy,
                     });

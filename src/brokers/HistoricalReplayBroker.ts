@@ -336,6 +336,8 @@ export class HistoricalReplayBroker implements BrokerPlugin {
       filledQuantity: qty,
       averageFillPrice: priced.fill,
       price: priced.fill,
+      // simulated broker's own commission for the quantity actually filled (surfaces onto trades.commission via OMS)
+      commission: this.costs.commissionPerShare * Math.max(qty, 0),
       createdAt: new Date(this.clockNowMs),
       updatedAt: new Date(this.clockNowMs),
     };

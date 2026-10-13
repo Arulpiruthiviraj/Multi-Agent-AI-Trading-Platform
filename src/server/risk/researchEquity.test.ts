@@ -37,3 +37,35 @@ describe('researchEquity', () => {
   });
 });
 function isToday(iso: string) { return today(iso); }
+
+describe('researchEquity net of commissions (2026-10-13)', () => {
+  it('trades.profit_loss is gross: entry and exit commissions are deducted from equity and daily loss', () => {
+    const s = computeResearchEquity({
+      budget: 20000,
+      closedTrades: [{ profitLoss: -100, filledAt: '2026-10-12T15:00:00Z' }],
+      fills: [
+        { commission: 0.11, filledAt: '2026-10-12T14:00:00Z' },
+        { commission: 0.11, filledAt: '2026-10-12T15:00:00Z' },
+        { commission: null, filledAt: '2026-10-12T15:30:00Z' }, // no real evidence: never guessed
+      ],
+      positions: [], isToday: today,
+    });
+    expect(s.feesToday).toBeCloseTo(0.22, 6);
+    expect(s.realizedToday).toBeCloseTo(-100.22, 6);
+    expect(s.dailyLoss).toBeCloseTo(100.22, 6);
+    expect(s.equity).toBeCloseTo(20000 - 100.22, 6);
+  });
+  it('a gross-winning round trip whose fees exceed the gain is a net loss for the brakes', () => {
+    const s = computeResearchEquity({
+      budget: 20000,
+      closedTrades: [{ profitLoss: 0.10, filledAt: '2026-10-12T15:00:00Z' }],
+      fills: [{ commission: 0.11, filledAt: '2026-10-12T14:00:00Z' }, { commission: 0.11, filledAt: '2026-10-12T15:00:00Z' }],
+      positions: [], isToday: today,
+    });
+    expect(s.dailyLoss).toBeCloseTo(0.12, 6);
+  });
+  it('omitting fills keeps the previous gross behaviour (backward compatible)', () => {
+    const s = computeResearchEquity({ budget: 20000, closedTrades: [{ profitLoss: -5, filledAt: '2026-10-12T15:00:00Z' }], positions: [], isToday: today });
+    expect(s.feesAllTime).toBe(0); expect(s.dailyLoss).toBe(5);
+  });
+});
