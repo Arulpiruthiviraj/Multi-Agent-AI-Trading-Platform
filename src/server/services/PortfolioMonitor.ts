@@ -482,7 +482,8 @@ export class PortfolioMonitorWorker {
     confidence: number;
     reasoning: string;
   }) {
-    if (!canEmitPortfolioExitIdea(args.symbol)) {
+    const exitTraceId = randomUUID();
+    if (!canEmitPortfolioExitIdea(args.symbol, Date.now(), exitTraceId)) {
       recordPortfolioDecision({
         symbol: args.symbol,
         state: 'WATCH',
@@ -492,7 +493,6 @@ export class PortfolioMonitorWorker {
       });
       return;
     }
-    const exitTraceId = randomUUID();
     eventBus.emitTradeIdea({
       traceId: exitTraceId,
       symbol: args.symbol,
