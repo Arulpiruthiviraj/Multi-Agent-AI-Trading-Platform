@@ -67,6 +67,23 @@ import { classifyMarketSession } from '../replay/marketSession';
 import { TRADING_TIMEZONE } from '../core/TradingCalendar';
 import { marketDataWorker } from './MarketDataWorker';
 
+/**
+ * Event time for order/fill timestamps. In a replay / synthetic session the market clock is SIMULATED, and the risk gates that compare
+ * "now" with the last fill (same_symbol_cooldown, post_loss_cooldown, daily_trade_limit) read the replay clock. Stamping fills with the
+ * wall clock made age = simulatedNow - wallFillTime hugely NEGATIVE, so a cooldown never expired and the daily-trade-limit day never
+ * matched (found by the 2026-10-13 synthetic lab). Outside replay this is exactly `new Date().toISOString()` - no live behaviour change.
+ */
+function omsEventIso(): string {
+  try {
+    const session = getActiveReplaySession() as { clock?: { now(): number } } | null;
+    if (session?.clock && typeof session.clock.now === 'function') {
+      const t = session.clock.now();
+      if (Number.isFinite(t)) return new Date(t).toISOString();
+    }
+  } catch { /* no active replay session */ }
+  return new Date().toISOString();
+}
+
 function getActiveReplaySessionSafe(): { replayId: string } | null {
   try {
     return getActiveReplaySession();
@@ -306,6 +323,7 @@ export class OrderManagementService {
         filledQuantity,
         averageFillPrice,
         applyPosition: true,
+        filledAt: omsEventIso(),
       });
       if (result.newQty <= 0) {
         if ((filledQuantity ?? 0) > 0 && !result.positionApplied) throw new Error('POSITION_FILL_BASELINE_UNAVAILABLE');
@@ -320,7 +338,7 @@ export class OrderManagementService {
         }
       }
       const fillPrice = result.incrementalPrice!;
-      eventBus.emit(EVENTS.ORDER_FILLED, { traceId, transactionId, id: orderId, symbol, side, quantity: result.newQty, price: fillPrice, status, filledAt: new Date().toISOString() });
+      eventBus.emit(EVENTS.ORDER_FILLED, { traceId, transactionId, id: orderId, symbol, side, quantity: result.newQty, price: fillPrice, status, filledAt: omsEventIso() });
       // Inventory and P&L were committed atomically with the fill, before observers run.
       return { newQty: result.newQty, reconciliationRequired: false };
     } catch (e) {
@@ -431,7 +449,7 @@ export class OrderManagementService {
     }
 
     const orderId = crypto.randomUUID();
-    const submittedAt = new Date().toISOString();
+    const submittedAt = omsEventIso();
 
     // Insert the PENDING row immediately, BEFORE the broker call - this is the real submission
     // moment, not a post-hoc record of whatever happened. If this insert itself fails, there's
@@ -681,7 +699,7 @@ export class OrderManagementService {
       }
       await this.persistRealCommissionIfKnown(orderId, brokerOrder.commission);
 
-      const acceptedAt = new Date().toISOString();
+      const acceptedAt = omsEventIso();
       // Keep the reservation unresolved until terminal fill evidence is committed below.
       await db.update(trades).set({ brokerOrderId, status: isTerminalOrderStatus(status) ? 'PENDING' : status, price: fillPrice, acceptedAt }).where(eq(trades.id, orderId));
       eventBus.emit(EVENTS.ORDER_ACCEPTED, { traceId, transactionId, id: orderId, brokerOrderId, status, acceptedAt });
@@ -711,7 +729,7 @@ export class OrderManagementService {
 
       profitLoss = db.select({ profitLoss: trades.profitLoss }).from(trades).where(eq(trades.id, orderId)).get()?.profitLoss ?? null;
       if (status === 'FILLED') {
-        filledAt = new Date().toISOString();
+        filledAt = omsEventIso();
       }
     } catch (e) {
       console.error("[OMS] Broker execution failed.", e);
