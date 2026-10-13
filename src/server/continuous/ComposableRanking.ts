@@ -385,16 +385,19 @@ export async function fetchPreviousRanks(symbols: string[], beforeIso: string): 
   try {
     const rows = await db.select({ symbol: candidateRankings.symbol, rank: candidateRankings.rank, cycleAt: candidateRankings.cycleAt })
       .from(candidateRankings)
-      // Bounded by a recent cycle_at window (uses idx_candidate_rankings_cycle) instead of every historical
-      // row for these symbols: the unbounded form blocked the main thread for 17-28 s (SLOW_SQL_STATEMENT).
+      // Bounded by a recent cycle_at window. Do NOT put the symbol IN-list in SQL: with it the planner picks the
+      // (symbol, created_at) index and still walks every historical row of those symbols (26-37 s synchronous
+      // blocks, SLOW_SQL_STATEMENT, even with the window predicate). Without it the query is a range scan on
+      // idx_candidate_rankings_cycle over a few hours of rows; the symbols are filtered in JS below.
       .where(and(
-        inArray(candidateRankings.symbol, symbols),
         gte(candidateRankings.cycleAt, new Date(Date.parse(beforeIso) - continuousIntelligence.rankPreviousLookbackMs).toISOString()),
         lt(candidateRankings.cycleAt, beforeIso),
       ))
       .orderBy(desc(candidateRankings.cycleAt));
+    const wanted = new Set(symbols);
     const seen = new Set<string>();
     for (const row of rows) {
+      if (!wanted.has(row.symbol)) continue;
       if (row.cycleAt >= beforeIso) continue; // only strictly prior cycles
       if (seen.has(row.symbol)) continue;
       seen.add(row.symbol);
