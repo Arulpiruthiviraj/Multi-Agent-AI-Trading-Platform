@@ -1,0 +1,103 @@
+{
+  "type": "SOAK_RESULT",
+  "soakId": "soak-75min-1791845999554",
+  "seed": 20261012,
+  "methodology": "Single long-lived process; back-to-back 180-sim-min sessions (150ms wall-clock/bar) for 180 wall-clock minutes against one isolated DB. SyntheticSessionEngine cannot pace true wall-clock (disclosed in its header).",
+  "wallClockMinutes": 76.09566666666667,
+  "iterationsCompleted": 29,
+  "iterationsFailed": 0,
+  "samples": 67,
+  "memory": {
+    "startRssMb": 306.22265625,
+    "endRssMb": 324.29296875,
+    "maxRssMb": 375.2421875,
+    "rssDeltaMb": 18.0703125,
+    "endHeapMb": 109.06071472167969
+  },
+  "eventLoop": {
+    "maxP95Ms": 730.333183,
+    "finalP50Ms": 31.244287,
+    "finalMaxMs": 531.103743
+  },
+  "db": {
+    "startBytes": 1298432,
+    "endBytes": 870502400,
+    "growthBytes": 869203968,
+    "maxWalBytes": 5092352
+  },
+  "aiPosture": "ALL_AI_DOWN_THROUGHOUT (no provider keys in this environment — hardest case for quant-first)",
+  "activity": {
+    "iterationsCompleted": 29,
+    "totalNonFixtureFills": 0,
+    "note": "Fills are informational only; zero is a legitimate outcome. Activity is proven by quant assessments, idea generation, and consensus evaluations in observability_events."
+  },
+  "stabilityVerdict": "FAIL",
+  "resourceBounds": {
+    "maxRssMb": 2048,
+    "maxRssDeltaMb": 512,
+    "maxEventLoopP95Ms": 100,
+    "maxDbGrowthBytes": 1073741824,
+    "maxWalBytes": 104857600
+  },
+  "boundViolations": [
+    "maxEventLoopP95Ms 730.3 > 100"
+  ],
+  "iterationErrors": [],
+  "samplesTail": [
+    {
+      "tMin": 71.95623333333333,
+      "iteration": 28,
+      "rssMb": 310.53125,
+      "heapUsedMb": 93.5401382446289,
+      "eventLoopP50Ms": 31.227903,
+      "eventLoopP95Ms": 537.919487,
+      "eventLoopMaxMs": 48620.371967,
+      "dbBytes": 814813184,
+      "walBytes": 5092352
+    },
+    {
+      "tMin": 72.95946666666667,
+      "iteration": 28,
+      "rssMb": 313.5859375,
+      "heapUsedMb": 94.63727569580078,
+      "eventLoopP50Ms": 31.293439,
+      "eventLoopP95Ms": 584.581119,
+      "eventLoopMaxMs": 1176.502271,
+      "dbBytes": 828342272,
+      "walBytes": 5092352
+    },
+    {
+      "tMin": 74.51288333333333,
+      "iteration": 29,
+      "rssMb": 184.41015625,
+      "heapUsedMb": 77.3293228149414,
+      "eventLoopP50Ms": 31.014911,
+      "eventLoopP95Ms": 368.574463,
+      "eventLoopMaxMs": 40332.427263,
+      "dbBytes": 842481664,
+      "walBytes": 5092352
+    },
+    {
+      "tMin": 75.51796666666667,
+      "iteration": 29,
+      "rssMb": 259.375,
+      "heapUsedMb": 96.91426849365234,
+      "eventLoopP50Ms": 31.211519,
+      "eventLoopP95Ms": 344.195071,
+      "eventLoopMaxMs": 660.078591,
+      "dbBytes": 860737536,
+      "walBytes": 5092352
+    },
+    {
+      "tMin": 76.09566666666667,
+      "iteration": 29,
+      "rssMb": 324.29296875,
+      "heapUsedMb": 109.06071472167969,
+      "eventLoopP50Ms": 31.244287,
+      "eventLoopP95Ms": 332.136447,
+      "eventLoopMaxMs": 531.103743,
+      "dbBytes": 870502400,
+      "walBytes": 5092352
+    }
+  ]
+}

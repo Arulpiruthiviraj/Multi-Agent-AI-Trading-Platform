@@ -93,7 +93,8 @@ async function main(): Promise<void> {
   // certified hermetic test (BUY fill → organic SELL exit → flat, all AI down).
   console.log('\n=== END-OF-SOAK PROOF: running AiOfflineQuantCertification ===');
   await new Promise<void>((resolve, reject) => {
-    const test = spawn('npx', ['vitest', 'run', 'src/server/quant/AiOfflineQuantCertification.test.ts'], {
+    // Windows: spawning bare 'npx' fails with ENOENT (found 2026-10-12 after a 76-minute soak); run vitest via node.
+    const test = spawn(process.execPath, [path.resolve(process.cwd(), 'node_modules/vitest/vitest.mjs'), 'run', 'src/server/quant/AiOfflineQuantCertification.test.ts'], {
       env: { ...process.env },
       stdio: 'inherit',
       cwd: process.cwd(),
