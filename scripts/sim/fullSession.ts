@@ -28,6 +28,7 @@ import type { TimelineEntry } from '../../src/server/replay/synthetic/DecisionTi
 import {
   buildCanonicalFullDaySpec,
   buildTradeLifecycleSpec,
+  buildMultiTradeDaySpec,
   buildRestartSpecs,
   buildMatrixSpecs,
   type FullSessionSpec,
@@ -147,6 +148,12 @@ async function main() {
   }
 
   // --- Restart: two halves, fresh processes, merged certification ---------------
+  if (only === 'multitrade') {
+    const spec = buildMultiTradeDaySpec(`${outDir}/multitrade.json`, Number((process.argv.find((a) => a.startsWith('--seed=')) ?? '--seed=424242').slice(7)));
+    const r = await runSpecInChild(spec);
+    summary.runs.push({ kind: 'multitrade', ok: r.ok, error: r.error ?? null, ...(r.data ? summarizeResult(r.data) : {}) });
+  }
+
   if (only === 'all' || only === 'restart') {
     const { first, second } = buildRestartSpecs(`${outDir}/restart-half1.json`, `${outDir}/restart-half2.json`);
     const r1 = await runSpecInChild(first);

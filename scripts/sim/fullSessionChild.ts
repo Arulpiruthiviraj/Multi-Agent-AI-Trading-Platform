@@ -67,7 +67,7 @@ async function main() {
     speedMultiplier: spec.speed,
     sessionDurationMinutes: spec.durationMinutes,
     universeSize: spec.symbols,
-    initialCash: 100_000,
+    initialCash: spec.initialCash ?? 100_000,
     faultPlan: spec.faultPlan,
     lateMoverConfigs: spec.lateMoverConfigs,
     staleCacheSymbols: spec.staleCacheSymbols,

@@ -33,6 +33,8 @@ export interface FullSessionSpec {
   lateMoverConfigs?: SyntheticSymbolConfig[];
   staleCacheSymbols?: string[];
   stopAfterBarIndex?: number;
+  /** Argus research capital AND simulated broker cash (default 100k for legacy runs). */
+  initialCash?: number;
   resume?: { startBarIndex: number; brokerState: HistoricalReplayBrokerState };
   /**
    * Operator-gated cold-start bootstrap (2026-10-11): when true, the parent sets
@@ -135,6 +137,28 @@ export function buildTradeLifecycleSpec(outputPath: string, seed = 424242): Full
   spec.coldStartBootstrap = true;
   spec.label = 'trade-lifecycle full RTH day (cold-start bootstrap; same fault matrix)';
   return spec;
+}
+
+/**
+ * Multi-trade RTH day on the MULTI_TRADE_DAY per-symbol paths with $20K research capital (KNOWN_OPPORTUNITY_PLATFORM_FIXTURE:
+ * mechanical capability, not market alpha). Same environment control as the lifecycle run (cold-start bootstrap is an operator gate;
+ * every idea still faces consensus, the RiskEngine gates and OMS). requireTradeForCertification stays true.
+ */
+export function buildMultiTradeDaySpec(outputPath: string, seed = 424242): FullSessionSpec {
+  return {
+    simulationId: `full-session-multitrade-${seed}-${Date.now().toString(36)}`,
+    scenarioId: 'MULTI_TRADE_DAY',
+    seed,
+    speed: 30,
+    durationMinutes: FULL_SESSION_BARS,
+    symbols: 5,
+    faultPlan: [],
+    coldStartBootstrap: true,
+    initialCash: 20_000,
+    requireTradeForCertification: true,
+    outputPath,
+    label: 'KNOWN_OPPORTUNITY_PLATFORM_FIXTURE: multi-trade RTH day, $20K research capital (mechanical capability, not alpha)',
+  };
 }
 
 /** Restart-certification halves. Run 1 stops after bar 199; run 2 resumes at bar 200. */

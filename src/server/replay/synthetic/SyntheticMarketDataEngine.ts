@@ -94,7 +94,7 @@ export class SyntheticMarketDataEngine {
 
       for (let t = startMs; t < endMs; t += BAR_INTERVAL_MS) {
         const offsetMs = t - startMs;
-        const segment = activeSegment(this.scenario, offsetMs);
+        const segment = activeSegment(this.scenario, offsetMs, config.symbol);
         const intraday = intradayMultiplier(offsetMs, sessionLengthMs);
 
         // Apply any scenario events whose moment has arrived, exactly once, at this bar.

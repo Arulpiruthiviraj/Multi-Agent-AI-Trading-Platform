@@ -58,6 +58,12 @@ export interface ScenarioProfile {
   expectedToBeTradeable: boolean;
   segments: RegimeSegment[];
   events: ScenarioEvent[];
+  /**
+   * Optional per-symbol regime paths (2026-10-13, multi-trade day). A symbol listed here follows ITS OWN segment list instead of the
+   * shared one, so one session can contain a steady winner, a fakeout loser and a chop name at the same time. This controls the
+   * ENVIRONMENT only - what each price path does; whether Argus recognises, sizes, enters or exits is still decided by the real pipeline.
+   */
+  symbolSegments?: Record<string, RegimeSegment[]>;
 }
 
 const MIN = 60_000;
@@ -393,7 +399,49 @@ export const DATA_INTERRUPTION: ScenarioProfile = {
   events: [{ type: 'DATA_INTERRUPTION', atOffsetMs: 30 * MIN, interruptionBars: 10 }],
 };
 
+const seg = (fromMin: number, toMin: number, regime: RegimeLabel, drift: number, vol: number, volume: number): RegimeSegment =>
+  ({ fromOffsetMs: fromMin * MIN, toOffsetMs: toMin * MIN, regime, driftPerBarMean: drift, volatilityMultiplier: vol, volumeMultiplier: volume });
+
+/** SCENARIO: MULTI_TRADE_DAY (2026-10-13). KNOWN_OPPORTUNITY_PLATFORM_FIXTURE - mechanical capability, NOT evidence of market alpha.
+ *  One RTH day (390 bars) in which each symbol follows its own path, so a single session offers several independent, overlapping
+ *  opportunities of different quality instead of one scripted round trip:
+ *   AAPL  STEADY_WINNER    - gap/pop, bounded pullback, base, breakout, then a long, low-noise, volume-confirmed uptrend.
+ *   NVDA  FAKEOUT_LOSER    - the same breakout structure, then a sustained reversal (a breakout that fails).
+ *   MSFT  LATE_WINNER      - quiet morning, then pullback -> base -> breakout -> trend after midday (competes for capital with earlier names).
+ *   QQQ   CHOP             - range-bound, moderate volatility: few or no trades is correct.
+ *   SPY   LATE_FAKEOUT     - quiet, breakout in the afternoon, failure, partial recovery (a second chance after a loss: cooldown path).
+ *  Nothing here injects a signal, approval or order. The paths are only shaped so that opportunities and failures EXIST. */
+export const MULTI_TRADE_DAY: ScenarioProfile = {
+  id: 'MULTI_TRADE_DAY',
+  description: 'Per-symbol paths: steady winner, failed breakout, late winner, chop, late fakeout - several overlapping opportunities of different quality in one RTH day.',
+  expectedToBeTradeable: true,
+  segments: [seg(0, 400, 'SIDEWAYS', 0, 1, 1)],
+  events: [
+    { type: 'GAP', atOffsetMs: 0, gapPct: 0.02, symbols: ['AAPL', 'NVDA'] },
+  ],
+  symbolSegments: {
+    AAPL: [
+      seg(0, 8, 'HIGH_VOL', 0.0010, 1.6, 2.3), seg(8, 16, 'TRENDING_DOWN', -0.0009, 1.1, 1.4), seg(16, 28, 'SIDEWAYS', 0.00005, 0.55, 1.1),
+      seg(28, 40, 'TRENDING_UP', 0.0013, 1.3, 2.6), seg(40, 400, 'TRENDING_UP', 0.00045, 1.1, 1.7),
+    ],
+    NVDA: [
+      seg(0, 8, 'HIGH_VOL', 0.0010, 1.6, 2.3), seg(8, 16, 'TRENDING_DOWN', -0.0009, 1.1, 1.4), seg(16, 28, 'SIDEWAYS', 0.00005, 0.55, 1.1),
+      seg(28, 40, 'TRENDING_UP', 0.0013, 1.3, 2.6), seg(40, 70, 'TRENDING_UP', 0.0004, 1.2, 1.7), seg(70, 400, 'TRENDING_DOWN', -0.0008, 1.4, 1.9),
+    ],
+    MSFT: [
+      seg(0, 120, 'SIDEWAYS', 0.00002, 0.6, 0.9), seg(120, 135, 'TRENDING_DOWN', -0.0008, 1.1, 1.3), seg(135, 150, 'SIDEWAYS', 0.00005, 0.55, 1.1),
+      seg(150, 165, 'TRENDING_UP', 0.0013, 1.3, 2.6), seg(165, 400, 'TRENDING_UP', 0.0005, 1.1, 1.7),
+    ],
+    QQQ: [seg(0, 400, 'SIDEWAYS', 0, 1.0, 1.1)],
+    SPY: [
+      seg(0, 200, 'SIDEWAYS', 0.00001, 0.6, 0.9), seg(200, 215, 'TRENDING_UP', 0.0012, 1.3, 2.4), seg(215, 230, 'TRENDING_UP', 0.0003, 1.2, 1.6),
+      seg(230, 300, 'TRENDING_DOWN', -0.0009, 1.4, 1.9), seg(300, 400, 'TRENDING_UP', 0.0004, 1.1, 1.3),
+    ],
+  },
+};
+
 export const SCENARIOS: Record<string, ScenarioProfile> = {
+  MULTI_TRADE_DAY,
   DATA_INTERRUPTION,
   QUIET_OPEN,
   EXTREME_NOISE,
@@ -418,8 +466,9 @@ export function getScenario(id: string): ScenarioProfile {
 /** Finds the active regime segment for a given simulated-time offset - the last segment whose
  *  window contains it, defaulting to a flat/neutral regime if the scenario has a gap in coverage
  *  (never throws mid-session over a config gap). */
-export function activeSegment(scenario: ScenarioProfile, offsetMs: number): RegimeSegment {
-  for (const seg of scenario.segments) {
+export function activeSegment(scenario: ScenarioProfile, offsetMs: number, symbol?: string): RegimeSegment {
+  const list = (symbol && scenario.symbolSegments?.[symbol]) || scenario.segments;
+  for (const seg of list) {
     if (offsetMs >= seg.fromOffsetMs && offsetMs < seg.toOffsetMs) return seg;
   }
   return { fromOffsetMs: offsetMs, toOffsetMs: offsetMs + 1, regime: 'SIDEWAYS', driftPerBarMean: 0, volatilityMultiplier: 1, volumeMultiplier: 1 };
