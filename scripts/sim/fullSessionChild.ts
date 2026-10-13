@@ -60,6 +60,11 @@ async function main() {
     `[child pid=${process.pid}] ===`,
   );
 
+  let wallClockAudit: { stop(): Array<{ file: string; fn: string; calls: number }> } | null = null;
+  if (process.env.ARGUS_SYNTH_WALLCLOCK_AUDIT === '1') {
+    const { startWallClockAudit } = await import('../../src/server/replay/synthetic/WallClockAudit');
+    wallClockAudit = startWallClockAudit();
+  }
   const result = await engine.run({
     simulationId: spec.simulationId,
     scenarioId: spec.scenarioId,
@@ -75,6 +80,7 @@ async function main() {
     resume: spec.resume,
   });
 
+  const wallClockCallers = wallClockAudit ? wallClockAudit.stop() : null;
   let certification: any = null;
   if (spec.requireTradeForCertification !== null && !result.stoppedEarly) {
     const { evaluateCertification } = await import('../../src/server/replay/synthetic/CertificationGate');
@@ -122,6 +128,7 @@ async function main() {
       durationMinutes: spec.durationMinutes, symbols: spec.symbols,
     },
     certification,
+    wallClockCallers,
     faultOutcomes: result.faultOutcomes,
     // Full timeline (needed by the parent to merge restart halves and to audit invariants).
     timeline: result.timeline,

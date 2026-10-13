@@ -1,0 +1,17 @@
+{
+  "_comment": "Ratchet for wall-clock reads in trading-decision modules (2026-10-13). Counts are the reviewed baseline of `Date.now()` / zero-arg `new Date()` per file. A change that ADDS a read must either use the simulation/replay clock seam or consciously raise this baseline in the same review. Market-time decisions (freshness, session, cooldown, expiry) must not use the real clock inside a synthetic session; latency/ids/log timestamps may.",
+  "files": {
+    "src/server/engines/RiskEngine.ts": { "dateNow": 9, "newDate": 1 },
+    "src/server/services/OrderManagement.ts": { "dateNow": 7, "newDate": 9 },
+    "src/server/services/PortfolioMonitor.ts": { "dateNow": 4, "newDate": 0 },
+    "src/server/services/ChiefTraderAgent.ts": { "dateNow": 10, "newDate": 5 },
+    "src/server/services/MarketDataWorker.ts": { "dateNow": 17, "newDate": 2 },
+    "src/server/services/QuantSignalAgent.ts": { "dateNow": 15, "newDate": 2 },
+    "src/server/services/TechnicalAgent.ts": { "dateNow": 10, "newDate": 0 },
+    "src/server/services/KronosForecastAgent.ts": { "dateNow": 5, "newDate": 2 },
+    "src/server/engines/TradingEngine.ts": { "dateNow": 1, "newDate": 4 },
+    "src/server/core/consensusIdeaFreshness.ts": { "dateNow": 1, "newDate": 0 },
+    "src/server/services/RiskAgent.ts": { "dateNow": 0, "newDate": 0 },
+    "src/server/services/PortfolioReconciliation.ts": { "dateNow": 2, "newDate": 7 }
+  }
+}

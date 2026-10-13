@@ -402,10 +402,25 @@ export const DATA_INTERRUPTION: ScenarioProfile = {
 const seg = (fromMin: number, toMin: number, regime: RegimeLabel, drift: number, vol: number, volume: number): RegimeSegment =>
   ({ fromOffsetMs: fromMin * MIN, toOffsetMs: toMin * MIN, regime, driftPerBarMean: drift, volatilityMultiplier: vol, volumeMultiplier: volume });
 
+function saw(fromMin: number, toMin: number, o: { upMin: number; downMin: number; upDrift: number; downDrift: number; vol: number; upVolume: number; downVolume: number }): RegimeSegment[] {
+  const out: RegimeSegment[] = [];
+  let t = fromMin;
+  while (t < toMin) {
+    const upEnd = Math.min(toMin, t + o.upMin);
+    out.push(seg(t, upEnd, 'TRENDING_UP', o.upDrift, o.vol, o.upVolume));
+    t = upEnd;
+    if (t >= toMin) break;
+    const downEnd = Math.min(toMin, t + o.downMin);
+    out.push(seg(t, downEnd, 'TRENDING_DOWN', o.downDrift, o.vol, o.downVolume));
+    t = downEnd;
+  }
+  return out;
+}
+
 /** SCENARIO: MULTI_TRADE_DAY (2026-10-13). KNOWN_OPPORTUNITY_PLATFORM_FIXTURE - mechanical capability, NOT evidence of market alpha.
  *  One RTH day (390 bars) in which each symbol follows its own path, so a single session offers several independent, overlapping
  *  opportunities of different quality instead of one scripted round trip:
- *   AAPL  STEADY_WINNER    - gap/pop, bounded pullback, base, breakout, then a long, low-noise, volume-confirmed uptrend.
+ *   AAPL  STEADY_WINNER    - opening gap/pop, then repeated impulse + shallow-pullback cycles with a clearly positive net drift.
  *   NVDA  FAKEOUT_LOSER    - the same breakout structure, then a sustained reversal (a breakout that fails).
  *   MSFT  LATE_WINNER      - quiet morning, then pullback -> base -> breakout -> trend after midday (competes for capital with earlier names).
  *   QQQ   CHOP             - range-bound, moderate volatility: few or no trades is correct.
@@ -420,22 +435,28 @@ export const MULTI_TRADE_DAY: ScenarioProfile = {
     { type: 'GAP', atOffsetMs: 0, gapPct: 0.02, symbols: ['AAPL', 'NVDA'] },
   ],
   symbolSegments: {
+    // sawtooth helper: repeated impulse + pullback cycles keep RSI oscillating in a tradeable band (a straight ramp pins RSI at
+    // 85+ and the existing mean-reversion rules then correctly refuse to chase it - see VALIDATED_CONVERGENCE_CONTROL's header).
     AAPL: [
-      seg(0, 8, 'HIGH_VOL', 0.0010, 1.6, 2.3), seg(8, 16, 'TRENDING_DOWN', -0.0009, 1.1, 1.4), seg(16, 28, 'SIDEWAYS', 0.00005, 0.55, 1.1),
-      seg(28, 40, 'TRENDING_UP', 0.0013, 1.3, 2.6), seg(40, 400, 'TRENDING_UP', 0.00045, 1.1, 1.7),
+      seg(0, 8, 'HIGH_VOL', 0.0010, 1.6, 2.3),
+      ...saw(8, 400, { upMin: 22, downMin: 7, upDrift: 0.0007, downDrift: -0.0006, vol: 1.2, upVolume: 1.8, downVolume: 1.2 }),
     ],
     NVDA: [
-      seg(0, 8, 'HIGH_VOL', 0.0010, 1.6, 2.3), seg(8, 16, 'TRENDING_DOWN', -0.0009, 1.1, 1.4), seg(16, 28, 'SIDEWAYS', 0.00005, 0.55, 1.1),
-      seg(28, 40, 'TRENDING_UP', 0.0013, 1.3, 2.6), seg(40, 70, 'TRENDING_UP', 0.0004, 1.2, 1.7), seg(70, 400, 'TRENDING_DOWN', -0.0008, 1.4, 1.9),
+      seg(0, 8, 'HIGH_VOL', 0.0010, 1.6, 2.3),
+      ...saw(8, 120, { upMin: 22, downMin: 7, upDrift: 0.0007, downDrift: -0.0006, vol: 1.2, upVolume: 1.8, downVolume: 1.2 }),
+      // the trend FAILS: sustained decline with only brief bounces (a long entry made in the first two hours is a loser)
+      ...saw(120, 400, { upMin: 4, downMin: 26, upDrift: 0.0004, downDrift: -0.0008, vol: 1.3, upVolume: 1.3, downVolume: 1.9 }),
     ],
     MSFT: [
-      seg(0, 120, 'SIDEWAYS', 0.00002, 0.6, 0.9), seg(120, 135, 'TRENDING_DOWN', -0.0008, 1.1, 1.3), seg(135, 150, 'SIDEWAYS', 0.00005, 0.55, 1.1),
-      seg(150, 165, 'TRENDING_UP', 0.0013, 1.3, 2.6), seg(165, 400, 'TRENDING_UP', 0.0005, 1.1, 1.7),
+      seg(0, 100, 'SIDEWAYS', 0.00002, 0.6, 0.9),
+      ...saw(100, 400, { upMin: 22, downMin: 7, upDrift: 0.0007, downDrift: -0.0006, vol: 1.2, upVolume: 1.8, downVolume: 1.2 }),
     ],
-    QQQ: [seg(0, 400, 'SIDEWAYS', 0, 1.0, 1.1)],
+    QQQ: saw(0, 400, { upMin: 10, downMin: 10, upDrift: 0.0004, downDrift: -0.0004, vol: 1.0, upVolume: 1.1, downVolume: 1.1 }),
     SPY: [
-      seg(0, 200, 'SIDEWAYS', 0.00001, 0.6, 0.9), seg(200, 215, 'TRENDING_UP', 0.0012, 1.3, 2.4), seg(215, 230, 'TRENDING_UP', 0.0003, 1.2, 1.6),
-      seg(230, 300, 'TRENDING_DOWN', -0.0009, 1.4, 1.9), seg(300, 400, 'TRENDING_UP', 0.0004, 1.1, 1.3),
+      seg(0, 190, 'SIDEWAYS', 0.00001, 0.6, 0.9),
+      ...saw(190, 260, { upMin: 22, downMin: 7, upDrift: 0.0007, downDrift: -0.0006, vol: 1.2, upVolume: 1.8, downVolume: 1.2 }),
+      ...saw(260, 330, { upMin: 4, downMin: 26, upDrift: 0.0004, downDrift: -0.0008, vol: 1.3, upVolume: 1.3, downVolume: 1.9 }),
+      ...saw(330, 400, { upMin: 22, downMin: 7, upDrift: 0.0006, downDrift: -0.0005, vol: 1.1, upVolume: 1.5, downVolume: 1.1 }),
     ],
   },
 };
