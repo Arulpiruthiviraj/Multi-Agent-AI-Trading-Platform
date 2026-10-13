@@ -56,6 +56,10 @@ export function ensureHoldingSubscribed(symbol: string): void {
 export function canEmitPortfolioExitIdea(symbol: string, now = Date.now(), traceId?: string): boolean {
   if (!isPortfolioIntelEnabled()) return true;
   const key = symbol.toUpperCase();
+  // A genuine protective attempt that reached Risk/OMS owns the symbol until a terminal
+  // result releases it. This prevents a second close from being emitted merely because the
+  // wall-clock cooldown elapsed while the first order is still pending/partially filled.
+  if (activeExitTraceBySymbol.has(key)) return false;
   const last = lastExitEmitAt.get(key) ?? 0;
   if (now - last < continuousIntelligence.exitIdeaCooldownMs) return false;
   lastExitEmitAt.set(key, now);
