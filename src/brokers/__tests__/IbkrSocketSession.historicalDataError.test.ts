@@ -35,8 +35,10 @@ describe('IbkrSocketSession historical-data error observability (2026-09-20 reme
   it('a reqHistoricalData rejection fires the dedicated historical-data error handler with requestType-distinguishing detail, distinct from the streaming path', async () => {
     const s = session(); const socket = await connect(s);
     const historicalErrors: any[] = [];
+    const historicalTimings: any[] = [];
     const streamingErrors: any[] = [];
     s.setHistoricalDataErrorHandler((detail) => historicalErrors.push(detail));
+    s.setHistoricalDataTimingHandler((detail) => historicalTimings.push(detail));
     s.setMarketDataErrorHandler((symbol, code, message) => streamingErrors.push({ symbol, code, message }));
 
     socket.reqHistoricalData.mockImplementation((reqId: number) => {
@@ -55,6 +57,11 @@ describe('IbkrSocketSession historical-data error observability (2026-09-20 reme
     // A historical-request error must never be mistaken for (or double-counted as) a streaming
     // reqMktData rejection - the two observability paths are fully independent.
     expect(streamingErrors).toHaveLength(0);
+    expect(historicalTimings).toHaveLength(1);
+    expect(historicalTimings[0]).toMatchObject({ symbol: 'SQ', timeframe: '1Day', outcome: 'ERROR', barCount: 0 });
+    expect(historicalTimings[0].queueWaitMs).toBeGreaterThanOrEqual(0);
+    expect(historicalTimings[0].serviceMs).toBeGreaterThanOrEqual(0);
+    expect(historicalTimings[0].totalMs).toBeGreaterThanOrEqual(historicalTimings[0].serviceMs);
   });
 
   it('a successful historical request never fires the error handler', async () => {
@@ -68,5 +75,31 @@ describe('IbkrSocketSession historical-data error observability (2026-09-20 reme
 
     await expect(s.requestHistoricalBars('SPY', '1Day', Date.now() - 86_400_000, Date.now())).resolves.toEqual([]);
     expect(historicalErrors).toHaveLength(0);
+  });
+
+  it('measures histChain queue wait separately from IBKR service time', async () => {
+    const s = session(); const socket = await connect(s);
+    const timings: any[] = [];
+    s.setHistoricalDataTimingHandler((detail) => timings.push(detail));
+    let calls = 0;
+    socket.reqHistoricalData.mockImplementation((reqId: number) => {
+      calls += 1;
+      if (calls === 1) {
+        setTimeout(() => socket.emit(EventName.historicalData, reqId, 'finished', 0, 0, 0, 0, 0), 30);
+      } else {
+        queueMicrotask(() => socket.emit(EventName.historicalData, reqId, 'finished', 0, 0, 0, 0, 0));
+      }
+    });
+
+    const now = Date.now();
+    const first = s.requestHistoricalBars('SPY', '1Min', now - 60_000, now);
+    const second = s.requestHistoricalBars('QQQ', '1Min', now - 60_000, now);
+    await Promise.all([first, second]);
+
+    expect(timings).toHaveLength(2);
+    expect(timings[0]).toMatchObject({ symbol: 'SPY', outcome: 'EMPTY' });
+    expect(timings[1]).toMatchObject({ symbol: 'QQQ', outcome: 'EMPTY' });
+    expect(timings[1].queueWaitMs).toBeGreaterThanOrEqual(20);
+    expect(timings[1].totalMs).toBeGreaterThanOrEqual(timings[1].queueWaitMs);
   });
 });
