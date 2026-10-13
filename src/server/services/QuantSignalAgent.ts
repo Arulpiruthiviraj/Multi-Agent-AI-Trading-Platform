@@ -885,12 +885,45 @@ export class QuantSignalAgent {
               category: 'DISCOVERY', eventType: 'QUANT_INTRADAY_FETCH_DEADLINE', symbol, traceId,
               reasoning: `Intraday ${INTRADAY_TIMEFRAME} fetch exceeded ${tradingSafety.quantIntradayFetchMaxWaitMs}ms; evaluation proceeds without intraday bars (opening range unavailable this cycle). Fetch continues in the background.`,
             }));
+            observeSafe(() => structuredLogger.info('quant_bar_input_availability', {
+              category: 'DISCOVERY', eventType: 'QUANT_BAR_INPUT_AVAILABILITY', symbol, traceId,
+              timeframe: INTRADAY_TIMEFRAME, requestedStartMs: window.startMs, requestedEndMs: window.endMs,
+              sessionOpenMs: window.sessionOpenMs, barCount: 0, requiredBarCount: null,
+              firstBarTimestamp: null, lastBarTimestamp: null, outcome: 'DEADLINE',
+              terminalReason: 'INTRADAY_FETCH_DEADLINE',
+            }));
           } else if ('value' in intradayOutcome) {
             intradayBars = intradayOutcome.value;
             intradaySessionOpenMs = window.sessionOpenMs;
+            observeSafe(() => structuredLogger.info('quant_bar_input_availability', {
+              category: 'DISCOVERY', eventType: 'QUANT_BAR_INPUT_AVAILABILITY', symbol, traceId,
+              timeframe: INTRADAY_TIMEFRAME, requestedStartMs: window.startMs, requestedEndMs: window.endMs,
+              sessionOpenMs: window.sessionOpenMs, barCount: intradayBars.length, requiredBarCount: null,
+              firstBarTimestamp: intradayBars[0]?.timestamp ?? null,
+              lastBarTimestamp: intradayBars[intradayBars.length - 1]?.timestamp ?? null,
+              outcome: intradayBars.length > 0 ? 'AVAILABLE' : 'EMPTY',
+              terminalReason: intradayBars.length > 0 ? null : 'INTRADAY_BARS_EMPTY',
+            }));
           }
+        } else {
+          observeSafe(() => structuredLogger.info('quant_bar_input_availability', {
+            category: 'DISCOVERY', eventType: 'QUANT_BAR_INPUT_AVAILABILITY', symbol, traceId,
+            timeframe: INTRADAY_TIMEFRAME, requestedStartMs: null, requestedEndMs: endMs,
+            sessionOpenMs: null, barCount: 0, requiredBarCount: null,
+            firstBarTimestamp: null, lastBarTimestamp: null, outcome: 'WINDOW_UNAVAILABLE',
+            terminalReason: 'INTRADAY_SESSION_WINDOW_UNAVAILABLE',
+          }));
         }
       } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        observeSafe(() => structuredLogger.info('quant_bar_input_availability', {
+          category: 'DISCOVERY', eventType: 'QUANT_BAR_INPUT_AVAILABILITY', symbol, traceId,
+          timeframe: INTRADAY_TIMEFRAME, requestedStartMs: null, requestedEndMs: endMs,
+          sessionOpenMs: intradaySessionOpenMs ?? null, barCount: 0, requiredBarCount: null,
+          firstBarTimestamp: null, lastBarTimestamp: null, outcome: 'FETCH_ERROR',
+          terminalReason: classifyQuantEvalError(e),
+          error: message.slice(0, 500),
+        }));
         console.warn(`[QuantSignalAgent] ${symbol}: intraday bar fetch for opening-range evaluation failed (non-fatal - falling back to daily-bar-only support/resistance features)`, e);
         intradayBars = undefined;
       }
