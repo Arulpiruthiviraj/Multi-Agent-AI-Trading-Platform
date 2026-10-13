@@ -15,7 +15,7 @@ vi.mock('@stoqey/ib', async () => {
   }
   return { ...actual, IBApi: Socket };
 });
-import { IbkrSocketSession } from '../IbkrSocketSession';
+import { buildIbkrHistoricalDuration, IbkrSocketSession } from '../IbkrSocketSession';
 import { EventName } from '@stoqey/ib';
 
 const sessions: IbkrSocketSession[] = [];
@@ -77,7 +77,7 @@ describe('IbkrSocketSession historical-data error observability (2026-09-20 reme
     expect(historicalErrors).toHaveLength(0);
   });
 
-  it('measures histChain queue wait separately from IBKR service time', async () => {
+  it('measures historical queue wait separately from IBKR service time', async () => {
     const s = session(); const socket = await connect(s);
     const timings: any[] = [];
     s.setHistoricalDataTimingHandler((detail) => timings.push(detail));
@@ -101,5 +101,80 @@ describe('IbkrSocketSession historical-data error observability (2026-09-20 reme
     expect(timings[1]).toMatchObject({ symbol: 'QQQ', outcome: 'EMPTY' });
     expect(timings[1].queueWaitMs).toBeGreaterThanOrEqual(20);
     expect(timings[1].totalMs).toBeGreaterThanOrEqual(timings[1].queueWaitMs);
+  });
+
+  it('does not inflate a short 1Min request to 30 days while retaining the daily lookback minimum', () => {
+    const end = Date.UTC(2026, 9, 13, 15, 0, 0);
+    expect(buildIbkrHistoricalDuration('1Min', end - 10 * 60_000, end)).toBe('600 S');
+    expect(buildIbkrHistoricalDuration('1Min', end - 2 * 86_400_000, end)).toBe('2 D');
+    expect(buildIbkrHistoricalDuration('1Day', end - 86_400_000, end)).toBe('30 D');
+  });
+
+  it('serves current-session live Quant work before queued old intraday backfill', async () => {
+    const s = session(); const socket = await connect(s);
+    const order: string[] = [];
+    let firstReqId: number | null = null;
+    socket.reqHistoricalData.mockImplementation((reqId: number, contract: any) => {
+      order.push(String(contract?.symbol));
+      if (firstReqId === null) {
+        firstReqId = reqId;
+        return;
+      }
+      queueMicrotask(() => socket.emit(EventName.historicalData, reqId, 'finished', 0, 0, 0, 0, 0));
+    });
+
+    const now = Date.now();
+    const oldEnd = now - 14 * 86_400_000;
+    const first = s.requestHistoricalBars('IBM', '1Min', oldEnd - 60_000, oldEnd);
+    for (let i = 0; order.length === 0 && i < 20; i++) await Promise.resolve();
+
+    const queuedBackground = s.requestHistoricalBars('INTC', '1Min', oldEnd - 60_000, oldEnd);
+    const queuedLive = s.requestHistoricalBars('SPY', '1Min', now - 60_000, now);
+
+    socket.emit(EventName.historicalData, firstReqId, 'finished', 0, 0, 0, 0, 0);
+    await Promise.all([first, queuedBackground, queuedLive]);
+
+    expect(order).toEqual(['IBM', 'SPY', 'INTC']);
+  });
+
+  it('coalesces equivalent historical requests into one IBKR request', async () => {
+    const s = session(); const socket = await connect(s);
+    socket.reqHistoricalData.mockImplementation((reqId: number) => {
+      queueMicrotask(() => socket.emit(EventName.historicalData, reqId, 'finished', 0, 0, 0, 0, 0));
+    });
+
+    const now = Date.now();
+    const a = s.requestHistoricalBars('QQQ', '1Min', now - 5 * 60_000, now);
+    const b = s.requestHistoricalBars('QQQ', '1Min', now - 5 * 60_000, now);
+    await Promise.all([a, b]);
+
+    expect(socket.reqHistoricalData).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops queued work that expires before provider service instead of sending stale work to IBKR', async () => {
+    const s = session(); const socket = await connect(s);
+    let activeReqId: number | null = null;
+    const requestedSymbols: string[] = [];
+    socket.reqHistoricalData.mockImplementation((reqId: number, contract: any) => {
+      requestedSymbols.push(String(contract?.symbol));
+      if (activeReqId === null) activeReqId = reqId;
+      else queueMicrotask(() => socket.emit(EventName.historicalData, reqId, 'finished', 0, 0, 0, 0, 0));
+    });
+
+    const now = Date.now();
+    const oldEnd = now - 14 * 86_400_000;
+    const active = s.requestHistoricalBars('IBM', '1Min', oldEnd - 60_000, oldEnd);
+    for (let i = 0; requestedSymbols.length === 0 && i < 20; i++) await Promise.resolve();
+
+    const expiring = s.requestHistoricalBars('SPY', '1Min', now - 60_000, now, {
+      priority: 'LIVE_QUANT',
+      maxQueueWaitMs: 1,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    socket.emit(EventName.historicalData, activeReqId, 'finished', 0, 0, 0, 0, 0);
+
+    await expect(active).resolves.toEqual([]);
+    await expect(expiring).rejects.toThrow(/expired in queue/i);
+    expect(requestedSymbols).toEqual(['IBM']);
   });
 });
