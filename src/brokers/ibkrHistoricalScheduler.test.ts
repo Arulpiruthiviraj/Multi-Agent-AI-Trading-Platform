@@ -312,3 +312,36 @@ describe('HistoricalRequestScheduler: negative cache (backfill churn)', () => {
     void p;
   });
 });
+
+describe('HistoricalRequestScheduler: negative cache STRESS (hundreds of permanently failing windows)', () => {
+  it('re-submitting 300 failing research windows every 5 minutes for 24 h: wire requests per hour converge DOWNWARD and stay far below the naive rate', async () => {
+    const NEG = { baseMs: 600_000, maxMs: 6 * 3_600_000, maxEntries: 5000 };
+    const h = harness({ negativeCache: NEG, maxQueued: { 0: 24, 1: 24, 2: 48, 3: 5000 } });
+    const WINDOWS = 300; const PERIOD = 5 * 60_000; const HOURS = 24;
+    const wirePerHour: number[] = new Array(HOURS).fill(0);
+    const t0 = h.now();
+    let served = 0;
+    for (let tick = 0; tick < (HOURS * 3_600_000) / PERIOD; tick++) {
+      for (let w = 0; w < WINDOWS; w++) void settle(h.sched.submit(job(`DEAD${w}`, 'RESEARCH_BACKFILL', 1000 + w, 2000 + w)));
+      // drain: every request that reaches the wire fails (IBKR cannot serve these windows)
+      for (let guard = 0; guard < WINDOWS * 2; guard++) {
+        await h.flush();
+        if (h.started.length === served) break;
+        const hour = Math.min(HOURS - 1, Math.floor((h.now() - t0) / 3_600_000));
+        while (served < h.started.length) { wirePerHour[hour]++; h.started[served].reject(new Error('IBKR historicalData timeout')); served++; }
+      }
+      h.advance(PERIOD);
+    }
+    const naive = WINDOWS * (3_600_000 / PERIOD);
+    expect(wirePerHour[0]).toBeLessThanOrEqual(WINDOWS * 3);                    // first hour: tries at t=0, +10 min, +30 min (10/20/40 min doubling)
+    expect(wirePerHour[0]).toBeLessThan(naive * 0.3);
+    const firstHalf = wirePerHour.slice(0, 12).reduce((a, b) => a + b, 0);
+    const secondHalf = wirePerHour.slice(12).reduce((a, b) => a + b, 0);
+    expect(secondHalf).toBeLessThanOrEqual(firstHalf);                           // converges downward, never ramps back up
+    expect(wirePerHour.slice(6).every((n) => n <= WINDOWS)).toBe(true);        // later hours never exceed one attempt per window per hour
+    const total = wirePerHour.reduce((a, b) => a + b, 0);
+    expect(total).toBeLessThan(naive * HOURS * 0.05);                            // < 5% of the unthrottled request volume
+    expect(h.sched.getStats().negativeCacheEntries).toBeLessThanOrEqual(NEG.maxEntries);
+    expect(h.sched.getStats().counters.negativeCached).toBeGreaterThan(0);
+  });
+});
