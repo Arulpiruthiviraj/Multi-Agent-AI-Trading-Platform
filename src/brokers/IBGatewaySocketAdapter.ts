@@ -57,6 +57,14 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
     this.session.setHistoricalDataErrorHandler(handler);
   }
 
+  setHistoricalDataTimingHandler(handler: ((detail: {
+    symbol: string; timeframe: string; startMs: number; endMs: number;
+    queueWaitMs: number; serviceMs: number; totalMs: number;
+    outcome: 'SUCCESS' | 'EMPTY' | 'TIMEOUT' | 'ERROR'; barCount: number;
+  }) => void) | null): void {
+    this.session.setHistoricalDataTimingHandler(handler);
+  }
+
   /** 2026-09-20 remediation (part D): surfaces an IBKR delayed tick (field 66-69). Diagnostics
    *  only - never routed through setQuoteSink's live sink. */
   setDelayedTickHandler(handler: ((symbol: string, field: number, price: number) => void) | null): void {
