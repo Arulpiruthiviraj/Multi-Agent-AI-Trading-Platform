@@ -297,32 +297,48 @@ export class RiskEngine {
         let buyingPower: number | undefined;
 
         try {
-            // 0. Trading kill switch - checked first, always evaluated and recorded, unlike the
-            // old RiskAgent pre-check that bypassed RiskEngine (and thus this gate ladder)
-            // entirely on a rejection. Blocks on BOTH non-enabled states - TRADING_PAUSED is a
-            // softer halt than EMERGENCY_STOP (no forced order cancellation) but it still means
-            // no new trades, which is the entire point of pausing.
+            // 0. Trading control is evaluated first. EMERGENCY_STOP remains absolute. TRADING_PAUSED
+            // is entry-only for a cryptographically sealed PortfolioMonitor protective SELL: pausing
+            // entries during maintenance/restart must not disable the position-reducing safety path.
+            // Unsealed/discretionary SELLs and every BUY remain blocked while paused.
             const replay = getActiveReplaySession();
+            let sealedProtectiveSell: boolean | null = null;
+            const isSealedProtectiveSell = (): boolean => {
+                if (sealedProtectiveSell === null) {
+                    sealedProtectiveSell = !replay && proposal.side === 'SELL'
+                        && verifyAndConsumeProtectiveExitSeal(
+                            proposal.protectiveExitSeal,
+                            { traceId: proposal.traceId, symbol: proposal.symbol, side: proposal.side },
+                        );
+                }
+                return sealedProtectiveSell;
+            };
             const tradingState = replay ? 'TRADING_ENABLED' : tradingEngine.state.tradingState;
-            recordGate('emergency_stop', tradingState === 'TRADING_ENABLED', { tradingState, emergencyStopActive: tradingEngine.state.emergencyStopActive, replay: !!replay });
+            const pausedProtectiveExitAllowed = tradingState === 'TRADING_PAUSED' && isSealedProtectiveSell();
+            const tradingStatePassed = tradingState === 'TRADING_ENABLED' || pausedProtectiveExitAllowed;
+            recordGate('emergency_stop', tradingStatePassed, {
+                tradingState,
+                emergencyStopActive: tradingEngine.state.emergencyStopActive,
+                replay: !!replay,
+                pausedProtectiveExitAllowed,
+            });
             const emergencyStopReason = tradingState === 'EMERGENCY_STOP'
-                ? "Emergency stop is active. All new trades are blocked until resumed."
-                : "Trading is paused. All new trades are blocked until resumed.";
+                ? "Emergency stop is active. All trading, including protective exits, is blocked until resumed."
+                : "Trading is paused. New entries and unsealed trades are blocked; only a sealed PortfolioMonitor protective exit is allowed.";
 
             // Autobot toggle (tradingEngine.state.enabled / UI autoBotConfig.enabled) is NOT a
-            // second kill switch. emergency_stop still owns TRADING_PAUSED / EMERGENCY_STOP.
-            // New BUY risk requires Autobot on; SELL/exits still run while TRADING_ENABLED so
-            // PortfolioMonitor can flatten existing paper positions.
+            // second kill switch. New BUY risk requires Autobot on. A sealed protective SELL may
+            // continue while TRADING_PAUSED; EMERGENCY_STOP still blocks every order.
             const autobotOn = replay ? replaySafety.allowBuysInReplay : tradingEngine.state.enabled === true;
             const autobotBlocksBuy = proposal.side === 'BUY' && !autobotOn;
             recordGate('autobot_enabled', !autobotBlocksBuy, {
                 enabled: tradingEngine.state.enabled,
                 side: proposal.side,
                 note: proposal.side === 'SELL'
-                    ? 'SELL/exit is not blocked by Autobot-off; emergency_stop still applies.'
+                    ? 'SELL/exit is not blocked by Autobot-off; trading-state gate separately requires TRADING_ENABLED or a sealed protective exit while paused.'
                     : undefined,
             });
-            const autobotReason = 'AUTOBOT_DISABLED: Autobot is off. New BUY risk is blocked. SELL/exits still require TRADING_ENABLED.';
+            const autobotReason = 'AUTOBOT_DISABLED: Autobot is off. New BUY risk is blocked.';
 
             const nowMs = replay ? replay.clock.now() : Date.now();
             // Replay knows its own replayId, so it can push the filter into the query itself
@@ -516,20 +532,10 @@ export class RiskEngine {
               recordGate('buying_power_reservation', true, { reservedBuyNotional, buyingPowerAfterReservation: buyingPower });
             }
 
-            // 2026-10-12 gate-by-intent: loss/rate gates exist to stop NEW exposure. A verified,
-            // single-use protective-exit seal (minted only by PortfolioMonitor.emitRiskExit, bound to
-            // this trace+symbol+SELL) lets the position-REDUCING order past those four gates only; every
-            // mandatory gate (sell_position_exists, sufficient_size, price_validity, market_hours,
-            // data_freshness, emergency_stop) still applies. Verified once and memoized because the
-            // seal is consumed on first verification and news_veto needs the same answer.
-            let sealedProtectiveSell: boolean | null = null;
-            const isSealedProtectiveSell = (): boolean => {
-                if (sealedProtectiveSell === null) {
-                    sealedProtectiveSell = !replay && proposal.side === 'SELL'
-                        && verifyAndConsumeProtectiveExitSeal(proposal.protectiveExitSeal, { traceId: proposal.traceId, symbol: proposal.symbol, side: proposal.side });
-                }
-                return sealedProtectiveSell;
-            };
+            // 2026-10-12 gate-by-intent: loss/rate gates exist to stop NEW exposure. The verified
+            // single-use protective-exit seal was resolved once above for the trading-state gate and
+            // is memoized for the loss/rate/news exemptions below. Mandatory position/size/price/
+            // session/freshness gates still apply; EMERGENCY_STOP remains absolute.
 
             // 2a. Daily loss circuit breaker - tracks real broker equity against a start-of-day
             // baseline captured the first time we evaluate risk each calendar day. Uses the real
