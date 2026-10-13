@@ -68,6 +68,16 @@ import { getTimeHHMMInZone, TRADING_TIMEZONE } from '../core/TradingCalendar';
 
 export type TradingState = 'TRADING_ENABLED' | 'TRADING_PAUSED' | 'EMERGENCY_STOP';
 
+/**
+ * 2026-10-13: what a TRADING_PAUSED state blocks. FULL (the default and every pre-existing pause) blocks every order,
+ * including protective exits - exactly the behavior that blocked the S end-of-day flatten on Oct 12. ENTRIES_ONLY is set
+ * ONLY by the boot restart-safety pause when `tradingSafety.restartSafetyEntriesOnlyPause` is true: new entries stay
+ * blocked until an operator resumes, but a sealed protective SELL (minted by PortfolioMonitor, bound to trace+symbol)
+ * may still pass RiskEngine's emergency_stop gate - every other gate (position existence, quantity, price, session,
+ * freshness, reconciliation) still applies. EMERGENCY_STOP is never affected. In-memory only: a restart returns to FULL.
+ */
+export type PauseKind = 'FULL' | 'ENTRIES_ONLY';
+
 // Fields a client is allowed to change via the generic toggle()/config-update path. Deliberately
 // excludes tradingState/emergencyStopActive (must go through setTradingState(), which is
 // audited), history/eventBus/activeCycle/etc (internal, derived, or event-driven state, not
@@ -115,6 +125,7 @@ export interface AutoBotState {
     regimeState?: any;
     emergencyStopActive: boolean;
     tradingState: TradingState;
+    pauseKind: PauseKind;
     dayStartEquity: number | null;
     dayStartDateStr: string | null;
     // AutoTradeScheduler.ts: when true, that background worker owns `enabled` and drives it
@@ -142,6 +153,7 @@ class TradingEngine {
             currentDailyLoss: 0,
             emergencyStopActive: false,
             tradingState: 'TRADING_ENABLED',
+            pauseKind: 'FULL',
             dayStartEquity: null,
             dayStartDateStr: null,
             autoTradeScheduleEnabled: false,
@@ -629,10 +641,12 @@ class TradingEngine {
      */
     public async setTradingState(
         newState: TradingState,
-        opts: { reason: string; actor: string; cancelOpenOrders?: boolean }
+        opts: { reason: string; actor: string; cancelOpenOrders?: boolean; pauseKind?: PauseKind }
     ): Promise<{ ok: true; fromState: TradingState; toState: TradingState; cancelledOrderIds: string[] }> {
         const fromState = this.state.tradingState;
         this.state.tradingState = newState;
+        // Only an explicit ENTRIES_ONLY request on a PAUSE narrows the pause; any other transition resets to FULL.
+        this.state.pauseKind = newState === 'TRADING_PAUSED' && opts.pauseKind === 'ENTRIES_ONLY' ? 'ENTRIES_ONLY' : 'FULL';
         this.state.emergencyStopActive = newState === 'EMERGENCY_STOP'; // kept in sync for RiskEngine/UI back-compat
 
         let cancelledOrderIds: string[] = [];

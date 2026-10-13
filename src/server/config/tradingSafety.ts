@@ -495,6 +495,8 @@ export interface TradingSafety {
   agentWinRateAlertPct: number;
   agentWinRateAlertMinPredictions: number;
   autoFlattenOnReconciliationMismatch: boolean;
+  /** 2026-10-13: when true the boot restart-safety pause is ENTRIES_ONLY (new entries blocked, sealed protective exits allowed). Default false = unchanged FULL pause. */
+  restartSafetyEntriesOnlyPause: boolean;
   /** P1-11 (2026-10-04 remediation): default true preserves exact current behavior (an
    *  unconfigured Alpaca clock - no ALPACA_API_KEY/SECRET_KEY - skips gate 12 entirely, passing
    *  regardless of real time). When an operator sets this false, gate 12 falls back to
@@ -1019,6 +1021,9 @@ function loadTradingSafety(): TradingSafety {
   }
   if (typeof raw.defaultStrategyFocus !== 'string' || !raw.defaultStrategyFocus) {
     throw new Error('config/tradingSafety.json missing string field: defaultStrategyFocus');
+  }
+  if (typeof raw.restartSafetyEntriesOnlyPause !== 'boolean') {
+    throw new Error('config/tradingSafety.json missing boolean field: restartSafetyEntriesOnlyPause');
   }
   if (typeof raw.autoFlattenOnReconciliationMismatch !== 'boolean') {
     throw new Error('config/tradingSafety.json missing boolean field: autoFlattenOnReconciliationMismatch');

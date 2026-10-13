@@ -4,6 +4,7 @@
  *
  * Boot order invariant (DEF-01): BrokerManager.initialize() before tradingEngine.initialize().
  */
+import { tradingSafety } from '../config/tradingSafety';
 import { AIRouter } from '../ai/AIRouter';
 import { armReconciliationBootWarmup } from './startup';
 import { installServerLogBuffer } from '../services/ServerLogBuffer';
@@ -109,7 +110,11 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
   // beginRuntimeSession() writes this process's own fresh marker.
   const restartSafety = evaluateRestartSafety(interruptedSession, tradingEngine.state.tradingState);
   if (restartSafety.shouldForcePause) {
-    await tradingEngine.setTradingState('TRADING_PAUSED', { reason: restartSafety.reason, actor: 'RestartSafetyGuard' });
+    await tradingEngine.setTradingState('TRADING_PAUSED', {
+      reason: restartSafety.reason,
+      actor: 'RestartSafetyGuard',
+      pauseKind: tradingSafety.restartSafetyEntriesOnlyPause ? 'ENTRIES_ONLY' : 'FULL',
+    });
   }
 
   // 2026-10-08 defect hunt (P2-W2): gracefulShutdown publishes {shutdownInProgress: true}
