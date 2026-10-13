@@ -87,6 +87,15 @@ export interface SizingContext {
   symbol: string;
   currentPrice: number;
   accountEquity: number;
+  /**
+   * 2026-10-13 research-capital consistency: Argus's own capital (settings.budget + realized + unrealized P&L).
+   * When supplied, every PERCENT-OF-CAPITAL cap (portfolio risk amount, percent-of-equity notional, single-symbol
+   * concentration, sector concentration, correlated exposure) is computed on THIS, not on the ~$1M simulated broker
+   * account. `accountEquity` stays the broker figure and still drives only the INVALID_ACCOUNT_EQUITY validity gate.
+   * Omitted (replay/backtest/research-basis off or unavailable) -> accountEquity, exactly the previous behavior.
+   * Buying power can only LIMIT a quantity; it can never enlarge research risk capacity.
+   */
+  riskCapitalEquity?: number;
   buyingPower: number;
   maxTradeSizeDollar: number;
   maxPortfolioRiskPct: number;
@@ -161,7 +170,10 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
   }
 
   const riskPerShare = ctx.currentPrice * STOP_LOSS_ASSUMPTION_PCT;
-  const maxRiskAmount = ctx.accountEquity * ctx.maxPortfolioRiskPct;
+  const capitalBasis = (typeof ctx.riskCapitalEquity === 'number' && Number.isFinite(ctx.riskCapitalEquity) && ctx.riskCapitalEquity > 0)
+    ? ctx.riskCapitalEquity
+    : ctx.accountEquity;
+  const maxRiskAmount = capitalBasis * ctx.maxPortfolioRiskPct;
   // Crypto Expansion Phase 1 (2026-09-21): shared by both BUY blocks below (notional/risk/BP, and
   // concentration/sector/correlation). Omitted -> step=1 -> exact existing equity behavior.
   const quantityStep = ctx.quantityStep ?? 1;
@@ -173,7 +185,7 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
   // computed exactly as before and still applies on top of whichever notional cap wins here.
   const sizingMode = ctx.sizingMode ?? 'FIXED_DOLLAR';
   const effectiveNotionalCapDollar = sizingMode === 'PERCENT_OF_EQUITY'
-    ? ctx.accountEquity * ((ctx.percentOfEquityPct ?? tradingSafety.defaultPercentOfEquityPct) / 100)
+    ? capitalBasis * ((ctx.percentOfEquityPct ?? tradingSafety.defaultPercentOfEquityPct) / 100)
     : ctx.maxTradeSizeDollar;
 
   let maxQuantity: number;
@@ -273,7 +285,7 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
     };
     const existingPosition = ctx.existingPositions.find(p => p.symbol === ctx.symbol);
     const existingValue = existingPosition ? existingPosition.quantity * ctx.currentPrice : 0;
-    const maxPositionValue = ctx.accountEquity * MAX_SINGLE_SYMBOL_CONCENTRATION_PCT;
+    const maxPositionValue = capitalBasis * MAX_SINGLE_SYMBOL_CONCENTRATION_PCT;
     const remainingRoom = Math.max(0, maxPositionValue - existingValue);
     const maxSharesByConcentration = quantizeQuantityDown(remainingRoom / ctx.currentPrice, quantityStep);
     const beforeConcentration = maxQuantity;
@@ -295,7 +307,7 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
     if (proposalSector) {
       const sectorMarks = valueHoldings(ctx.existingPositions.filter(p => getSector(p.symbol) === proposalSector));
       const sectorValue = sectorMarks.value;
-      const maxSectorValue = ctx.accountEquity * MAX_SECTOR_CONCENTRATION_PCT;
+      const maxSectorValue = capitalBasis * MAX_SECTOR_CONCENTRATION_PCT;
       const remainingSectorRoom = sectorValue === null ? 0 : Math.max(0, maxSectorValue - sectorValue);
       const maxSharesBySector = quantizeQuantityDown(remainingSectorRoom / ctx.currentPrice, quantityStep);
       const beforeSector = maxQuantity;
@@ -329,7 +341,7 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
         }
         const correlatedMarks = valueHoldings(correlatedPositions);
         const correlatedValue = correlatedMarks.value;
-        const maxCorrelatedValue = ctx.accountEquity * MAX_CORRELATED_EXPOSURE_PCT;
+        const maxCorrelatedValue = capitalBasis * MAX_CORRELATED_EXPOSURE_PCT;
         const remainingCorrelatedRoom = correlatedValue === null ? 0 : Math.max(0, maxCorrelatedValue - correlatedValue);
         const maxSharesByCorrelation = quantizeQuantityDown(remainingCorrelatedRoom / ctx.currentPrice, quantityStep);
         const beforeCorr = maxQuantity;

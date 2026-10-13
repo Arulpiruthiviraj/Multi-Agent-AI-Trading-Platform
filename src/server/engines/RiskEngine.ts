@@ -841,6 +841,8 @@ export class RiskEngine {
                     symbol: proposal.symbol,
                     currentPrice,
                     accountEquity,
+                    // 2026-10-13: percent-of-capital caps use Argus research capital, never the broker account.
+                    riskCapitalEquity: researchSnap && Number.isFinite(researchSnap.equity) && researchSnap.equity > 0 ? researchSnap.equity : undefined,
                     buyingPower,
                     maxTradeSizeDollar: applySubordinateAssetNotionalCap({
                         symbol: proposal.symbol,
