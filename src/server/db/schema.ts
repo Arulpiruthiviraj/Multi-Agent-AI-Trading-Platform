@@ -984,7 +984,10 @@ export const consensusEvidence = sqliteTable('consensus_evidence', {
   reasoning: text('reasoning'),
   agreed: integer('agreed', { mode: 'boolean' }).notNull(), // did this agent's side match the final consensus side?
   currentPrice: real('current_price'),
-});
+}, (table) => ({
+  // 2026-10-13: lookups by transaction_id were a full-table SCAN (13-14 s per call observed). See migration 0100.
+  transactionIdIdx: index('idx_consensus_evidence_transaction_id').on(table.transactionId),
+}));
 
 // Phase 1 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md) - the AI call ledger. Before this, AIRouter's
 // routeTask()/routeConsensus() sent the real prompt to the real provider and only the token
