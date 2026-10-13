@@ -842,11 +842,17 @@ export class RiskEngine {
                 // every current real) symbol - see quantityStep/minimumQuantity/minimumNotional
                 // below.
                 const cryptoInstrumentForSizing = getCryptoInstrument(proposal.symbol);
+                // When Argus is explicitly operating on a research-capital risk basis, every
+                // exposure/sizing cap must use that same equity denominator. Passing the ~$1M PAPER
+                // broker equity here made symbol/sector/correlation caps effectively non-binding
+                // relative to the configured $20K Argus allocation.
+                const sizingEquity = researchSnap?.equity ?? accountEquity;
+                const sizingEquityBasis = researchSnap ? 'RESEARCH' : 'BROKER';
                 const sizingResult = await calculatePositionSizing({
                     side: proposal.side,
                     symbol: proposal.symbol,
                     currentPrice,
-                    accountEquity,
+                    accountEquity: sizingEquity,
                     buyingPower,
                     maxTradeSizeDollar: applySubordinateAssetNotionalCap({
                         symbol: proposal.symbol,
@@ -878,7 +884,12 @@ export class RiskEngine {
                     closePositionIntent: proposal.closePositionIntent,
                 });
                 maxQuantity = sizingResult.maxQuantity;
-                for (const g of sizingResult.gates) recordGate(g.gate, g.passed, g.detail);
+                for (const g of sizingResult.gates) recordGate(g.gate, g.passed, {
+                    ...g.detail,
+                    equityBasis: sizingEquityBasis,
+                    sizingEquity,
+                    brokerEquity: accountEquity,
+                });
                 sufficientSizePassed = sizingResult.gates.find(g => g.gate === 'sufficient_size')?.passed ?? false;
 
                 // If we are selling, make sure we have the shares
