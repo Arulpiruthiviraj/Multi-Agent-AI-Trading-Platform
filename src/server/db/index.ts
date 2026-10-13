@@ -34,6 +34,7 @@
  */
 
 import Database from 'better-sqlite3';
+import { instrumentSlowSql } from './slowSqlTiming';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import * as schema from './schema';
@@ -83,6 +84,11 @@ sqlite.pragma('synchronous = NORMAL');
 // disk - a straightforward throughput win with no durability tradeoff (nothing here is data
 // that survives a restart anyway).
 sqlite.pragma('temp_store = MEMORY');
+
+// 2026-10-12: name the statement behind any long synchronous block (see slowSqlTiming.ts). Threshold
+// ARGUS_SLOW_SQL_MS (default 1500); 0 disables.
+const slowSqlMs = Number(process.env.ARGUS_SLOW_SQL_MS ?? 1500);
+if (slowSqlMs > 0 && !process.env.VITEST) instrumentSlowSql(sqlite, slowSqlMs);
 
 export const db = drizzle(sqlite, { schema });
 export const sqliteDb = sqlite;

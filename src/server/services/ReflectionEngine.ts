@@ -9,7 +9,7 @@
  */
 import { db } from '../db';
 import { agentPredictions, agentPerformanceStats, agentConfidenceCalibration, trades, learnedRules, predictionOutcomes, kronosPredictions } from '../db/schema';
-import { eq, desc, or, and, exists, isNull, notInArray, not, like, sql } from 'drizzle-orm';
+import { eq, desc, or, and, exists, isNull, notInArray, not, like, sql, getTableColumns } from 'drizzle-orm';
 import { eventBus } from '../core/EventBus';
 import { AIRouter } from '../ai/AIRouter';
 import { bucketFor, calibratedConfidenceForBucket } from './ConfidenceCalibration';
@@ -23,6 +23,35 @@ import { independenceClusterGapMs, isExcludedFromWeightLearning, secondaryGroupK
 import { isTelemetryPulsePayload, TELEMETRY_PULSE_TRACE_PREFIX } from '../core/telemetryPulse';
 import { NON_LIVE_OPENING_TRADE_ENVS } from './omsEntryPrice';
 import { recordReflectionEngineCycleSample, incReflectionEngineSkippedOverlap } from '../observability/ObservabilityMetrics';
+
+const yieldToEventLoop = (): Promise<void> => new Promise<void>((resolve) => setImmediate(resolve));
+
+/**
+ * Profiled 2026-10-12 (freeze profiler, data/freeze-profiles): evaluateAgents() materialised the whole
+ * agent_predictions / prediction_outcomes / kronos_predictions tables with single synchronous
+ * better-sqlite3 `.all()` calls on the main thread every cycle - 6-15 s of event-loop blocking per
+ * minute on the 17 GB production database. Same rows, same order (rowid ascending), but fetched in bounded
+ * pages with a macrotask yield between pages so no single block exceeds one page's cost.
+ */
+async function selectAllPaged<T extends Record<string, any>>(table: any, tableName: string, where: any): Promise<T[]> {
+  const pageRows = Math.max(100, Number(tradingSafety.calibrationFetchPageRows) || 2000);
+  const out: T[] = [];
+  let last = -1;
+  for (;;) {
+    const rowidFilter = sql`"${sql.raw(tableName)}"."rowid" > ${last}`;
+    const rows: any[] = await db
+      .select({ ...getTableColumns(table), __rowid: sql<number>`"${sql.raw(tableName)}"."rowid"` })
+      .from(table)
+      .where(where ? and(where, rowidFilter) : rowidFilter)
+      .orderBy(sql`"${sql.raw(tableName)}"."rowid"`)
+      .limit(pageRows);
+    if (rows.length === 0) break;
+    for (const r of rows) { last = Number(r.__rowid); delete r.__rowid; out.push(r as T); }
+    if (rows.length < pageRows) break;
+    await yieldToEventLoop();
+  }
+  return out;
+}
 
 export class ReflectionEngine {
   private intervalId: NodeJS.Timeout | null = null;
@@ -284,7 +313,7 @@ export class ReflectionEngine {
       // Read eligibility only: pending predictions cannot contribute to the outcome loop.
       // EXISTS uses the existing (prediction_id, source_table) index and avoids loading
       // their payloads into V8. Calibration math and all graded outcomes remain unchanged.
-      const rawPredictionRows = await db.select().from(agentPredictions).where(and(
+      const rawPredictionRows = await selectAllPaged<any>(agentPredictions, 'agent_predictions', and(
         or(
           isNull(agentPredictions.traceId),
           not(like(agentPredictions.traceId, `${TELEMETRY_PULSE_TRACE_PREFIX}%`)),
@@ -293,12 +322,12 @@ export class ReflectionEngine {
           eq(predictionOutcomes.predictionId, agentPredictions.id),
           eq(predictionOutcomes.sourceTable, 'agent_predictions'),
         ))),
-      )).all();
+      ));
       agentPredictionsQueryDurationMs = Date.now() - predictionsQueryStartedAt;
       agentPredictionsRowsScanned = rawPredictionRows.length;
       const predictions = rawPredictionRows;
       const predictionById = new Map(predictions.map(p => [p.id, p]));
-      const outcomes = await db.select().from(predictionOutcomes).where(eq(predictionOutcomes.sourceTable, 'agent_predictions'));
+      const outcomes = await selectAllPaged<any>(predictionOutcomes, 'prediction_outcomes', eq(predictionOutcomes.sourceTable, 'agent_predictions'));
       for (const o of outcomes) {
         const p = predictionById.get(o.predictionId);
         if (!p || p.agentName === 'KronosEngine') continue; // Kronos sourced from kronos_predictions below - see M1
@@ -314,17 +343,17 @@ export class ReflectionEngine {
       // duplication) - source its stats/calibration from there directly instead of the
       // agent_predictions copies (ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md finding M1).
       const kronosQueryStartedAt = Date.now();
-      const kronosRows = await db.select().from(kronosPredictions).where(
+      const kronosRows = await selectAllPaged<any>(kronosPredictions, 'kronos_predictions',
         exists(db.select({ id: predictionOutcomes.id }).from(predictionOutcomes).where(and(
           // Match the old Map's String(id) exactly; do not coerce '01' into id 1.
           eq(predictionOutcomes.predictionId, sql<string>`cast(${kronosPredictions.id} as text)`),
           eq(predictionOutcomes.sourceTable, 'kronos_predictions'),
         ))),
-      ).all();
+      );
       kronosPredictionsQueryDurationMs = Date.now() - kronosQueryStartedAt;
       kronosPredictionsRowsScanned = kronosRows.length;
       const kronosById = new Map(kronosRows.map(k => [String(k.id), k]));
-      const kronosOutcomes = await db.select().from(predictionOutcomes).where(eq(predictionOutcomes.sourceTable, 'kronos_predictions'));
+      const kronosOutcomes = await selectAllPaged<any>(predictionOutcomes, 'prediction_outcomes', eq(predictionOutcomes.sourceTable, 'kronos_predictions'));
       for (const o of kronosOutcomes) {
         const k = kronosById.get(o.predictionId);
         if (!k) continue;
