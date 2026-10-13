@@ -78,9 +78,11 @@ describe('QuantSignalAgent intraday fetch deadline', () => {
     const realEnsure = historicalDataGateway.ensureBars.bind(historicalDataGateway);
     let intradayCalls = 0;
     let intradayStillPending = true;
+    let capturedIntent: any = null;
     vi.spyOn(historicalDataGateway, 'ensureBars').mockImplementation((async (symbol: string, tf: string, s: number, e: number) => {
       if (tf === '1Min') {
         intradayCalls++;
+        capturedIntent = (await import('../data/historicalRequestIntent')).currentHistoricalIntent();
         return new Promise<void>(() => { /* never settles: stalled provider queue */ });
       }
       return realEnsure(symbol, tf, s, e);
@@ -90,7 +92,11 @@ describe('QuantSignalAgent intraday fetch deadline', () => {
     const started = Date.now();
     const evaluation = await new QuantSignalAgent().evaluateSymbol('QINTRA', { emitIdeas: false });
     void started;
-    expect(intradayCalls).toBe(1); // the fetch was attempted exactly once - not duplicated, not cancelled
+    expect(intradayCalls).toBe(1); // the fetch was attempted exactly once - not duplicated
+    // 2026-10-13: it carries a live-Quant intent and an abandonment signal that fired at the decision deadline, so the scheduler
+    // discards / cancels the IBKR request instead of leaving it as zombie work.
+    expect(capturedIntent?.intent).toBe('QUANT_ON_DEMAND');
+    expect(capturedIntent?.signal?.aborted).toBe(true);
     expect(intradayStillPending).toBe(true);
     expect(evaluation).not.toBeNull(); // evaluation completed without intraday bars (fail-open path)
 

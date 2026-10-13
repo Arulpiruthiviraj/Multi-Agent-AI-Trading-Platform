@@ -27,7 +27,7 @@ import { generateTraceId } from '../core/traceId';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { db } from '../db';
-import { runWithHistoricalIntent } from '../data/historicalRequestIntent';
+import { runWithHistoricalIntent, currentHistoricalIntent } from '../data/historicalRequestIntent';
 import * as schema from '../db/schema';
 import { marketDataWorker, type RescueRequestClass } from './MarketDataWorker';
 import { getCachedMoverSymbols } from '../continuous/MarketUniverseScanner';
@@ -964,7 +964,12 @@ export class QuantSignalAgent {
           // here. Past quantIntradayFetchMaxWaitMs the evaluation proceeds as it already does when
           // this fetch fails (no intraday bars; opening range honestly unavailable) - the fetch keeps
           // running underneath (never cancelled or duplicated) and its bars serve a later evaluation.
-          const intradayFetch = (async () => {
+          // 2026-10-13: the caller's decision deadline is also the scheduler's abandonment signal. Past the deadline this
+          // evaluation proceeds without the bars, so the IBKR request is discarded if still queued, or cancelled shortly after
+          // if already on the wire - it no longer lives on as zombie work ahead of other live-session requests.
+          const intradayAbort = new AbortController();
+          const declaredIntent = currentHistoricalIntent()?.intent ?? 'QUANT_ON_DEMAND';
+          const intradayFetch = runWithHistoricalIntent(declaredIntent, async () => {
             try {
               await historicalDataGateway.ensureBars(symbol, INTRADAY_TIMEFRAME, window.startMs, window.endMs);
             } catch (e: any) {
@@ -972,9 +977,12 @@ export class QuantSignalAgent {
               if (!/429|rate-limited|Too Many Requests/i.test(msg)) throw e;
             }
             return historicalDataGateway.getBars(symbol, INTRADAY_TIMEFRAME, window.startMs, window.endMs);
-          })();
+          }, intradayAbort.signal);
+          // A late rejection (cancelled/expired after we stopped waiting) must never surface as an unhandled rejection.
+          intradayFetch.catch(() => undefined);
           const intradayOutcome = await awaitWithinDeadline(intradayFetch, tradingSafety.quantIntradayFetchMaxWaitMs);
           if (intradayOutcome.timedOut) {
+            intradayAbort.abort();
             observeSafe(() => structuredLogger.info('quant_intraday_fetch_deadline', {
               category: 'DISCOVERY', eventType: 'QUANT_INTRADAY_FETCH_DEADLINE', symbol, traceId,
               reasoning: `Intraday ${INTRADAY_TIMEFRAME} fetch exceeded ${tradingSafety.quantIntradayFetchMaxWaitMs}ms; evaluation proceeds without intraday bars (opening range unavailable this cycle). Fetch continues in the background.`,
