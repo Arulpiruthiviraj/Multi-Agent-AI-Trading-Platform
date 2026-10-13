@@ -52,6 +52,19 @@ export function getCachedIbkrContractResolution(symbol: string): ContractResolut
   return resolutionCache.get(symbol.toUpperCase()) ?? null;
 }
 
+/**
+ * 2026-10-13: IBKR answered a historical-data request with code 200 ("No security definition has been found").
+ * Remember it (in-memory, like the rest of this cache) so repeated requests for the same non-security string
+ * (news-derived company names such as INTEL/WALMART) fail fast in stockContract() instead of each one waiting
+ * its turn in the single serial historical queue only to be rejected again.
+ */
+export function recordIbkrContractNotFound(symbol: string): void {
+  const key = symbol.toUpperCase();
+  const existing = resolutionCache.get(key);
+  if (existing && existing.status === 'RESOLVED') return; // a verified contract is never overwritten by one error
+  resolutionCache.set(key, { status: 'NOT_FOUND', symbol: key, resolvedAt: Date.now() });
+}
+
 export function resetIbkrContractResolutionCacheForTests(): void {
   resolutionCache.clear();
 }

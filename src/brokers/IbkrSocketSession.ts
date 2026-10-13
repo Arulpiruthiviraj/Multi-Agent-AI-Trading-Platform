@@ -3,6 +3,7 @@
  * Orders still enter only through OMS → BrokerManager.getActiveBroker().placeOrder().
  * This module never opens a browser and never speaks Client Portal :5000.
  */
+import { recordIbkrContractNotFound } from './ibkrContractResolution';
 import { histRequestStore } from '../server/data/historicalRequestTelemetry';
 import {
   IBApi,
@@ -1485,8 +1486,7 @@ export class IbkrSocketSession {
       );
     }
 
-    const spanDays = Math.max(1, Math.ceil((endMs - startMs) / 86_400_000));
-    const durationStr = spanDays <= 365 ? `${Math.min(365, Math.max(spanDays, 30))} D` : '2 Y';
+    const durationStr = ibkrHistoricalDuration(timeframe, startMs, endMs, Date.now());
     const contract = this.stockContract(symbol);
     const reqId = this.nextHistReqId++;
     const ib = this.ib;
@@ -1551,6 +1551,7 @@ export class IbkrSocketSession {
         // streaming (reqMktData) errors use, so a caller could not distinguish "streaming
         // entitlement failure" from "historical entitlement/data failure" from persisted evidence
         // alone. Surfaced as its own, clearly-labeled event before rejecting.
+        if (Number(code) === 200) recordIbkrContractNotFound(symbol);
         try {
           this.historicalDataErrorHandler?.({
             symbol: symbol.toUpperCase(), reqId, code: Number(code), message: String(err?.message ?? err ?? ''),
@@ -1805,6 +1806,28 @@ export class IbkrSocketSession {
   activeMarketDataCount(): number {
     return this.activeMktData.size;
   }
+}
+
+/**
+ * IBKR `durationStr` for a historical request.
+ *
+ * 2026-10-13: every request used to be padded to a MINIMUM of 30 days regardless of timeframe. That is harmless for
+ * 1Day bars (30 bars) but a 1Min request for today's session (a few hours) became ~11,700 minute bars per symbol,
+ * serialized through the global historical queue and then persisted - a prime suspect for the 97% intraday-deadline
+ * rate (not proven; the new request telemetry measures it). Intraday requests now ask only for what is needed.
+ *
+ * `endDateTime` is sent as "" (= now), so the duration must reach back from NOW to `startMs`: it is measured from
+ * `nowMs`, never from the window end (a window that ended earlier today still has to be reachable). 1Day behavior is
+ * unchanged (30 D minimum, 365 D cap, 2 Y beyond).
+ */
+export function ibkrHistoricalDuration(timeframe: string, startMs: number, endMs: number, nowMs: number): string {
+  if (timeframe === '1Day') {
+    const spanDays = Math.max(1, Math.ceil((endMs - startMs) / 86_400_000));
+    return spanDays <= 365 ? `${Math.min(365, Math.max(spanDays, 30))} D` : '2 Y';
+  }
+  const reachSec = Math.max(1, Math.ceil((Math.max(nowMs, endMs) - startMs) / 1000));
+  if (reachSec <= 86_400) return `${Math.max(300, Math.ceil(reachSec / 60) * 60 + 60)} S`;
+  return `${Math.min(365, Math.ceil(reachSec / 86_400))} D`;
 }
 
 function mapTimeframeToIbBarSize(timeframe: string): BarSizeSetting | null {

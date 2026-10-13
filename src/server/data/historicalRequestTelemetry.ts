@@ -174,7 +174,7 @@ export function finalizeHistRequest(
       process_epoch: epoch, build_sha: buildSha(), created_at: nowIso,
     };
     const ok = status === 'AVAILABLE_FRESH' || status === 'AVAILABLE_DELAYED' || status === 'PARTIAL';
-    const skipAvailability = ctx.role === 'COALESCED' || fin.terminalStatus === 'LATE_SETTLEMENT';
+    const skipAvailability = ctx.role === 'COALESCED' || fin.terminalStatus === 'LATE_SETTLEMENT' || fin.terminalStatus === 'INVALID_SYMBOL';
     const availability = skipAvailability ? null : {
       symbol: ctx.symbol, provider: ctx.provider === 'none' || ctx.provider === 'cache' ? 'cache' : ctx.provider, timeframe: ctx.timeframe,
       session_date: sessionDateNy(ctx.asOfMs), status, last_bar_ms: ctx.cacheLatestBarMs, bar_count: ctx.validBars ?? ctx.cacheBarCount,

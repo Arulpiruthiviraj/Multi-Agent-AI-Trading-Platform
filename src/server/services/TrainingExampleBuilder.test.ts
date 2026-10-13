@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -106,6 +106,25 @@ describe('TrainingExampleBuilder (Phase 7)', () => {
 
     const examples = await db.select().from(schema.trainingExamples).where(eq(schema.trainingExamples.transactionId, 'ARG-TEST-LEAK'));
     expect(examples).toHaveLength(0); // correctly skipped, never silently included
+  });
+
+  it('2026-10-13: legacy rows with company-name symbols never reach a data provider (they were re-sent to IBKR every cycle)', async () => {
+    const { historicalDataGateway } = await import('../engines/backtest/HistoricalDataGateway');
+    const ensureSpy = vi.spyOn(historicalDataGateway, 'ensureBars');
+    const getSpy = vi.spyOn(historicalDataGateway, 'getBars');
+    for (const [id, symbol] of [['ARG-LEGACY-1', ' Archer Aviation'], ['ARG-LEGACY-2', 'Walmart']] as const) {
+      await db.insert(schema.transactions).values({ id, symbol, openedAt: DECISION_TIME.toISOString(), status: 'RISK_REJECTED', finalDecision: 'BUY', outcome: 'N_A' });
+      await db.insert(schema.consensusDecisions).values({
+        transactionId: id, symbol, side: 'BUY', weightedConfidence: 0.8, threshold: 0.75, approved: true,
+        agreementsCount: 1, disagreementsCount: 0, createdAt: DECISION_TIME.toISOString(),
+      });
+    }
+    await trainingExampleBuilder.buildPending();
+    const touched = [...ensureSpy.mock.calls, ...getSpy.mock.calls].map((c) => c[0]);
+    expect(touched).not.toContain(' Archer Aviation');
+    expect(touched).not.toContain('Walmart');
+    expect(await db.select().from(schema.trainingExamples).where(eq(schema.trainingExamples.transactionId, 'ARG-LEGACY-1'))).toHaveLength(0);
+    ensureSpy.mockRestore(); getSpy.mockRestore();
   });
 
   it('does not duplicate an already-built training example on a second run', async () => {

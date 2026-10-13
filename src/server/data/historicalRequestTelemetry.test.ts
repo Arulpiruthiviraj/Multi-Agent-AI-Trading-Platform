@@ -152,4 +152,16 @@ describe('HistoricalDataGateway telemetry (integration, isolated DB)', () => {
     expect(telemetryStats().queued).toBeLessThanOrEqual(5000);
     expect(() => finalizeHistRequest(undefined as any, { terminalStatus: 'OK' }, T)).not.toThrow();
   });
+
+  it('rejects a malformed symbol at the gateway boundary: no provider request, INVALID_SYMBOL recorded, no availability row', async () => {
+    let calls = 0;
+    register({ id: 'ibkr_gateway', fetchBars: async () => { calls++; return bars(); } });
+    await expect(gateway.ensureBars(' ARCHER AVIATION', '1Min', now - 3_600_000, now)).rejects.toThrow(/INVALID_SYMBOL/);
+    await expect(gateway.ensureBars('THE FED', '1Min', now - 3_600_000, now)).rejects.toThrow(/INVALID_SYMBOL/);
+    await flushHistTelemetryForTests();
+    expect(calls).toBe(0);
+    const n = sqliteDb.prepare("select count(*) c from historical_request_telemetry where terminal_status='INVALID_SYMBOL'").get().c;
+    expect(n).toBe(2);
+    expect(sqliteDb.prepare("select count(*) c from intraday_data_availability where symbol like '%ARCHER%' or symbol='THE FED'").get().c).toBe(0);
+  });
 });

@@ -12,6 +12,7 @@
  * backoff is armed; callers may still evaluate from cache — never fabricate bars.
  * ==========================================================
  */
+import { isPlausibleHistoricalSymbol } from '../../data/symbolFormat';
 import { histRequestStore, newHistRequestContext, finalizeHistRequest, type HistRequestContext } from '../../data/historicalRequestTelemetry';
 import { db, sqliteDb } from '../../db';
 import * as schema from '../../db/schema';
@@ -304,6 +305,12 @@ export class HistoricalDataGateway {
    * Never fabricates bars.
    */
   async ensureBars(symbol: string, timeframe: string, startMs: number, endMs: number, opts?: { traceId?: string | null }): Promise<void> {
+    if (!isPlausibleHistoricalSymbol(symbol)) {
+      // Never reaches a provider queue. Recorded as its own terminal so malformed extractions are countable.
+      const badCtx = newHistRequestContext({ symbol: String(symbol).slice(0, 64), timeframe, startMs, endMs, role: 'CACHE_ONLY', traceId: opts?.traceId ?? null });
+      this.finalizeTelemetry(badCtx, 'INVALID_SYMBOL', `not a plausible ticker: ${JSON.stringify(String(symbol).slice(0, 64))}`);
+      throw new Error(`[HistoricalDataGateway] INVALID_SYMBOL: ${JSON.stringify(String(symbol).slice(0, 64))} is not a plausible ticker - no provider request made.`);
+    }
     const coalesceKey = this.memoryKey(symbol, timeframe, startMs, endMs);
     const inFlight = this.inflightEnsureBars.get(coalesceKey);
     if (inFlight) {
