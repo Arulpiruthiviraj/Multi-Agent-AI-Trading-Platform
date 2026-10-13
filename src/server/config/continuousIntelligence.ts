@@ -15,6 +15,8 @@ export interface ContinuousIntelligenceConfig {
   maxActiveSubscriptions: number;
   maxNewSubscriptionsPerCycle: number;
   exitIdeaCooldownMs: number;
+  /** 2026-10-13: a protective-exit trace that owns a symbol but has NO trades row after this long (never reached OMS: dropped, crashed, swallowed) is an orphan and is released. A trace with a live non-terminal order is never released by age. */
+  exitOwnershipOrphanGraceMs: number;
   screenerEvalCooldownMs: number;
   screenerMinHistoryBars: number;
   screenerMinReturnPct: number;
@@ -362,6 +364,7 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     maxActiveSubscriptions: requireNumber(raw.maxActiveSubscriptions, 'maxActiveSubscriptions'),
     maxNewSubscriptionsPerCycle: requireNumber(raw.maxNewSubscriptionsPerCycle, 'maxNewSubscriptionsPerCycle'),
     exitIdeaCooldownMs: requireNumber(raw.exitIdeaCooldownMs, 'exitIdeaCooldownMs'),
+    exitOwnershipOrphanGraceMs: requireNumber(raw.exitOwnershipOrphanGraceMs, 'exitOwnershipOrphanGraceMs'),
     screenerEvalCooldownMs: requireNumber(raw.screenerEvalCooldownMs, 'screenerEvalCooldownMs'),
     screenerMinHistoryBars: requireNumber(raw.screenerMinHistoryBars, 'screenerMinHistoryBars'),
     screenerMinReturnPct: requireNumber(raw.screenerMinReturnPct, 'screenerMinReturnPct'),

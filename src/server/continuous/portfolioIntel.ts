@@ -96,6 +96,11 @@ eventBus.on(EVENTS.RISK_ASSESSMENT_COMPLETED, (assessment: any) => {
   }
 });
 
+// ChiefTrader terminal NO_TRADE for this exact trace (consensus/quant-policy rejection) also ends the attempt.
+eventBus.on(EVENTS.DESK_NO_TRADE, (noTrade: any) => {
+  releasePortfolioExitCooldownForTrace(noTrade?.symbol, noTrade?.traceId);
+});
+
 eventBus.on(EVENTS.RISK_BLOCK, (block: any) => {
   releasePortfolioExitCooldownForTrace(block?.symbol, block?.traceId);
 });
@@ -106,6 +111,32 @@ eventBus.on(EVENTS.ORDER_EXECUTED, (order: any) => {
     releasePortfolioExitCooldownForTrace(order?.symbol, order?.traceId);
   }
 });
+
+export type ExitOwnerOrderState = 'NONE' | 'NON_TERMINAL' | 'TERMINAL';
+
+/**
+ * Backstop for a lost terminal event. Ownership normally ends on an explicit terminal signal for the exact
+ * trace; if that signal never arrives (idea swallowed before OMS, crash between Risk and OMS) the symbol would
+ * stay single-flight forever with an unprotected position. Evidence-based, not a timer: a trace whose order is
+ * live (NON_TERMINAL) is NEVER released here, however old; a TERMINAL order releases; no order row at all
+ * releases only after exitOwnershipOrphanGraceMs.
+ */
+export function reconcileExitOwnership(symbol: string, orderState: ExitOwnerOrderState, now = Date.now()): 'RELEASED' | 'KEPT' | 'NOT_OWNED' {
+  const key = symbol.toUpperCase();
+  const trace = activeExitTraceBySymbol.get(key);
+  if (!trace) return 'NOT_OWNED';
+  if (orderState === 'NON_TERMINAL') return 'KEPT';
+  if (orderState === 'NONE') {
+    const emittedAt = lastExitEmitAt.get(key) ?? 0;
+    if (now - emittedAt < continuousIntelligence.exitOwnershipOrphanGraceMs) return 'KEPT';
+  }
+  releasePortfolioExitCooldownForTrace(key, trace);
+  return 'RELEASED';
+}
+
+export function getExitOwnerTrace(symbol: string): string | null {
+  return activeExitTraceBySymbol.get(symbol.toUpperCase()) ?? null;
+}
 
 export function recordPortfolioDecision(payload: {
   symbol: string;

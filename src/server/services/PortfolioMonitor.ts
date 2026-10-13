@@ -50,6 +50,9 @@ import { computeVolumeFeatures } from '../quant/indicators/volume';
 import { evaluateThesisInvalidation, parseStoredThesis } from '../quant/analysis/ThesisInvalidation';
 import {
   canEmitPortfolioExitIdea,
+  getExitOwnerTrace,
+  reconcileExitOwnership,
+  type ExitOwnerOrderState,
   ensureHoldingSubscribed,
   pruneExitCooldownsForFlatSymbols,
   recordPortfolioDecision,
@@ -237,6 +240,7 @@ export class PortfolioMonitorWorker {
         if (holding.quantity <= 0) continue;
 
         ensureHoldingSubscribed(holding.symbol);
+        await this.reconcileProtectiveExitOwnership(holding.symbol);
         const currentLivePrice = marketDataWorker.getLatestPrice(holding.symbol);
         if (!currentLivePrice) {
           recordPortfolioDecision({
@@ -472,6 +476,27 @@ export class PortfolioMonitorWorker {
       console.error("[PortfolioWorker] Error during review:", e);
     } finally {
       this.isReviewing = false;
+    }
+  }
+
+  /**
+   * Evidence-based backstop for a lost terminal event (see reconcileExitOwnership). Looks up the owning trace's
+   * order in the ledger: live order -> keep single-flight; terminal -> release; no row -> release only after
+   * the orphan grace. Never throws: a failed lookup keeps ownership (fail closed against duplicate closes).
+   */
+  private async reconcileProtectiveExitOwnership(symbol: string): Promise<void> {
+    try {
+      const owner = getExitOwnerTrace(symbol);
+      if (!owner) return;
+      const row = (await db.select({ status: trades.status }).from(trades).where(eq(trades.traceId, owner)).limit(1))[0];
+      const state: ExitOwnerOrderState = !row
+        ? 'NONE'
+        : ['FILLED', 'REJECTED', 'CANCELED', 'EXTERNAL_MANUAL', 'ARCHIVED_DIAGNOSTIC'].includes(String(row.status).toUpperCase())
+          ? 'TERMINAL'
+          : 'NON_TERMINAL';
+      reconcileExitOwnership(symbol, state);
+    } catch (err) {
+      console.warn(`[PortfolioWorker] exit-ownership reconcile failed for ${symbol}; keeping single-flight:`, err);
     }
   }
 
