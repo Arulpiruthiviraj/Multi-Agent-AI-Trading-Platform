@@ -53,3 +53,26 @@ Allocation cap; pending BUYs reserve; partial fills update reservations; open po
 3. Implement the research-equity basis and the section 5 tests.
 4. Decide on broker-resident protective orders (new order mechanism; separate architecture review).
 5. Deploy `complete/protective-exit-seal` only after the full suite on the exact SHA.
+
+
+## 7. 2026-10-13 status correction — current main before retry-throttle repair
+
+This section supersedes stale deployment-status wording above without deleting the October 12 historical record.
+
+- Current audited main before this repair branch: `adabfcdbef70ac229fd3de567e8d7f1308c3745a`.
+- The sealed protective-exit gate-by-intent repair is now on main. `daily_loss`, `consecutive_loss`, `portfolio_drawdown`, `order_rate_limit`, and `news_veto` can exempt only a genuine single-use PortfolioMonitor protective SELL seal. Mandatory position/order/session gates remain enforced.
+- Runtime evidence on 2026-10-13: the carried `S` position's protective SELL was approved by RiskEngine and filled through OMS/IBKR at 09:19 ET. This demonstrates the protected execution spine for one real PAPER close; it does not certify every chaos case.
+- Research-capital setting was read back as **$20,000** with **$1,000 maxTradeSize**, **2 max open positions**, and **$250 dailyLossLimit**. Increasing budget did not increase maxTradeSize or position count.
+- `config/tradingSafety.json` has `researchEquityRiskBasisEnabled: true`; RiskEngine records `basis: RESEARCH` when the research snapshot is available. This replaces the broker-equity basis for daily-loss and drawdown in PAPER runtime.
+- Remaining accounting limitation: the in-process unrealized peak in `researchEquity.ts` is not persisted across restart, so a pre-restart unrealized high-water mark can be understated immediately after restart. This remains a correctness limitation and must not be described as fully solved.
+- Broker-resident protective stops remain **absent by design** in Argus. Software protection still depends on the engine process, market data, PortfolioMonitor cadence, RiskEngine, OMS, and broker connectivity.
+- New runtime defect found 2026-10-13: a Risk-rejected protective exit was throttled by the generic five-minute portfolio-intel cooldown (observed `S` 09:14 rejection → 09:19 retry). Repair branch `repair/oct13-protective-exit-retry` binds the throttle to the exact protective trace, keeps an approved/in-flight close single-flight, and releases the throttle immediately on confirmed Risk/broker terminal rejection/cancellation/fill. Runtime deployment verification is still required after merge.
+
+### Current certification interpretation
+
+- Protective-exit mechanism: **SOURCE + TARGETED TEST COVERAGE PRESENT; one real PAPER close observed.**
+- Broker-resident protection: **ABSENT.**
+- $20K aggregate BUY allocation guard: **PRESENT** and independent of broker buying power.
+- Research-equity daily-loss/drawdown basis: **ENABLED**, with the restart high-water limitation above.
+- Unattended protection during process outage: **NOT CERTIFIED.**
+- Protective-exit retry-throttle repair: **BRANCH ONLY until merged/deployed.**
