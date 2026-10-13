@@ -246,6 +246,20 @@ describe('portfolio intel cooldown', () => {
     expect(canEmitPortfolioExitIdea('S', 1_000_001, retryTrace)).toBe(true);
   });
 
+  it('releases ownership when the protective idea is rejected before ChiefTrader/RiskEngine', () => {
+    process.env[FLAG_P] = 'true';
+    const traceId = 'protective-pre-chief-reject';
+    expect(canEmitPortfolioExitIdea('MSFT', 1_500_000, traceId)).toBe(true);
+
+    eventBus.emit(EVENTS.TRADE_IDEA_REJECTED, {
+      traceId,
+      symbol: 'MSFT',
+      reason: 'MAX_TRADE_IDEAS_PER_MINUTE',
+    });
+
+    expect(canEmitPortfolioExitIdea('MSFT', 1_500_001, 'protective-pre-chief-retry')).toBe(true);
+  });
+
   it('does not let an unrelated trace unlock an in-flight protective close', () => {
     process.env[FLAG_P] = 'true';
     const firstTrace = 'protective-owned-trace';
