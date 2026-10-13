@@ -633,6 +633,9 @@ export class SyntheticSessionEngine {
       const { portfolioMonitor } = await import('../../services/PortfolioMonitor');
       const { eventBus } = await import('../../core/EventBus');
       for (const symbol of universe) marketDataWorker.subscribe(symbol);
+      // Quotes in this session are stamped with simulated time, so freshness (PortfolioMonitor's stale-price skip, spread evidence
+      // age) must be measured against the same simulated clock - see MarketDataWorker.setSimulationClock.
+      marketDataWorker.setSimulationClock(() => this.clock.now());
 
       timeline = new DecisionTimelineClass(this.clock);
       this.timeline = timeline;
@@ -854,6 +857,10 @@ export class SyntheticSessionEngine {
         try { elHistogram.disable(); } catch { /* teardown must not throw */ }
       }
       setActiveReplaySession(null);
+      try {
+        const { marketDataWorker: mdw } = await import('../../services/MarketDataWorker');
+        mdw.setSimulationClock(null);
+      } catch { /* teardown must not throw */ }
     }
   }
 }

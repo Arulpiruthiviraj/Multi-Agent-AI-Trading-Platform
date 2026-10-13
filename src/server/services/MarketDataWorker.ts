@@ -863,6 +863,24 @@ export class MarketDataWorker {
     return this.wallMs() - subscribedAt < dwellMs;
   }
 
+  /**
+   * 2026-10-13 simulation clock seam. A synthetic session stamps its quotes with SIMULATED time (cacheObservedQuote(.., observedAtMs)),
+   * but every freshness decision here compared them with the REAL wall clock: PortfolioMonitor saw each held position's "latest tick"
+   * as 28 days old and skipped EVERY exit evaluation (123 of 123 cycles in the canonical full-day certification) - so no synthetic
+   * session could ever exercise a protective exit, and the mandatory market-open Test B could never reach POSITION_CLOSED.
+   * The seam can only be installed in a process marked SYNTHETIC_SIMULATION=true; in production it is null and nowMs() is Date.now().
+   */
+  private simulationClockMs: (() => number) | null = null;
+  setSimulationClock(clockMs: (() => number) | null): void {
+    if (clockMs !== null && process.env.SYNTHETIC_SIMULATION !== 'true') {
+      throw new Error('MarketDataWorker.setSimulationClock refused: only an isolated SYNTHETIC_SIMULATION process may substitute the clock.');
+    }
+    this.simulationClockMs = clockMs;
+  }
+  private nowMs(): number {
+    return this.simulationClockMs ? this.simulationClockMs() : Date.now();
+  }
+
   getLatestPriceAgeMs(symbol: string): number | null {
     const key = quoteKey(symbol);
     const t = this.latestPriceTimestamps.get(key) ?? this.latestPriceTimestamps.get(symbol);
@@ -878,7 +896,7 @@ export class MarketDataWorker {
     // live state", using a fully separate, isolated quote cache (cacheReplayQuote/
     // getReplayQuoteAgeMs) with the replay's own simulated clock passed in explicitly - this live
     // function was never the real path replay relies on for price-age freshness.
-    return Date.now() - t;
+    return this.nowMs() - t;
   }
 
   /** Real ask price from the last "q" message that carried one, or null if none has ever arrived
@@ -912,7 +930,7 @@ export class MarketDataWorker {
     const ask = this.latestAskPrices.get(key) ?? this.latestAskPrices.get(symbol);
     const askAt = this.latestAskTimestamps.get(key) ?? this.latestAskTimestamps.get(symbol);
     if (typeof bid !== 'number' || typeof ask !== 'number' || typeof askAt !== 'number') return null;
-    const now = Date.now();
+    const now = this.nowMs();
     if (!bidEvidence || now - askAt > maxAgeMs || now - bidEvidence.observedAtMs > maxAgeMs
       || askAt > now || bidEvidence.observedAtMs > now) return null;
     if (!(bid > 0) || !(ask > 0) || ask < bid) return null;
