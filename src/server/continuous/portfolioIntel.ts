@@ -17,9 +17,11 @@ export type PortfolioDecisionState =
   | 'NO_BASIS';
 
 const lastExitEmitAt = new Map<string, number>();
+const activeExitTraceBySymbol = new Map<string, string>();
 
 export function resetPortfolioIntelForTests() {
   lastExitEmitAt.clear();
+  activeExitTraceBySymbol.clear();
 }
 
 /**
@@ -31,7 +33,10 @@ export function resetPortfolioIntelForTests() {
  */
 export function pruneExitCooldownsForFlatSymbols(heldSymbols: Set<string>): void {
   for (const key of [...lastExitEmitAt.keys()]) {
-    if (!heldSymbols.has(key)) lastExitEmitAt.delete(key);
+    if (!heldSymbols.has(key)) {
+      lastExitEmitAt.delete(key);
+      activeExitTraceBySymbol.delete(key);
+    }
   }
 }
 
@@ -48,14 +53,46 @@ export function ensureHoldingSubscribed(symbol: string): void {
   });
 }
 
-export function canEmitPortfolioExitIdea(symbol: string, now = Date.now()): boolean {
+export function canEmitPortfolioExitIdea(symbol: string, now = Date.now(), traceId?: string): boolean {
   if (!isPortfolioIntelEnabled()) return true;
   const key = symbol.toUpperCase();
   const last = lastExitEmitAt.get(key) ?? 0;
   if (now - last < continuousIntelligence.exitIdeaCooldownMs) return false;
   lastExitEmitAt.set(key, now);
+  if (traceId) activeExitTraceBySymbol.set(key, traceId);
   return true;
 }
+
+/**
+ * 2026-10-13 safety closure: a rejected protective exit must not remain suppressed for the
+ * generic five-minute idea cooldown. Release only the exact trace that currently owns the
+ * symbol's throttle; unrelated SELLs cannot unlock it.
+ */
+export function releasePortfolioExitCooldownForTrace(symbol: unknown, traceId: unknown): boolean {
+  if (typeof symbol !== 'string' || typeof traceId !== 'string' || !symbol || !traceId) return false;
+  const key = symbol.toUpperCase();
+  if (activeExitTraceBySymbol.get(key) !== traceId) return false;
+  activeExitTraceBySymbol.delete(key);
+  lastExitEmitAt.delete(key);
+  return true;
+}
+
+eventBus.on(EVENTS.RISK_ASSESSMENT_COMPLETED, (assessment: any) => {
+  if (assessment?.approved === false) {
+    releasePortfolioExitCooldownForTrace(assessment.symbol, assessment.traceId);
+  }
+});
+
+eventBus.on(EVENTS.RISK_BLOCK, (block: any) => {
+  releasePortfolioExitCooldownForTrace(block?.symbol, block?.traceId);
+});
+
+eventBus.on(EVENTS.ORDER_EXECUTED, (order: any) => {
+  const status = String(order?.status ?? '').toUpperCase();
+  if (status === 'FILLED' || status === 'REJECTED' || status === 'CANCELED') {
+    releasePortfolioExitCooldownForTrace(order?.symbol, order?.traceId);
+  }
+});
 
 export function recordPortfolioDecision(payload: {
   symbol: string;
