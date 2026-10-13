@@ -360,7 +360,7 @@ describe('OrderManagementService.executeOrder', () => {
       expect(getFinalTradeRow().reasoning).toContain('KILL_SWITCH_ENGAGED_AT_SUBMIT');
       await oms.executeOrder('AAPL', 'SELL', 10, 'reasoning', 'eo-sell-trace');
       expect(placeOrder).toHaveBeenCalledTimes(1);
-      expect(placeOrder.mock.calls[0][0]).toMatchObject({ symbol: 'AAPL', side: 'SELL' });
+      expect((placeOrder.mock.calls[0] as any[])[0]).toMatchObject({ symbol: 'AAPL', side: 'SELL' });
     } finally { tradingEngineState.pauseKind = 'FULL'; tradingEngineState.tradingState = 'TRADING_ENABLED'; }
   });
 

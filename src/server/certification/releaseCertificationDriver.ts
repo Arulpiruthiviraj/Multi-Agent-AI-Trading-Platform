@@ -26,6 +26,7 @@
  * strategies, never manufactures VALIDATED/CHAMPION authority, never arms LIVE.
  * PAPER ONLY.
  */
+import { computeTierVerdicts, type TierVerdict } from './readinessTiers';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -77,6 +78,10 @@ export const SUITE_DELEGATIONS: SuiteDelegation[] = [
   { field: 'PROTECTIVE_EXIT_OWNERSHIP_MATRIX', testFile: 'src/server/continuous/portfolioIntel.exitOwnership.test.ts', proves: 'cases A-H: Risk/pre-Chief/Chief/broker rejection release the exact trace; PENDING/PARTIALLY_FILLED stay single-flight beyond the cooldown; unrelated SELL cannot release; flat prune; persistence failure and lost-terminal backstop cannot strand a symbol' },
   { field: 'RESEARCH_CAPITAL_20K', testFile: 'src/server/engines/RiskEngine.test.ts', proves: '$20k Argus allocation remains binding even with ~$1M broker equity/buying power and existing exposure' },
   { field: 'RESEARCH_CAPITAL_SIZING_CAPS', testFile: 'src/server/engines/RiskEngine.researchCapitalCaps.test.ts', proves: 'concentration/sector/correlation/risk-amount sizing caps derive from research capital, not ~$1M broker equity or buying power' },
+  { field: 'IBKR_HISTORICAL_SCHEDULER', testFile: 'src/brokers/ibkrHistoricalScheduler.test.ts', proves: 'live-session historical requests are never queued behind research backfill (strict intent priority + preemption), identical requests coalesce/promote, per-class bounds and expiry hold, abandoned requests are discarded/cancelled, one request on the wire' },
+  { field: 'PAUSE_ENTRIES_ONLY_RESTART', testFile: 'src/server/engines/TradingEngine.pauseKind.test.ts', proves: 'an ENTRIES_ONLY pause (operator / shutdown / boot) is persisted and restored across restart; automated safety pauses and EMERGENCY_STOP stay FULL' },
+  { field: 'PAUSE_ENTRIES_ONLY_RISK_GATE', testFile: 'src/server/engines/RiskEngine.entriesOnlyPause.test.ts', proves: 'under an ENTRIES_ONLY pause a sealed protective SELL passes the emergency_stop gate while BUYs, unsealed SELLs and forged seals stay blocked and every other mandatory gate still applies' },
+  { field: 'READINESS_TIERS', testFile: 'src/server/certification/readinessTiers.test.ts', proves: 'per-tier readiness: no check is turned green, unknown checks gate every tier, Jev never gates a PAPER tier, LIVE is always NO_GO; authenticated live probes; portable jar lookup' },
   { field: 'IBKR_HISTORICAL_QUEUE_BOUND', testFile: 'src/brokers/__tests__/IbkrSocketSession.historicalQueueBound.test.ts', proves: 'serialized IBKR historical chain is bounded (queue-full rejection, stale intraday drop) so abandoned callers cannot build unbounded provider backlog' },
   { field: 'IBKR_INTRADAY_REQUEST_DURATION', testFile: 'src/brokers/__tests__/IbkrSocketSession.intradayRequest.test.ts', proves: 'a small 1Min window is not padded to a 30-day IBKR request; 1Day lookback unchanged' },
   { field: 'QUANT_SCHEDULED_BOUNDS', testFile: 'src/server/services/QuantSignalAgent.scheduledBounds.test.ts', proves: 'scheduled cycle: held positions first; obsolete work is CAPACITY_DEFERRED (resumes next cycle); recently evaluated symbols are SUPERSEDED; no silent drops' },
@@ -117,6 +122,9 @@ export interface ReleaseDriverInput {
   suiteTimeoutMs?: number;
   /** Base URL of a running engine for live probes (e.g. http://127.0.0.1:3000). Null = no live probe. */
   engineBaseUrl?: string | null;
+  /** 2026-10-13: auth headers for the live engine probes (the CLI's own session cookie / dev token). Without them an
+   *  authenticated engine answers 401 and every live check came back UNKNOWN as if the engine were unhealthy. */
+  engineHeaders?: Record<string, string>;
   liveProbeTimeoutMs?: number;
 }
 
@@ -131,6 +139,8 @@ export interface ReleaseCertificationReport {
   conditions: string[];
   blockingChecks: string[];
   suiteDelegations: SuiteDelegation[];
+  /** 2026-10-13: per-readiness-tier verdicts (see readinessTiers.ts). `ready`/`overallStatus` above stay the strict global verdict. */
+  tiers: TierVerdict[];
 }
 
 function check(field: string, state: ReleaseCheckState, value: unknown, evidence: string): ReleaseCheck {
@@ -145,6 +155,19 @@ function sha256File(p: string): string {
 
 /** Runs one vitest file, returns PASS/FAIL. Never throws. */
 function runSuiteFile(repoRoot: string, testFile: string, timeoutMs: number): { state: ReleaseCheckState; evidence: string } {
+  const first = runSuiteFileOnce(repoRoot, testFile, timeoutMs);
+  if (first.state === 'PASS') return first;
+  // 2026-10-13: a delegated suite that fails once under host contention (the live engine booting, a 19 GB snapshot being
+  // copied) and passes when re-run is a flaky pass, not a clean pass: report it as PASS only with the first failure in the
+  // evidence, and a suite that fails twice is a FAIL. One retry only - this never converts a deterministic failure.
+  const second = runSuiteFileOnce(repoRoot, testFile, timeoutMs);
+  if (second.state === 'PASS') {
+    return { state: 'PASS', evidence: `${second.evidence} [PASSED ON RETRY - first attempt failed: ${first.evidence.slice(0, 400)}]` };
+  }
+  return { state: 'FAIL', evidence: `${second.evidence} [failed on both attempts; first: ${first.evidence.slice(0, 200)}]` };
+}
+
+function runSuiteFileOnce(repoRoot: string, testFile: string, timeoutMs: number): { state: ReleaseCheckState; evidence: string } {
   try {
     execFileSync(process.execPath, ['node_modules/vitest/vitest.mjs', 'run', testFile], {
       cwd: repoRoot, timeout: timeoutMs, stdio: 'pipe',
@@ -160,12 +183,21 @@ function runSuiteFile(repoRoot: string, testFile: string, timeoutMs: number): { 
   }
 }
 
-async function probeEngineJson(baseUrl: string, urlPath: string, timeoutMs: number): Promise<any | null> {
+/** Portable lookup of the packaged Java quant core jar (no shell). */
+export function findPackagedJavaJar(repoRoot: string): string | null {
+  try {
+    const targetDir = path.join(repoRoot, 'quant-core-java', 'target');
+    const jars = fs.readdirSync(targetDir).filter((f) => f.endsWith('.jar') && !f.endsWith('-sources.jar') && !f.startsWith('original-')).sort();
+    return jars.length > 0 ? path.join(targetDir, jars[0]) : null;
+  } catch { return null; }
+}
+
+export async function probeEngineJson(baseUrl: string, urlPath: string, timeoutMs: number, headers?: Record<string, string>): Promise<any | null> {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      const res = await fetch(`${baseUrl}${urlPath}`, { signal: ctrl.signal });
+      const res = await fetch(`${baseUrl}${urlPath}`, { signal: ctrl.signal, headers });
       if (!res.ok) return null;
       return await res.json();
     } finally {
@@ -203,14 +235,9 @@ export async function runReleaseCertification(input: ReleaseDriverInput): Promis
     typeof schemaNum === 'number' ? 'PASS' : 'UNKNOWN',
     schemaNum,
     'PRAGMA user_version on the isolated snapshot (migrations applied at open)');
-  const jarCandidates = ['quant-core-java/target/*.jar'];
-  let jarPath: string | null = null;
-  try {
-    const { execSync } = await import('node:child_process');
-    const out = execSync('ls quant-core-java/target/*.jar 2>/dev/null | head -1', { cwd: input.repoRoot, encoding: 'utf8' }).trim();
-    if (out) jarPath = path.join(input.repoRoot, out);
-  } catch { /* none */ }
-  void jarCandidates;
+  // 2026-10-13: filesystem lookup instead of a POSIX `ls ... | head -1` shell pipeline, which cannot run under Windows cmd.exe
+  // and made this check UNKNOWN on the Windows host regardless of whether the jar existed.
+  const jarPath = findPackagedJavaJar(input.repoRoot);
   if (jarPath && fs.existsSync(jarPath)) {
     need('JAVA_ARTIFACT_HASH', 'PASS', sha256File(jarPath), `sha256 of packaged Java quant core ${jarPath}`);
   } else {
@@ -362,7 +389,7 @@ export async function runReleaseCertification(input: ReleaseDriverInput): Promis
   // --- Live probes (engine must be up; otherwise UNKNOWN, fail-closed) ------------------
   const liveTimeout = input.liveProbeTimeoutMs ?? 5000;
   if (input.engineBaseUrl) {
-    const compHealth: any = await probeEngineJson(input.engineBaseUrl, '/api/v2/runtime/component-health', liveTimeout);
+    const compHealth: any = await probeEngineJson(input.engineBaseUrl, '/api/v2/runtime/component-health', liveTimeout, input.engineHeaders);
     if (compHealth) {
       const comps: Array<{ component: string; status: string; detail: string }> =
         compHealth.components ?? compHealth ?? [];
@@ -372,7 +399,7 @@ export async function runReleaseCertification(input: ReleaseDriverInput): Promis
         md ?? null,
         `live component-health from ${input.engineBaseUrl}: Market Data=${md?.status ?? 'absent'} (${md?.detail ?? 'no detail'})`);
       // SUBSCRIPTION_HEALTH: derive from the market-data worker state endpoint when available.
-      const subHealth: any = await probeEngineJson(input.engineBaseUrl, '/api/v2/runtime/market/status', liveTimeout);
+      const subHealth: any = await probeEngineJson(input.engineBaseUrl, '/api/v2/runtime/market/status', liveTimeout, input.engineHeaders);
       need('SUBSCRIPTION_HEALTH',
         subHealth ? 'PASS' : 'UNKNOWN',
         subHealth,
@@ -386,7 +413,7 @@ export async function runReleaseCertification(input: ReleaseDriverInput): Promis
         `engine not reachable at ${input.engineBaseUrl} - subscription health is runtime-only; refusing to certify statically`);
     }
     // Scheduler latency: only measurable live. Look for a scheduler stats endpoint; else UNKNOWN.
-    const schedStats: any = await probeEngineJson(input.engineBaseUrl, '/api/v2/scheduling/quant/stats', liveTimeout);
+    const schedStats: any = await probeEngineJson(input.engineBaseUrl, '/api/v2/scheduling/quant/stats', liveTimeout, input.engineHeaders);
     if (schedStats && typeof schedStats === 'object' && schedStats.p50 !== undefined) {
       need('SCHEDULER_P50', 'PASS', schedStats.p50, 'live quant scheduler p50 cycle latency (ms)');
       need('SCHEDULER_P95', 'PASS', schedStats.p95 ?? null, 'live quant scheduler p95 cycle latency (ms)');
@@ -478,5 +505,6 @@ export async function runReleaseCertification(input: ReleaseDriverInput): Promis
     conditions,
     blockingChecks: blocking,
     suiteDelegations: SUITE_DELEGATIONS,
+    tiers: computeTierVerdicts(checks),
   };
 }

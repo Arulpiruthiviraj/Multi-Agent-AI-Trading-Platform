@@ -283,6 +283,10 @@ async function main() {
       },
       withSuites,
       engineBaseUrl: engineUrlArg ? engineUrlArg.slice('--engine-url='.length) : null,
+      // The CLI passes its own session cookie / dev token via env (never argv: argv is visible in process listings).
+      engineHeaders: (() => {
+        try { const j = process.env.ARGUS_CERT_ENGINE_HEADERS_JSON; return j ? JSON.parse(j) as Record<string, string> : undefined; } catch { return undefined; }
+      })(),
     });
     report.releaseCertification = driverReport;
 
@@ -331,7 +335,13 @@ async function main() {
     } else {
       printHuman(report);
     }
-    process.exitCode = report.overallStatus === 'READY' ? 0 : report.overallStatus === 'READY_WITH_CONDITIONS' ? 2 : 3;
+    // --tier=CONTROLLED_PAPER|UNATTENDED_PAPER|QUANT_FIRST selects which readiness tier decides the exit code (default: the
+    // strict global verdict, unchanged). LIVE is always NO_GO.
+    const tierArg = process.argv.find((a) => a.startsWith('--tier='))?.slice('--tier='.length);
+    const tierVerdict = tierArg ? (driverReport.tiers ?? []).find((t: any) => t.tier === tierArg) : null;
+    if (tierArg && !tierVerdict) { console.error(`unknown --tier=${tierArg}`); process.exitCode = 1; }
+    else if (tierVerdict) process.exitCode = tierVerdict.status === 'READY' ? 0 : 3;
+    else process.exitCode = report.overallStatus === 'READY' ? 0 : report.overallStatus === 'READY_WITH_CONDITIONS' ? 2 : 3;
   } catch (error: any) {
     closeDb();
     const fatal = `certifyNextSession: internal error: ${error?.message || error}\n`;
@@ -506,6 +516,11 @@ function printHuman(report: any) {
   }
   console.log(`READY: ${report.ready}`);
   console.log(`OVERALL_STATUS: ${report.overallStatus}`);
+  console.log('');
+  console.log('READINESS TIERS (each check gates only the tiers it belongs to; nothing is turned green, LIVE is always NO_GO):');
+  for (const t of report.releaseCertification?.tiers ?? []) {
+    console.log(`  ${t.tier.padEnd(18)} ${t.status.padEnd(10)}${t.blockingChecks.length ? ' blocked by: ' + t.blockingChecks.join(', ') : ''}`);
+  }
   console.log('');
   printRealState(report.realState);
   console.log('');

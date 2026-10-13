@@ -2284,6 +2284,7 @@ const commands: Record<string, () => Promise<void>> = {
     const dbFlag = process.argv.slice(3).find(a => a.startsWith('--db='));
     const withSuites = process.argv.slice(3).includes('--with-suites');
     const engineUrlFlag = process.argv.slice(3).find(a => a.startsWith('--engine-url='));
+    const tierFlag = process.argv.slice(3).find(a => a.startsWith('--tier='));
     const asJson = process.argv.slice(3).includes('--json');
     // Phase 2 (2026-10-12): pass the synthetic market-open session stage through
     // to the cert child (scripts/certifyNextSession.ts --with-sim).
@@ -2335,10 +2336,14 @@ const commands: Record<string, () => Promise<void>> = {
           ...(engineUrlFlag ? [engineUrlFlag] : []),
           ...(withSim ? ['--with-sim'] : []),
           ...(simSpeedFlag ? [simSpeedFlag] : []),
+          ...(tierFlag ? [tierFlag] : []),
         ], {
           env: {
             ...env, SYNTHETIC_SIMULATION: 'false', ARGUS_DISABLE_MARKET_DATA_WS: 'true',
             ARGUS_CERT_SOURCE_DB: sourcePath,
+            // 2026-10-13: the live-engine probes authenticate exactly as this CLI does (session cookie / dev token), via env so
+            // the secret never appears on a command line. Without it an authenticated engine's 401 read as "unhealthy/UNKNOWN".
+            ...(engineUrlFlag ? { ARGUS_CERT_ENGINE_HEADERS_JSON: JSON.stringify(cliAuthHeaders()) } : {}),
           },
           stdio: 'inherit',
         });
