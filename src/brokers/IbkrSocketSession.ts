@@ -377,6 +377,12 @@ export class IbkrSocketSession {
     symbol: string; reqId: number; code: number; message: string;
     durationStr: string; barSize: string; whatToShow: string;
   }) => void) | null = null;
+  /** Diagnostics-only latency split for the serialized historical request chain. */
+  private historicalDataTimingHandler: ((detail: {
+    symbol: string; timeframe: string; startMs: number; endMs: number;
+    queueWaitMs: number; serviceMs: number; totalMs: number;
+    outcome: 'SUCCESS' | 'EMPTY' | 'TIMEOUT' | 'ERROR'; barCount: number;
+  }) => void) | null = null;
   /** 2026-09-20 forensic-audit remediation (part D): IBKR delayed tick fields (66-69) - see
    *  tickPrice handler below. Deliberately separate from tickHandler (the live-quote sink
    *  MarketDataWorker/RiskEngine/OMS ultimately consume) - delayed data must never silently enter
@@ -504,6 +510,14 @@ export class IbkrSocketSession {
     durationStr: string; barSize: string; whatToShow: string;
   }) => void) | null): void {
     this.historicalDataErrorHandler = handler;
+  }
+
+  setHistoricalDataTimingHandler(handler: ((detail: {
+    symbol: string; timeframe: string; startMs: number; endMs: number;
+    queueWaitMs: number; serviceMs: number; totalMs: number;
+    outcome: 'SUCCESS' | 'EMPTY' | 'TIMEOUT' | 'ERROR'; barCount: number;
+  }) => void) | null): void {
+    this.historicalDataTimingHandler = handler;
   }
 
   /** 2026-09-20 remediation (part D): fires for an IBKR delayed tick (field 66-69) - diagnostics
@@ -1447,7 +1461,39 @@ export class IbkrSocketSession {
    * Never fabricates bars — empty / timeout / error throws or returns [].
    */
   requestHistoricalBars(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<Bar[]> {
-    const run = () => this.requestHistoricalBarsOnce(symbol, timeframe, startMs, endMs);
+    const enqueuedAtMs = Date.now();
+    const run = async (): Promise<Bar[]> => {
+      const startedAtMs = Date.now();
+      try {
+        const bars = await this.requestHistoricalBarsOnce(symbol, timeframe, startMs, endMs);
+        const finishedAtMs = Date.now();
+        try {
+          this.historicalDataTimingHandler?.({
+            symbol, timeframe, startMs, endMs,
+            queueWaitMs: Math.max(0, startedAtMs - enqueuedAtMs),
+            serviceMs: Math.max(0, finishedAtMs - startedAtMs),
+            totalMs: Math.max(0, finishedAtMs - enqueuedAtMs),
+            outcome: bars.length > 0 ? 'SUCCESS' : 'EMPTY',
+            barCount: bars.length,
+          });
+        } catch { /* diagnostics must never affect historical delivery */ }
+        return bars;
+      } catch (e) {
+        const finishedAtMs = Date.now();
+        const message = e instanceof Error ? e.message : String(e);
+        try {
+          this.historicalDataTimingHandler?.({
+            symbol, timeframe, startMs, endMs,
+            queueWaitMs: Math.max(0, startedAtMs - enqueuedAtMs),
+            serviceMs: Math.max(0, finishedAtMs - startedAtMs),
+            totalMs: Math.max(0, finishedAtMs - enqueuedAtMs),
+            outcome: /timeout/i.test(message) ? 'TIMEOUT' : 'ERROR',
+            barCount: 0,
+          });
+        } catch { /* diagnostics must never affect historical delivery */ }
+        throw e;
+      }
+    };
     const next = this.histChain.then(run, run);
     this.histChain = next.then(
       () => undefined,
