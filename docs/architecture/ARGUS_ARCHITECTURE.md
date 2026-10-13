@@ -5042,3 +5042,25 @@ October 12 main integration: Release A preserves main's cooperative supersession
 - **IBKR position snapshot.** `IbkrSocketSession` now drops cached positions absent from a completed `positionEnd` snapshot (a closed position used to linger and cause a false `POSITION_FILL_CONFLICT`).
 - **Diagnostic.** `ARGUS_FREEZE_PROFILER=true` attaches a worker-thread CPU profiler that writes a `.cpuprofile` during an event-loop freeze. Off by default.
 - Still open: the ~220 s post-reconciliation freeze cause is unnamed; protective exits remain software-only (no broker-resident orders); no strategy is lifecycle-authorized.
+
+
+## 2026-10-13 — Protective-exit retry ownership
+
+Production evidence exposed a second protective-exit failure mode after the gate-by-intent repair: a genuine `PORTFOLIO_EXIT` SELL rejected by RiskEngine could remain suppressed for the generic `exitIdeaCooldownMs` (300 s). The observed `S` close was rejected around 09:14 ET by `extended_hours_execution_policy` and did not retry until ~09:19 ET.
+
+The repair keeps the existing protected execution spine unchanged and adds **trace-owned exit single-flight** at the portfolio-intel boundary:
+
+```
+PortfolioMonitor
+  └─ mint protective trace + seal
+      └─ acquire per-symbol protective-exit throttle
+          └─ ChiefTrader → RiskAgent → RiskEngine → OMS → Broker
+               ├─ Risk reject / risk persist failure ──► release exact trace
+               ├─ broker REJECTED/CANCELED ───────────► release exact trace
+               ├─ PARTIALLY_FILLED/PENDING ──────────► retain ownership
+               └─ FILLED ────────────────────────────► release exact trace
+```
+
+The throttle may be released only by the same `traceId + symbol` that owns it. An unrelated discretionary SELL cannot unlock another protective close. An approved or partially-filled close remains single-flight even after the wall-clock cooldown expires, preventing duplicate liquidation attempts. This is not a RiskEngine bypass and does not weaken `sell_position_exists`, sizing, price/session/freshness checks, reconciliation, OMS idempotency, or broker constraints.
+
+Broker-resident stops are still not part of this architecture. Process outage, missing market data, or an event-loop stall can therefore still delay software-only protection; that is an explicit remaining reliability boundary.
