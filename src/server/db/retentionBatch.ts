@@ -23,6 +23,9 @@ export function deleteExpiredByRowidWindows(
   maxWindows: number,
 ): { deleted: number; windows: number; lastWindowHadExpired: boolean } {
   // Identifiers come from code constants (never user input).
+  // Rows can be large (decision_provenance up to 256 KB each): reading the time column forces the row's pages in,
+  // so one 5,000-row window took 7-8 s. Cap the window so each statement stays well under a second.
+  windowRows = Math.min(windowRows, 400);
   const win = sqlite.prepare('SELECT rowid AS r, ' + timeColumn + ' AS t ' + 'FROM' + ' ' + table + ' WHERE rowid > ? ORDER BY rowid LIMIT ?');
   const del = sqlite.prepare('DELETE ' + 'FROM' + ' ' + table + ' WHERE rowid >= ? AND rowid <= ? AND ' + timeColumn + ' < ?');
   let after = cursors.get(table) ?? -1;

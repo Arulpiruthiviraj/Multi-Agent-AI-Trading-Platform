@@ -212,6 +212,8 @@ export interface ContinuousIntelligenceConfig {
    *  candidates may receive a real javaQuantScore (Java quant engine bar-fetch + HTTP call) during
    *  the once-per-day PRE_MARKET plan-building cycle. Never applied to the ~30s RTH ranking loop. */
   javaQuantScoreCandidateLimit: number;
+  /** 2026-10-12: fetchPreviousRanks only looks this far back (6 h). The unbounded query materialised every historical ranking row for the symbols (27.9 s synchronous block on the 640k-row table). */
+  rankPreviousLookbackMs: number;
   /** 2026-10-06 pre-market focus engine, course-corrected (lifecycle, not a one-time snapshot):
    *  four lifecycle points, each run at most once per trading date while ET wall-clock time is
    *  inside its window. (1) INITIAL_BUILD on PREMARKET_SESSION_STARTED / first PRE_MARKET tick;
@@ -436,6 +438,7 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     rankingThresholdsBySession: requireRankingThresholdsBySession(raw.rankingThresholdsBySession, 'rankingThresholdsBySession'),
     newsCatalystComponent: requireNewsCatalystComponent(raw.newsCatalystComponent),
     javaQuantScoreCandidateLimit: requireNumber(raw.javaQuantScoreCandidateLimit, 'javaQuantScoreCandidateLimit'),
+    rankPreviousLookbackMs: requireNumber(raw.rankPreviousLookbackMs, 'rankPreviousLookbackMs'),
     premarketMidMorningRefreshStartEt: requireHhmm(raw.premarketMidMorningRefreshStartEt, 'premarketMidMorningRefreshStartEt'),
     premarketMidMorningRefreshEndEt: requireHhmm(raw.premarketMidMorningRefreshEndEt, 'premarketMidMorningRefreshEndEt'),
     premarketRefreshWindowStart: requireHhmm(raw.premarketRefreshWindowStart, 'premarketRefreshWindowStart'),

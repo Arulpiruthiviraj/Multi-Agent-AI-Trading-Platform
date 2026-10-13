@@ -19,7 +19,7 @@
  */
 import { db } from '../db';
 import { newsClusters, agentPredictions, candidateRankings } from '../db/schema';
-import { desc, gte, inArray } from 'drizzle-orm';
+import { and, desc, gte, inArray, lt } from 'drizzle-orm';
 import { quantCoreBridge } from '../services/QuantCoreBridge';
 import { FACTOR_CONFIDENCE_SCALE } from '../services/JavaQuantAdvisoryService';
 import type { ResearchBar } from '../research/ohlcvTypes';
@@ -385,7 +385,13 @@ export async function fetchPreviousRanks(symbols: string[], beforeIso: string): 
   try {
     const rows = await db.select({ symbol: candidateRankings.symbol, rank: candidateRankings.rank, cycleAt: candidateRankings.cycleAt })
       .from(candidateRankings)
-      .where(inArray(candidateRankings.symbol, symbols))
+      // Bounded by a recent cycle_at window (uses idx_candidate_rankings_cycle) instead of every historical
+      // row for these symbols: the unbounded form blocked the main thread for 17-28 s (SLOW_SQL_STATEMENT).
+      .where(and(
+        inArray(candidateRankings.symbol, symbols),
+        gte(candidateRankings.cycleAt, new Date(Date.parse(beforeIso) - continuousIntelligence.rankPreviousLookbackMs).toISOString()),
+        lt(candidateRankings.cycleAt, beforeIso),
+      ))
       .orderBy(desc(candidateRankings.cycleAt));
     const seen = new Set<string>();
     for (const row of rows) {

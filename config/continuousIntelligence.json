@@ -70,6 +70,7 @@
   },
   "_javaQuantScoreCandidateLimitComment": "Session-Aware Trading Architecture Phase 3 follow-up (2026-09-05): javaQuantScore (ComposableRanking.ts) is now actually wired to a live caller - SnapshotScanner's once-per-trading-day PRE_MARKET plan-building cycle only (never the ~30s RTH ranking loop, which would multiply Java HTTP + bar-fetch cost by every cycle for no evidence-backed benefit yet). Bounded to this many top-momentum candidates (by the SAME deterministic pre-score already computed, before Java is ever called) - matches DEFAULT_TRADE_PLAN_THRESHOLDS' total tier capacity (primaryCount 3 + backupCount 5 + watchlistCount 15 = 23) rounded down, since a symbol outside that range cannot receive a TradePlan tier anyway. Zero cost when QUANT_JAVA_CORE_ENABLED is off (isQuantJavaCoreEnabled() gate checked first).",
   "javaQuantScoreCandidateLimit": 20,
+  "rankPreviousLookbackMs": 21600000,
   "_momentumScanUniverseSymbolsComment": "2026-09-20 forensic-audit remediation: 'SQ' corrected to 'XYZ' - Block Inc. has traded under ticker XYZ on NYSE since its 2023 rename; the stale 'SQ' symbol was confirmed live to produce real IBKR error 200 ('No security definition has been found for the request'), not an entitlement failure.",
   "momentumScanUniverseSymbols": [
     "SPY", "QQQ", "IWM", "DIA", "GLD", "SMH", "XLF", "XLE", "XLK", "SOXL", "TQQQ", "SQQQ",
