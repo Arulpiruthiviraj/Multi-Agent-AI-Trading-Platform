@@ -34,7 +34,9 @@ const yieldToEventLoop = (): Promise<void> => new Promise<void>((resolve) => set
  * pages with a macrotask yield between pages so no single block exceeds one page's cost.
  */
 async function selectAllPaged<T extends Record<string, any>>(table: any, tableName: string, where: any): Promise<T[]> {
-  const pageRows = Math.max(100, Number(tradingSafety.calibrationFetchPageRows) || 2000);
+  // Smaller than the calibration page (2,000): the EXISTS-correlated pages measured 5-9 s each (SLOW_SQL_STATEMENT);
+  // 250 rows keeps each synchronous statement near a second while reading the same rows in the same order.
+  const pageRows = Math.max(100, Math.min(250, Number(tradingSafety.calibrationFetchPageRows) || 250));
   const out: T[] = [];
   let last = -1;
   for (;;) {

@@ -21,6 +21,7 @@
  */
 import { db } from '../db';
 import { agentPredictions, kronosPredictions, predictionOutcomes, newsPredictions } from '../db/schema';
+import { countOffThread } from '../db/offThreadCount';
 import { and, eq, gt, isNull, ne, notLike, or, asc, sql } from 'drizzle-orm';
 import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
 import { tradingSafety } from '../config/tradingSafety';
@@ -159,6 +160,11 @@ export async function evaluatePrediction(
   };
 }
 
+// Last successfully computed backlog counts (the off-thread count can fail or time out; keep the last known value).
+let lastAgentRemaining = 0;
+let lastKronosRemaining = 0;
+let lastNewsRemaining = 0;
+
 export interface PredictionOutcomeEvaluatorCycleStats {
   rowsFetched: number;
   rowsProcessed: number;
@@ -276,15 +282,18 @@ export class PredictionOutcomeEvaluator {
       // Real backlog size, not just this cycle's bounded window - operator correctness audit
       // requirement. Same WHERE/JOIN, no LIMIT; the index added alongside this fix
       // (idx_agent_predictions_timestamp) keeps this cheap even as the table grows.
-      const [{ count: agentRemainingCount }] = await db
+      // Exact count, computed on a read-only worker thread (offThreadCount.ts): run on the main thread it was a
+      // 5-9 s synchronous block every cycle. null (worker failure/timeout) keeps the last known value.
+      const agentRemainingCount = await countOffThread(db
         .select({ count: sql<number>`count(*)` })
         .from(agentPredictions)
         .leftJoin(predictionOutcomes, and(
           eq(predictionOutcomes.predictionId, agentPredictions.id),
           eq(predictionOutcomes.sourceTable, 'agent_predictions'),
         ))
-        .where(agentPendingCondition);
-      stats.rowsRemaining += agentRemainingCount;
+        .where(agentPendingCondition));
+      if (agentRemainingCount !== null) lastAgentRemaining = agentRemainingCount;
+      stats.rowsRemaining += agentRemainingCount ?? lastAgentRemaining;
 
       for (const { p } of pendingAgent) {
         if (outOfTime()) { stats.bailedOnWallClock = true; break; }
@@ -380,12 +389,13 @@ export class PredictionOutcomeEvaluator {
       }
       stats.rowsFetched += pendingKronos.length;
       stats.batches += 1;
-      const [{ count: kronosRemainingCount }] = await db
+      const kronosRemainingCount = await countOffThread(db
         .select({ count: sql<number>`count(*)` })
         .from(kronosPredictions)
         .leftJoin(predictionOutcomes, kronosJoinCondition)
-        .where(isNull(predictionOutcomes.id));
-      stats.rowsRemaining += kronosRemainingCount;
+        .where(isNull(predictionOutcomes.id)));
+      if (kronosRemainingCount !== null) lastKronosRemaining = kronosRemainingCount;
+      stats.rowsRemaining += kronosRemainingCount ?? lastKronosRemaining;
 
       for (const { k } of pendingKronos) {
         if (outOfTime()) { stats.bailedOnWallClock = true; break; }
@@ -435,12 +445,13 @@ export class PredictionOutcomeEvaluator {
       }
       stats.rowsFetched += pendingNews.length;
       stats.batches += 1;
-      const [{ count: newsRemainingCount }] = await db
+      const newsRemainingCount = await countOffThread(db
         .select({ count: sql<number>`count(*)` })
         .from(newsPredictions)
         .leftJoin(predictionOutcomes, newsJoinCondition)
-        .where(isNull(predictionOutcomes.id));
-      stats.rowsRemaining += newsRemainingCount;
+        .where(isNull(predictionOutcomes.id)));
+      if (newsRemainingCount !== null) lastNewsRemaining = newsRemainingCount;
+      stats.rowsRemaining += newsRemainingCount ?? lastNewsRemaining;
 
       for (const { n } of pendingNews) {
         if (outOfTime()) { stats.bailedOnWallClock = true; break; }

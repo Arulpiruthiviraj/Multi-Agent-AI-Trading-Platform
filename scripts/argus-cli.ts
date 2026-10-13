@@ -2304,14 +2304,23 @@ const commands: Record<string, () => Promise<void>> = {
       // engine DB, never writes to the source. Falls back to a WAL-aware file copy
       // (main DB + WAL copied in that order: replay stays consistent, possibly stale).
       try {
-        execFileSync('sqlite3', [sourcePath, `.backup '${snapshotDb.replace(/'/g, "''")}'`], { stdio: 'pipe' });
-      } catch (backupError: any) {
-        // 2026-10-11 (#11): the old fallback did copyFileSync of the live DB plus
-        // -wal/-shm while the engine writes — a torn non-atomic snapshot that can
-        // silently feed wrong rows into certification. Deleted. Fail loudly instead:
-        // a torn snapshot is worse than no snapshot.
-        console.error(`certify-next-session: sqlite3 .backup failed (${backupError?.message || backupError}); refusing to use a torn file-copy snapshot.`);
-        process.exit(1);
+        // Primary: better-sqlite3's online backup API (SQLite's consistent backup mechanism; no external
+        // binary needed - the sqlite3 CLI is not installed on the Windows host, which made this gate
+        // unusable there). Read-only on the source; copies in pages without blocking the live writer.
+        const { default: BetterSqlite3 } = await import('better-sqlite3');
+        const src = new BetterSqlite3(sourcePath, { readonly: true, fileMustExist: true });
+        try { await src.backup(snapshotDb); } finally { src.close(); }
+      } catch (apiError: any) {
+        try {
+          execFileSync('sqlite3', [sourcePath, `.backup '${snapshotDb.replace(/'/g, "''")}'`], { stdio: 'pipe' });
+        } catch (backupError: any) {
+          // 2026-10-11 (#11): the old fallback did copyFileSync of the live DB plus
+          // -wal/-shm while the engine writes - a torn non-atomic snapshot that can
+          // silently feed wrong rows into certification. Deleted. Fail loudly instead:
+          // a torn snapshot is worse than no snapshot.
+          console.error(`certify-next-session: online backup failed (api: ${apiError?.message || apiError}; sqlite3: ${backupError?.message || backupError}); refusing to use a torn file-copy snapshot.`);
+          process.exit(1);
+        }
       }
       const code = await new Promise<number>((resolveCode, reject) => {
         const child = spawn(process.execPath, [

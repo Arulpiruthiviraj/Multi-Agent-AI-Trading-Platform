@@ -16,6 +16,7 @@
  * given a synthetic zero or guessed value.
  * ==========================================================
  */
+import { countOffThread } from '../db/offThreadCount';
 import { db } from '../db';
 import { agentPredictions, kronosPredictions, predictionOutcomeHorizons } from '../db/schema';
 import { and, eq, inArray, isNull, ne, notLike, or, asc, sql } from 'drizzle-orm';
@@ -110,6 +111,8 @@ export interface MultiHorizonOutcomeEvaluatorCycleStats {
   rowsRemaining: number;
 }
 
+let lastAgentRemainingMH = 0;
+let lastKronosRemainingMH = 0;
 const EMPTY_CYCLE_STATS: MultiHorizonOutcomeEvaluatorCycleStats = {
   rowsFetched: 0, rowsProcessed: 0, rowsWritten: 0, batches: 0, bailedOnWallClock: false, rowsRemaining: 0,
 };
@@ -182,12 +185,13 @@ export class MultiHorizonOutcomeEvaluator {
       .limit(batchSize);
     stats.rowsFetched += pendingAgent.length;
     stats.batches += 1;
-    const [{ count: agentRemainingCount }] = await db
+    const agentRemainingCount = await countOffThread(db
       .select({ count: sql<number>`count(*)` })
       .from(agentPredictions)
       .leftJoin(predictionOutcomeHorizons, agentJoinCondition)
-      .where(agentPendingCondition);
-    stats.rowsRemaining += agentRemainingCount;
+      .where(agentPendingCondition));
+    if (agentRemainingCount !== null) lastAgentRemainingMH = agentRemainingCount;
+    stats.rowsRemaining += agentRemainingCount ?? lastAgentRemainingMH;
 
     if (pendingAgent.length > 0) {
       // A prediction in this batch may already have SOME (not all) horizons recorded - fetch just
@@ -252,12 +256,13 @@ export class MultiHorizonOutcomeEvaluator {
         .limit(batchSize);
       stats.rowsFetched += pendingKronos.length;
       stats.batches += 1;
-      const [{ count: kronosRemainingCount }] = await db
+      const kronosRemainingCount = await countOffThread(db
         .select({ count: sql<number>`count(*)` })
         .from(kronosPredictions)
         .leftJoin(predictionOutcomeHorizons, kronosJoinCondition)
-        .where(kronosPendingCondition);
-      stats.rowsRemaining += kronosRemainingCount;
+        .where(kronosPendingCondition));
+      if (kronosRemainingCount !== null) lastKronosRemainingMH = kronosRemainingCount;
+      stats.rowsRemaining += kronosRemainingCount ?? lastKronosRemainingMH;
 
       if (pendingKronos.length > 0) {
         const batchIds = pendingKronos.map(({ k }) => String(k.id));

@@ -621,6 +621,10 @@ export class AIRouter {
       const skipUntil = this.skipUntil.get(id);
       if (typeof skipUntil === 'number' && skipUntil > now) return false;
       const stat = dbStats.find(s => s.id === id);
+      // 2026-10-12: when local inference is intentionally off (ARGUS_SKIP_OLLAMA=true, the CLI default), the
+      // router still dispatched 3,099 Ollama calls in one day (3,070 failures, ~30 s each, holding AI concurrency).
+      // Treat the local provider as unroutable instead.
+      if (process.env.ARGUS_SKIP_OLLAMA === 'true' && stat && /ollama/i.test(String(stat.providerName ?? ''))) return false;
       return !stat || stat.enabled !== false;
     });
   }
