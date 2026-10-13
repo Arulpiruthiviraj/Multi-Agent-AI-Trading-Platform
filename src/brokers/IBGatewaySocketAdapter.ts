@@ -75,6 +75,11 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
   }
 
   /** 2026-09-20 remediation (part A): explicit contract qualification via reqContractDetails. */
+  /** 2026-10-13: IBKR historical request queue depth / oldest age / counters (read-only diagnostics). */
+  getHistoricalQueueStats() {
+    return this.session.getHistoricalQueueStats();
+  }
+
   resolveContract(symbol: string) {
     return this.session.resolveContract(symbol);
   }

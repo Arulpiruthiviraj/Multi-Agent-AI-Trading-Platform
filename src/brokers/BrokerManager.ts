@@ -64,6 +64,7 @@ export type BrokerSyncState = 'INITIALIZING' | 'READY' | 'SYNCING' | 'FAILED';
 
 export class BrokerManager {
   private static instance: BrokerManager;
+  private historicalQueueStatsTimer: ReturnType<typeof setInterval> | null = null;
   private activeBroker: BrokerPlugin;
   private brokers: Map<string, BrokerPlugin> = new Map();
   private paperTickFromMarketData = false;
@@ -792,6 +793,23 @@ export class BrokerManager {
             whatToShow: detail.whatToShow,
           });
         });
+        // 2026-10-13: periodic queue health for the IBKR historical scheduler (depth per class, oldest queued age, coalesced /
+        // expired / preempted / cancelled counters) - emitted only while there is queue activity, so an idle queue is silent.
+        if (this.historicalQueueStatsTimer) clearInterval(this.historicalQueueStatsTimer);
+        let lastCountersJson = '';
+        this.historicalQueueStatsTimer = setInterval(() => {
+          try {
+            const stats = (mdBroker as any).getHistoricalQueueStats?.();
+            if (!stats) return;
+            const countersJson = JSON.stringify(stats.counters);
+            if (stats.depthTotal === 0 && stats.runningIntent === null && countersJson === lastCountersJson) return;
+            lastCountersJson = countersJson;
+            structuredLogger.info('IBKR historical queue stats', {
+              category: 'MARKET_DATA', eventType: 'IBKR_HISTORICAL_QUEUE_STATS', component: 'BrokerManager', ...stats,
+            });
+          } catch { /* diagnostics only */ }
+        }, 30_000);
+        (this.historicalQueueStatsTimer as any)?.unref?.();
         mdBroker.setHistoricalDataTimingHandler((detail) => {
           structuredLogger.info('IBKR historical-data timing', {
             category: 'MARKET_DATA',
@@ -902,6 +920,7 @@ export class BrokerManager {
               mdBroker.setMarketDataSubscriptionHandler(null);
               mdBroker.setHistoricalDataErrorHandler(null);
               mdBroker.setHistoricalDataTimingHandler(null);
+              if (this.historicalQueueStatsTimer) { clearInterval(this.historicalQueueStatsTimer); this.historicalQueueStatsTimer = null; }
               mdBroker.setDelayedTickHandler(null);
               mdBroker.setSubscriptionLifecycleHandler(null);
             },

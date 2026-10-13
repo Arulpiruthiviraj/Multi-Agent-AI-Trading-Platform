@@ -14,6 +14,7 @@
  * BrokerManager, never emits TRADE_IDEA_GENERATED, and this evaluation can never affect a live
  * decision - it only tells the operator, in hindsight, how large a miss actually was.
  */
+import { runWithHistoricalIntent } from '../data/historicalRequestIntent';
 import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
 import { continuousIntelligence } from '../config/continuousIntelligence';
 import {
@@ -54,7 +55,12 @@ export class MissedOpportunityEvaluator {
     await this.guard.run(() => this.runCycle(now));
   }
 
-  private async runCycle(now: Date): Promise<void> {
+  private runCycle(now: Date): Promise<void> {
+    // 2026-10-13: missed-opportunity grading fetches 1Min windows after OLD detections: research backfill (P3).
+    return runWithHistoricalIntent('RESEARCH_BACKFILL', () => this.runCycleInner(now));
+  }
+
+  private async runCycleInner(now: Date): Promise<void> {
     const nowMs = now.getTime();
     // A record is only due once its own evaluation window has actually elapsed - reusing a single
     // global cutoff (rather than per-record) is safe today because every live caller passes the

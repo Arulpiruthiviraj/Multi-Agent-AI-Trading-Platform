@@ -37,6 +37,7 @@ import { mintProtectiveExitSeal, PROTECTIVE_EXIT_AUTHORIZED_MINTER } from '../co
 import { eventBus } from '../core/EventBus';
 import { randomUUID } from 'node:crypto';
 import { db } from '../db';
+import { runWithHistoricalIntent } from '../data/historicalRequestIntent';
 import { portfolio, settings, trades } from '../db/schema';
 import { and, desc, eq } from 'drizzle-orm';
 import { marketDataWorker } from './MarketDataWorker';
@@ -578,7 +579,12 @@ export class PortfolioMonitorWorker {
     }
   }
 
-  private async computeCampaignAtr(symbol: string): Promise<number | null> {
+  private computeCampaignAtr(symbol: string): Promise<number | null> {
+    // 2026-10-13: bars for a HELD position - highest historical-request class (P0), never behind research backfill.
+    return runWithHistoricalIntent('POSITION_DATA', () => this.computeCampaignAtrInner(symbol));
+  }
+
+  private async computeCampaignAtrInner(symbol: string): Promise<number | null> {
     try {
       const endMs = Date.now();
       const startMs = endMs - 2 * 24 * 60 * 60 * 1000;

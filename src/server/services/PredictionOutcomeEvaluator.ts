@@ -20,6 +20,7 @@
  * ==========================================================
  */
 import { db } from '../db';
+import { runWithHistoricalIntent } from '../data/historicalRequestIntent';
 import { agentPredictions, kronosPredictions, predictionOutcomes, newsPredictions } from '../db/schema';
 import { countOffThread } from '../db/offThreadCount';
 import { and, eq, gt, isNull, ne, notLike, or, asc, sql } from 'drizzle-orm';
@@ -73,7 +74,21 @@ export interface EvaluatedOutcome {
  * fewer than 2 real bars exist or the requested horizon endpoints are unavailable - typically
  * because provider data is incomplete or the window extends beyond available trading history.
  */
-export async function evaluatePrediction(
+// 2026-10-13: outcome grading re-fetches 1Min windows around OLD prediction times (Oct 13: 1-hour windows weeks in the past,
+// each TIMEOUT/EMPTY after 15-56 s) through the SAME serialized IBKR queue as live Quant. It is research backfill (P3): it
+// yields to - and is preempted by - live-session work, and is bounded/expired by the IBKR historical scheduler.
+export function evaluatePrediction(
+  predictionId: string,
+  sourceTable: 'agent_predictions' | 'kronos_predictions' | 'transactions' | 'news_predictions' | 'consensus_debate_predictions',
+  symbol: string,
+  side: string,
+  predictionTimeMs: number,
+  horizonMs: number = EVALUATION_HORIZON_MS,
+): Promise<EvaluatedOutcome | null> {
+  return runWithHistoricalIntent('RESEARCH_BACKFILL', () => evaluatePredictionInner(predictionId, sourceTable, symbol, side, predictionTimeMs, horizonMs));
+}
+
+async function evaluatePredictionInner(
   predictionId: string,
   sourceTable: 'agent_predictions' | 'kronos_predictions' | 'transactions' | 'news_predictions' | 'consensus_debate_predictions',
   symbol: string,

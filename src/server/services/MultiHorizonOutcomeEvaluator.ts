@@ -16,6 +16,7 @@
  * given a synthetic zero or guessed value.
  * ==========================================================
  */
+import { runWithHistoricalIntent } from '../data/historicalRequestIntent';
 import { countOffThread } from '../db/offThreadCount';
 import { db } from '../db';
 import { agentPredictions, kronosPredictions, predictionOutcomeHorizons } from '../db/schema';
@@ -41,12 +42,23 @@ export interface MultiHorizonOutcomeResult {
  * a non-directional side, a data-source failure, or when fewer bars exist than the smallest
  * still-missing horizon requires.
  */
-export async function evaluateMultiHorizonOutcomesForPrediction(
+export function evaluateMultiHorizonOutcomesForPrediction(
   symbol: string,
   side: string,
   predictionTimeMs: number,
   alreadyDoneLabels: ReadonlySet<string>,
   horizons: MultiHorizonDefinition[] = multiHorizonOutcomeTracking.horizons,
+): Promise<MultiHorizonOutcomeResult[]> {
+  // 2026-10-13: research backfill (P3) - see PredictionOutcomeEvaluator.evaluatePrediction.
+  return runWithHistoricalIntent('RESEARCH_BACKFILL', () => evaluateMultiHorizonInner(symbol, side, predictionTimeMs, alreadyDoneLabels, horizons));
+}
+
+async function evaluateMultiHorizonInner(
+  symbol: string,
+  side: string,
+  predictionTimeMs: number,
+  alreadyDoneLabels: ReadonlySet<string>,
+  horizons: MultiHorizonDefinition[],
 ): Promise<MultiHorizonOutcomeResult[]> {
   if (side !== 'BUY' && side !== 'SELL') return [];
   const missing = horizons.filter((h) => !alreadyDoneLabels.has(h.label));

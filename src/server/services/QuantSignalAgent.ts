@@ -27,6 +27,7 @@ import { generateTraceId } from '../core/traceId';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { db } from '../db';
+import { runWithHistoricalIntent } from '../data/historicalRequestIntent';
 import * as schema from '../db/schema';
 import { marketDataWorker, type RescueRequestClass } from './MarketDataWorker';
 import { getCachedMoverSymbols } from '../continuous/MarketUniverseScanner';
@@ -825,7 +826,12 @@ export class QuantSignalAgent {
     const stageTimer = createQuantEvalStageTimer();
     let errorCode: string | null = null;
     try {
-      const result = await this.evaluateSymbolInternal(symbol, options, traceId, timing, stageTimer);
+      // 2026-10-13: every historical request this evaluation makes carries its scheduling class, so a scheduled or
+      // on-demand current-session evaluation is served ahead of any research backfill in IBKR's request queue.
+      const result = await runWithHistoricalIntent(
+        evaluationOrigin === 'SCHEDULED_CYCLE' ? 'QUANT_SCHEDULED' : 'QUANT_ON_DEMAND',
+        () => this.evaluateSymbolInternal(symbol, options, traceId, timing, stageTimer),
+      );
       // evaluateSymbolInternal's only null return is the insufficient-bars early return below -
       // every other path returns a full evaluation.
       outcome = result === null ? 'INSUFFICIENT_BARS' : 'ASSESSED';
