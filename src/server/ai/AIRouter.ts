@@ -564,7 +564,19 @@ export class AIRouter {
 
   private noteProviderSkipFromError(providerId: string, err: unknown): void {
     if (isTimeoutSkipError(err)) {
-      this.skipProviderTemporarily(providerId, AI_TIMEOUT_SKIP_COOLDOWN_MS, err instanceof Error ? err.message : String(err));
+      // 2026-10-13: a flat 60 s timeout cooldown re-probed a provider that never answers once a minute all session -
+      // Oct 13: 1,561 x 25 s local-model timeouts and ~1,375 x 8 s remote timeouts in 2h (93.5% of AI calls failed, each
+      // holding AI concurrency, CPU and memory). Same consecutive-failure escalation the unreachable path already uses:
+      // base cooldown doubles per failed EPISODE up to the long cap, and any success resets the streak.
+      const activeUntil = this.skipUntil.get(providerId);
+      const newEpisode = !(typeof activeUntil === 'number' && activeUntil > Date.now());
+      const streak = (this.transientFailureStreak.get(providerId) ?? 0) + (newEpisode ? 1 : 0);
+      this.transientFailureStreak.set(providerId, Math.max(1, streak));
+      this.skipProviderTemporarily(
+        providerId,
+        escalatedProviderCooldownMs(AI_TIMEOUT_SKIP_COOLDOWN_MS, Math.max(1, streak), AI_QUOTA_EXCEEDED_COOLDOWN_MS),
+        err instanceof Error ? err.message : String(err),
+      );
       return;
     }
     // Real gap found live (Phase 9, 2026-08-27): classifyAIProviderError()'s MODEL_UNAVAILABLE case
