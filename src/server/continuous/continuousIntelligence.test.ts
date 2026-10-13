@@ -224,6 +224,67 @@ describe('portfolio intel cooldown', () => {
     expect(canEmitPortfolioExitIdea('AAPL', 1_000_001)).toBe(true);
   });
 
+  it('releases a trace-owned protective-exit throttle immediately after RiskEngine rejects it', () => {
+    process.env[FLAG_P] = 'true';
+    const firstTrace = 'protective-risk-reject-1';
+    const retryTrace = 'protective-risk-reject-2';
+    expect(canEmitPortfolioExitIdea('S', 1_000_000, firstTrace)).toBe(true);
+
+    // Even after the generic five-minute cooldown expires, an unresolved close stays single-flight.
+    expect(canEmitPortfolioExitIdea('S', 1_000_000 + continuousIntelligence.exitIdeaCooldownMs + 1, retryTrace)).toBe(false);
+
+    eventBus.emit(EVENTS.RISK_ASSESSMENT_COMPLETED, {
+      traceId: firstTrace,
+      symbol: 'S',
+      side: 'SELL',
+      approved: false,
+      maxQuantity: 0,
+      reasoning: 'extended_hours_execution_policy',
+    });
+
+    // The exact rejected protective trace is eligible on the next normal monitor cycle.
+    expect(canEmitPortfolioExitIdea('S', 1_000_001, retryTrace)).toBe(true);
+  });
+
+  it('does not let an unrelated trace unlock an in-flight protective close', () => {
+    process.env[FLAG_P] = 'true';
+    const firstTrace = 'protective-owned-trace';
+    expect(canEmitPortfolioExitIdea('DDOG', 2_000_000, firstTrace)).toBe(true);
+
+    eventBus.emit(EVENTS.RISK_ASSESSMENT_COMPLETED, {
+      traceId: 'different-trace',
+      symbol: 'DDOG',
+      side: 'SELL',
+      approved: false,
+      maxQuantity: 0,
+      reasoning: 'unrelated',
+    });
+
+    expect(canEmitPortfolioExitIdea('DDOG', 2_000_000 + continuousIntelligence.exitIdeaCooldownMs + 1, 'retry')).toBe(false);
+  });
+
+  it('keeps a partial protective fill single-flight and releases on terminal broker rejection', () => {
+    process.env[FLAG_P] = 'true';
+    const traceId = 'protective-broker-trace';
+    expect(canEmitPortfolioExitIdea('AAPL', 3_000_000, traceId)).toBe(true);
+
+    eventBus.emit(EVENTS.ORDER_EXECUTED, {
+      traceId,
+      symbol: 'AAPL',
+      side: 'SELL',
+      status: 'PARTIALLY_FILLED',
+    });
+    expect(canEmitPortfolioExitIdea('AAPL', 3_000_000 + continuousIntelligence.exitIdeaCooldownMs + 1, 'retry-1')).toBe(false);
+
+    eventBus.emit(EVENTS.ORDER_EXECUTED, {
+      traceId,
+      symbol: 'AAPL',
+      side: 'SELL',
+      status: 'REJECTED',
+    });
+    expect(canEmitPortfolioExitIdea('AAPL', 3_000_001, 'retry-2')).toBe(true);
+  });
+
   it('HOLD telemetry is not an order', () => {
     process.env[FLAG_P] = 'true';
     const recorded: unknown[] = [];
