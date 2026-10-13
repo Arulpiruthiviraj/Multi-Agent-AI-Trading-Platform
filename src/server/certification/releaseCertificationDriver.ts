@@ -70,6 +70,13 @@ export const SUITE_DELEGATIONS: SuiteDelegation[] = [
   { field: 'WATCHDOG', testFile: 'scripts/lib/argusWatchdogLogic.test.ts', proves: 'slowness -> no restart before confirmTicks; death -> one restart; storm -> bounded lockout' },
   { field: 'MEMORY', testFile: 'src/brokers/paperBrokerOrderRegistry.leak.test.ts', proves: 'order-registry boundedness + heap growth across paper order lifecycles' },
   { field: 'QUEUES', testFile: 'src/server/config/dataTransportLimits.test.ts', proves: 'WS backpressure/keepalive keys' },
+  { field: 'CALIBRATION_EVENT_LOOP', testFile: 'src/server/continuous/CalibrationCandidateBuilder.eventLoop.test.ts', proves: 'calibration output equivalence plus non-vacuous event-loop gap bound over large histories' },
+  { field: 'KRONOS_JOIN_PLAN', testFile: 'src/server/services/PredictionOutcomeEvaluator.kronosJoinPlan.test.ts', proves: 'old INTEGER/TEXT join loses the index; cast form preserves count and uses the production index' },
+  { field: 'PROTECTIVE_EXIT_GATES', testFile: 'src/server/engines/RiskEngine.lossGatesProtectiveExit.test.ts', proves: 'genuine sealed protective SELL can reduce risk when entry loss/rate gates are tripped while mandatory SELL safety gates remain' },
+  { field: 'PROTECTIVE_EXIT_RETRY', testFile: 'src/server/continuous/continuousIntelligence.test.ts', proves: 'rejected protective exits release exact-trace throttle; pending/partial exits remain single-flight; unrelated traces cannot unlock' },
+  { field: 'RESEARCH_CAPITAL_20K', testFile: 'src/server/engines/RiskEngine.test.ts', proves: '$20k Argus allocation remains binding even with ~$1M broker equity/buying power and existing exposure' },
+  { field: 'INTRADAY_DATA_CONTRACT', testFile: 'src/server/services/QuantSignalAgent.intradayDeadline.test.ts', proves: '1Min deadline/provider failures are bounded and recorded explicitly rather than mislabeled as strategy NO_SETUP' },
+  { field: 'IBKR_HISTORICAL_TIMING', testFile: 'src/brokers/__tests__/IbkrSocketSession.historicalDataError.test.ts', proves: 'IBKR historical queue wait and provider service time are measured separately without changing request semantics' },
 ];
 
 export interface ReleaseDriverInput {
