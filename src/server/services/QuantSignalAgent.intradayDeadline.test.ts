@@ -26,6 +26,7 @@ describe('QuantSignalAgent intraday fetch deadline', () => {
   let historicalDataGateway: any;
   let tradingSafety: any;
   let marketDataWorker: any;
+  let structuredLogger: any;
   const originalOrb = process.env.QUANT_ORB_STRATEGY_ENABLED;
   const originalWait = { v: 0 };
 
@@ -39,6 +40,7 @@ describe('QuantSignalAgent intraday fetch deadline', () => {
     ({ historicalDataGateway } = await import('../engines/backtest/HistoricalDataGateway'));
     ({ tradingSafety } = await import('../config/tradingSafety'));
     ({ marketDataWorker } = await import('./MarketDataWorker'));
+    ({ structuredLogger } = await import('../observability/StructuredLogger'));
     ({ QuantSignalAgent } = await import('./QuantSignalAgent'));
     originalWait.v = tradingSafety.quantIntradayFetchMaxWaitMs;
   });
@@ -81,11 +83,43 @@ describe('QuantSignalAgent intraday fetch deadline', () => {
       return realEnsure(symbol, tf, s, e);
     }) as any);
 
+    const logSpy = vi.spyOn(structuredLogger, 'info');
     const started = Date.now();
     const evaluation = await new QuantSignalAgent().evaluateSymbol('QINTRA', { emitIdeas: false });
     void started;
     expect(intradayCalls).toBe(1); // the fetch was attempted exactly once - not duplicated, not cancelled
     expect(intradayStillPending).toBe(true);
     expect(evaluation).not.toBeNull(); // evaluation completed without intraday bars (fail-open path)
+
+    const deadlineAvailability = logSpy.mock.calls.find((call: any[]) =>
+      call[0] === 'quant_bar_input_availability'
+      && call[1]?.timeframe === '1Min'
+      && call[1]?.outcome === 'DEADLINE');
+    expect(deadlineAvailability).toBeDefined();
+    expect(deadlineAvailability?.[1]?.terminalReason).toBe('INTRADAY_FETCH_DEADLINE');
+    expect(deadlineAvailability?.[1]?.barCount).toBe(0);
+  }, 20_000);
+
+  it('records FETCH_ERROR distinctly from NO_SETUP when the 1Min provider fails', async () => {
+    seedDaily('QINTRAERR');
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-12T15:00:00Z') });
+    vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['QINTRAERR']);
+    const realEnsure = historicalDataGateway.ensureBars.bind(historicalDataGateway);
+    vi.spyOn(historicalDataGateway, 'ensureBars').mockImplementation((async (symbol: string, tf: string, s: number, e: number) => {
+      if (tf === '1Min') throw new Error('synthetic provider unavailable');
+      return realEnsure(symbol, tf, s, e);
+    }) as any);
+    const logSpy = vi.spyOn(structuredLogger, 'info');
+
+    const evaluation = await new QuantSignalAgent().evaluateSymbol('QINTRAERR', { emitIdeas: false });
+    expect(evaluation).not.toBeNull();
+
+    const failedAvailability = logSpy.mock.calls.find((call: any[]) =>
+      call[0] === 'quant_bar_input_availability'
+      && call[1]?.timeframe === '1Min'
+      && call[1]?.outcome === 'FETCH_ERROR');
+    expect(failedAvailability).toBeDefined();
+    expect(failedAvailability?.[1]?.terminalReason).toBeTruthy();
+    expect(failedAvailability?.[1]?.error).toMatch(/synthetic provider unavailable/);
   }, 20_000);
 });
