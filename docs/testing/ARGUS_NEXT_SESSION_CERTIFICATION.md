@@ -176,3 +176,16 @@ Jev + every AI provider unavailable; an authorized TEST-only Quant fixture drive
 **This is mechanism certification, not alpha proof.** It certifies that the pipeline functions
 without AI and that the consensus gate holds — it says nothing about whether any strategy is
 profitable.
+
+
+## 13. 2026-10-13 protective-exit retry release gate
+
+Runtime behavior found on 2026-10-13 adds a mandatory release invariant for any build carrying open positions:
+
+| Invariant | Check | PASS | FAIL |
+|---|---|---|---|
+| `PROTECTIVE_EXIT_RETRY_OWNERSHIP` | Emit a genuine sealed PortfolioMonitor protective SELL; force a Risk rejection; verify the same position can emit a fresh protective trace on the next PortfolioMonitor review. Then hold a PENDING/PARTIALLY_FILLED close beyond `exitIdeaCooldownMs` and verify no duplicate close is emitted. Finally deliver terminal REJECTED/CANCELED/FILLED and verify exact-trace ownership releases. | rejected exits retry on the next review; in-flight closes stay single-flight; unrelated traces cannot release ownership | any fixed 5-minute blind spot after rejection, or any duplicate close while a prior close is unresolved ⇒ **NO_GO** |
+| `BROKER_RESIDENT_PROTECTION` | Query the actual PAPER execution account for working protective orders; do not infer from configured stop percentages. | explicit broker working-order evidence exists and matches the held quantity/order contract | if absent/unknown, report **software-only protection**; unattended PAPER may not be called fully protected |
+| `PORTFOLIO_MONITOR_CADENCE` | During at least four 15-minute maintenance cycles, measure maximum gap between position reviews while an open position is present. | no maintenance task causes a missed protection window beyond the certified bound | gap exceeds bound or cannot be measured ⇒ **NO_GO** for unattended PAPER |
+
+The first invariant is covered by `src/server/continuous/continuousIntelligence.test.ts` on `repair/oct13-protective-exit-retry`. It still requires exact-SHA CI and controlled-runtime verification before deployment. The second and third are runtime-only and must never be inferred from unit tests.
