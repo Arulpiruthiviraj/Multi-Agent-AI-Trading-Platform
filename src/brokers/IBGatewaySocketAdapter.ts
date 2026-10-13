@@ -60,7 +60,8 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
   setHistoricalDataTimingHandler(handler: ((detail: {
     symbol: string; timeframe: string; startMs: number; endMs: number;
     queueWaitMs: number; serviceMs: number; totalMs: number;
-    outcome: 'SUCCESS' | 'EMPTY' | 'TIMEOUT' | 'ERROR'; barCount: number;
+    outcome: 'SUCCESS' | 'EMPTY' | 'TIMEOUT' | 'ERROR' | 'DROPPED_QUEUE_FULL' | 'DROPPED_QUEUE_STALE'; barCount: number;
+    queueDepthAtEnqueue: number;
   }) => void) | null): void {
     this.session.setHistoricalDataTimingHandler(handler);
   }

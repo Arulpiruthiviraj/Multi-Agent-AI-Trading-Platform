@@ -11,6 +11,8 @@
   "maxNewSubscriptionsPerCycle": 20,
   "exitIdeaCooldownMs": 300000,
   "exitOwnershipOrphanGraceMs": 120000,
+  "ibkrHistoricalMaxQueuedRequests": 24,
+  "ibkrIntradayHistoricalMaxQueueWaitMs": 30000,
   "screenerEvalCooldownMs": 60000,
   "screenerMinHistoryBars": 8,
   "screenerMinReturnPct": 0.015,

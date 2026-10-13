@@ -368,6 +368,8 @@ export class IbkrSocketSession {
   private nextHistReqId = 50_000;
   /** Serialize historical requests — IB paces hist data; avoid storms. */
   private histChain: Promise<unknown> = Promise.resolve();
+  /** Requests waiting for their turn in histChain (not yet running). */
+  private histWaiting = 0;
   /** Separate ID space from market-data/historical reqIds - see resolveContract(). */
   private nextContractReqId = 900_000;
   /** 2026-09-20 forensic-audit remediation (part B): reqHistoricalData errors previously only
@@ -382,7 +384,8 @@ export class IbkrSocketSession {
   private historicalDataTimingHandler: ((detail: {
     symbol: string; timeframe: string; startMs: number; endMs: number;
     queueWaitMs: number; serviceMs: number; totalMs: number;
-    outcome: 'SUCCESS' | 'EMPTY' | 'TIMEOUT' | 'ERROR'; barCount: number;
+    outcome: 'SUCCESS' | 'EMPTY' | 'TIMEOUT' | 'ERROR' | 'DROPPED_QUEUE_FULL' | 'DROPPED_QUEUE_STALE'; barCount: number;
+    queueDepthAtEnqueue: number;
   }) => void) | null = null;
   /** 2026-09-20 forensic-audit remediation (part D): IBKR delayed tick fields (66-69) - see
    *  tickPrice handler below. Deliberately separate from tickHandler (the live-quote sink
@@ -516,7 +519,8 @@ export class IbkrSocketSession {
   setHistoricalDataTimingHandler(handler: ((detail: {
     symbol: string; timeframe: string; startMs: number; endMs: number;
     queueWaitMs: number; serviceMs: number; totalMs: number;
-    outcome: 'SUCCESS' | 'EMPTY' | 'TIMEOUT' | 'ERROR'; barCount: number;
+    outcome: 'SUCCESS' | 'EMPTY' | 'TIMEOUT' | 'ERROR' | 'DROPPED_QUEUE_FULL' | 'DROPPED_QUEUE_STALE'; barCount: number;
+    queueDepthAtEnqueue: number;
   }) => void) | null): void {
     this.historicalDataTimingHandler = handler;
   }
@@ -1463,8 +1467,24 @@ export class IbkrSocketSession {
    */
   requestHistoricalBars(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<Bar[]> {
     const enqueuedAtMs = Date.now();
+    const queueDepthAtEnqueue = this.histWaiting;
+    const emitTiming = (detail: Parameters<NonNullable<typeof this.historicalDataTimingHandler>>[0]) => {
+      try { this.historicalDataTimingHandler?.(detail); } catch { /* diagnostics must never affect historical delivery */ }
+    };
+    // 2026-10-13: bound the serialized chain. Before this, a Quant caller that gave up at its 8s deadline left its
+    // request behind every other one, and with ~50 evaluations/min the chain only grew (zombie backlog).
+    if (queueDepthAtEnqueue >= continuousIntelligence.ibkrHistoricalMaxQueuedRequests) {
+      emitTiming({ symbol, timeframe, startMs, endMs, queueWaitMs: 0, serviceMs: 0, totalMs: 0, outcome: 'DROPPED_QUEUE_FULL', barCount: 0, queueDepthAtEnqueue });
+      return Promise.reject(new Error(`IBKR_HISTORICAL_QUEUE_FULL: ${queueDepthAtEnqueue} requests already waiting (max ${continuousIntelligence.ibkrHistoricalMaxQueuedRequests}); ${symbol} ${timeframe} not queued.`));
+    }
+    this.histWaiting++;
     const run = async (): Promise<Bar[]> => {
+      this.histWaiting = Math.max(0, this.histWaiting - 1);
       const startedAtMs = Date.now();
+      if (timeframe !== '1Day' && startedAtMs - enqueuedAtMs > continuousIntelligence.ibkrIntradayHistoricalMaxQueueWaitMs) {
+        emitTiming({ symbol, timeframe, startMs, endMs, queueWaitMs: startedAtMs - enqueuedAtMs, serviceMs: 0, totalMs: startedAtMs - enqueuedAtMs, outcome: 'DROPPED_QUEUE_STALE', barCount: 0, queueDepthAtEnqueue });
+        throw new Error(`IBKR_HISTORICAL_QUEUE_STALE: ${symbol} ${timeframe} waited ${startedAtMs - enqueuedAtMs}ms (max ${continuousIntelligence.ibkrIntradayHistoricalMaxQueueWaitMs}ms); dropped unserved.`);
+      }
       try {
         const bars = await this.requestHistoricalBarsOnce(symbol, timeframe, startMs, endMs);
         const finishedAtMs = Date.now();
@@ -1476,6 +1496,7 @@ export class IbkrSocketSession {
             totalMs: Math.max(0, finishedAtMs - enqueuedAtMs),
             outcome: bars.length > 0 ? 'SUCCESS' : 'EMPTY',
             barCount: bars.length,
+            queueDepthAtEnqueue,
           });
         } catch { /* diagnostics must never affect historical delivery */ }
         return bars;
@@ -1490,6 +1511,7 @@ export class IbkrSocketSession {
             totalMs: Math.max(0, finishedAtMs - enqueuedAtMs),
             outcome: /timeout/i.test(message) ? 'TIMEOUT' : 'ERROR',
             barCount: 0,
+            queueDepthAtEnqueue,
           });
         } catch { /* diagnostics must never affect historical delivery */ }
         throw e;

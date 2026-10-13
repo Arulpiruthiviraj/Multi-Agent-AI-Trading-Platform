@@ -17,6 +17,10 @@ export interface ContinuousIntelligenceConfig {
   exitIdeaCooldownMs: number;
   /** 2026-10-13: a protective-exit trace that owns a symbol but has NO trades row after this long (never reached OMS: dropped, crashed, swallowed) is an orphan and is released. A trace with a live non-terminal order is never released by age. */
   exitOwnershipOrphanGraceMs: number;
+  /** 2026-10-13: bound on requests WAITING in IbkrSocketSession's serialized historical chain. Past it a new request is rejected immediately (IBKR_HISTORICAL_QUEUE_FULL) instead of lengthening an unbounded chain behind callers that already gave up. */
+  ibkrHistoricalMaxQueuedRequests: number;
+  /** 2026-10-13: an INTRADAY historical request that waited longer than this before its turn is dropped unserved (IBKR_HISTORICAL_QUEUE_STALE): its caller's deadline long passed and the bars it would return are already obsolete. Daily requests are never dropped by age. */
+  ibkrIntradayHistoricalMaxQueueWaitMs: number;
   screenerEvalCooldownMs: number;
   screenerMinHistoryBars: number;
   screenerMinReturnPct: number;
@@ -365,6 +369,8 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     maxNewSubscriptionsPerCycle: requireNumber(raw.maxNewSubscriptionsPerCycle, 'maxNewSubscriptionsPerCycle'),
     exitIdeaCooldownMs: requireNumber(raw.exitIdeaCooldownMs, 'exitIdeaCooldownMs'),
     exitOwnershipOrphanGraceMs: requireNumber(raw.exitOwnershipOrphanGraceMs, 'exitOwnershipOrphanGraceMs'),
+    ibkrHistoricalMaxQueuedRequests: requireNumber(raw.ibkrHistoricalMaxQueuedRequests, 'ibkrHistoricalMaxQueuedRequests'),
+    ibkrIntradayHistoricalMaxQueueWaitMs: requireNumber(raw.ibkrIntradayHistoricalMaxQueueWaitMs, 'ibkrIntradayHistoricalMaxQueueWaitMs'),
     screenerEvalCooldownMs: requireNumber(raw.screenerEvalCooldownMs, 'screenerEvalCooldownMs'),
     screenerMinHistoryBars: requireNumber(raw.screenerMinHistoryBars, 'screenerMinHistoryBars'),
     screenerMinReturnPct: requireNumber(raw.screenerMinReturnPct, 'screenerMinReturnPct'),
