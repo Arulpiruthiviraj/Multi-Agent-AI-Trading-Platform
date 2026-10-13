@@ -167,3 +167,85 @@ Tags: [C] confirmed, [S] strongly supported, [H] hypothesis, [U] unknown.
 4. [U] Not done: provider-timeout storm / restart-with-open-position / full-universe / combined-failure synthetic scenarios, mutation tests, release-certification binding, intraday-provider root cause (54% deadlines), TimesFM install and Chronos comparison.
 
 **Verdict for 2026-10-13: READY_WITH_CONDITIONS for supervised PAPER — NOT certified for unattended operation.** Conditions: watch the first 30 minutes (PortfolioMonitor review gaps, `data/freeze-profiles/`, reconciliation), S carried, soak FAIL unresolved.
+
+
+## Addendum 11 — Full-day reconstruction (read-only DB evidence), freeze ROOT CAUSE, and corrected next-session readiness
+Evidence base: `data/argus.db` opened read-only (observability_events, risk_assessments, trades, fills, transaction_traces, ai_calls, consensus_evidence, reconciliation_events); freeze CPU profiles (`data/freeze-profiles/`, `scripts/forensic/analyzeCpuProfile.cjs`); slow-SQL records (`SLOW_SQL_STATEMENT`). Times are America/New_York. Tags: [C] confirmed from records, [S] strongly supported, [H] hypothesis, [U] unknown/not verified. This addendum supersedes the readiness wording of Addendum 10 where they differ (see section J).
+
+### A. The recurring freeze — ROOT CAUSE [C]
+- **Pattern [C]:** 32 same-process event-stream gaps of 206–325 s between 09:40 and 20:50 ET (plus 27 shorter 60–130 s gaps that coincide with boot/restart backlog). After every restart the first long gap begins ~6.4 min after boot, then repeats every ~15 min (period ≈ freeze length + ~11 min). Examples: 13:17:13 (+213 s), 13:32:13 (+218), 13:47:14 (+206), 14:02:15 (+210), 15:19:10 (+221), 16:25:03 (+224), 17:20:52 (+253), 19:09:16 (+244), 20:13:56 (+238), 20:29:15 (+242), 20:44:42 (+325). Longest 325 s.
+- **During a freeze [C]:** the engine process ran at ~100% of one core (6.2 CPU-s per 6 s sample) with flat memory (649 MB) while `/health` failed — a main-thread CPU/IO-bound block, not a suspend or memory-pressure stall. The 15-minute calibration worker was excluded earlier (it starts 9.5 min before the freeze); its repair was verified separately.
+- **Cause [C]:** the freeze profiler (rolling profile, validated on a deliberate native-sqlite block) recorded a 362 s window with **308 s of self time in one better-sqlite3 `.all()`**, and the slow-SQL instrumentation then named the statement: `select count(*) from kronos_predictions left join prediction_outcomes on (prediction_outcomes.prediction_id = kronos_predictions.id and source_table = ?) where prediction_outcomes.id is null` — **231,858 ms in a single synchronous call** (21:25 ET). It is the `kronosRemainingCount` statistic in `PredictionOutcomeEvaluator` (a stats-only count). `kronos_predictions.id` is INTEGER and `prediction_outcomes.prediction_id` is TEXT, so SQLite applies numeric affinity to the text column and cannot use the unique `(prediction_id, source_table)` index; it built an automatic index on `source_table` only and scanned ~82k outcome rows for each of ~238k Kronos rows. With `cast(kronos_predictions.id as text)` the same query plans as an index SEARCH and ran in **142 ms** on the live database (read-only check).
+- **Fix [C]:** `PredictionOutcomeEvaluator.ts` join condition now casts (30ef8c7). Regression `PredictionOutcomeEvaluator.kronosJoinPlan.test.ts` asserts the plan class, count equivalence, a scaled timing contrast, and that the production source never compares `predictionId` to the integer id directly; it **fails on the old source** (verified by stashing the fix) and passes now.
+- **Other main-thread blockers found by the same instrumentation [C]:** (1) `ReflectionEngine.evaluateAgents` ran full-table `.all()` reads every ~60 s (6–15 s of blocking per cycle) — now read in pages with a macrotask yield between pages (same rows and order; ReflectionEngine suites green). (2) Retention deletes of the "delete where key in (select key where time < cutoff limit n)" form have no time-column index on `quant_assessments` (4.6 GB) and `decision_provenance`, so every batch scanned the whole table: 65.7 s and 15.6 s single statements at boot — replaced by bounded rowid-window deletes (`retentionBatch.ts`; equivalence test against the old delete; per-statement cost bounded by the window). (3) A `candidate_rankings` symbol-IN/ORDER BY select (18.2 s) and an `agent_predictions` pending count (8.7 s) were recorded and are **not yet fixed** [U]. (4) Hourly retention and the pending-outcome statistics still run on the main thread; moving them off-thread is not done.
+- **Not yet proven in a live session [C]:** the fix was deployed at 21:34 ET (PID 27912). Verification = no 200+ s gap over at least 3 cycles (45+ min) in the event stream. Until then the freeze is **fixed in source and deployed, not runtime-verified**.
+- **Why the first profiler captured nothing [C]:** the profiler worker exited immediately (nothing kept its event loop alive), and a profile cannot be started while the main thread is blocked; both fixed (rolling profile + keepalive).
+
+### B. Process epochs and Quant processing (session_id) [C]
+| ET span | Quant eval started / finished | Intraday-fetch deadlines | Ideas | Consensus rounds |
+|---|---|---|---|---|
+| 09:27–12:05 | 4,710 / 4,476 | 0 (metric not yet present) | 11,247 | 6,637 |
+| 12:06–13:09 | 1,637 / 1,622 | 1,145 (70%) | 3,188 | 1,833 |
+| 13:10–14:54 | 3,459 / 3,450 | 1,845 (53%) | 7,666 | 4,714 |
+| 14:54–15:29 | 1,138 / 1,124 | 603 (53%) | 2,476 | 1,410 |
+| 15:29–16:05 | 987 / 986 | 491 (50%) | 1,999 | 1,209 |
+| 16:05–17:10 | 256 / 255 | 124 (48%) | 58 | 30 |
+| 17:14–18:11 | 186 / 185 | 100 (54%) | 0 | 0 |
+| 18:12–18:47 | 118 / 117 | 58 (49%) | 0 | 0 |
+| 18:47–19:33 | 677 / 667 | 336 (50%) | 1,362 | 703 |
+| 19:33–19:52 | 70 / 69 | 31 | 0 | 0 |
+| 19:52–20:35 | 1,004 / 999 | 672 (67%) | 2,375 | 1,311 |
+
+Day totals: Quant evaluations started 13,921, finished 13,627, assessments 12,919, intraday deadlines 5,178 (about 56% of evaluations after the metric existed); trade ideas 29,523; DESK_NO_TRADE 29,971; Chief consensus rounds 17,381; temporary data rescues granted 9,564; ideas rate-limited 8,815. Symbols keep being processed after the close (Kronos/Quant continue). There were 11 process epochs by 20:35 ET and three more restarts for fixes/diagnostics afterwards (about 21:00, 21:16, 21:34). Quant p50/p95 per epoch were measured earlier (Addenda 4–8, about 8 s / 12 s after the 12:06 repair) and were not recomputed here [U]. The 48–70% intraday-deadline rate is **unexplained** [U]; the freeze fix does not address it.
+
+### C. Decision funnel [C]
+Consensus terminal reasons (transaction_traces): INSUFFICIENT_AGENT_PARTICIPATION 8,167; CONFIDENCE_BELOW_STRONG 8,017; MODERATE_REJECT_CALIBRATION 884; AGENT_DATA_UNAVAILABLE 298; AGENT_HOLD 163; MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE 38; CONSENSUS_APPROVED 58 (3 ended FILLED). Discovery: candidates admitted 6,615, filtered 17,311, subscription outcomes 14,260, SUBSCRIPTION_NOT_PROMOTED 6,104. RiskEngine: **58 assessments — 3 approved, 55 rejected**: SELL `sell_position_exists` 23 (GLD, NIO, GOOG, HD discretionary SELL ideas with no position — correct rejections), `consecutive_loss` 25 (23 SELL + 2 BUY), `news_veto` 2 (GS SELL at 11:12 and 11:38), `market_hours` 4 (S SELL after the close), `emergency_stop` 1 (S SELL while paused, 20:04). The news_veto and sell_position_exists rejections were discretionary SELLs, not protective liquidations [C]. Largest attrition: consensus never reached a decision (insufficient independent participation / confidence below the STRONG bar) — about 16.2k of 17.4k rounds. OMS orders 3, broker fills 3.
+
+### D. Orders, fills, P&L [C]
+| ET | Trade | Evidence (consensus_evidence) | Result |
+|---|---|---|---|
+| 12:11:24 | DDOG BUY 10 @ 289.01 | KronosEngine BUY c0.86 w0.88; TechnicalAgent BUY c0.93 w0.95; score 0.895 vs 0.75; freshness of the entry quote not re-derived here [U] | FILLED; commission 1.00; arrival 289.01 (zero measured slippage) |
+| 15:01:14 | S BUY 38 @ 25.82 | Kronos BUY c0.86; Technical BUY c0.91; Macro HOLD c0 w0.10; score 0.888 | FILLED; commission 1.00; **no sell recorded** |
+| 15:57:51 | DDOG SELL 10 @ 287.31 | PortfolioManager risk exit (EOD flatten) c0.86 | FILLED; realized **−$17.00**; commission 1.06; arrival 287.57 |
+
+Both entries cleared the 0.75 bar through two correlated-family agents (Kronos + Technical); the QuantEngine path and quant-first authorization were not involved (strategy_id is NULL on all three trades) [C]. Totals: 3 trades (2 BUY, 1 SELL), 3 fills, realized −$17.00, commissions about $3.06. S unrealized P&L: **unknown** (no mark after the close) [U]. Broker equity about $1,002,052 throughout.
+
+### E. Capital and risk basis [C]
+Budget was $5,000 until 14:57 ET, then $20,000 (AUTOBOT_CONFIGURATION_PERSISTED 18:57:54Z); maxTradeSize 1,000; dailyLossLimit 250. Before the evening deploy, daily_loss and drawdown used broker equity (about $1.0M); since the evening deploy they use research P&L on the budget (gate detail `basis: RESEARCH`). Not runtime-verified under real trading [U].
+
+### F. AI providers [C]
+ai_calls today: NVIDIA 3,059 calls (383 ok, 2,676 error, avg 10–12 s, $0.19); Ollama (Local) 3,099 (29 ok, 3,070 error, avg ~30 s) — **Ollama was dispatched 3,099 times although it is described as disabled; a local server process exists and nearly every call timed out or failed**; Mistral 1,187 errors (429 rate limit); LiteLLM gateway 639 errors; Kimi 194 (429); OpenRouter 254 (402 payment required); Gemini 93; Claude 42; OpenAI 41. By agent: BearResearcher 2,854 errors / 41 ok; BullResearcher 2,728 / 167; MacroAgent 1,440 / 70; ConsensusDebate 679 / 27; QuantContradictionAnalyzer 409 / 73. AI_DEBATE_FAIL_CLOSED_EXCLUDED 2,493. Quant processing kept running through all of it (AI is not on the Quant path). **Jev: no rows in `ai_calls` today; its success rate and contribution are UNKNOWN [U]** (it is governed separately).
+
+### G. Discovery / missed opportunities [U]
+An independent mover benchmark for Oct 12 was **not obtainable**: Alpha Vantage TOP_GAINERS_LOSERS returned the Oct 9 snapshot (`last_updated 2026-10-09`) and no point-in-time Oct 12 mover feed was available. Confirmed operational misses, correct no-trade cases and missed-opportunity classification for Oct 12 are therefore **UNKNOWN**; only Argus's own admission/filter/subscription counts (section C) are verified. The Oct 9 baseline remains in `ARGUS_DISCOVERY_COVERAGE_BASELINE_2026-10-12.md`.
+
+### H. Positions and protection [C]
+- DDOG: bought 12:11, closed by the 15:57 EOD flatten (software exit, 60-s monitor). PortfolioMonitor review gaps equalled the freeze lengths (up to about 325 s), and there were no broker-resident protective orders (Argus creates none) — the position was unprotected during every freeze.
+- Reconciliation paused trading at 15:57:54 (stale-position false conflict, see Addendum 9), which (a) turned Autobot off and (b) blocked the EOD flatten of S. S 38 sh is held overnight; the broker portfolio view shows S 38 unmarked and the ledger shows the matching unclosed BUY.
+- Evening fix: missing valuation marks while the US session is CLOSED no longer count toward a pause (6d08dd2).
+
+### I. Defects fixed today, with regression evidence
+| Defect | Fix commit | Regression (fails on old?) | Deployed | Runtime-verified |
+|---|---|---|---|---|
+| Calibration-cycle freeze | repair/stall-attribution (in 283c8dd) | CalibrationCandidateBuilder.eventLoop.test.ts (yes) | yes | calibration cycle only |
+| **Kronos pending-count freeze (4–5 min)** | 30ef8c7 | PredictionOutcomeEvaluator.kronosJoinPlan.test.ts (yes) | yes (21:34) | **pending** |
+| evaluateAgents per-minute 6–15 s blocks | paged reads | ReflectionEngine suites; no failing-before test [U] | yes | pending |
+| Retention full-table-scan deletes (65 s / 15 s) | 30ef8c7 | retentionBatch.test.ts (equivalence + bounded window) | yes | pending |
+| Protective SELL blocked by loss/rate gates | da31759 | RiskEngine.lossGatesProtectiveExit.test.ts (yes) | yes | no |
+| Broker-equity risk basis | f43dd1b | researchEquity.test.ts | yes | no |
+| IBKR stale position cache | 7c845c9 | IbkrSocketSession.positionSnapshotPrune.test.ts (yes) | yes | no |
+| Overnight valuation false-pause | 6d08dd2 | PortfolioReconciliation.test.ts closed-session case (yes) | yes | partly (cycles 7123/7124 matched) |
+
+Certification: full suite 826/826 files, 6,808 tests, tsc clean, build OK on 589d1e4; later commits (including 30ef8c7) were verified by targeted suites and typecheck only — **the exact-SHA full suite has not been re-run on 30ef8c7** [U]. The 75-minute wall-clock soak FAILED (event-loop p95 730 ms vs 100 ms bound) while overlapping real-engine restarts; the Kronos join and retention scans exist in the production engine, not in that isolated soak, so the soak result is not a verdict on them [H].
+
+### J. CORRECTION to Addendum 10 and earlier "ready for tomorrow" statements — **new entries are blocked** [C]
+The RiskEngine `consecutive_loss` gate has been **TRIPPED since 16:23 ET**: the last three closed non-replay trades are DDOG −$17.00 (today) and OKTA −$56.29 and −$5.56 (Oct 7, cover buys from the short incident). The gate looks only at the last three closed trades regardless of age, so **every new BUY is rejected** (SQQQ at 19:06 and ACN at 19:16 already were) until a closed trade wins; the only position that can close is S. This is a time-unbounded deadlock for new entries, not a transient condition. Sealed protective exits are exempt (da31759); discretionary SELLs without a position are rejected anyway. Options needing an operator decision (not applied): (1) accept — no new entries tomorrow unless S closes at a profit; (2) bound the look-back (for example only closes from the last N sessions) through config; (3) reset after review. Until decided, **Argus cannot open new positions at tomorrow's open**.
+
+### K. Readiness verdict for 2026-10-13 and remaining work
+- ENGINEERING: READY_WITH_CONDITIONS — freeze root cause fixed and deployed but not yet runtime-verified; verify no 200+ s event-stream gap over at least 3 cycles before the open.
+- CAPITAL_RISK: READY_WITH_CONDITIONS — research basis enabled, untested live.
+- POSITION_PROTECTION: **NOT_CERTIFIED** — software-only exits; S carried; no broker-resident stops.
+- STRATEGY_AUTHORIZATION: **NOT READY** — 20 of 21 strategies have no lifecycle record, PULLBACK_CONTINUATION is RETIRED; quant-first inactive.
+- NEW_ENTRIES: **BLOCKED by consecutive_loss** pending the operator decision in section J.
+- AUTONOMOUS_PAPER_READINESS: **NO_GO for unattended trading; supervised only.**
+- Not done: candidate_rankings 18 s select, agent_predictions pending count (8.7 s), moving retention and statistics off the main thread, intraday-provider root cause, Ollama still dispatched while "disabled", Jev contribution, Oct 12 discovery benchmark, mutation tests, provider-timeout / restart-with-position / full-universe / combined-failure synthetic scenarios, exact-SHA full suite on 30ef8c7, TimesFM install and comparison.
