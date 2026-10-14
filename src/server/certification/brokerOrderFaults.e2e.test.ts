@@ -16,7 +16,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { eq } from 'drizzle-orm';
-import { installBrokerFaults, type FaultInjectionController, type FaultSpec } from '../replay/synthetic/FaultInjectingBroker';
+import { installBrokerFaults, type FaultInjectionController, type FaultSpec } from '../../brokers/FaultInjectingBroker';
 
 describe('broker order-lifecycle faults (real spine, simulated broker + fault layer)', () => {
   let tmp: string; let db: any; let sqliteDb: any; let schema: any;

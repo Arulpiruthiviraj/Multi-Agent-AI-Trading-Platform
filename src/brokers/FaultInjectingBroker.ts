@@ -18,7 +18,7 @@
  *
  * All state is in-memory and deterministic (poll counts, not wall time).
  */
-import type { Order } from '../../../brokers/BrokerAdapter';
+import type { Order } from './BrokerAdapter';
 
 export type FaultBehavior =
   | { kind: 'DELAYED_FILL'; polls: number }
