@@ -110,6 +110,13 @@ async function performDrain(handles: ShutdownHandles): Promise<void> {
     failed('[gracefulShutdown] Failed to stop workers', e);
   }
   try {
+    // idea agents are stopped above; record whatever the consensus pool still holds as NO_CONSENSUS before the DB closes
+    const { chiefTrader } = await import('../services/ChiefTraderAgent');
+    await chiefTrader.flushPendingIdeasAtShutdown();
+  } catch (e) {
+    failed('[gracefulShutdown] Failed to flush pending consensus ideas', e);
+  }
+  try {
     const { marketDataWorker } = await import('../services/MarketDataWorker');
     marketDataWorker.stop();
   } catch (e) {

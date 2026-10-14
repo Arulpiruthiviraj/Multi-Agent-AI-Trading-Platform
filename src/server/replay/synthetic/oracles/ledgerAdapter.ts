@@ -28,7 +28,7 @@ export function readOracleInputs(
     }));
     const tradesPnl: Record<string, number | null> = {};
     const fillsRealized: Record<string, number | null> = {};
-    for (const t of db.prepare(`SELECT id, profit_loss AS pnl FROM trades WHERE side='SELL' AND status='FILLED'`).all() as Array<{ id: string; pnl: number | null }>) tradesPnl[t.id] = t.pnl;
+    for (const t of db.prepare(`SELECT id, profit_loss AS pnl FROM trades WHERE side='SELL' AND id IN (SELECT order_id FROM fills)`).all() as Array<{ id: string; pnl: number | null }>) tradesPnl[t.id] = t.pnl;
     for (const r of rows) {
       if (r.side !== 'SELL') continue;
       const prev = fillsRealized[r.orderId];

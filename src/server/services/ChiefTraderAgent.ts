@@ -1712,6 +1712,18 @@ export class ChiefTraderAgent {
    * otherwise that attempt (and the evidence behind it) would simply vanish with no record,
    * making "why didn't Argus trade AAPL even though 3 agents said BUY" unanswerable.
    */
+  /**
+   * Planned-stop flush (2026-10-13). Ideas pooled in memory for a consensus round used to vanish silently when the process stopped (the
+   * periodic sweep that records them as NO_CONSENSUS never got to run), so a restart left ideas with no recorded fate - found by the
+   * restart battery's lineage oracle. Called from the graceful drain (and the synthetic planned stop): persists the same NO_CONSENSUS
+   * transaction the sweep would have written for any symbol whose ideas never crossed the bar, then clears the pool. It cannot approve
+   * anything - the threshold/independence logic is untouched - and an unplanned crash still loses in-memory ideas (unavoidable).
+   */
+  async flushPendingIdeasAtShutdown(): Promise<void> {
+    try { await this.recordUnresolvedAsNoConsensus(); } catch (e) { console.error('[ChiefTrader] shutdown flush failed (ideas stay unrecorded)', e); }
+    this.recentIdeas = [];
+  }
+
   private async recordUnresolvedAsNoConsensus() {
     const symbols = Array.from(new Set(this.recentIdeas.map(i => i.symbol)));
     for (const symbol of symbols) {

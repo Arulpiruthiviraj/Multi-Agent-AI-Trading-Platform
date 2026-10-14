@@ -849,6 +849,11 @@ export class SyntheticSessionEngine {
           // unclean and the hold would (correctly) engage - see the ideaGenerationGateOpen
           // proof recorded at boot.
           try {
+            // mimic the graceful drain: pooled ideas get an explicit NO_CONSENSUS fate instead of vanishing with the process
+            const { chiefTrader: ct } = await import('../../services/ChiefTraderAgent');
+            await ct.flushPendingIdeasAtShutdown();
+          } catch { /* best effort */ }
+          try {
             const { markCleanShutdown } = await import('../../core/sessionRecovery');
             markCleanShutdown();
           } catch { /* best effort - the resume half fails loud if the hold engages */ }
