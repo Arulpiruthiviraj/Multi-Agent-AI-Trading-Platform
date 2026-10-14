@@ -17,8 +17,10 @@ import fs from 'node:fs';
 import { assertSyntheticSimulationNotOpeningProductionDb } from '../../src/server/db/syntheticSimulationDbGuard';
 import { resolveDbDir } from '../../src/server/db/resolveDbDir';
 import type { FullSessionSpec } from './fullSessionPlan';
+import { assertProductionEnvPresentForSession } from './sessionEnvGuard';
 
 function assertChildEnvironmentIsIsolated(): void {
+  assertProductionEnvPresentForSession(process.cwd(), process.env);
   if (process.env.SYNTHETIC_SIMULATION !== 'true') {
     throw new Error(
       'FATAL: fullSessionChild.ts must be launched by fullSession.ts (the parent launcher) with ' +
