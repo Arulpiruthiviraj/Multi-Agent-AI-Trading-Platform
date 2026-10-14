@@ -35,7 +35,7 @@ export interface RiskOracleResult {
   caps: Record<string, number>;
 }
 
-const wholeShares = (usd: number, price: number) => (price > 0 && usd > 0 ? Math.floor(usd / price + 1e-9) : 0);
+const wholeShares = (usd: number, price: number) => (price > 0 && usd > 0 ? Math.floor(usd / price) : 0);
 
 export function maxPermissibleBuyQuantity(i: RiskOracleInput): RiskOracleResult {
   const existing = i.holdings.find((h) => h.symbol === i.symbol);

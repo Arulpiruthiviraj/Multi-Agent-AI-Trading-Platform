@@ -220,7 +220,9 @@ export function buildMatrixSpecs(outDir: string): FullSessionSpec[] {
   specs.push({
     simulationId: `matrix-${runTag}-trending-bear`, scenarioId: 'TRENDING_BEAR', seed: 31337, speed: 60,
     durationMinutes: 90, symbols: 5, faultPlan: noFaults,
-    requireTradeForCertification: true, outputPath: `${outDir}/matrix-trending-bear.json`,
+    // Expected BEHAVIOUR, not expected activity: the system is long-only (a SELL idea with no position is rejected by sell_position_exists), so a
+    // correct decline of a bear trend is a PASS. A trade here would be the suspicious outcome, not the absence of one.
+    requireTradeForCertification: false, outputPath: `${outDir}/matrix-trending-bear.json`,
     label: 'short-side mirror: sustained downtrend (90 bars)',
   });
   specs.push({
@@ -233,7 +235,9 @@ export function buildMatrixSpecs(outDir: string): FullSessionSpec[] {
         params: { articles: buildNewsBurstArticles(FULL_SESSION_START_MS, 20) },
       },
     ],
-    requireTradeForCertification: true, outputPath: `${outDir}/matrix-news-shock.json`,
+    // Same principle: a single-source news burst that fails the 0.75 / independent-evidence bar must be declined; certification checks the
+    // decline is explicit and invariants hold, not that a trade occurred.
+    requireTradeForCertification: false, outputPath: `${outDir}/matrix-news-shock.json`,
     label: 'news shock + burst through the real news pipeline (90 bars)',
   });
   specs.push({

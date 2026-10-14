@@ -69,6 +69,9 @@ const SUITE_AREAS: Record<string, string[]> = {
     'src/server/replay/synthetic/oracles/multiTradeMetrics.test.ts',
   ],
   SYMBOL_ROUTING: ['src/server/data/symbolFormat.test.ts'],
+  PROPERTY_FUZZ_METAMORPHIC: ['src/server/certification/properties.test.ts'],
+  // GATE_CERTIFIED (not FULL_SESSION_EXERCISED): gate 9 ignores REPLAY trades by design, so it is certified on an isolated PAPER ledger.
+  CONSECUTIVE_LOSS_GATE_CERTIFIED: ['src/server/certification/consecutiveLossGate.e2e.test.ts'],
   // Oct 13 incidents kept as permanent scenarios (each file reproduces the incident's failure mode and fails if the repair is removed):
   //  1Min starvation (scheduler FAILURE MODE test), rejected protective exit then retry (exit-ownership cases), entries paused with active
   //  protection (e2e), $1M broker vs $20K Argus capital (research-capital caps), main-thread DB pressure (off-thread + slow-SQL attribution),
@@ -101,6 +104,8 @@ function runSuite(files: string[]): { pass: boolean; summary: string; detail: st
   }
 }
 
+/** Scenarios whose design intentionally leaves positions open at the close (Argus has no end-of-day flatten configured; it is a swing system). */
+const SWING_BY_DESIGN = new Set(['MULTI_TRADE_DAY']);
 const TECH = new Set(['AAPL', 'MSFT', 'NVDA', 'AMD', 'META', 'GOOGL', 'AMZN', 'TSLA']);
 
 function sessionOracles(resultFile: string, initialCash: number) {
@@ -128,7 +133,18 @@ function sessionOracles(resultFile: string, initialCash: number) {
       riskAssessments: ra.map((x) => ({ side: x.side, approved: !!x.approved, rejectionGate: x.g, symbol: x.symbol, atMs: Date.parse(x.at) })),
     };
   } finally { db.close(); }
-  return { accounting, lineage, risk, metricsInput, unprotected: ledger.portfolio.length > 0 && j.brokerSummary.positions.length === 0 };
+  // Open positions at session end must be intentional by scenario design AND still monitored (a PortfolioMonitor decision after the last fill).
+  const open = ledger.portfolio.map((p) => p.symbol);
+  const db2 = new Database(j.dbPath, { readonly: true, fileMustExist: true });
+  const unmonitored: string[] = [];
+  try {
+    for (const sym of open) {
+      const lastFill = db2.prepare('SELECT MAX(f.filled_at) AS t FROM fills f JOIN trades t ON t.id=f.order_id WHERE t.symbol=?').get(sym) as { t: string | null };
+      const mon = db2.prepare("SELECT COUNT(*) AS n FROM event_traces WHERE event_type='PORTFOLIO_DECISION_RECORDED' AND payload LIKE ?").get(`%\"symbol\":\"${sym}\"%`) as { n: number };
+      if (!(mon.n > 0) || lastFill.t === null) unmonitored.push(sym);
+    }
+  } finally { db2.close(); }
+  return { accounting, lineage, risk, metricsInput, openSymbols: open, unmonitored, scenarioId: String(j.spec?.scenarioId ?? '') };
 }
 
 async function main() {
@@ -151,7 +167,7 @@ async function main() {
   if (sessions.length === 0) {
     areas.push({ area: 'SESSION_ORACLES', verdict: 'NOT_RUN', evidence: 'no --sessions artifacts supplied' });
   } else {
-    const acc: string[] = []; const lin: string[] = []; const rsk: string[] = [];
+    const acc: string[] = []; const lin: string[] = []; const rsk: string[] = []; const opn: string[] = [];
     const allMetrics = { initialCapital: 0, fills: [] as any[], riskAssessments: [] as any[] };
     let n = 0;
     for (const f of sessions) {
@@ -160,6 +176,11 @@ async function main() {
         acc.push(...o.accounting.map((m) => `${path.basename(path.dirname(f))}: ${m.code} ${m.detail}`));
         lin.push(...o.lineage.violations.map((m) => `${path.basename(path.dirname(f))}: ${m.code} ${m.detail}`));
         rsk.push(...o.risk.map((m) => `${path.basename(path.dirname(f))}: ${m.code} ${m.detail}`));
+        if (o.openSymbols.length) {
+          const intentional = SWING_BY_DESIGN.has(o.scenarioId);
+          if (!intentional) opn.push(`${path.basename(path.dirname(f))}: ${o.openSymbols.join(',')} open at end in scenario ${o.scenarioId} that does not hold positions by design`);
+          for (const s of o.unmonitored) opn.push(`${path.basename(path.dirname(f))}: ${s} open at end with NO portfolio monitoring evidence (unprotected)`);
+        }
         allMetrics.initialCapital = 20000;
         // sessions are independent days: offset each session's timeline so FIFO lots never cross sessions
         const base = n * 1e12;
@@ -171,6 +192,7 @@ async function main() {
     areas.push({ area: 'ACCOUNTING_ORACLE', verdict: acc.length ? 'FAIL' : 'PASS', evidence: `${n} session(s)`, detail: acc });
     areas.push({ area: 'LINEAGE_ORACLE', verdict: lin.length ? 'FAIL' : 'PASS', evidence: `${n} session(s)`, detail: lin });
     areas.push({ area: 'RISK_ORACLE', verdict: rsk.length ? 'FAIL' : 'PASS', evidence: `${n} session(s)`, detail: rsk });
+    areas.push({ area: 'OPEN_POSITIONS_AT_END', verdict: opn.length ? 'FAIL' : 'PASS', evidence: `${n} session(s); only swing-by-design scenarios may hold, and every held position must show monitoring`, detail: opn });
     // Aggregate organic multi-trade evidence across the supplied sessions. Reported, with an explicit bar; an unmet bar is a FINDING about
     // how rarely the real strategy set trades in these fixtures, not something to be forced by relaxing consensus.
     const m = measureMultiTrade(allMetrics, {
