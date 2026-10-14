@@ -24,6 +24,7 @@ import { buildRescueOutcomeReport, formatRescueOutcomeReport } from '../observab
 import { buildStrategyScorecard, formatStrategyScorecard } from '../research/strategyScorecard';
 import { buildExplorationHealthReport, formatExplorationHealthReport } from '../observability/explorationHealthReport';
 import { guardHeavyReport, HeavyReportRefusedError } from '../observability/heavyReportGuard';
+import { operatorReportGuard, OPERATOR_REPORT_PATHS } from '../observability/operatorReportGuard';
 import { buildRecertificationReview, formatRecertificationReview } from '../quant/strategies/StrategyRecertification';
 import { buildStrategyScoreNormalizationComparison, formatStrategyScoreNormalizationComparison } from '../research/strategyScoreNormalizationComparison';
 import { marketDataWorker } from '../services/MarketDataWorker';
@@ -45,6 +46,8 @@ import { buildDailyAttributionReport, summarizeDailyAttribution, formatDailyAttr
 import { buildMarketDataDiagnosticsReport, formatMarketDataDiagnosticsReport } from '../observability/marketDataDiagnosticsReport';
 
 export const observabilityRouter = Router();
+// 2026-10-14: every operator report route runs under the shared heavy-report slot (serialized + memory breaker); see operatorReportGuard.ts.
+observabilityRouter.use([...OPERATOR_REPORT_PATHS], operatorReportGuard);
 
 // Bounded in-memory diagnostics stay usable without large historical report scans.
 observabilityRouter.get('/process-resources', (_req, res) => {

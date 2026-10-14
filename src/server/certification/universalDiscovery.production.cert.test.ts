@@ -25,6 +25,10 @@ const UNIVERSE = Number(process.env.DISCOVERY_UNIVERSE ?? 500);
 const MINUTES = Number(process.env.DISCOVERY_MINUTES ?? 390);
 const RENEWALS_PER_MIN = Number(process.env.DISCOVERY_RENEWALS_PER_MIN ?? 37);
 const INCUMBENTS = Number(process.env.DISCOVERY_INCUMBENTS ?? 87);
+// Counterfactual knobs (diagnostics only; the production config is restored in finally and nothing here is a proposal):
+const SWAPS = process.env.DISCOVERY_SWAPS ? Number(process.env.DISCOVERY_SWAPS) : null;
+const SCORE_EDGE = process.env.DISCOVERY_SCORE_EDGE ? Number(process.env.DISCOVERY_SCORE_EDGE) : null;
+const TAG = process.env.DISCOVERY_TAG ?? '';
 
 describe(`UNIVERSAL_DISCOVERY production-stack (arm=${ARM}, seed=${SEED})`, () => {
   let tmp: string; let sqliteDb: any;
@@ -49,6 +53,9 @@ describe(`UNIVERSAL_DISCOVERY production-stack (arm=${ARM}, seed=${SEED})`, () =
     const saved = { rescue: continuousIntelligence.temporaryDataRescueRoutineRenewalGrantsImmunity, dwell: continuousIntelligence.minDynamicDwellReleasesOnTicks };
     continuousIntelligence.temporaryDataRescueRoutineRenewalGrantsImmunity = ARM === 'LEGACY';
     continuousIntelligence.minDynamicDwellReleasesOnTicks = ARM === 'LEGACY';
+    const savedKnobs = { swaps: continuousIntelligence.momentumHotSwapSlotsPerCycle, edge: continuousIntelligence.snapshotMomentumScoreEdge };
+    if (SWAPS !== null) continuousIntelligence.momentumHotSwapSlotsPerCycle = SWAPS;
+    if (SCORE_EDGE !== null) continuousIntelligence.snapshotMomentumScoreEdge = SCORE_EDGE;
 
     const market = new SyntheticDiscoveryMarket({ seed: SEED, universeSize: UNIVERSE, startingWatchlistSize: 120, validCount: 20, trapCount: 8, outsideFraction: OUTSIDE });
     const truth = buildTruth(market);
@@ -122,6 +129,7 @@ describe(`UNIVERSAL_DISCOVERY production-stack (arm=${ARM}, seed=${SEED})`, () =
       for (const f of flags) delete process.env[f];
       Object.assign(continuousIntelligence, { seedSymbols: savedLists.seed, watchUniverseSymbols: savedLists.watch, campaignOpeningSurgeSymbols: savedLists.surge, momentumScanUniverseSymbols: savedLists.mom, coreStreamingSymbols: savedLists.core });
       continuousIntelligence.temporaryDataRescueRoutineRenewalGrantsImmunity = saved.rescue; continuousIntelligence.minDynamicDwellReleasesOnTicks = saved.dwell;
+      continuousIntelligence.momentumHotSwapSlotsPerCycle = savedKnobs.swaps; continuousIntelligence.snapshotMomentumScoreEdge = savedKnobs.edge;
       Opp.resetOpportunityScanForTests(); Snap.resetSnapshotScannerForTests(); Alloc.resetBroadUniverseAllocatorForTests(); MUS.resetMarketUniverseScannerForTests();
     }
 
@@ -130,7 +138,7 @@ describe(`UNIVERSAL_DISCOVERY production-stack (arm=${ARM}, seed=${SEED})`, () =
     const promotedOpp = lifetimes.filter((l) => oppSyms.has(l.symbol) && !incumbents.includes(l.symbol));
     const quick = lifetimes.filter((l) => l.left !== null && (l.left as number) - l.joined < 60_000 && !incumbents.includes(l.symbol));
     const report = {
-      arm: ARM, seed: SEED, universe: UNIVERSE, incumbents: INCUMBENTS, renewalsPerMin: RENEWALS_PER_MIN, outsideFraction: OUTSIDE,
+      arm: ARM, tag: TAG, knobs: { swaps: SWAPS, scoreEdge: SCORE_EDGE }, seed: SEED, universe: UNIVERSE, incumbents: INCUMBENTS, renewalsPerMin: RENEWALS_PER_MIN, outsideFraction: OUTSIDE,
       score: { eligible: score.eligible, discoveredInTime: score.discoveredInTime, recall: score.recall, recallOutside: score.recallOutsideWatchlist, precision: score.precision, promotedTotal: score.promotedTotal, trapHits: score.promotedTrapHits, latencyMin: score.latencyMin, missByClass: score.missByClass },
       promotions: { distinctNewSubscriptions: log.promoted.size, quickEvictionsUnder60s: quick.length, opportunityLifetimeUnder60s: promotedOpp.filter((l) => l.left !== null && (l.left as number) - l.joined < 60_000).length },
       notPromotedReasons: reasonCounts, occupancySamples: samples,
@@ -139,7 +147,7 @@ describe(`UNIVERSAL_DISCOVERY production-stack (arm=${ARM}, seed=${SEED})`, () =
     };
     const dir = process.env.DISCOVERY_REPORT_DIR || os.tmpdir();
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `discovery-production-${ARM}-seed${SEED}.json`), JSON.stringify(report, null, 1));
+    fs.writeFileSync(path.join(dir, `discovery-production-${ARM}${TAG ? '-' + TAG : ''}-seed${SEED}.json`), JSON.stringify(report, null, 1));
     // eslint-disable-next-line no-console
     console.log(`[DISCOVERY-PRODUCTION ${ARM} seed=${SEED}] eligible=${score.eligible} found=${score.discoveredInTime} recall=${score.recall} outsideRecall=${score.recallOutsideWatchlist} precision=${score.precision} promotedNew=${log.promoted.size} quickEvict=${quick.length} reasons=${JSON.stringify(reasonCounts)} occupancy=${JSON.stringify(samples.filter((s) => s.minute % 90 === 0))}`);
     expect(getBlockedSyntheticAlpacaCalls()).toEqual([]);

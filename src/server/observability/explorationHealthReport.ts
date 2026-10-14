@@ -16,7 +16,7 @@
  */
 import { db } from '../db';
 import { observabilityEvents, riskAssessments, trades } from '../db/schema';
-import { and, eq, gte } from 'drizzle-orm';
+import { and, eq, gte, inArray } from 'drizzle-orm';
 import { classifyTradeEnvironment, isReplayTraceId } from '../research/organicPaper';
 
 export interface ExplorationHealthRow {
@@ -72,6 +72,16 @@ export async function buildExplorationHealthReport(sinceIso: string): Promise<Ex
     and(eq(observabilityEvents.eventType, 'STRATEGY_EXPLORATION_PROMOTED'), gte(observabilityEvents.ts, sinceMs)),
   );
 
+  // 2026-10-14: one batched query per 500 trace ids instead of one synchronous query PER promotion (the N+1 shape that froze the engine in
+  // rescueOutcomeReport). Same rows, same per-promotion semantics, grouped in memory.
+  const eventsByTrace = new Map<string, Array<typeof promotions[number]>>();
+  const traceIds = [...new Set(promotions.map((p) => p.traceId).filter((t): t is string => !!t))];
+  for (let i = 0; i < traceIds.length; i += 500) {
+    const chunk = traceIds.slice(i, i + 500);
+    const evs = await db.select().from(observabilityEvents).where(and(inArray(observabilityEvents.traceId, chunk), gte(observabilityEvents.ts, sinceMs)));
+    for (const e of evs) { const k = e.traceId as string; (eventsByTrace.get(k) ?? eventsByTrace.set(k, []).get(k)!).push(e); }
+  }
+
   const rows: ExplorationHealthRow[] = [];
   for (const promo of promotions) {
     if (!promo.traceId || !promo.symbol) continue; // cannot correlate without a real traceId - never guessed
@@ -80,9 +90,7 @@ export async function buildExplorationHealthReport(sinceIso: string): Promise<Ex
     try { reasoning = JSON.parse(promo.payload as string)?.reasoning ?? null; } catch { /* leave null */ }
     const { promoted, natural } = extractPromotedStrategies(reasoning);
 
-    const rescueEvents = await db.select().from(observabilityEvents).where(
-      and(eq(observabilityEvents.traceId, traceId), gte(observabilityEvents.ts, sinceMs)),
-    );
+    const rescueEvents = eventsByTrace.get(traceId) ?? [];
     const rescueGrant = rescueEvents.find((e) => e.eventType === 'TEMPORARY_DATA_RESCUE_GRANTED');
     const rescueDenial = rescueEvents.find((e) => e.eventType === 'TEMPORARY_DATA_RESCUE_DENIED');
     const staleDiscard = rescueEvents.find((e) => e.eventType === 'QUANT_IDEA_DISCARDED_STALE_DATA');
