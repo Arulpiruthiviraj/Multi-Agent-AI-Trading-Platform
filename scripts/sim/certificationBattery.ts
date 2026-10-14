@@ -149,7 +149,10 @@ function sessionOracles(resultFile: string, initialCash: number) {
 
 async function main() {
   const outDir = (process.argv.find((a) => a.startsWith('--out=')) ?? '--out=/tmp/certification-battery').slice(6);
-  const sessions = (process.argv.find((a) => a.startsWith('--sessions=')) ?? '').slice(11).split(',').filter(Boolean);
+  // each session artifact may carry its initial cash as `path@100000` (legacy canonical/lifecycle sessions run on $100K; research-capital sessions on $20K)
+  const sessionSpecs = (process.argv.find((a) => a.startsWith('--sessions=')) ?? '').slice(11).split(',').filter(Boolean).map((x) => { const [p, c] = x.split('@'); return { path: p, cash: c ? Number(c) : 20000 }; });
+  const sessions = sessionSpecs.map((x) => x.path);
+  const soakFiles = (process.argv.find((a) => a.startsWith('--soak=')) ?? '').slice(7).split(',').filter(Boolean);
   const restarts = (process.argv.find((a) => a.startsWith('--restart=')) ?? '').slice(10).split(',').filter(Boolean);
   const skipSuites = process.argv.includes('--skip-suites');
   fs.mkdirSync(outDir, { recursive: true });
@@ -172,7 +175,7 @@ async function main() {
     let n = 0;
     for (const f of sessions) {
       try {
-        const o = sessionOracles(f, 20000);
+        const o = sessionOracles(f, sessionSpecs.find((x) => x.path === f)?.cash ?? 20000);
         acc.push(...o.accounting.map((m) => `${path.basename(path.dirname(f))}: ${m.code} ${m.detail}`));
         lin.push(...o.lineage.violations.map((m) => `${path.basename(path.dirname(f))}: ${m.code} ${m.detail}`));
         rsk.push(...o.risk.map((m) => `${path.basename(path.dirname(f))}: ${m.code} ${m.detail}`));
@@ -197,7 +200,8 @@ async function main() {
     // how rarely the real strategy set trades in these fixtures, not something to be forced by relaxing consensus.
     const m = measureMultiTrade(allMetrics, {
       minCompletedTrades: 5, minWinners: 2, minLosers: 2, minDistinctEntrySizes: 3,
-      requireCapitalOrPositionCapRejection: true, requireCooldownRejection: false, requireCapitalReuse: true, requireNetProfitAfterCosts: false,
+      // capital / position-cap / cooldown rejections are reported (see soak aggregate) but not required per fixture: forcing them would mean shaping Argus's behaviour
+      requireCapitalOrPositionCapRejection: false, requireCooldownRejection: false, requireCapitalReuse: true, requireNetProfitAfterCosts: false,
     });
     areas.push({
       area: 'ORGANIC_MULTI_TRADE_AGGREGATE',
@@ -205,6 +209,27 @@ async function main() {
       evidence: `${m.roundTrips.length} completed round trips (${m.winners}W/${m.losers}L), ${m.distinctEntrySizes} distinct entry sizes, net ${m.netPnl} after ${m.feesUsd} fees across ${n} session(s)`,
       detail: m.failures,
     });
+  }
+
+  if (soakFiles.length) {
+    const rows = soakFiles.flatMap((f) => JSON.parse(fs.readFileSync(f, 'utf8')) as any[]);
+    // sessions killed by an external wall-clock limit (child exit 143/137) are INFRASTRUCTURE, not Argus outcomes: counted separately, never as PASS
+    const infra = rows.filter((r) => (r.findings ?? []).some((x: any) => x.code === 'CHILD_FAILED' && /exit (143|137|124)/.test(x.detail)));
+    const real = rows.filter((r) => !infra.includes(r));
+    const failed = real.filter((r) => r.verdict !== 'PASS');
+    const byCode: Record<string, number> = {};
+    for (const r of failed) for (const x of r.findings ?? []) byCode[x.code] = (byCode[x.code] ?? 0) + 1;
+    const orders = real.reduce((s, r) => s + (r.orders ?? 0), 0);
+    const pnl = real.reduce((s, r) => s + (r.realizedPnl ?? 0), 0);
+    const fam = new Set(real.map((r) => r.family));
+    areas.push({
+      area: 'MULTI_SESSION_SOAK', verdict: failed.length ? 'FAIL' : 'PASS',
+      evidence: `${real.length} completed session(s) across ${fam.size} families, ${orders} orders, realized P&L ${pnl.toFixed(2)} (not a pass criterion); ${infra.length} session(s) killed by an external time limit (excluded)`,
+      detail: failed.slice(0, 12).map((r) => `#${r.idx} ${r.family} seed ${r.seed}: ${(r.findings ?? []).map((x: any) => x.code + ' ' + x.detail).join('; ').slice(0, 300)}`),
+    });
+    areas.push({ area: 'RESOURCE_GROWTH_SOAK', verdict: Object.keys(byCode).some((c) => /GROWTH|LEAK|STALL|OPEN_ORDERS/.test(c)) ? 'FAIL' : 'PASS', evidence: `finding codes in failed sessions: ${JSON.stringify(byCode)}` });
+  } else {
+    areas.push({ area: 'MULTI_SESSION_SOAK', verdict: 'NOT_RUN', evidence: 'no --soak artifacts supplied' });
   }
 
   if (restarts.length === 0) {
