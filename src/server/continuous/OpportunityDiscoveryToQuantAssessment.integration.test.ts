@@ -172,6 +172,10 @@ describe('Discovery-to-quantitative-assessment real cross-service trace (2026-09
     for (let i = 0; i < continuousIntelligence.minDynamicDwellTicks; i++) {
       marketDataWorker.ingestIbkrQuote(symbol, 10 + i * 0.01);
     }
+    // 2026-10-14: dwell protection is now time-based by default (the early release on tick count is opt-in legacy), so a cleared dwell means the
+    // full minDynamicDwellMs has elapsed on the worker's test clock.
+    // Backdate this symbol's subscription so its full dwell has genuinely elapsed WITHOUT moving the worker clock (rescue windows in the same fixture keep their timing).
+    (marketDataWorker as any).subscribedAtMs.set(symbol, (marketDataWorker as any).wallMs() - continuousIntelligence.minDynamicDwellMs - 1000);
   }
 
   /** Real, non-mocked full capacity: subscribes `cap` distinct, dwell-cleared (evictable) filler
@@ -611,6 +615,7 @@ describe('Discovery-to-quantitative-assessment real cross-service trace (2026-09
       const isolated = new MarketDataWorkerClass();
       isolated.subscribe('GENSY', { momentumScore: 1 });
       for (let i = 0; i < continuousIntelligence.minDynamicDwellTicks; i++) isolated.ingestIbkrQuote('GENSY', 10 + i * 0.01);
+      (isolated as any).subscribedAtMs.set('GENSY', (isolated as any).wallMs() - continuousIntelligence.minDynamicDwellMs - 1000); // time-based dwell (2026-10-14)
       expect(isolated.getEvictionEligibleDynamicSymbols()).toContain('GENSY'); // genuinely evictable in this generation
 
       // Real reconnect-driven generation change bookkeeping: the prior generation's registration is

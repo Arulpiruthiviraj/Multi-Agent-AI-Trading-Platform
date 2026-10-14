@@ -69,6 +69,8 @@
   "rvolMoverMinRatio": 2,
   "minDynamicDwellMs": 60000,
   "minDynamicDwellTicks": 10,
+  "_minDynamicDwellReleasesOnTicksComment": "2026-10-14 production forensic (Oct 9, CCI): a promoted broad-universe challenger was evicted 28s and again 10s after promotion although minDynamicDwellMs is 60000, because isWithinDynamicDwell() released protection as soon as the symbol had minDynamicDwellTicks (10) ticks - trivial for a liquid name - while the agents that could evaluate it need far more (Technical ~50 ticks, Kronos 30+). The promoted symbol was removed before any agent could evaluate it (never analyzed either time). false = dwell protection lasts the full minDynamicDwellMs regardless of tick count; true restores the old early release.",
+  "minDynamicDwellReleasesOnTicks": false,
   "temporaryDataRescueMaxDurationMs": 300000,
   "_temporaryDataRescueMaxExtensionsComment": "2026-10-07 defect fix (Market-D1): bounds cumulative RENEWAL extensions of one active temporary-data-rescue lifetime. Each extension adds another full temporaryDataRescueMaxDurationMs of eviction immunity, so a permanently-dark symbol re-requesting every cycle previously accumulated indefinite immunity and pinned one dynamic slot forever. 12 extensions x 5 minutes = ~1 hour of total immunity per rescue lifetime (fail-safe: the cap only ever denies renewals, never grants more; a later request after the entry lapses starts a fresh, separately-bounded lifetime).",
   "temporaryDataRescueMaxExtensions": 12,

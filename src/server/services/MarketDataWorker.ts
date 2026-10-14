@@ -873,7 +873,8 @@ export class MarketDataWorker {
     const dwellMs = continuousIntelligence.minDynamicDwellMs;
     const dwellTicks = continuousIntelligence.minDynamicDwellTicks;
     const ticks = this.tickCounts.get(symbol) ?? 0;
-    if (ticks >= dwellTicks) return false;
+    // 2026-10-14: the early release on tick count is opt-in (legacy). Default: full time-based dwell, so a promoted challenger survives long enough to be evaluated.
+    if (continuousIntelligence.minDynamicDwellReleasesOnTicks && ticks >= dwellTicks) return false;
     const subscribedAt = this.subscribedAtMs.get(symbol);
     if (subscribedAt == null) return false;
     return this.wallMs() - subscribedAt < dwellMs;

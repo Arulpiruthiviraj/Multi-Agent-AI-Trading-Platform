@@ -923,6 +923,26 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       expect(pinned).toBe(dynamicSymbols.length); // legacy: every renewed symbol is eviction-immune (the observed 84/87 pattern)
     });
 
+    it('REGRESSION 2026-10-14 (Oct 9 CCI): a freshly promoted symbol that already has >= minDynamicDwellTicks ticks stays dwell-protected for the full minDynamicDwellMs; the legacy early release is opt-in', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      worker.setNowForTests(Date.now());
+      worker.subscribe('LNG');
+      (worker as any).tickCounts.set('LNG', continuousIntelligence.minDynamicDwellTicks + 1); // a liquid name racks up ticks in seconds
+      worker.setNowForTests(Date.now() + 28_000); // the observed CCI eviction came 28s after promotion
+      expect(worker.getEvictionEligibleDynamicSymbols()).not.toContain('LNG'); // fixed default: still inside the 60s dwell
+      const saved = continuousIntelligence.minDynamicDwellReleasesOnTicks;
+      try {
+        continuousIntelligence.minDynamicDwellReleasesOnTicks = true; // legacy behavior reproduces the defect
+        expect(worker.getEvictionEligibleDynamicSymbols()).toContain('LNG');
+      } finally {
+        continuousIntelligence.minDynamicDwellReleasesOnTicks = saved;
+      }
+      await expireDynamicDwell();
+      expect(worker.getEvictionEligibleDynamicSymbols()).toContain('LNG'); // evictable again once the full dwell has elapsed
+    });
+
     it('held-position protection (2026-10-14): a symbol backing an open position is never an eviction candidate, and is evictable again once flat', async () => {
       const { continuousIntelligence } = await import('../config/continuousIntelligence');
       authenticate(instances[0]);

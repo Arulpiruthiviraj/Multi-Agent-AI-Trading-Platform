@@ -118,6 +118,8 @@ export interface ContinuousIntelligenceConfig {
   minDynamicDwellMs: number;
   /** Alternate dwell exit: enough ticks to evaluate setups before eviction. */
   minDynamicDwellTicks: number;
+  /** false (2026-10-14 default): dwell protection lasts the full minDynamicDwellMs; true releases it early once minDynamicDwellTicks ticks arrived. */
+  minDynamicDwellReleasesOnTicks: boolean;
   /** Bounded, single-use protection window for MarketDataWorker.requestTemporaryDataRescue() -
    *  "one more evaluation cycle" of live data for a strategy idea that was otherwise discarded
    *  solely by STALE_MARKET_DATA. Never permanent - auto-released after this many ms. */
@@ -433,6 +435,7 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     rvolMoverMinRatio: requireNonNegativeNumber(raw.rvolMoverMinRatio, 'rvolMoverMinRatio'),
     minDynamicDwellMs: requireNumber(raw.minDynamicDwellMs, 'minDynamicDwellMs'),
     minDynamicDwellTicks: requireNumber(raw.minDynamicDwellTicks, 'minDynamicDwellTicks'),
+    minDynamicDwellReleasesOnTicks: raw.minDynamicDwellReleasesOnTicks === true,
     temporaryDataRescueMaxDurationMs: requireNumber(raw.temporaryDataRescueMaxDurationMs, 'temporaryDataRescueMaxDurationMs'),
     temporaryDataRescueMaxExtensions: requireNumber(raw.temporaryDataRescueMaxExtensions, 'temporaryDataRescueMaxExtensions'),
     temporaryDataRescueRoutineRenewalGrantsImmunity: raw.temporaryDataRescueRoutineRenewalGrantsImmunity === true,
