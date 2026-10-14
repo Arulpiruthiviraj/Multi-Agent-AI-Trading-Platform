@@ -1724,10 +1724,43 @@ export class ChiefTraderAgent {
     this.recentIdeas = [];
   }
 
+  /** Idea traceIds already persisted as evidence of a NO_CONSENSUS decision (bounded) - so an idea recorded while fresh is not recorded again when it later expires. */
+  private noConsensusRecordedTraces = new Set<string>();
+  private rememberRecordedTrace(traceId: string): void {
+    this.noConsensusRecordedTraces.add(traceId);
+    if (this.noConsensusRecordedTraces.size > 5000) {
+      const oldest = this.noConsensusRecordedTraces.values().next().value;
+      if (oldest !== undefined) this.noConsensusRecordedTraces.delete(oldest);
+    }
+  }
+
   private async recordUnresolvedAsNoConsensus() {
     const symbols = Array.from(new Set(this.recentIdeas.map(i => i.symbol)));
     for (const symbol of symbols) {
       if (this.debatePending(symbol)) continue;
+      // 2026-10-13 lineage: an idea that waits past consensusIdeaMaxAgeMs for a second voice used to be dropped by the TTL filter below with
+      // NO recorded fate (only still-fresh ideas were persisted). Persist the expired ones as their own NO_CONSENSUS decision (the filter
+      // removes them right after, so each is recorded exactly once). Records only; no vote, threshold or independence logic is touched.
+      const expiredIdeas = this.recentIdeas.filter(i => i.symbol === symbol && !isConsensusIdeaFresh(i.receivedAt) && !this.noConsensusRecordedTraces.has(i.traceId));
+      if (expiredIdeas.length > 0) {
+        try {
+          const expiredEvidence: Evidence[] = coalesceEvidenceByAgent(expiredIdeas.map(i => ({ ...i, weight: this.resolveWeight(i.agent) })));
+          const expiredResult = EvidenceAggregator.aggregate(expiredEvidence);
+          for (const i of expiredIdeas) this.rememberRecordedTrace(i.traceId);
+          await recordConsensusTransaction({
+            symbol,
+            side: expiredResult.side,
+            weightedConfidence: expiredResult.confidence,
+            threshold: CONSENSUS_APPROVAL_THRESHOLD,
+            approved: false,
+            reasoning: `Idea(s) expired after ${Math.round(tradingSafety.consensusIdeaMaxAgeMs / 1000)}s without a qualifying consensus (no second independent voice arrived in time). Best side: ${expiredResult.side} at ${(expiredResult.confidence * 100).toFixed(1)}% (threshold ${(CONSENSUS_APPROVAL_THRESHOLD * 100).toFixed(0)}%).`,
+            debateUsed: false,
+            evidence: expiredEvidence.map(e => ({ sourceTraceId: e.traceId, agent: e.agent, side: e.side, confidence: e.confidence, weight: e.weight, reasoning: e.reasoning, currentPrice: e.currentPrice })),
+          });
+        } catch (e) {
+          console.error('[ChiefTrader] Failed to record expired ideas (they are still dropped; fate unrecorded)', e);
+        }
+      }
       const relevantIdeas = this.recentIdeas.filter(i => i.symbol === symbol && isConsensusIdeaFresh(i.receivedAt));
       if (relevantIdeas.length === 0) {
         // 2026-10-08 leak hunt: this round is dead - no fresh ideas means no consensus_decisions
@@ -1747,6 +1780,7 @@ export class ChiefTraderAgent {
       }))));
       const result = EvidenceAggregator.aggregate(evidence);
       this.logAndResetInterimConsensusTally(symbol, 'NO_CONSENSUS');
+      for (const i of relevantIdeas) this.rememberRecordedTrace(i.traceId);
 
       await recordConsensusTransaction({
         symbol,

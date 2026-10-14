@@ -45,3 +45,25 @@ describe('ChiefTraderAgent.flushPendingIdeasAtShutdown (2026-10-13)', () => {
     expect(agent.recentIdeas).toEqual([]);
   });
 });
+
+describe('ChiefTraderAgent sweep records expired ideas exactly once (2026-10-13)', () => {
+  beforeEach(() => recordConsensusTransaction.mockClear());
+  it('an idea older than consensusIdeaMaxAgeMs gets its own NO_CONSENSUS record; one already recorded while fresh is not recorded again', async () => {
+    const agent: any = new ChiefTraderAgent();
+    const old = Date.now() - 10 * 60_000;
+    agent.recentIdeas = [
+      { traceId: 'stale1', symbol: 'TSLA', side: 'BUY', confidence: 0.6, agent: 'KronosEngine', reasoning: 'k', receivedAt: old },
+      { traceId: 'stale2', symbol: 'TSLA', side: 'BUY', confidence: 0.6, agent: 'TechnicalAgent', reasoning: 't', receivedAt: old },
+    ];
+    agent.noConsensusRecordedTraces.add('stale2'); // was persisted while still fresh
+    await agent.recordUnresolvedAsNoConsensus();
+    expect(recordConsensusTransaction).toHaveBeenCalledTimes(1);
+    const call: any = (recordConsensusTransaction.mock.calls[0] as any[])[0];
+    expect(call.approved).toBe(false);
+    expect(call.reasoning).toMatch(/expired/i);
+    expect(call.evidence.map((e: any) => e.sourceTraceId)).toEqual(['stale1']);
+    recordConsensusTransaction.mockClear();
+    await agent.recordUnresolvedAsNoConsensus();            // second sweep: both are now recorded -> nothing new
+    expect(recordConsensusTransaction).not.toHaveBeenCalled();
+  });
+});
