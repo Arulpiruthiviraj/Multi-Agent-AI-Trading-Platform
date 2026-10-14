@@ -154,3 +154,18 @@ export function detectStarvedCandidates(
   }
   return starved;
 }
+
+/**
+ * Canonical reason code for a subscription decision (2026-10-14). On Oct 14, 5,790 of 10,591 NOT_PROMOTED events (55 %) were logged as `OTHER`
+ * although every one of them was the hysteresis/score-edge branch above ("Score X does not beat the weakest active dynamic symbol ..."): the
+ * mapping in OpportunityDiscovery had no branch for it. One mapping, next to the strings it classifies, so a new reason cannot silently fall
+ * through to OTHER again (the unit test asserts that every reason this file can emit maps to a non-OTHER code).
+ */
+export function subscriptionReasonCodeOf(d: { action: string; reason: string }): string {
+  if (d.action === 'ALREADY_ACTIVE') return 'ALREADY_ACTIVE';
+  if (d.action === 'PROMOTED') return 'CHALLENGER_SELECTED';
+  if (d.reason.startsWith('Hot-swap cap reached')) return 'SWAP_CAP_REACHED';
+  if (d.reason.startsWith('No streaming slots available and no non-core dynamic symbol eligible')) return 'INCUMBENT_NOT_EVICTABLE';
+  if (/^Score [\d.]+ does not beat the weakest active dynamic symbol/.test(d.reason)) return 'SCORE_EDGE_NOT_MET';
+  return 'OTHER';
+}

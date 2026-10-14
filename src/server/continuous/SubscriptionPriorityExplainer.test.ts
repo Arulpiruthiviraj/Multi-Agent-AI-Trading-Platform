@@ -3,6 +3,7 @@ import {
   explainSnapshotHotSwapDecisions,
   computeCapacitySnapshot,
   detectStarvedCandidates,
+  subscriptionReasonCodeOf,
 } from './SubscriptionPriorityExplainer';
 import type { SnapshotCandidate } from './SnapshotScanner';
 
@@ -129,5 +130,32 @@ describe('detectStarvedCandidates', () => {
     const recs = new Map([['ACTIVE', [true, true, true]]]);
     const starved = detectStarvedCandidates(recs, new Set(['ACTIVE']), 2);
     expect(starved).not.toContain('ACTIVE');
+  });
+});
+
+describe('subscriptionReasonCodeOf (REGRESSION 2026-10-14: 5,790 score-edge non-promotions were logged as OTHER)', () => {
+  const run = (over: Partial<Parameters<typeof explainSnapshotHotSwapDecisions>[0]>) => explainSnapshotHotSwapDecisions({
+    top: [cand('NEW', 1.0)], active: new Set(['OLD']), activeDynamic: ['OLD'], emptySlots: 0, maxSwaps: 1, scoreEdge: 0.15, scoreOf: () => 0.9, ...over,
+  });
+  it('maps the hysteresis/score-edge branch to SCORE_EDGE_NOT_MET, not OTHER', () => {
+    const d = run({})[0];
+    expect(d.action).toBe('NOT_PROMOTED');
+    expect(subscriptionReasonCodeOf(d)).toBe('SCORE_EDGE_NOT_MET');
+  });
+  it('maps every reason the explainer can emit to a specific code; none falls through to OTHER', () => {
+    const decisions = [
+      ...run({ top: [cand('OLD', 1)] }),                                                   // ALREADY_ACTIVE
+      ...run({ emptySlots: 2, maxSwaps: 2, active: new Set(), activeDynamic: [] }),        // PROMOTED into an empty slot
+      ...run({ top: [cand('A', 5), cand('B', 5)], scoreOf: () => 0.1 }),                   // PROMOTED then SWAP_CAP_REACHED for B
+      ...run({ activeDynamic: [] }),                                                       // no evictable incumbent
+      ...run({}),                                                                          // score edge not met
+      ...run({ scoreOf: () => 0.1 }),                                                      // PROMOTED by displacing
+    ];
+    const codes = decisions.map(subscriptionReasonCodeOf);
+    expect(codes).not.toContain('OTHER');
+    expect(new Set(codes)).toEqual(new Set(['ALREADY_ACTIVE', 'CHALLENGER_SELECTED', 'SWAP_CAP_REACHED', 'INCUMBENT_NOT_EVICTABLE', 'SCORE_EDGE_NOT_MET']));
+  });
+  it('an unknown future reason text still maps to OTHER (the explicit fallback)', () => {
+    expect(subscriptionReasonCodeOf({ action: 'NOT_PROMOTED', reason: 'something new' })).toBe('OTHER');
   });
 });

@@ -14,6 +14,7 @@ export default defineConfig({
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'scripts/**/*.test.ts', 'tests/**/*.test.ts'],
     globals: false,
     setupFiles: ['./vitest.setup.ts'],
+    globalSetup: ['./vitest.globalSetup.ts'],
     // Parallel workers sharing Chronos/OpenAlice sockets produced ECONNRESET on in-process
     // supertest (GET /api/v2/quant/strategies) even though the handler is synchronous.
     fileParallelism: false,

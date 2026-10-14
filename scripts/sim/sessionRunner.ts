@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { computeSyntheticSimulationPaths } from '../../src/server/replay/syntheticSimulationPaths';
 import type { FullSessionSpec } from './fullSessionPlan';
+import { assertDiskSpace, loadArtifactPolicy, retainSessionEvidence } from './artifactLifecycle';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -46,6 +47,9 @@ export interface ChildRunResult {
 
 export async function runSpecInChild(spec: FullSessionSpec): Promise<ChildRunResult> {
   const { dbPath } = computeSyntheticSimulationPaths(spec.simulationId);
+  const policy = loadArtifactPolicy();
+  // Disk preflight (2026-10-14): never start a session the drive cannot hold (the system drive had 4.3 GB free during the Oct 14 incident).
+  assertDiskSpace(path.dirname(dbPath), policy.minFreeDiskGb);
   const env = buildChildEnv(dbPath);
   // Operator-gated cold-start bootstrap: environment control only (the flag is a documented
   // operator gate; ideas still face the full consensus/Risk/OMS path). Set per-spec so the
@@ -67,6 +71,10 @@ export async function runSpecInChild(spec: FullSessionSpec): Promise<ChildRunRes
   if (code !== 0) return { ok: false, outputPath: spec.outputPath, data: null, error: `child exit ${code}` };
   try {
     const data = JSON.parse(fs.readFileSync(spec.outputPath, 'utf8'));
+    // Evidence follows the verdict: keep the session database beside the result so the independent oracles can be re-run later.
+    const retention = retainSessionEvidence(data?.dbPath ?? dbPath, spec.outputPath, policy);
+    data.evidenceRetention = retention;
+    try { fs.writeFileSync(spec.outputPath, JSON.stringify(data, null, 2)); } catch { /* best effort */ }
     return { ok: true, outputPath: spec.outputPath, data };
   } catch (e: any) {
     return { ok: false, outputPath: spec.outputPath, data: null, error: `result read failed: ${e?.message}` };

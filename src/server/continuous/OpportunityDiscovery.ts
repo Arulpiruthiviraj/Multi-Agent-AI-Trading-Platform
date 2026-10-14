@@ -31,7 +31,7 @@ import {
   isSnapshotScannerRth,
   type SnapshotCandidate,
 } from './SnapshotScanner';
-import { explainSnapshotHotSwapDecisions } from './SubscriptionPriorityExplainer';
+import { explainSnapshotHotSwapDecisions, subscriptionReasonCodeOf } from './SubscriptionPriorityExplainer';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 
 /** Reasons that require a live quote. Watchlist subscribe is allowed; BUY still hits applyAssetIdeaGate. */
@@ -884,13 +884,7 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
         // a candidate with a zero score or truncated out never reaches explainSnapshotHotSwapDecisions
         // at all - those two outcomes are covered by the discovery_challenger_cycle_snapshot event
         // above instead (aggregate zeroScoreOrExcludedCount / per-candidate survivedTruncation:false).
-        const reasonCodeOf = (d: { action: string; reason: string }): string => {
-          if (d.action === 'ALREADY_ACTIVE') return 'ALREADY_ACTIVE';
-          if (d.action === 'PROMOTED') return 'CHALLENGER_SELECTED';
-          if (d.reason.startsWith('Hot-swap cap reached')) return 'SWAP_CAP_REACHED';
-          if (d.reason.startsWith('No streaming slots available and no non-core dynamic symbol eligible')) return 'INCUMBENT_NOT_EVICTABLE';
-          return 'OTHER';
-        };
+        const reasonCodeOf = subscriptionReasonCodeOf;
         for (const d of decisions) {
           const reasonCode = reasonCodeOf(d);
           observeSafe(() => {

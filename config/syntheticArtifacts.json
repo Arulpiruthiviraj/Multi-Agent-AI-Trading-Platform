@@ -1,0 +1,9 @@
+{
+  "_comment": "2026-10-14 artifact lifecycle for synthetic certification. Incident: the system drive had 4.3 GB free (24.8 GB production DB, ~18,000 leftover test temp databases = ~40 GB) and an ad-hoc cleanup deleted certification-session databases that independent oracles still needed. Policy: (1) every synthetic session RETAINS its database next to its result artifact (evidence follows the verdict); (2) long-running certification scripts refuse to start below minFreeDiskGb; (3) automatic cleanup only ever removes leftovers of the unit-test runner (testArtifactPrefixes) and NEVER anything matching protectedPrefixes or living in a retained-evidence folder.",
+  "minFreeDiskGb": 15,
+  "retainSessionDatabases": true,
+  "evidenceSubfolder": "evidence",
+  "testArtifactMaxAgeMinutes": 120,
+  "testArtifactPrefixes": ["argus_", "argus-"],
+  "protectedPrefixes": ["argus_synthetic_sim_", "argus_certification_", "argus_oct14_"]
+}
