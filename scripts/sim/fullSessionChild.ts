@@ -78,6 +78,7 @@ async function main() {
     lateMoverConfigs: spec.lateMoverConfigs,
     staleCacheSymbols: spec.staleCacheSymbols,
     stopAfterBarIndex: spec.stopAfterBarIndex,
+    stopWhen: spec.stopWhen,
     resume: spec.resume,
   });
 

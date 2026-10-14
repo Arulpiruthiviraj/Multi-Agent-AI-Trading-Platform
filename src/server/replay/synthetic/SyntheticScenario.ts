@@ -417,6 +417,16 @@ function saw(fromMin: number, toMin: number, o: { upMin: number; downMin: number
   return out;
 }
 
+function shifted(offsetMin: number, upDrift: number): RegimeSegment[] {
+  return [
+    seg(0, offsetMin, 'SIDEWAYS', 0.00002, 0.6, 0.9),
+    seg(offsetMin, offsetMin + 120, 'TRENDING_UP', upDrift, 1.1, 1.8),
+    seg(offsetMin + 120, offsetMin + 150, 'TRENDING_DOWN', -0.0030, 1.3, 2.0),
+    seg(offsetMin + 150, offsetMin + 210, 'SIDEWAYS', 0.00002, 0.6, 1.0),
+    seg(offsetMin + 210, 400, 'TRENDING_UP', upDrift * 0.8, 1.1, 1.6),
+  ];
+}
+
 /** SCENARIO: MULTI_TRADE_DAY (2026-10-13). KNOWN_OPPORTUNITY_PLATFORM_FIXTURE - mechanical capability, NOT evidence of market alpha.
  *  One RTH day (390 bars) in which each symbol follows its own path, so a single session offers several independent, overlapping
  *  opportunities of different quality instead of one scripted round trip:
@@ -458,6 +468,9 @@ export const MULTI_TRADE_DAY: ScenarioProfile = {
       seg(0, 8, 'HIGH_VOL', 0.0006, 1.4, 2.0),
       seg(8, 100, 'TRENDING_UP', 0.0016, 1.1, 1.7), seg(100, 130, 'TRENDING_DOWN', -0.0025, 1.3, 2.0), seg(130, 400, 'TRENDING_UP', 0.0007, 1.0, 1.4),
     ],
+    // Universe symbols 6-10 (used when a session runs the 10-symbol universe): the same leg/crash template shifted in time, with
+    // alternating leg strength, so more independent opportunities (and more failures) exist per day.
+    AMD: shifted(25, 0.0014), AMZN: shifted(55, 0.0012), META: shifted(85, 0.0015), TSLA: shifted(115, 0.0011), GOOGL: shifted(145, 0.0013),
   },
 };
 

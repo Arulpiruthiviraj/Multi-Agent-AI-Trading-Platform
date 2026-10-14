@@ -18,11 +18,7 @@
  *
  * Writes per-run JSON to --out/ plus combined-summary.json.
  */
-import { spawn } from 'node:child_process';
-import path from 'node:path';
 import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { computeSyntheticSimulationPaths } from '../../src/server/replay/syntheticSimulationPaths';
 import { evaluateCertification } from '../../src/server/replay/synthetic/CertificationGate';
 import type { TimelineEntry } from '../../src/server/replay/synthetic/DecisionTimeline';
 import {
@@ -31,94 +27,9 @@ import {
   buildMultiTradeDaySpec,
   buildRestartSpecs,
   buildMatrixSpecs,
-  type FullSessionSpec,
 } from './fullSessionPlan';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-function buildChildEnv(dbPath: string): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  delete env.LIVE_ARM;
-  env.SYNTHETIC_SIMULATION = 'true';
-  env.PAPER_TRADING_ONLY = 'true';
-  env.ARGUS_DB_PATH = dbPath;
-  env.ARGUS_DISABLE_MARKET_DATA_WS = 'true';
-  env.ARGUS_DISABLE_HEAP_SNAPSHOTS = 'true';
-  env.OPENALICE_ENABLED = 'false';
-  env.ARGUS_OPPORTUNITY_LOOP_ENABLED = 'false';
-  env.ARGUS_BROAD_UNIVERSE_ENABLED = 'false';
-  env.ARGUS_MARKET_MOVERS_ENABLED = 'false';
-  env.ARGUS_ACTIVE_BROKER = 'internal_paper';
-  env.ARGUS_NEWS_ENGINE_ENABLED = 'false';
-  env.ARGUS_POST_MARKET_ANALYSIS_ENABLED = 'false';
-  // Isolated synthetic session: no real broker/AI keys are ever stored in its DB. When the
-  // operator's environment provides no ENCRYPTION_SECRET, use a synthetic-only value (same
-  // pattern as vitest.setup.ts) so EncryptionService's fail-closed check passes without
-  // touching any real secret. Never logged, never persisted outside the isolated session.
-  if (!env.ENCRYPTION_SECRET) {
-    env.ENCRYPTION_SECRET = 'SYNTHETIC_SESSION_ONLY_DO_NOT_USE_FOR_REAL_KEYS_2026_10_11';
-  }
-  return env;
-}
-
-interface ChildRunResult {
-  ok: boolean;
-  outputPath: string;
-  data: any | null;
-  error?: string;
-}
-
-async function runSpecInChild(spec: FullSessionSpec): Promise<ChildRunResult> {
-  const { dbPath } = computeSyntheticSimulationPaths(spec.simulationId);
-  const env = buildChildEnv(dbPath);
-  // Operator-gated cold-start bootstrap: environment control only (the flag is a documented
-  // operator gate; ideas still face the full consensus/Risk/OMS path). Set per-spec so the
-  // trade-lifecycle run is explicit and auditable.
-  if (spec.coldStartBootstrap === true) env.QUANT_COLD_START_BOOTSTRAP_ENABLED = 'true';
-  const childScriptPath = path.join(__dirname, 'fullSessionChild.ts');
-  const tsxCliPath = path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
-  const specArg = `--spec=${encodeURIComponent(JSON.stringify(spec))}`;
-  console.log(`\n>>> launching: ${spec.label} [db=${dbPath}]`);
-  const started = Date.now();
-  const code: number = await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['--use-system-ca', tsxCliPath, childScriptPath, specArg], {
-      env, stdio: 'inherit',
-    });
-    child.on('error', reject);
-    child.on('exit', (c) => resolve(c ?? 1));
-  });
-  console.log(`<<< finished in ${((Date.now() - started) / 1000).toFixed(1)}s: ${spec.label} (exit=${code})`);
-  if (code !== 0) return { ok: false, outputPath: spec.outputPath, data: null, error: `child exit ${code}` };
-  try {
-    const data = JSON.parse(fs.readFileSync(spec.outputPath, 'utf8'));
-    return { ok: true, outputPath: spec.outputPath, data };
-  } catch (e: any) {
-    return { ok: false, outputPath: spec.outputPath, data: null, error: `result read failed: ${e?.message}` };
-  }
-}
-
-function summarizeResult(data: any): any {
-  const c = data.certification;
-  return {
-    label: data.label,
-    certification: c?.certification ?? null,
-    tradeObserved: c?.tradeObserved ?? null,
-    stages: c?.stages ?? null,
-    firstBlockingStage: c?.firstBlockingStage ?? null,
-    reason: c?.reason ?? null,
-    zeroTradeReason: c?.zeroTradeReason ?? null,
-    realizedPnl: data.brokerSummary?.realizedPnl ?? null,
-    orders: data.brokerSummary?.orderCount ?? null,
-    fills: c?.counts?.fills ?? null,
-    invariantViolations: (c?.invariantViolations ?? []).map((v: any) => v.code),
-    faultOutcomes: (data.faultOutcomes ?? []).map((f: any) => ({
-      kind: f.kind, phase: f.phase, atBar: f.atBar, verdict: f.verdict, detail: f.detail,
-    })),
-    wallClockS: +(data.wallClockDurationMs / 1000).toFixed(1),
-    eventLoopP95: data.eventLoop?.p95 ?? null,
-    rssPeakMb: data.memory?.rssPeakMb ?? null,
-  };
-}
+import { runSpecInChild, summarizeResult } from './sessionRunner';
 
 async function main() {
   const outArg = process.argv.find((a) => a.startsWith('--out='));
@@ -149,7 +60,7 @@ async function main() {
 
   // --- Restart: two halves, fresh processes, merged certification ---------------
   if (only === 'multitrade') {
-    const spec = buildMultiTradeDaySpec(`${outDir}/multitrade.json`, Number((process.argv.find((a) => a.startsWith('--seed=')) ?? '--seed=424242').slice(7)));
+    const spec = buildMultiTradeDaySpec(`${outDir}/multitrade.json`, Number((process.argv.find((a) => a.startsWith('--seed=')) ?? '--seed=424242').slice(7)), Number((process.argv.find((a) => a.startsWith('--symbols=')) ?? '--symbols=5').slice(10)));
     const r = await runSpecInChild(spec);
     summary.runs.push({ kind: 'multitrade', ok: r.ok, error: r.error ?? null, ...(r.data ? summarizeResult(r.data) : {}) });
   }

@@ -33,6 +33,8 @@ export interface FullSessionSpec {
   lateMoverConfigs?: SyntheticSymbolConfig[];
   staleCacheSymbols?: string[];
   stopAfterBarIndex?: number;
+  /** Event-based restart point (see SyntheticSessionOptions.stopWhen). */
+  stopWhen?: { condition: import('../../src/server/replay/synthetic/SyntheticSessionEngine').RestartCondition; extraBars?: number };
   /** Argus research capital AND simulated broker cash (default 100k for legacy runs). */
   initialCash?: number;
   /** Per-trade cap and daily-loss limit for the session's replay risk config (see SyntheticSessionOptions.riskProfile). */
@@ -146,14 +148,14 @@ export function buildTradeLifecycleSpec(outputPath: string, seed = 424242): Full
  * mechanical capability, not market alpha). Same environment control as the lifecycle run (cold-start bootstrap is an operator gate;
  * every idea still faces consensus, the RiskEngine gates and OMS). requireTradeForCertification stays true.
  */
-export function buildMultiTradeDaySpec(outputPath: string, seed = 424242): FullSessionSpec {
+export function buildMultiTradeDaySpec(outputPath: string, seed = 424242, symbols = 5): FullSessionSpec {
   return {
     simulationId: `full-session-multitrade-${seed}-${Date.now().toString(36)}`,
     scenarioId: 'MULTI_TRADE_DAY',
     seed,
     speed: 30,
     durationMinutes: FULL_SESSION_BARS,
-    symbols: 5,
+    symbols,
     faultPlan: [],
     coldStartBootstrap: true,
     initialCash: 20_000,

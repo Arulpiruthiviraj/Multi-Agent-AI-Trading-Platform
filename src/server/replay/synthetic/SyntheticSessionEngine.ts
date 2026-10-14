@@ -95,6 +95,15 @@ const PORTFOLIO_MONITOR_TRIGGER_EVERY_BARS = 3;
  *  QUANT_TRIGGER_EVERY_BARS so an injected article's own publishedAtMs bar is checked promptly. */
 const NEWS_TRIGGER_EVERY_BARS = 1;
 
+export type RestartCondition =
+  | 'FIRST_BUY_SUBMITTED'
+  | 'FIRST_BUY_FILLED'
+  | 'HOLDING_ONE_POSITION'
+  | 'HOLDING_TWO_POSITIONS'
+  | 'SELL_SUBMITTED'
+  | 'PARTIAL_FILL_RECORDED'
+  | 'WORKING_ORDER_OPEN';
+
 export interface SyntheticSessionOptions {
   simulationId: string;
   scenarioId: string;
@@ -158,6 +167,13 @@ export interface SyntheticSessionOptions {
    * brokerState for the resume half.
    */
   stopAfterBarIndex?: number;
+  /**
+   * Event-based restart point (2026-10-13 restart battery): stop `extraBars` bars after the first bar boundary at which the condition holds,
+   * instead of at a fixed bar. This is how a restart is placed deterministically at "after the BUY was submitted", "while holding a position",
+   * "while a protective SELL exists", "while an order is partially filled" without guessing when the real pipeline will act. The stop is a
+   * planned process boundary (broker state exported, persisted DB kept); it injects no signal, approval, order or fill.
+   */
+  stopWhen?: { condition: RestartCondition; extraBars?: number };
   /**
    * Resume a session previously stopped with stopAfterBarIndex: reuse the same isolated DB
    * (same simulationId), fast-persist bars below startBarIndex without emitting them, restore
@@ -667,6 +683,25 @@ export class SyntheticSessionEngine {
       const timestamps = Array.from({ length: session.totalBars }, (_, i) => sessionStartMs + i * BAR_INTERVAL_MS);
       const startBar = options.resume?.startBarIndex ?? 0;
       const stopAfter = options.stopAfterBarIndex ?? null;
+      let dynamicStopAt: number | null = null;
+      let lastProcessedBar = startBar - 1;
+      const stopConditionMet = async (condition: RestartCondition): Promise<boolean> => {
+        const { db: sdb } = await import('../../db');
+        const sch = await import('../../db/schema');
+        const trades = await sdb.select().from(sch.trades);
+        const fillRows = await sdb.select().from(sch.fills);
+        const port = (await sdb.select().from(sch.portfolio)).filter((p: any) => Math.abs(p.quantity) > 1e-9);
+        const real = trades.filter((t: any) => !String(t.id).startsWith('cert-') && !String(t.traceId ?? '').startsWith('cert-'));
+        switch (condition) {
+          case 'FIRST_BUY_SUBMITTED': return real.some((t: any) => t.side === 'BUY');
+          case 'FIRST_BUY_FILLED': return real.some((t: any) => t.side === 'BUY' && fillRows.some((f: any) => f.orderId === t.id));
+          case 'HOLDING_ONE_POSITION': return port.length >= 1;
+          case 'HOLDING_TWO_POSITIONS': return port.length >= 2;
+          case 'SELL_SUBMITTED': return real.some((t: any) => t.side === 'SELL');
+          case 'PARTIAL_FILL_RECORDED': return real.some((t: any) => t.status === 'PARTIALLY_FILLED');
+          case 'WORKING_ORDER_OPEN': return this.broker.exportState().workingOrders.length >= 1;
+        }
+      };
       // Live universe: grows when a LATE_MOVER fault fires. On resume, symbols admitted before
       // the restart are pre-admitted (their pre-restart bars were already revealed to the first
       // half's EventBus; this half continues from the same point).
@@ -799,7 +834,12 @@ export class SyntheticSessionEngine {
 
         // Restart certification, first half: stop after the configured bar; the resume half
         // continues from here in a fresh process with the exported broker state.
-        if (stopAfter !== null && i >= stopAfter) {
+        lastProcessedBar = i;
+        if (options.stopWhen && dynamicStopAt === null && await stopConditionMet(options.stopWhen.condition)) {
+          dynamicStopAt = i + (options.stopWhen.extraBars ?? 0);
+        }
+        const effectiveStop = dynamicStopAt ?? stopAfter;
+        if (effectiveStop !== null && i >= effectiveStop) {
           // Planned stop (not a crash): mark a clean shutdown so the resume half does not
           // inherit a spurious restart-safety entry hold. A real crash would leave the marker
           // unclean and the hold would (correctly) engage - see the ideaGenerationGateOpen
@@ -812,7 +852,7 @@ export class SyntheticSessionEngine {
         }
       }
 
-      const stoppedEarly = stopAfter !== null;
+      const stoppedEarly = stopAfter !== null || dynamicStopAt !== null;
       if (!stoppedEarly) {
         // A few extra portfolio-monitor passes at the very end - gives take-profit/stop/trailing exit
         // logic a real chance to fire against the session's final prices before results are collected,
@@ -853,7 +893,7 @@ export class SyntheticSessionEngine {
         costProfile: costs,
         faultOutcomes,
         stoppedEarly,
-        stoppedAtBarIndex: stoppedEarly ? stopAfter : null,
+        stoppedAtBarIndex: stoppedEarly ? lastProcessedBar : null,
         brokerState: stoppedEarly ? this.broker.exportState() : null,
         ideaGenerationGateOpen,
       };
