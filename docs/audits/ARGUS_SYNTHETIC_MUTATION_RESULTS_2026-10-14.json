@@ -1,6 +1,11 @@
 {
-  "sha": "b8962ace94cbd1081ee1967a87e2e66b6a0c39bd",
-  "generatedAt": "2026-10-14T22:00:32.182Z",
+  "sha": "7bb3325bd6e98d7e8b379b9c1bfb0878b2111c93",
+  "control": {
+    "verdict": "GREEN",
+    "exit": 0,
+    "tail": "{\"ts\":\"2026-10-14T22:04:01.398Z\",\"level\":\"WARN\",\"logger\":\"argus\",\"msg\":\"Refused: 'operator-report:/' cannot run while 'operator-report:/' is already in progress - heavy research reports are serialized to protect the trading process.\",\"sessionId\":\"sess_8543bc27-7a63-44d3-ae4e-9829ee67ae02\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"SYSTEM\",\"eventType\":\"HEAVY_REPORT_REFUSED\",\"symbol\":null,\"orderId\":null,\"component\":null}\n{\"ts\":\"2026-10-14T22:04:01.520Z\",\"level\":\"INFO\",\"logger\":\"argus\",\"msg\":\"Heavy report completed: operator-report:/ in 166ms\",\"sessionId\":\"sess_8543bc27-7a63-44d3-ae4e-9829ee67ae02\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"SYSTEM\",\"eventType\":\"HEAVY_REPORT_COMPLETED\",\"symbol\":null,\"orderId\":null,\"component\":null}\n{\"ts\":\"2026-10-14T22:04:01.528Z\",\"level\":\"INFO\",\"logger\":\"argus\",\"msg\":\"Heavy report started: operator-report:/\",\"sessionId\":\"sess_8543bc27-7a63-44d3-ae4e-9829ee67ae02\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"SYSTEM\",\"eventType\":\"HEAVY_REPORT_STARTED\",\"symbol\":null,\"orderId\":null,\"component\":null}\n{\"ts\":\"2026-10-14T22:04:01.688Z\",\"level\":\"INFO\",\"logger\":\"argus\",\"msg\":\"Heavy report completed: operator-report:/ in 160ms\",\"sessionId\":\"sess_8543bc27-7a63-44d3-ae4e-9829ee67ae02\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"SYSTEM\",\"eventType\":\"HEAVY_REPORT_COMPLETED\",\"symbol\":null,\"orderId\":null,\"component\":null}\n{\"ts\":\"2026-10-14T22:04:01.697Z\",\"level\":\"WARN\",\"logger\":\"argus\",\"msg\":\"Refused: process memory already elevated (10000000MB, at/above the 2048MB warning threshold) - heavy research reports are disabled until memory recovers.\",\"sessionId\":\"sess_8543bc27-7a63-44d3-ae4e-9829ee67ae02\",\"correlationId\":null,\"decisionId\":null,\"traceId\":null,\"category\":\"SYSTEM\",\"eventType\":\"HEAVY_REPORT_REFUSED\",\"symbol\":null,\"orderId\":null,\"component\":null}\n\n Test Files  10 passed (10)\n      Tests  191 passed | 1 expected fail (192)\n   Start at  18:03:44\n   Duration  17.69s (transform 4.67s, setup 253ms, import 5.43s, tests 9.11s, environment 2ms)\n\n"
+  },
+  "generatedAt": "2026-10-14T22:04:44.978Z",
   "restoredClean": true,
   "results": [
     {
@@ -11,10 +16,10 @@
       ],
       "verdict": "CAUGHT",
       "exit": 1,
-      "seconds": 3.9,
+      "seconds": 3.6,
       "failures": [
-        "× REGRESSION 2026-10-14 (rescue pinning): routine renewals of an already-streaming symbol never create or extend eviction immunity, so it stays evictable 20ms",
-        "× REPRODUCTION of the production pinning: many routine-renewed dynamic symbols stay evictable under the fix, and are ALL pinned under the legacy behavior 29ms"
+        "× REGRESSION 2026-10-14 (rescue pinning): routine renewals of an already-streaming symbol never create or extend eviction immunity, so it stays evictable 19ms",
+        "× REPRODUCTION of the production pinning: many routine-renewed dynamic symbols stay evictable under the fix, and are ALL pinned under the legacy behavior 25ms"
       ]
     },
     {
@@ -25,7 +30,7 @@
       ],
       "verdict": "CAUGHT",
       "exit": 1,
-      "seconds": 5,
+      "seconds": 4.3,
       "failures": [
         "× REGRESSION 2026-10-14 (Oct 9 CCI): a freshly promoted symbol that already has >= minDynamicDwellTicks ticks stays dwell-protected for the full minDynamicDwell"
       ]
@@ -38,9 +43,9 @@
       ],
       "verdict": "CAUGHT",
       "exit": 1,
-      "seconds": 3.6,
+      "seconds": 3.8,
       "failures": [
-        "× held-position protection (2026-10-14): a symbol backing an open position is never an eviction candidate, and is evictable again once flat 10ms"
+        "× held-position protection (2026-10-14): a symbol backing an open position is never an eviction candidate, and is evictable again once flat 7ms"
       ]
     },
     {
@@ -51,9 +56,9 @@
       ],
       "verdict": "CAUGHT",
       "exit": 1,
-      "seconds": 4.4,
+      "seconds": 3.2,
       "failures": [
-        "× the router mounts operatorReportGuard on exactly the declared operator paths (and individually guarded routes are not double-wrapped) 11ms"
+        "× the router mounts operatorReportGuard on exactly the declared operator paths (and individually guarded routes are not double-wrapped) 7ms"
       ]
     },
     {
@@ -64,10 +69,10 @@
       ],
       "verdict": "CAUGHT",
       "exit": 1,
-      "seconds": 2.2,
+      "seconds": 1.8,
       "failures": [
-        "× maps the hysteresis/score-edge branch to SCORE_EDGE_NOT_MET, not OTHER 12ms",
-        "× maps every reason the explainer can emit to a specific code; none falls through to OTHER 4ms"
+        "× maps the hysteresis/score-edge branch to SCORE_EDGE_NOT_MET, not OTHER 7ms",
+        "× maps every reason the explainer can emit to a specific code; none falls through to OTHER 2ms"
       ]
     },
     {
@@ -78,9 +83,9 @@
       ],
       "verdict": "CAUGHT",
       "exit": 1,
-      "seconds": 10.4,
+      "seconds": 9.4,
       "failures": [
-        "× PRODUCTION_OCT14: the best realistic agreeing pair (Technical + Kronos, both BUY with raw 0.85) is correctly REJECTED below 0.75 44ms"
+        "× PRODUCTION_OCT14: the best realistic agreeing pair (Technical + Kronos, both BUY with raw 0.85) is correctly REJECTED below 0.75 36ms"
       ]
     },
     {
@@ -92,10 +97,10 @@
       ],
       "verdict": "CAUGHT",
       "exit": 1,
-      "seconds": 4.8,
+      "seconds": 5.1,
       "failures": [
-        "× a strategy with no lifecycle record at all is NOT_AUTHORIZED (NO_LIFECYCLE_RECORD) — missing state is never silently UNTESTED 14ms",
-        "× a strategy with NO lifecycle record is NOT_AUTHORIZED / NO_LIFECYCLE_RECORD (terminal), never silently UNTESTED 8ms"
+        "× a strategy with no lifecycle record at all is NOT_AUTHORIZED (NO_LIFECYCLE_RECORD) — missing state is never silently UNTESTED 18ms",
+        "× a strategy with NO lifecycle record is NOT_AUTHORIZED / NO_LIFECYCLE_RECORD (terminal), never silently UNTESTED 23ms"
       ]
     },
     {
@@ -108,7 +113,7 @@
       "exit": 1,
       "seconds": 1.5,
       "failures": [
-        "× FAILS when the fixture produces an approval (it no longer reproduces the production conditions it claims to) 6ms"
+        "× FAILS when the fixture produces an approval (it no longer reproduces the production conditions it claims to) 7ms"
       ]
     },
     {
@@ -119,7 +124,7 @@
       ],
       "verdict": "CAUGHT",
       "exit": 1,
-      "seconds": 1.6,
+      "seconds": 1.2,
       "failures": [
         "× refuses a session whose RESOLVED config lacks a required production-equivalent flag (the exact seed-33 failure) 6ms"
       ]
@@ -134,9 +139,9 @@
       "exit": 1,
       "seconds": 1.2,
       "failures": [
-        "× policy comes from config and protects certification evidence prefixes 8ms",
-        "× cleanup removes stale unit-test leftovers but NEVER a protected evidence database, a recent file, or an unrelated file 6ms",
-        "× teardown mode (createdSince) only touches this run's leftovers and still never touches protected evidence 3ms"
+        "× policy comes from config and protects certification evidence prefixes 7ms",
+        "× cleanup removes stale unit-test leftovers but NEVER a protected evidence database, a recent file, or an unrelated file 10ms",
+        "× teardown mode (createdSince) only touches this run's leftovers and still never touches protected evidence 4ms"
       ]
     },
     {
@@ -148,10 +153,10 @@
       ],
       "verdict": "CAUGHT",
       "exit": 1,
-      "seconds": 3.6,
+      "seconds": 4.1,
       "failures": [
-        "× DEGRADED lifecycle is terminally NOT_ELIGIBLE (never re-routed to consensus) 6ms",
-        "× every runtime state maps to exactly its documented authority, reason and emission eligibility; only VALIDATED/CHAMPION ever authorize 18ms",
+        "× DEGRADED lifecycle is terminally NOT_ELIGIBLE (never re-routed to consensus) 12ms",
+        "× every runtime state maps to exactly its documented authority, reason and emission eligibility; only VALIDATED/CHAMPION ever authorize 17ms",
         "× state survives a restart: the lifecycle is read from the database on every resolution (no in-memory authority cache) 3ms"
       ]
     },
@@ -163,10 +168,10 @@
       ],
       "verdict": "CAUGHT",
       "exit": 1,
-      "seconds": 2.6,
+      "seconds": 3.3,
       "failures": [
-        "× correctly correlates a rescue that led all the way to a real consensus approval, RiskEngine approval, and a paper fill 10ms",
-        "× REGRESSION 2026-10-14 (engine freeze): query count is constant, not proportional to the number of rescue grants 108ms"
+        "× correctly correlates a rescue that led all the way to a real consensus approval, RiskEngine approval, and a paper fill 11ms",
+        "× REGRESSION 2026-10-14 (engine freeze): query count is constant, not proportional to the number of rescue grants 346ms"
       ]
     }
   ],

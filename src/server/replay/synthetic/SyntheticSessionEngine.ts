@@ -51,6 +51,7 @@ import type { ResearchBar } from '../../research/ohlcvTypes';
 import type { CalibrationSeedSpec, CalibrationSeedResult } from './CalibrationHistorySeeder';
 import type { SyntheticNewsArticleSpec } from './SyntheticInjectableNewsProvider';
 import type { HistoricalReplayBrokerState } from '../../../brokers/HistoricalReplayBroker';
+import { SessionDiscoveryDriver, DEFAULT_SESSION_DISCOVERY, type SessionDiscoveryOptions } from './discovery/SessionDiscoveryDriver';
 import {
   SessionFaultApplier,
   type SessionFault,
@@ -170,6 +171,19 @@ export interface SyntheticSessionOptions {
    */
   stopAfterBarIndex?: number;
   /**
+   * REAL DISCOVERY (2026-10-14): replaces the pre-chosen universe with a hidden-truth market (SyntheticDiscoveryMarket) whose symbols can only enter the
+   * session through the production discovery -> ranking -> subscription path (MarketUniverseScanner/SnapshotScanner/OpportunityDiscovery -> MarketDataWorker
+   * allocator at the IBKR cap, with dwell/rescue/eviction). Only the external Alpaca REST boundary is simulated. The engine feeds bars/ticks ONLY for
+   * symbols the real allocator has subscribed. Date.now is bound to the simulated clock for the session so production dwell/rescue timing is faithful.
+   */
+  discovery?: Partial<SessionDiscoveryOptions>;
+  /**
+   * Test-scoped strategy lifecycle records (written through the REAL recordStrategyLifecycleTransition into the isolated DB; labeled SYNTHETIC).
+   * `baselineCoreUntested` reproduces the planned production baseline (UNTESTED = no authority). `records` grants explicit test-scoped states.
+   * Absent = production reality on Oct 14: no lifecycle records at all (QuantEngine NOT_AUTHORIZED / NO_LIFECYCLE_RECORD).
+   */
+  lifecycle?: { baselineCoreUntested?: boolean; records?: Array<{ strategyId: string; status: string; reason: string }> };
+  /**
    * Event-based restart point (2026-10-13 restart battery): stop `extraBars` bars after the first bar boundary at which the condition holds,
    * instead of at a fixed bar. This is how a restart is placed deterministically at "after the BUY was submitted", "while holding a position",
    * "while a protective SELL exists", "while an order is partially filled" without guessing when the real pipeline will act. The stop is a
@@ -237,6 +251,10 @@ export interface SyntheticSessionResult {
    * idea agent, so a quiet session proves nothing. null = not recorded (older callers).
    */
   ideaGenerationGateOpen: boolean | null;
+  /** Real-discovery evidence (options.discovery): oracle score, promotions, lifetimes, reason counts, occupancy, admitted symbols, blocked provider calls. */
+  discovery?: Record<string, unknown> | null;
+  /** Lifecycle records written for the session (test-scoped, SYNTHETIC) or null when none (production-faithful Oct 14 state). */
+  lifecycleSeed?: Array<{ strategyId: string; status: string }> | null;
 }
 
 export function defaultSessionStartMs(): number {
@@ -378,13 +396,21 @@ export class SyntheticSessionEngine {
     // and retains the whole session per failure. Teardown lives in the finally below.
     let timeline: DecisionTimeline | null = null;
     let elHistogram: ReturnType<typeof monitorEventLoopDelay> | null = null;
+    let restoreDateNow: (() => void) | null = null;
+    if (options.discovery && options.resume) throw new Error('options.discovery is not supported together with options.resume (restart halves)');
     try {
       const wallClockStart = Date.now();
       const sessionStartMs = options.sessionStartMs ?? defaultSessionStartMs();
       const sessionDurationMs = (options.sessionDurationMinutes ?? 90) * 60_000;
       const sessionEndMs = sessionStartMs + sessionDurationMs;
       const scenario = getScenario(options.scenarioId);
-      const universeConfigs = defaultSyntheticUniverse(options.universeSize ?? 5);
+      // Real discovery: the hidden-truth market replaces the pre-chosen universe; only core + incumbents stream at open.
+      const discoveryDriver = options.discovery ? new SessionDiscoveryDriver({ ...DEFAULT_SESSION_DISCOVERY, ...options.discovery }) : null;
+      const discoveryMarket = discoveryDriver ? await discoveryDriver.buildMarket() : null;
+      const realDateNow = Date.now; // captured BEFORE any simulated-time patch; wall-clock metrics must never use the patched value
+      const universeConfigs = discoveryDriver && discoveryMarket
+        ? discoveryDriver.initialSymbols().map((symbol) => ({ symbol, startPrice: discoveryMarket.prevCloseOf(symbol) ?? 100, baseVolatility: 0.0007, baseVolumePerBar: Math.max(1000, Math.round((discoveryMarket.snapshot(symbol, 0)?.prevDailyBar.v ?? 1_000_000) / 390)), baseSpreadPct: 0.0003 }))
+        : defaultSyntheticUniverse(options.universeSize ?? 5);
       const universe = universeConfigs.map((u) => u.symbol);
 
       // --- Seed the isolated settings row + session-recovery isolation BEFORE boot (same fix this
@@ -520,6 +546,20 @@ export class SyntheticSessionEngine {
         const { seedAgentProfile } = await import('./AgentCalibrationProfiles');
         agentCalibrationProfileResult = await seedAgentProfile(options.agentCalibrationProfile);
       }
+      let lifecycleSeed: Array<{ strategyId: string; status: string }> | null = null;
+      if (options.lifecycle) {
+        lifecycleSeed = [];
+        const { recordUntestedBaselines } = await import('../../quant/strategies/lifecycleBaseline');
+        const { recordStrategyLifecycleTransition } = await import('../../quant/strategies/StrategyEmissionEligibility');
+        if (options.lifecycle.baselineCoreUntested) {
+          const r = await recordUntestedBaselines({ reason: 'SYNTHETIC_SEEDED certification baseline (isolated DB, no authority)', actor: 'synthetic-certification' });
+          for (const x of r.recorded) lifecycleSeed.push({ strategyId: x.strategyId, status: 'UNTESTED' });
+        }
+        for (const rec of options.lifecycle.records ?? []) {
+          await recordStrategyLifecycleTransition(rec.strategyId, rec.status as any, `SYNTHETIC_SEEDED test-scoped: ${rec.reason}`, null, 0, new Date());
+          lifecycleSeed.push({ strategyId: rec.strategyId, status: rec.status });
+        }
+      }
       let calibrationSeedResults: import('./CalibrationHistorySeeder').CalibrationSeedResult[] = [];
       if (options.calibrationSeeds && options.calibrationSeeds.length > 0) {
         const { seedSyntheticCalibrationHistory } = await import('./CalibrationHistorySeeder');
@@ -559,7 +599,9 @@ export class SyntheticSessionEngine {
       const rng = new SyntheticRandom(options.seed);
       const allBarConfigs = [...universeConfigs, ...(options.lateMoverConfigs ?? [])];
       const marketDataEngine = new SyntheticMarketDataEngine(rng, allBarConfigs, scenario);
-      const barsBySymbol = marketDataEngine.generateSession(sessionStartMs, sessionEndMs);
+      const barsBySymbol = discoveryMarket
+        ? barsFromDiscoveryMarket(discoveryMarket, sessionStartMs, Math.floor(sessionDurationMs / BAR_INTERVAL_MS))
+        : marketDataEngine.generateSession(sessionStartMs, sessionEndMs);
       const newsItems = await seedSyntheticNewsForScenario(scenario, sessionStartMs, universe);
       const newsProvider = buildSyntheticNewsProvider(newsItems);
 
@@ -577,6 +619,13 @@ export class SyntheticSessionEngine {
       // below (see realMsBetweenBars) - the lever that actually controls how fast a session
       // completes in wall-clock time, which is what section 27's speed knobs are really asking for.
       this.clock = new SyntheticMarketClock(sessionStartMs, { speedMultiplier: 1 });
+      if (discoveryDriver) {
+        // Production dwell / rescue / eviction timing is measured with Date.now(). The session runs ~100x faster than real time, so bind Date.now to
+        // the simulated clock (which captured the REAL Date.now at construction and is unaffected). Restored in finally.
+        const clockRef = this.clock;
+        Date.now = () => clockRef.now();
+        restoreDateNow = () => { Date.now = realDateNow; };
+      }
       const requestedSpeedMultiplier = options.speedMultiplier ?? 1;
       const realMsBetweenBars = Math.max(5, Math.round(REAL_MS_BETWEEN_BARS / requestedSpeedMultiplier));
       const cutoff = new InformationCutoff(this.clock);
@@ -651,7 +700,7 @@ export class SyntheticSessionEngine {
         rejectionsForRetrospective: [],
         agentIdeaStats: {},
         stageDurations: {},
-        replayStartedAtMs: Date.now(),
+        replayStartedAtMs: realDateNow(),
         campaign: { lockedForDate: null, lockAction: null, dailyRealizedByDate: new Map(), daysTargetMet: new Set(), postTargetEquityPeakByDate: new Map(), postTargetMaxDrawdownPct: 0 },
       };
       setActiveReplaySession(session);
@@ -672,7 +721,11 @@ export class SyntheticSessionEngine {
       const { quantSignalAgent } = await import('../../services/QuantSignalAgent');
       const { portfolioMonitor } = await import('../../services/PortfolioMonitor');
       const { eventBus } = await import('../../core/EventBus');
-      for (const symbol of universe) marketDataWorker.subscribe(symbol);
+      if (discoveryDriver) {
+        await discoveryDriver.install({ nowMs: () => this.clock.now(), sessionDay: new Date(sessionStartMs).toISOString().slice(0, 10) });
+      } else {
+        for (const symbol of universe) marketDataWorker.subscribe(symbol);
+      }
       // Quotes in this session are stamped with simulated time, so freshness (PortfolioMonitor's stale-price skip, spread evidence
       // age) must be measured against the same simulated clock - see MarketDataWorker.setSimulationClock.
       marketDataWorker.setSimulationClock(() => this.clock.now());
@@ -793,6 +846,27 @@ export class SyntheticSessionEngine {
         // fired inside the window).
         const feedDown = faultApplier.isFeedInterrupted(i);
 
+        // REAL DISCOVERY: admit symbols the production allocator has subscribed since the previous bar (their earlier bars and prior-day history
+        // are made available point-in-time, the way a provider backfill would), then feed ticks only to currently-streaming symbols.
+        const streamingNow: Set<string> | null = discoveryDriver ? new Set(marketDataWorker.getActiveSymbols()) : null;
+        if (discoveryDriver && discoveryMarket && streamingNow) {
+          for (const sym of streamingNow) {
+            if (liveUniverse.includes(sym) || !barsBySymbol.has(sym)) continue;
+            const { generateSyntheticPriorDayHistory } = await import('./SyntheticDailyBarProvider');
+            const cfg = { symbol: sym, startPrice: discoveryMarket.prevCloseOf(sym) ?? 100, baseVolatility: 0.0007, baseVolumePerBar: Math.max(1000, Math.round((discoveryMarket.snapshot(sym, 0)?.prevDailyBar.v ?? 1_000_000) / 390)), baseSpreadPct: 0.0003 };
+            for (const bar of generateSyntheticPriorDayHistory(cfg, scenario, options.seed, sessionStartMs)) await persistDailyBar(sym, bar);
+            const history = barsBySymbol.get(sym)!;
+            const revealedHistory: SyntheticBar[] = [];
+            for (let k = 0; k < i; k++) { await persistBar(sym, history[k]); revealedHistory.push(history[k]); }
+            const todayBar = rollupTodaysDailyBar(revealedHistory, sessionStartMs);
+            if (todayBar) await persistDailyBar(sym, todayBar);
+            liveUniverse.push(sym);
+            revealedBarsBySymbol.set(sym, revealedHistory);
+            barsBySymbolResearch.set(sym, history.map((b) => ({ timestamp: b.timestamp, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume })));
+            session.activeDiscoveredSymbols.add(sym);
+            session.discoveredAt.set(sym, this.clock.now());
+          }
+        }
         for (const symbol of liveUniverse) {
           // A defensive per-bar re-subscribe used to live here (see git history) to fight real
           // MarketUniverseScanner/OpportunityDiscovery subscription churn - since root-caused (2026-
@@ -818,10 +892,16 @@ export class SyntheticSessionEngine {
           }
 
           if (previousBar && !feedDown) {
-            marketDataWorker.cacheObservedQuote(symbol, previousBar.close, t);
-            eventBus.emitMarketData(symbol, previousBar.close, previousBar.volume, new Date(t).toISOString());
+            if (streamingNow) {
+              // Discovery mode: the production tick path (ingestIbkrQuote: tick counts, momentum, freshness, MARKET_DATA) for streaming symbols only.
+              if (streamingNow.has(symbol)) marketDataWorker.ingestIbkrQuote(symbol, previousBar.close);
+            } else {
+              marketDataWorker.cacheObservedQuote(symbol, previousBar.close, t);
+              eventBus.emitMarketData(symbol, previousBar.close, previousBar.volume, new Date(t).toISOString());
+            }
           }
         }
+        if (discoveryDriver) await discoveryDriver.step(i, t);
 
         // Multi-bar partial-fill completion (2026-09-16, certification follow-up): once per bar, after
         // this bar's own price/volume are loaded above, give any still-open PARTIALLY_FILLED order a
@@ -898,6 +978,23 @@ export class SyntheticSessionEngine {
         await sleep(500); // brief drain only - the resume half continues the session
       }
 
+      let discoveryReport: Record<string, unknown> | null = null;
+      if (discoveryDriver && discoveryMarket) {
+        const { truth, score } = await discoveryDriver.scoreAgainstOracle();
+        const fin = await discoveryDriver.finish();
+        const oppSyms = new Set(truth.opportunities.map((o) => o.symbol));
+        const incumbentSet = new Set([...discoveryDriver.coreSymbols, ...discoveryDriver.incumbents]);
+        discoveryReport = {
+          score: { eligible: score.eligible, discoveredInTime: score.discoveredInTime, recall: score.recall, precision: score.precision, promotedTotal: score.promotedTotal, trapHits: score.promotedTrapHits, latencyMin: score.latencyMin, missByClass: score.missByClass },
+          opportunities: score.opportunities.map((o) => ({ symbol: o.symbol, kind: o.kind, firstObservable: o.firstObservableMin, expiry: o.expiryMin, promotedMin: o.promotedMin, cls: o.classification })),
+          promotedNew: [...discoveryDriver.log.promoted.entries()].map(([symbol, minute]) => ({ symbol, minute, isOracleOpportunity: oppSyms.has(symbol) })),
+          notPromotedReasons: discoveryDriver.reasonCounts, occupancySamples: discoveryDriver.samples,
+          lifetimes: discoveryDriver.lifetimes.filter((l) => !incumbentSet.has(l.symbol)), admittedToSession: liveUniverse.filter((x) => !incumbentSet.has(x)),
+          blockedProviderCalls: fin.blockedProviderCalls, unsupportedProviderCalls: fin.unsupported, seed: discoveryDriver.opts.seed, universe: discoveryDriver.opts.universeSize, renewalsPerMinute: discoveryDriver.opts.renewalsPerMinute,
+          label: 'SYNTHETIC_SEEDED / CERTIFICATION_FIXTURE_ONLY',
+        };
+      }
+
       // Post-close probes (fault plan).
       for (const o of await faultApplier.applyPostClose({ sessionStartMs })) faultOutcomes.push(o);
 
@@ -919,7 +1016,7 @@ export class SyntheticSessionEngine {
         eventLoopP95Ms: toMs(elHistogram.percentile(95)),
         eventLoopP99Ms: toMs(elHistogram.percentile(99)),
         eventLoopMaxMs: toMs(elHistogram.max),
-        wallClockDurationMs: Date.now() - wallClockStart,
+        wallClockDurationMs: realDateNow() - wallClockStart,
         dbPath: this.dbPath,
         calibrationSeedResults,
         agentCalibrationProfile: agentCalibrationProfileResult,
@@ -929,8 +1026,11 @@ export class SyntheticSessionEngine {
         stoppedAtBarIndex: stoppedEarly ? lastProcessedBar : null,
         brokerState: stoppedEarly ? this.broker.exportState() : null,
         ideaGenerationGateOpen,
+        discovery: discoveryReport,
+        lifecycleSeed,
       };
     } finally {
+      if (restoreDateNow) { try { restoreDateNow(); } catch { /* teardown must not throw */ } }
       // Guaranteed per-session teardown (see the try-open comment above): each step is
       // individually guarded so one failing teardown cannot mask the original error or
       // skip the remaining steps. Replay semantics are untouched - this only releases
@@ -948,6 +1048,26 @@ export class SyntheticSessionEngine {
       } catch { /* teardown must not throw */ }
     }
   }
+}
+
+/** Per-minute bars for every market symbol, derived ONLY from the market's public snapshot feed (the same data the provider serves), so the bars the
+ *  session persists and the snapshots the real scanners see are one source of truth by construction. */
+function barsFromDiscoveryMarket(market: import('./discovery/SyntheticDiscoveryMarket').SyntheticDiscoveryMarket, sessionStartMs: number, minutes: number): Map<string, SyntheticBar[]> {
+  const out = new Map<string, SyntheticBar[]>();
+  for (const symbol of market.symbols) {
+    const bars: SyntheticBar[] = [];
+    let prev = market.openOf(symbol) ?? 100;
+    for (let m = 0; m < minutes; m++) {
+      const snap = market.snapshot(symbol, m)!;
+      const close = snap.minuteBar.c; const open = prev;
+      const high = Math.max(snap.minuteBar.h, open, close); const low = Math.min(snap.minuteBar.l, open, close);
+      const half = (close * market.spreadBpsAt(symbol, m)) / 20000;
+      bars.push({ symbol, timestamp: sessionStartMs + m * BAR_INTERVAL_MS, open, high, low, close, volume: snap.minuteBar.v, bid: close - half, ask: close + half, spread: 2 * half });
+      prev = close;
+    }
+    out.set(symbol, bars);
+  }
+  return out;
 }
 
 function sleep(ms: number): Promise<void> {

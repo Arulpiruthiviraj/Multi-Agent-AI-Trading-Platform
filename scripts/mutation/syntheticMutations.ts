@@ -64,6 +64,13 @@ try {
   // dependencies are shared by junction/symlink; the isolated worktree never writes to node_modules
   try { fs.symlinkSync(path.join(repo, 'node_modules'), path.join(wt, 'node_modules'), 'junction'); } catch (e) { console.error('node_modules link failed', e); process.exit(2); }
   const results: Array<Record<string, unknown>> = [];
+  // UNMUTATED CONTROL: the exact union of targeted tests must be GREEN in this same isolated worktree, otherwise every 'CAUGHT' below is unproven.
+  const allTests = [...new Set(MUTATIONS.flatMap((m) => m.tests))];
+  const ctl = sh(process.execPath, [path.join(repo, 'node_modules', 'vitest', 'vitest.mjs'), 'run', ...allTests], wt, 1_800_000);
+  const control = { verdict: ctl.status === 0 ? 'GREEN' : 'RED', exit: ctl.status, tail: (ctl.stdout ?? '').split(String.fromCharCode(10)).slice(-12).join(String.fromCharCode(10)) };
+  fs.writeFileSync(path.join(out, 'control-run.json'), JSON.stringify(control, null, 2));
+  console.log('CONTROL ' + control.verdict);
+  if (control.verdict !== 'GREEN') { console.error(control.tail); process.exitCode = 3; throw new Error('unmutated control is not green; mutation results would be meaningless'); }
   for (const mu of MUTATIONS.filter((x) => only.length === 0 || only.includes(x.id))) {
     const file = path.join(wt, mu.file);
     const original = fs.readFileSync(file, 'utf8');
@@ -81,9 +88,10 @@ try {
     console.log(`${mu.id} ${caught ? 'CAUGHT' : 'MISSED'} (${mu.defect})`);
   }
   const clean = sh('git', ['status', '--porcelain'], wt).stdout.trim();
-  const summary = { sha: head, generatedAt: new Date().toISOString(), restoredClean: clean === '', results, caught: results.filter((x) => x.verdict === 'CAUGHT').length, missed: results.filter((x) => x.verdict === 'MISSED_BY_CERTIFICATION').length, notApplicable: results.filter((x) => x.verdict === 'MUTATION_NOT_APPLICABLE').length };
+  const summary = { sha: head, control, generatedAt: new Date().toISOString(), restoredClean: clean === '', results, caught: results.filter((x) => x.verdict === 'CAUGHT').length, missed: results.filter((x) => x.verdict === 'MISSED_BY_CERTIFICATION').length, notApplicable: results.filter((x) => x.verdict === 'MUTATION_NOT_APPLICABLE').length };
   fs.writeFileSync(path.join(out, 'mutation-results.json'), JSON.stringify(summary, null, 2));
   console.log(JSON.stringify({ caught: summary.caught, missed: summary.missed, notApplicable: summary.notApplicable, restoredClean: summary.restoredClean }));
 } finally {
+  try { fs.rmdirSync(path.join(wt, 'node_modules')); } catch { /* junction already gone */ } // remove ONLY the link, never its target
   sh('git', ['worktree', 'remove', '--force', wt], repo);
 }
