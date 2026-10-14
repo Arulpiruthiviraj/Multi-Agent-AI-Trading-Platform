@@ -65,7 +65,12 @@ export function runLineageOracle(rows: LineageRows): LineageResult {
   for (const t of rows.trades) {
     const filled = filledByOrder.get(t.id) ?? 0;
     if (t.status === 'FILLED' && !(filled > 0)) violations.push({ code: 'FILLED_ORDER_WITHOUT_FILL', detail: `${t.side} ${t.symbol} order ${t.id} is FILLED with no fill row` });
-    if (filled > 0 && t.status !== 'FILLED' && t.status !== 'PARTIALLY_FILLED') violations.push({ code: 'FILL_ON_NON_FILLED_ORDER', detail: `${t.side} ${t.symbol} order ${t.id} status ${t.status} has fill rows` });
+    // fills are legitimate on FILLED / PARTIALLY_FILLED, on RECONCILIATION_REQUIRED, and on CANCELED only when the cancel removed an unfilled remainder
+    // (partial fill, then cancel): fills must then be strictly less than the order quantity.
+    const fillsAllowed = t.status === 'FILLED' || t.status === 'PARTIALLY_FILLED' || t.status === 'RECONCILIATION_REQUIRED'
+      || ((t.status === 'CANCELED' || t.status === 'CANCELLED') && filled < t.quantity - 1e-9);
+    if (filled > 0 && !fillsAllowed) violations.push({ code: 'FILL_ON_NON_FILLED_ORDER', detail: `${t.side} ${t.symbol} order ${t.id} status ${t.status} has ${filled} filled of ${t.quantity}` });
+    if (filled > t.quantity + 1e-9) violations.push({ code: 'OVERFILLED_ORDER', detail: `${t.side} ${t.symbol} order ${t.id} filled ${filled} > ordered ${t.quantity}` });
     if (t.side === 'BUY') {
       const risk = (t.transactionId && riskByTxn.get(t.transactionId)) || (t.traceId ? rows.risk.find((r) => r.traceId === t.traceId) : undefined);
       if (!risk) violations.push({ code: 'BUY_WITHOUT_RISK_ASSESSMENT', detail: `BUY ${t.symbol} order ${t.id} has no risk assessment` });

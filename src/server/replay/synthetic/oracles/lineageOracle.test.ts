@@ -20,6 +20,17 @@ describe('lineageOracle', () => {
     expect(r.unterminated).toEqual(['d']);
   });
 
+  it('allows a partial fill followed by a cancel of the remainder, but not fills on a cancel that left nothing unfilled, nor overfills', () => {
+    const base = empty();
+    const trade = (status: string, qty = 10) => ({ id: 'o', traceId: null, transactionId: null, side: 'SELL' as const, status, symbol: 'A', quantity: qty });
+    const ok = runLineageOracle({ ...base, trades: [trade('CANCELED')], fills: [{ orderId: 'o', quantity: 4 }], openPositions: [{ symbol: 'A', quantity: -4 }] });
+    expect(ok.violations.filter((v) => v.code !== 'POSITION_NOT_EXPLAINED_BY_FILLS')).toEqual([]);
+    const bad = runLineageOracle({ ...base, trades: [trade('CANCELED')], fills: [{ orderId: 'o', quantity: 10 }], openPositions: [{ symbol: 'A', quantity: -10 }] });
+    expect(bad.violations.map((v) => v.code)).toContain('FILL_ON_NON_FILLED_ORDER');
+    const over = runLineageOracle({ ...base, trades: [trade('FILLED')], fills: [{ orderId: 'o', quantity: 11 }], openPositions: [{ symbol: 'A', quantity: -11 }] });
+    expect(over.violations.map((v) => v.code)).toContain('OVERFILLED_ORDER');
+  });
+
   it('requires risk approval before a BUY, a fill for a FILLED order, and fills that explain the portfolio', () => {
     const base = empty();
     const bad = runLineageOracle({

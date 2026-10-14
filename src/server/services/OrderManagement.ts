@@ -73,15 +73,24 @@ import { marketDataWorker } from './MarketDataWorker';
  * wall clock made age = simulatedNow - wallFillTime hugely NEGATIVE, so a cooldown never expired and the daily-trade-limit day never
  * matched (found by the 2026-10-13 synthetic lab). Outside replay this is exactly `new Date().toISOString()` - no live behaviour change.
  */
-function omsEventIso(): string {
+function omsNowMs(): number {
   try {
     const session = getActiveReplaySession() as { clock?: { now(): number } } | null;
     if (session?.clock && typeof session.clock.now === 'function') {
       const t = session.clock.now();
-      if (Number.isFinite(t)) return new Date(t).toISOString();
+      if (Number.isFinite(t)) return t;
     }
   } catch { /* no active replay session */ }
-  return new Date().toISOString();
+  return Date.now();
+}
+/**
+ * Because order timestamps are replay-clock stamps inside a replay session, every AGE computed from them (follow-up min/max age,
+ * crash-recovery lookback) must read the same clock via omsNowMs(); comparing a simulated stamp with the wall clock made a fresh order look
+ * weeks old and cancelled partially-filled remainders immediately (found by the restart battery, 2026-10-13). Real-time poll deadlines
+ * (pollForFill) intentionally keep the wall clock.
+ */
+function omsEventIso(): string {
+  return new Date(omsNowMs()).toISOString();
 }
 
 function getActiveReplaySessionSafe(): { replayId: string } | null {
@@ -814,7 +823,7 @@ export class OrderManagementService {
     }
     if (openTrades.length === 0) return;
 
-    const now = Date.now();
+    const now = omsNowMs();
     const due = openTrades.filter(t => t.submittedAt && (now - new Date(t.submittedAt).getTime()) >= FOLLOWUP_MIN_AGE_MS);
     if (due.length === 0) return;
 
@@ -938,7 +947,7 @@ export class OrderManagementService {
       console.error('[OMS] inbound recovery: broker.orders() failed', e);
       return;
     }
-    const cutoff = Date.now() - CRASH_RECOVERY_LOOKBACK_MS;
+    const cutoff = omsNowMs() - CRASH_RECOVERY_LOOKBACK_MS;
     let local: any[];
     try {
       local = await db.select().from(trades);
@@ -1077,7 +1086,7 @@ export class OrderManagementService {
   async reconcileStaleOrders(): Promise<void> {
     let candidates: any[];
     try {
-      const cutoff = new Date(Date.now() - CRASH_RECOVERY_LOOKBACK_MS).toISOString();
+      const cutoff = new Date(omsNowMs() - CRASH_RECOVERY_LOOKBACK_MS).toISOString();
       candidates = await db.select().from(trades).where(and(
         inArray(trades.status, ['PENDING', 'REJECTED']),
         isNull(trades.brokerOrderId),
@@ -1096,7 +1105,7 @@ export class OrderManagementService {
     // no longer match status='PENDING', so this cannot re-fire or clobber a concurrent
     // resolution. Capped at 500 rows per cycle; a larger backlog is itself a loud signal.
     try {
-      const cutoff = new Date(Date.now() - CRASH_RECOVERY_LOOKBACK_MS).toISOString();
+      const cutoff = new Date(omsNowMs() - CRASH_RECOVERY_LOOKBACK_MS).toISOString();
       const agedOut = await db.select().from(trades).where(and(
         eq(trades.status, 'PENDING'),
         isNull(trades.brokerOrderId),
