@@ -51,7 +51,9 @@ async function main() {
     scenarioId: spec.scenarioId,
     seed: spec.seed,
   });
-  // Resolved-configuration guard AFTER module imports (dotenv has loaded by now): certifiable only with production-equivalent flags and NO credentials.
+  // Resolve configuration exactly as the engine will (dotenv does not override variables already set), THEN verify it: certifiable only with
+  // production-equivalent flags and NO credentials. EncryptionService loads dotenv lazily, so the guard must not rely on that side effect.
+  (await import('dotenv')).config({ quiet: true });
   assertSessionEffectiveConfiguration(process.env, requiredFlagNamesFromConfig(process.cwd()), spec.outputPath ? path.dirname(spec.outputPath) : undefined);
 
   console.log(

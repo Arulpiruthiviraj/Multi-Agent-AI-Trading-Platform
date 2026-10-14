@@ -4,7 +4,7 @@
  * Incident: candidate 5e36e191's seed-33 session ran in a worktree with no `.env`, so ARGUS_PORTFOLIO_INTEL_ENABLED was off, PortfolioMonitor
  * still ran but wrote zero decision telemetry, and the independent oracle reported an open position as "unprotected" (an environment difference,
  * not a protection defect). Requiring a `.env` FILE is not enough, and copying the production `.env` would import broker credentials into a
- * synthetic run. The guard therefore checks the RESOLVED effective configuration (wherever it came from) and refuses credentials:
+ * synthetic run (ENCRYPTION_SECRET is exempt: sessionRunner injects a synthetic-only value). The guard therefore checks the RESOLVED effective configuration (wherever it came from) and refuses credentials:
  *   - required isolation: SYNTHETIC_SIMULATION=true, PAPER_TRADING_ONLY=true, no broker/data-provider credentials present;
  *   - required production-equivalent behavior flags (names from config/continuousIntelligence.json, never literals here);
  *   - a sanitized manifest (allowlisted non-secret flag values, credential PRESENCE as booleans only) saved with the artifacts.
@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const CREDENTIAL_VARS = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_API_SECRET', 'IBKR_ACCOUNT_ID', 'IBKR_GATEWAY_URL', 'COINBASE_API_KEY', 'COINBASE_API_SECRET', 'QUESTRADE_REFRESH_TOKEN', 'ENCRYPTION_SECRET', 'AUTH_PASSWORD'] as const;
+const CREDENTIAL_VARS = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_API_SECRET', 'IBKR_ACCOUNT_ID', 'IBKR_GATEWAY_URL', 'COINBASE_API_KEY', 'COINBASE_API_SECRET', 'QUESTRADE_REFRESH_TOKEN', 'AUTH_PASSWORD'] as const;
 const FLAG_ALLOWLIST = /(_ENABLED$|^PAPER_TRADING_ONLY$|^SYNTHETIC_SIMULATION$|^NODE_ENV$|^QUANT_ENGINE_INTERVAL_MS$)/;
 
 export interface SessionConfigManifest {
