@@ -45,3 +45,9 @@ snapshot ranking (that ranking covers only the configured lists).
 
 Argus can discover opportunities **inside its configured lists** well (94–100 % recall in these runs). It cannot yet be called a universal-discovery platform: opportunities outside the lists were found 0–37 % of the time, late, and 3 of 8 traps were
 promoted. Discovery is therefore `NOT_PROVEN` / `FAIL` for out-of-list discovery and must not be assumed tomorrow; trading will be driven by the curated universe plus whatever the movers/broad paths surface.
+
+## Cadence experiment (same day, seed 102 outside-only)
+
+Feeds refreshed every 1 minute instead of production's 15 (broad) / 5 (movers): recall 37 % -> 53 % (10 of 19), precision 56 %, 3 traps still promoted, p50 latency 3 min.
+9 of 19 opportunities are still `OFFERED_BY_MOVERS_NOT_PROMOTED`. Conclusion: feed cadence explains part of the miss, but the dominant blocker is promotion/slot competition
+(challenger score vs incumbent score, one swap per cycle), not data staleness. Recall@K stays 0 because outside-list names are never in the snapshot ranking.

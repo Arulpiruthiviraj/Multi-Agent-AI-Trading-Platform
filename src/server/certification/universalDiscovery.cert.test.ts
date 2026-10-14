@@ -76,7 +76,7 @@ describe('UNIVERSAL_DISCOVERY baseline against a hidden-ground-truth 500-symbol 
 
     // data feeds Argus would receive in production (derived from PUBLISHED prices only)
     // production cadences: broad scan every 15 min (its gap evidence ages between refreshes), movers every 5 min
-    const BROAD_REFRESH_MIN = 15; const MOVERS_REFRESH_MIN = 5;
+    const BROAD_REFRESH_MIN = Number(process.env.DISCOVERY_BROAD_REFRESH_MIN ?? 15); const MOVERS_REFRESH_MIN = Number(process.env.DISCOVERY_MOVERS_REFRESH_MIN ?? 5);
     vi.spyOn(MUS, 'getCachedBroadUniverseCandidatesWithVolume').mockImplementation(() => market.broadUniverse(Math.floor(feed.minute / BROAD_REFRESH_MIN) * BROAD_REFRESH_MIN));
     vi.spyOn(MUS, 'getCachedBroadUniverseGapPct').mockImplementation((sym: string) => market.sessionMoveAt(sym, Math.floor(feed.minute / BROAD_REFRESH_MIN) * BROAD_REFRESH_MIN));
     vi.spyOn(MUS, 'getCachedMoverSymbols').mockImplementation(() => market.moversAt(Math.floor(feed.minute / MOVERS_REFRESH_MIN) * MOVERS_REFRESH_MIN, 20));
@@ -108,7 +108,7 @@ describe('UNIVERSAL_DISCOVERY baseline against a hidden-ground-truth 500-symbol 
       for (let m = 0; m < SESSION_MINUTES; m++) {
         minuteNow = m; feed.minute = m;
         const now = new Date(OPEN_MS + m * 60_000);
-        for (const sym of market.moversAt(Math.floor(m / 5) * 5, 20)) if (!log.moversOffered!.has(sym)) log.moversOffered!.set(sym, m);
+        for (const sym of market.moversAt(Math.floor(m / Number(process.env.DISCOVERY_MOVERS_REFRESH_MIN ?? 5)) * Number(process.env.DISCOVERY_MOVERS_REFRESH_MIN ?? 5), 20)) if (!log.moversOffered!.has(sym)) log.moversOffered!.set(sym, m);
         await Opp.runOpportunityScan(now);
         for (const sym of Opp.getOpportunityScanUniverse()) if (!log.scanned.has(sym)) log.scanned.set(sym, m);
         for (const sym of probeAt.get(m) ?? []) {
@@ -132,7 +132,7 @@ describe('UNIVERSAL_DISCOVERY baseline against a hidden-ground-truth 500-symbol 
       delete process.env[flag];
     }
     const score = scoreDiscovery(truth, log, new Set(market.startingWatchlist));
-    const report = { label, cfg, wallS: +((Date.now() - t0) / 1000).toFixed(1), valid: truth.opportunities.length, traps: truth.traps.length, score, diag };
+    const report = { label: label + `|broad${process.env.DISCOVERY_BROAD_REFRESH_MIN ?? 15}-movers${process.env.DISCOVERY_MOVERS_REFRESH_MIN ?? 5}`, cfg, wallS: +((Date.now() - t0) / 1000).toFixed(1), valid: truth.opportunities.length, traps: truth.traps.length, score, diag };
     reports.push(report);
     console.log(`[DISCOVERY ${label}] eligible=${score.eligible} found=${score.discoveredInTime} recall=${score.recall} outsideRecall=${score.recallOutsideWatchlist} insideRecall=${score.recallInsideWatchlist} precision=${score.precision} promoted=${score.promotedTotal} trapHits=${score.promotedTrapHits} R@5=${score.recallAtK[5]} R@10=${score.recallAtK[10]} R@20=${score.recallAtK[20]} MRR=${score.meanReciprocalRank} latP50=${score.latencyMin.p50} latP95=${score.latencyMin.p95} classes=${JSON.stringify(score.missByClass)}`);
     return { market, truth, score, log };
