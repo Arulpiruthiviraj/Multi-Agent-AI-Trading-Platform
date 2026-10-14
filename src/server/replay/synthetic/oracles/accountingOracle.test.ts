@@ -66,3 +66,20 @@ describe('accountingOracle', () => {
     expect(compareOracleToLedger(o, l2).map((m) => m.code)).toContain('LEDGER_SELL_MISSING');
   });
 });
+
+describe('accountingOracle: partial fills (order-level totals)', () => {
+  it('sums several fills of one SELL order before comparing with the order-level ledger P&L', () => {
+    const fills = [
+      { orderId: 'b', symbol: 'A', side: 'BUY' as const, quantity: 10, price: 100, feeUsd: 0 },
+      { orderId: 's', symbol: 'A', side: 'SELL' as const, quantity: 4, price: 105, feeUsd: 0 },  // +20
+      { orderId: 's', symbol: 'A', side: 'SELL' as const, quantity: 6, price: 110, feeUsd: 0 },  // +60
+    ];
+    const ledger: LedgerView = {
+      tradesPnlBySellOrder: { s: 80 }, fillsRealizedByOrder: { s: 80 }, portfolio: [],
+      broker: { cash: 20000 + 80, realizedPnl: 80, feesPaid: 0, positions: [] }, initialCash: 20000,
+    };
+    expect(compareOracleToLedger(runAccountingOracle(fills), ledger)).toEqual([]);
+    ledger.tradesPnlBySellOrder.s = 20;
+    expect(compareOracleToLedger(runAccountingOracle(fills), ledger).map((m) => m.code)).toContain('LEDGER_PNL_MISMATCH');
+  });
+});

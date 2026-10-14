@@ -29,7 +29,11 @@ export function readOracleInputs(
     const tradesPnl: Record<string, number | null> = {};
     const fillsRealized: Record<string, number | null> = {};
     for (const t of db.prepare(`SELECT id, profit_loss AS pnl FROM trades WHERE side='SELL' AND status='FILLED'`).all() as Array<{ id: string; pnl: number | null }>) tradesPnl[t.id] = t.pnl;
-    for (const r of rows) if (r.side === 'SELL') fillsRealized[r.orderId] = r.realized;
+    for (const r of rows) {
+      if (r.side !== 'SELL') continue;
+      const prev = fillsRealized[r.orderId];
+      fillsRealized[r.orderId] = r.realized === null ? (prev ?? null) : (prev ?? 0) + r.realized;
+    }
     const portfolio = (db.prepare(`SELECT symbol, quantity, average_price AS averagePrice FROM portfolio WHERE quantity <> 0`).all() as Array<{ symbol: string; quantity: number; averagePrice: number }>);
     return {
       fills,

@@ -109,7 +109,14 @@ export function compareOracleToLedger(
   const out: AccountingMismatch[] = [];
   for (const v of oracle.violations) out.push({ code: `ORACLE_${v.code}`, detail: v.detail });
 
+  // An order may fill in several pieces (partial fills): trades.profit_loss and the per-order fill P&L are ORDER-level totals, so the oracle's
+  // per-fill sells are summed per order before comparing.
+  const sellsByOrder = new Map<string, { orderId: string; grossPnl: number }>();
   for (const s of oracle.sells) {
+    const cur = sellsByOrder.get(s.orderId);
+    if (cur) cur.grossPnl = r6(cur.grossPnl + s.grossPnl); else sellsByOrder.set(s.orderId, { orderId: s.orderId, grossPnl: s.grossPnl });
+  }
+  for (const s of sellsByOrder.values()) {
     const ledgerPnl = ledger.tradesPnlBySellOrder[s.orderId];
     if (ledgerPnl === undefined) out.push({ code: 'LEDGER_SELL_MISSING', detail: `no trades row for SELL ${s.orderId}` });
     else if (ledgerPnl === null) out.push({ code: 'LEDGER_PNL_NULL', detail: `trades.profit_loss is NULL for filled SELL ${s.orderId} (oracle gross ${s.grossPnl})` });
