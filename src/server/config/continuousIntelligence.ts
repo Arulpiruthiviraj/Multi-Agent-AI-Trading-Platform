@@ -128,6 +128,8 @@ export interface ContinuousIntelligenceConfig {
    *  RENEWAL requests are denied with an honest reason code. Fail-safe: only ever denies
    *  renewals, never grants more. */
   temporaryDataRescueMaxExtensions: number;
+  /** false (2026-10-14 default): a ROUTINE_RECOVERY RENEWAL of an already-streaming symbol never creates or extends eviction immunity. See config comment. */
+  temporaryDataRescueRoutineRenewalGrantsImmunity: boolean;
   /** Bounded exploration: at most this many symbols may hold an active rescue at once, so a burst
    *  of starved-strategy requests cannot dominate the real subscription capacity. */
   maxConcurrentTemporaryDataRescues: number;
@@ -433,6 +435,7 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     minDynamicDwellTicks: requireNumber(raw.minDynamicDwellTicks, 'minDynamicDwellTicks'),
     temporaryDataRescueMaxDurationMs: requireNumber(raw.temporaryDataRescueMaxDurationMs, 'temporaryDataRescueMaxDurationMs'),
     temporaryDataRescueMaxExtensions: requireNumber(raw.temporaryDataRescueMaxExtensions, 'temporaryDataRescueMaxExtensions'),
+    temporaryDataRescueRoutineRenewalGrantsImmunity: raw.temporaryDataRescueRoutineRenewalGrantsImmunity === true,
     maxConcurrentTemporaryDataRescues: requireNumber(raw.maxConcurrentTemporaryDataRescues, 'maxConcurrentTemporaryDataRescues'),
     rescueReservedSlotsForPriorityClasses: requireNumber(raw.rescueReservedSlotsForPriorityClasses, 'rescueReservedSlotsForPriorityClasses'),
     broadUniverseEnabledEnvVar: raw.broadUniverseEnabledEnvVar,

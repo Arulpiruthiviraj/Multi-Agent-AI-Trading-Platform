@@ -535,6 +535,13 @@ export class MarketDataWorker {
     // fresh tick acquired; it only ever needs its eviction-immunity window extended (RENEWAL).
     const intent: RescueIntent = alreadySubscribed ? 'RENEWAL' : 'NEW_DATA_ACQUISITION';
 
+    // 2026-10-14 rescue-pinning fix: a ROUTINE_RECOVERY RENEWAL targets a symbol that is ALREADY streaming (FundamentalAgent/MacroAgent data reads on
+    // curated names, every ~60-75s). It needs no acquisition protection, and letting it extend eviction immunity pinned 84 of 87 dynamic IBKR lines
+    // in production, starving stronger outside-list movers of an evictable incumbent. Granted (the data is already flowing) but never creates or
+    // extends immunity. Config-gated; NEW_DATA_ACQUISITION and every priority class are untouched.
+    if (requestClass === 'ROUTINE_RECOVERY' && intent === 'RENEWAL' && !continuousIntelligence.temporaryDataRescueRoutineRenewalGrantsImmunity) {
+      return { granted: true, symbol: ticker, alreadySubscribed, evictedSymbol: null };
+    }
     // The confirmed FRVO root cause: a RENEWAL request (already-subscribed AAPL/TSLA/ABNB
     // repeatedly re-extending immunity) must never compete for the SAME budget a genuine
     // NEW_DATA_ACQUISITION request (FRVO, no live tick at all) needs. RENEWAL is therefore

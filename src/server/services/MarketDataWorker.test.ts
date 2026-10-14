@@ -83,7 +83,19 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     worker.start();
   });
 
+  // 2026-10-14: temporaryDataRescueRoutineRenewalGrantsImmunity now defaults to false (routine renewals of already-streaming symbols no longer pin
+  // eviction immunity). Tests below that exercise the OTHER rescue mechanics (expiry/release bookkeeping, eviction diagnostics, intent segmentation,
+  // hasFreshTick logging) through routine renewals opt back into the legacy behavior explicitly; the new default has its own regression tests above.
+  let restoreLegacyRoutineRenewal: (() => void) | null = null;
+  async function useLegacyRoutineRenewalImmunity() {
+    const { continuousIntelligence } = await import('../config/continuousIntelligence');
+    const saved = continuousIntelligence.temporaryDataRescueRoutineRenewalGrantsImmunity;
+    continuousIntelligence.temporaryDataRescueRoutineRenewalGrantsImmunity = true;
+    restoreLegacyRoutineRenewal = () => { continuousIntelligence.temporaryDataRescueRoutineRenewalGrantsImmunity = saved; };
+  }
+
   afterEach(() => {
+    restoreLegacyRoutineRenewal?.(); restoreLegacyRoutineRenewal = null;
     worker.setNowForTests(null);
     worker.stop();
   });
@@ -878,7 +890,72 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       expect(priorityResult.granted).toBe(true);
     });
 
+    it('REGRESSION 2026-10-14 (rescue pinning): routine renewals of an already-streaming symbol never create or extend eviction immunity, so it stays evictable', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      worker.subscribe('LNG');
+      await expireDynamicDwell();
+      for (let i = 0; i < 20; i++) {
+        const r = worker.requestTemporaryDataRescue('LNG', 'fundamental data read');
+        expect(r.granted).toBe(true); // the caller is still satisfied: the symbol is already streaming
+        expect(r.alreadySubscribed).toBe(true);
+      }
+      expect(worker.getActiveTemporaryRescues().map((x) => x.symbol)).not.toContain('LNG');
+      expect(worker.getEvictionEligibleDynamicSymbols()).toContain('LNG');
+    });
+
+    it('REPRODUCTION of the production pinning: many routine-renewed dynamic symbols stay evictable under the fix, and are ALL pinned under the legacy behavior', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      const dynamicSymbols = Array.from({ length: 8 }, (_, i) => testTicker(i));
+      for (const sym of dynamicSymbols) worker.subscribe(sym);
+      await expireDynamicDwell();
+      const renewAll = () => { for (let round = 0; round < 15; round++) for (const sym of dynamicSymbols) worker.requestTemporaryDataRescue(sym, 'fundamental/macro read'); };
+      renewAll();
+      const evictableNow = worker.getEvictionEligibleDynamicSymbols().filter((s) => dynamicSymbols.includes(s)).length;
+      expect(evictableNow).toBe(dynamicSymbols.length); // fix: a stronger challenger always has an incumbent to displace
+      await useLegacyRoutineRenewalImmunity();
+      worker.releaseExpiredTemporaryDataRescues();
+      renewAll(); // legacy: first request is a RENEWAL on an already-subscribed symbol -> creates/extends immunity
+      const pinned = dynamicSymbols.length - worker.getEvictionEligibleDynamicSymbols().filter((s) => dynamicSymbols.includes(s)).length;
+      expect(pinned).toBe(dynamicSymbols.length); // legacy: every renewed symbol is eviction-immune (the observed 84/87 pattern)
+    });
+
+    it('priority-class renewals still extend eviction immunity (EXPLORATION is unchanged by the 2026-10-14 routine-renewal fix)', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      worker.subscribe('XOM');
+      await expireDynamicDwell();
+      expect(worker.requestTemporaryDataRescue('XOM', 'exploration', { requestClass: 'EXPLORATION' }).granted).toBe(true);
+      expect(worker.getActiveTemporaryRescues().map((x) => x.symbol)).toContain('XOM');
+      expect(worker.getEvictionEligibleDynamicSymbols()).not.toContain('XOM');
+    });
+
+    it('a routine request for a symbol that is NOT streaming (real acquisition) is still granted and protected, and the legacy behavior is restorable by config', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      await expireDynamicDwell();
+      const acquisition = worker.requestTemporaryDataRescue('CRM', 'needs first tick');
+      expect(acquisition.granted).toBe(true);
+      expect(worker.getActiveTemporaryRescues().map((x) => x.symbol)).toContain('CRM');
+      worker.subscribe('LNG');
+      await expireDynamicDwell();
+      const saved = continuousIntelligence.temporaryDataRescueRoutineRenewalGrantsImmunity;
+      try {
+        continuousIntelligence.temporaryDataRescueRoutineRenewalGrantsImmunity = true;
+        expect(worker.requestTemporaryDataRescue('LNG', 'legacy renewal').granted).toBe(true);
+        expect(worker.getActiveTemporaryRescues().map((x) => x.symbol)).toContain('LNG');
+      } finally {
+        continuousIntelligence.temporaryDataRescueRoutineRenewalGrantsImmunity = saved;
+      }
+    });
+
     it('Phase 14: a strategy that wins selection repeatedly on the same symbol (the real MOMENTUM_BREAKOUT/LNG pattern) gets a fresh rescue each time without any permanent subscription growth - each cycle grants, expires, and releases cleanly', async () => {
+      await useLegacyRoutineRenewalImmunity();
       const { continuousIntelligence } = await import('../config/continuousIntelligence');
       const cap = continuousIntelligence.maxActiveSubscriptions;
       authenticate(instances[0]);
@@ -1092,6 +1169,7 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     });
 
     it('reports a rescue-protected incumbent as not evictable, distinct from dwell protection', async () => {
+      await useLegacyRoutineRenewalImmunity();
       authenticate(instances[0]);
       freeOneDynamicSlot();
       worker.subscribe('ZRESQ', { momentumScore: 3 });
@@ -1361,6 +1439,7 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     }
 
     it('reproduces the exact confirmed defect and proves the fix: N already-subscribed renewal-only symbols filling the OLD shared pool no longer deny a genuine first-tick candidate', async () => {
+      await useLegacyRoutineRenewalImmunity();
       const { continuousIntelligence } = await import('../config/continuousIntelligence');
       const cap = continuousIntelligence.maxConcurrentTemporaryDataRescues;
 
@@ -1466,6 +1545,7 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     });
 
     it('RENEWAL admission never fabricates a fresh tick - hasFreshTick in the grant log reflects real lastTick state, and no tick is ever synthesized by granting a rescue', async () => {
+      await useLegacyRoutineRenewalImmunity();
       const sym = testTicker(0);
       worker.subscribe(sym);
       const grantSpy = vi.spyOn(structuredLogger, 'info');
