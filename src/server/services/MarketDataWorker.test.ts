@@ -909,7 +909,7 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       const { continuousIntelligence } = await import('../config/continuousIntelligence');
       authenticate(instances[0]);
       for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
-      const dynamicSymbols = Array.from({ length: 8 }, (_, i) => testTicker(i));
+      const dynamicSymbols = ['LNG', 'XOM', 'CRM', 'PFE', 'KO', 'BA', 'GE', 'MMM'];
       for (const sym of dynamicSymbols) worker.subscribe(sym);
       await expireDynamicDwell();
       const renewAll = () => { for (let round = 0; round < 15; round++) for (const sym of dynamicSymbols) worker.requestTemporaryDataRescue(sym, 'fundamental/macro read'); };
