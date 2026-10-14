@@ -923,6 +923,20 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       expect(pinned).toBe(dynamicSymbols.length); // legacy: every renewed symbol is eviction-immune (the observed 84/87 pattern)
     });
 
+    it('held-position protection (2026-10-14): a symbol backing an open position is never an eviction candidate, and is evictable again once flat', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      for (const sym of ['LNG', 'XOM']) worker.subscribe(sym);
+      await expireDynamicDwell();
+      expect(worker.getEvictionEligibleDynamicSymbols()).toEqual(expect.arrayContaining(['LNG', 'XOM']));
+      worker.setHeldSymbols(['lng']);
+      expect(worker.getEvictionEligibleDynamicSymbols()).not.toContain('LNG');
+      expect(worker.getEvictionEligibleDynamicSymbols()).toContain('XOM');
+      worker.setHeldSymbols([]);
+      expect(worker.getEvictionEligibleDynamicSymbols()).toContain('LNG');
+    });
+
     it('priority-class renewals still extend eviction immunity (EXPLORATION is unchanged by the 2026-10-14 routine-renewal fix)', async () => {
       const { continuousIntelligence } = await import('../config/continuousIntelligence');
       authenticate(instances[0]);

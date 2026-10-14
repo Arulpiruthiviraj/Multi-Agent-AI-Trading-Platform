@@ -430,6 +430,15 @@ export class MarketDataWorker {
     this.testNowMs = ms;
   }
 
+  /** Symbols that currently back an open position (set by PortfolioMonitor every cycle; empty when flat). Never evicted by hot-swap/rescue. */
+  private heldSymbols = new Set<string>();
+  setHeldSymbols(symbols: string[]): void {
+    this.heldSymbols = new Set(symbols.map((s) => looksLikeListedTicker(s) || quoteKey(s)).filter((s): s is string => !!s));
+  }
+  getHeldSymbols(): string[] {
+    return [...this.heldSymbols];
+  }
+
   private hasActiveRescue(symbol: string): boolean {
     const r = this.temporaryRescues.get(symbol);
     if (!r) return false;
@@ -1296,6 +1305,7 @@ export class MarketDataWorker {
     const protectedSet = protectedStreamingSet();
     return Array.from(this.activeStreams)
       .filter((s) => !protectedSet.has(s))
+      .filter((s) => !this.heldSymbols.has(s)) // 2026-10-14: a stream backing an open position is never an eviction candidate
       .filter((s) => !this.isWithinDynamicDwell(s))
       .filter((s) => !this.hasActiveRescue(s))
       .map((s) => ({

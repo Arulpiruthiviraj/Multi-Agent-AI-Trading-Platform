@@ -216,6 +216,9 @@ export class PortfolioMonitorWorker {
         }
         pruneExitCooldownsForFlatSymbols(heldSymbols);
       }
+      // 2026-10-14: tell the market-data allocator which symbols back an open position so hot-swap/rescue eviction can never drop their stream
+      // (previously a held symbol was protected only by dwell/rescue or by being re-subscribed here ~once per cycle). Cleared when flat.
+      marketDataWorker.setHeldSymbols(holdings.filter((h) => (h.quantity ?? 0) > 0).map((h) => String(h.symbol || '')));
       if (holdings.length === 0) return;
       console.log(`[PortfolioWorker] Reviewing ${holdings.length} active positions.`);
 
