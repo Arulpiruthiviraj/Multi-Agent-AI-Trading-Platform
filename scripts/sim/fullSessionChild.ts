@@ -86,6 +86,8 @@ async function main() {
     stopAfterBarIndex: spec.stopAfterBarIndex,
     stopWhen: spec.stopWhen,
     resume: spec.resume,
+    discovery: spec.discovery,
+    lifecycle: spec.lifecycle,
   });
 
   const wallClockCallers = wallClockAudit ? wallClockAudit.stop() : null;
@@ -171,6 +173,8 @@ async function main() {
     // evaluateCertification). Carried through the child output so the parent/driver
     // and the certification artifact can see it.
     ideaGenerationGateOpen: result.ideaGenerationGateOpen,
+    discovery: result.discovery ?? null,
+    lifecycleSeed: result.lifecycleSeed ?? null,
   };
 
   fs.mkdirSync(path.dirname(spec.outputPath), { recursive: true });

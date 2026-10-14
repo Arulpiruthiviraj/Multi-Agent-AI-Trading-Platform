@@ -20,7 +20,7 @@ import { calibratedConfidenceForBucket, CONFIDENCE_BUCKETS } from '../../service
 import type { ConfidenceBucket } from '../../services/ConfidenceCalibration';
 
 export interface CalibrationProfileRow { agentName: string; bucketLow: number; wins: number; losses: number }
-export type AgentCalibrationProfileName = 'PRODUCTION_OCT14' | 'POSITIVE_CAPABILITY';
+export type AgentCalibrationProfileName = 'PRODUCTION_OCT14' | 'POSITIVE_CAPABILITY' | 'POSITIVE_CAPABILITY_BROAD';
 
 /** Production `agent_confidence_calibration` as read from the Oct 14 post-close snapshot (counts only; no identifiers). */
 export const PRODUCTION_OCT14_CALIBRATION: CalibrationProfileRow[] = [
@@ -53,8 +53,18 @@ export const POSITIVE_CAPABILITY_CALIBRATION: CalibrationProfileRow[] = [
   { agentName: 'QuantEngine', bucketLow: 0.8, wins: 160, losses: 40 },
 ];
 
+/**
+ * SYNTHETIC_SEEDED / CERTIFICATION_FIXTURE_ONLY: like POSITIVE_CAPABILITY but the well-sampled reliable record covers every confidence bucket the
+ * agents actually produce on a discovered opportunity (0.6-1.0), not only 0.8+. Needed because real agents emit raw confidences of ~0.6-0.75 on
+ * ordinary strong setups; with history only in the 0.8 bucket the unchanged calibration/consensus rules (correctly) refuse them. This proves the
+ * pipeline can approve, buy and sell once independent calibrated evidence exists - it is never evidence that the agents are reliable in production.
+ */
+export const POSITIVE_CAPABILITY_BROAD_CALIBRATION: CalibrationProfileRow[] = ['KronosEngine', 'TechnicalAgent', 'QuantEngine', 'JavaCoreEnsemble']
+  .flatMap((agentName) => [0.6, 0.7, 0.8, 0.9].map((bucketLow) => ({ agentName, bucketLow, wins: 160, losses: 40 })));
+
 export function calibrationProfileRows(name: AgentCalibrationProfileName): CalibrationProfileRow[] {
-  return name === 'PRODUCTION_OCT14' ? PRODUCTION_OCT14_CALIBRATION : POSITIVE_CAPABILITY_CALIBRATION;
+  if (name === 'PRODUCTION_OCT14') return PRODUCTION_OCT14_CALIBRATION;
+  return name === 'POSITIVE_CAPABILITY_BROAD' ? POSITIVE_CAPABILITY_BROAD_CALIBRATION : POSITIVE_CAPABILITY_CALIBRATION;
 }
 
 function bucketOf(row: CalibrationProfileRow): ConfidenceBucket {

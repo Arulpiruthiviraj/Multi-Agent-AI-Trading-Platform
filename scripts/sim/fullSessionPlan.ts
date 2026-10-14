@@ -40,8 +40,12 @@ export interface FullSessionSpec {
   /** Per-trade cap and daily-loss limit for the session's replay risk config (see SyntheticSessionOptions.riskProfile). */
   riskProfile?: { maxPositionSizeUsd?: number; maxDailyLossUsd?: number };
   /** Agent calibration + weights loaded into the session's isolated DB (see AgentCalibrationProfiles.ts). Undefined = legacy uncalibrated session (NOT production-faithful). */
-  calibrationProfile?: 'PRODUCTION_OCT14' | 'POSITIVE_CAPABILITY';
+  calibrationProfile?: 'PRODUCTION_OCT14' | 'POSITIVE_CAPABILITY' | 'POSITIVE_CAPABILITY_BROAD';
   resume?: { startBarIndex: number; brokerState: HistoricalReplayBrokerState };
+  /** REAL DISCOVERY inside the session (see SyntheticSessionOptions.discovery). */
+  discovery?: Partial<import('../../src/server/replay/synthetic/discovery/SessionDiscoveryDriver').SessionDiscoveryOptions>;
+  /** Test-scoped strategy lifecycle records (see SyntheticSessionOptions.lifecycle). Absent = production Oct 14 state (no records). */
+  lifecycle?: { baselineCoreUntested?: boolean; records?: Array<{ strategyId: string; status: string; reason: string }> };
   /**
    * Operator-gated cold-start bootstrap (2026-10-11): when true, the parent sets
    * QUANT_COLD_START_BOOTSTRAP_ENABLED=true in the child env. This is ENVIRONMENT control
@@ -252,4 +256,36 @@ export function buildMatrixSpecs(outDir: string): FullSessionSpec[] {
     label: 'scheduler load: 10-symbol universe, 60 bars (quant cycle latency observation)',
   });
   return specs;
+}
+
+/**
+ * END-TO-END PRODUCTION-FAITHFUL SESSIONS (2026-10-14). Both run the REAL discovery -> subscription -> quant -> consensus -> risk -> OMS pipeline over a
+ * 500-symbol hidden-truth market with 90 occupied IBKR-style lines and Oct 14 routine rescue pressure. Only external market/broker boundaries are simulated.
+ *  - TEST A reproduces the Oct 14 decision conditions (production-calibrated agents, NO lifecycle records) and must ABSTAIN with every no-trade explained.
+ *  - TEST B keeps discovery/market identical but provides legitimately-established independent evidence (labeled synthetic calibration) and test-scoped
+ *    lifecycle eligibility (UNTESTED baseline = REQUIRES_CONSENSUS, the planned production state); a genuine opportunity must be discovered by the
+ *    production allocator, approved by real 0.75 consensus, pass RiskEngine, BUY, be monitored and SELL.
+ */
+const END_TO_END_DISCOVERY = { seed: 102, universeSize: 500, startingWatchlistSize: 120, validCount: 20, trapCount: 8, outsideFraction: 1, incumbentCount: 87, renewalsPerMinute: 37, hardCap: 90 };
+export function buildTestASpec(outputPath: string, seed = 102): FullSessionSpec {
+  return {
+    simulationId: `e2e-testA-${seed}-${Date.now().toString(36)}`,
+    scenarioId: 'QUIET_OPEN', seed, speed: 30, durationMinutes: FULL_SESSION_BARS, symbols: 5,
+    faultPlan: [], discovery: { ...END_TO_END_DISCOVERY, seed },
+    initialCash: 20_000, riskProfile: { maxPositionSizeUsd: 3_000, maxDailyLossUsd: 250 },
+    calibrationProfile: 'PRODUCTION_OCT14',
+    requireTradeForCertification: true, outputPath,
+    label: 'TEST A: Oct 14 production-faithful session (real discovery at 90 lines, production calibration, no lifecycle records) must abstain with explained reasons',
+  };
+}
+export function buildTestBSpec(outputPath: string, seed = 102): FullSessionSpec {
+  return {
+    ...buildTestASpec(outputPath, seed),
+    simulationId: `e2e-testB-${seed}-${Date.now().toString(36)}`,
+    calibrationProfile: 'POSITIVE_CAPABILITY_BROAD',
+    // production fixture parity: PULLBACK_CONTINUATION is RETIRED in production (baseline skips it), so it must not be revived by a fresh-DB baseline
+    lifecycle: { baselineCoreUntested: true, records: [{ strategyId: 'PULLBACK_CONTINUATION', status: 'RETIRED', reason: 'production parity: retired strategy stays retired' }] },
+    discovery: { ...END_TO_END_DISCOVERY, seed, postWindowReversal: { driftPerMin: -0.0016, minutes: 60 } },
+    label: 'TEST B: 500 hidden stocks -> real discovery -> real consensus (labeled synthetic calibration, UNTESTED baseline lifecycle) -> Risk -> BUY -> monitor -> SELL',
+  };
 }

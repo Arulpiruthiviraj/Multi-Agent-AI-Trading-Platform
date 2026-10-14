@@ -34,6 +34,9 @@ export interface DiscoveryMarketConfig {
   trapCount: number;
   /** fraction of valid opportunities placed OUTSIDE the starting watchlist (1 = all of them: the "watchlist is boring" variant) */
   outsideFraction: number;
+  /** Exit-path fixture (default off): after a VALID opportunity window ends the price decays at this per-minute drift for `reversalMinutes`, so a position
+   *  opened on the opportunity meets a real adverse move (protective exit / stop path). Environment control only - the decision to exit is Argus's. */
+  postWindowReversal?: { driftPerMin: number; minutes: number };
 }
 
 export interface RawSnapshot {
@@ -124,6 +127,10 @@ export class SyntheticDiscoveryMarket {
           case 'TINY_VOLUME_HUGE_PCT': if (inWin) { drift = rel < 6 ? 0.02 * k : 0; volMult = 0.02; } break;
           case 'STALE_DATA': break; // handled below: published data freezes while a big apparent move exists
         }
+      }
+      if (spec && spec.cls === 'VALID' && this.cfg.postWindowReversal) {
+        const after = m - (spec.startMin + spec.durationMin);
+        if (after >= 0 && after < this.cfg.postWindowReversal.minutes) drift = this.cfg.postWindowReversal.driftPerMin;
       }
       const ret = drift + sigma * rng.gaussian();
       const nxt = Math.max(1, px * (1 + ret));

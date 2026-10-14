@@ -27,6 +27,8 @@ export interface SessionDiscoveryOptions {
   /** routine ROUTINE_RECOVERY rescue renewals per simulated minute over the incumbents (Oct 14 observed ~37) */
   renewalsPerMinute: number;
   hardCap: number;
+  /** exit-path fixture, see DiscoveryMarketConfig.postWindowReversal */
+  postWindowReversal?: { driftPerMin: number; minutes: number };
 }
 export const DEFAULT_SESSION_DISCOVERY: SessionDiscoveryOptions = {
   seed: 102, universeSize: 500, startingWatchlistSize: 120, validCount: 20, trapCount: 8, outsideFraction: 1, incumbentCount: 87, renewalsPerMinute: 37, hardCap: 90,
@@ -53,7 +55,7 @@ export class SessionDiscoveryDriver {
   /** Build the market (pure) - call before the engine generates bars. */
   async buildMarket(): Promise<SyntheticDiscoveryMarket> {
     const { SyntheticDiscoveryMarket: Market } = await import('./SyntheticDiscoveryMarket');
-    this.market = new Market({ seed: this.opts.seed, universeSize: this.opts.universeSize, startingWatchlistSize: this.opts.startingWatchlistSize, validCount: this.opts.validCount, trapCount: this.opts.trapCount, outsideFraction: this.opts.outsideFraction });
+    this.market = new Market({ seed: this.opts.seed, universeSize: this.opts.universeSize, startingWatchlistSize: this.opts.startingWatchlistSize, validCount: this.opts.validCount, trapCount: this.opts.trapCount, outsideFraction: this.opts.outsideFraction, postWindowReversal: this.opts.postWindowReversal });
     this.coreSymbols.push(...this.market.startingWatchlist.slice(0, 3));
     this.incumbents = this.market.startingWatchlist.slice(3, 3 + this.opts.incumbentCount);
     return this.market;

@@ -120,7 +120,7 @@ export interface SyntheticSessionOptions {
    */
   riskProfile?: { maxPositionSizeUsd?: number; maxDailyLossUsd?: number };
   /** Load an agent calibration + weight profile into the isolated DB before the session (AgentCalibrationProfiles.ts). Production-faithful sessions use PRODUCTION_OCT14; POSITIVE_CAPABILITY is a labeled synthetic fixture. */
-  agentCalibrationProfile?: 'PRODUCTION_OCT14' | 'POSITIVE_CAPABILITY';
+  agentCalibrationProfile?: 'PRODUCTION_OCT14' | 'POSITIVE_CAPABILITY' | 'POSITIVE_CAPABILITY_BROAD';
   /** Real seconds : simulated seconds. Governs only how fast the clock ITSELF reports simulated
    *  time to consumers (SessionLifecycle, RiskEngine's market_hours-via-classifyMarketSession) -
    *  does not change the real wall-clock pacing of bar delivery (see REAL_MS_BETWEEN_BARS above). */

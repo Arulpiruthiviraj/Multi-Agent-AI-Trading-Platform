@@ -49,8 +49,8 @@ export async function runSpecInChild(spec: FullSessionSpec): Promise<ChildRunRes
   // Any driver (fullSession, soak, restartBattery) can run under a calibration profile via ARGUS_SYNTH_CALIBRATION_PROFILE without a code change.
   const envProfile = process.env.ARGUS_SYNTH_CALIBRATION_PROFILE;
   if (spec.calibrationProfile === undefined && envProfile) {
-    if (envProfile !== 'PRODUCTION_OCT14' && envProfile !== 'POSITIVE_CAPABILITY') throw new Error(`ARGUS_SYNTH_CALIBRATION_PROFILE must be PRODUCTION_OCT14 or POSITIVE_CAPABILITY (got ${envProfile})`);
-    spec = { ...spec, calibrationProfile: envProfile };
+    if (!['PRODUCTION_OCT14', 'POSITIVE_CAPABILITY', 'POSITIVE_CAPABILITY_BROAD'].includes(envProfile)) throw new Error(`ARGUS_SYNTH_CALIBRATION_PROFILE must be PRODUCTION_OCT14, POSITIVE_CAPABILITY or POSITIVE_CAPABILITY_BROAD (got ${envProfile})`);
+    spec = { ...spec, calibrationProfile: envProfile as any };
   }
   const { dbPath } = computeSyntheticSimulationPaths(spec.simulationId);
   const policy = loadArtifactPolicy();
