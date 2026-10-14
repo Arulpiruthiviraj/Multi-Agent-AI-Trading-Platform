@@ -480,7 +480,7 @@ Numbers below are the production `tradingSafety.json` / settings defaults as of 
 | 5 | `daily_trade_limit` | BUY count vs `maxDailyTrades`. **0 = skipped** (no cap). NY calendar day. |
 | 6 | `duplicate_signal` | Same symbol/side risk assessment within `duplicateSignalWindowMs` (60000). Replay skipped (uses `openStops`). |
 | 7 | `invalid_account_equity` | Broker equity missing or not positive. **No `$10000` placeholder.** Downstream gates recorded `SKIPPED_INVALID_ACCOUNT_EQUITY`. |
-| 8 | `daily_loss` | `dailyLoss < dailyLossLimit * dailyLossKillSwitchFraction` (0.8). Day baseline is **America/New_York** (`getTradingDateStr`), not UTC. LIVE min daily-loss cap `$1000` when restricted-live active. |
+| 8 | `daily_loss` | `dailyLoss < dailyLossLimit * dailyLossKillSwitchFraction` (0.8). Day baseline is **America/New_York** (`getTradingDateStr`), not UTC. LIVE min daily-loss cap `$1000` when restricted-live active. With the research-capital basis on, realized/unrealized P&L is **net of real commissions** (2026-10-13; `trades.profit_loss` itself stays gross; NULL commission counts as 0). |
 | 9 | `consecutive_loss` | Last `maxConsecutiveLosses` (3) closed FILLED trades all losers → fail. |
 | 10 | `portfolio_drawdown` | `(peak − equity) / peak < maxPortfolioDrawdownPct` (settings; default 0.15). Peak only ratchets up. Distinct from daily loss. |
 | 11 | `order_rate_limit` | `risk_assessments` in last 60s &lt; `maxOrdersPerMinute` (settings default 5). Replay skipped. |
