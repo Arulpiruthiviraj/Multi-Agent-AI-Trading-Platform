@@ -273,7 +273,7 @@ export function evaluateCertification(
     tradeObserved,
     expectedTrade: requireTrade && opts.expectation !== 'ABSTAIN_EXPLAINED',
     expectation: opts.expectation ?? (requireTrade ? 'TRADE' : 'ANY_SAFE'),
-    abstentionReasons: (() => { const h: Record<string, number> = {}; for (const e of timeline.filter((x) => x.eventType === 'DESK_NO_TRADE')) { const m = /\[(?:NO TRADE|[^\]]*)\]\s*([^.:(]{0,60})/.exec(String((e as any).reason ?? '')); const k = (m?.[1] ?? 'UNPARSED').trim() || 'UNPARSED'; h[k] = (h[k] || 0) + 1; } return h; })(),
+    abstentionReasons: (() => { const h: Record<string, number> = {}; for (const e of timeline.filter((x) => x.eventType === 'DESK_NO_TRADE')) { const raw = String((e as any).reason ?? '').replace(/^\[[^\]]*\]\s*/, '').replace(/\d+(\.\d+)?%?/g, '#').split(/\.\s/)[0].slice(0, 90).trim(); const k = raw || 'UNPARSED'; h[k] = (h[k] || 0) + 1; } return h; })(),
     completeLifecycle,
     stages,
     firstBlockingStage,
