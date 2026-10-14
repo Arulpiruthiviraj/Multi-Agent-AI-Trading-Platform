@@ -51,3 +51,16 @@ promoted. Discovery is therefore `NOT_PROVEN` / `FAIL` for out-of-list discovery
 Feeds refreshed every 1 minute instead of production's 15 (broad) / 5 (movers): recall 37 % -> 53 % (10 of 19), precision 56 %, 3 traps still promoted, p50 latency 3 min.
 9 of 19 opportunities are still `OFFERED_BY_MOVERS_NOT_PROMOTED`. Conclusion: feed cadence explains part of the miss, but the dominant blocker is promotion/slot competition
 (challenger score vs incumbent score, one swap per cycle), not data staleness. Recall@K stays 0 because outside-list names are never in the snapshot ranking.
+
+## Counterfactual matrix (seed 102, production cadence 15/5 min; SYNTHETIC diagnostics, nothing proposed)
+
+| Run | Valid promoted | Recall | Traps promoted | Precision | p50 / p95 latency (min) | Misses by first block |
+|---|---|---|---|---|---|---|
+| 12-slot baseline | 7/19 | 37 % | 3/8 | 44 % | 0 / 20 | 7 SCORE_EDGE_NOT_MET, 4 RANK_BELOW_CHALLENGER_LIMIT |
+| 90 slots (all free; production IBKR cap) | 19/19 | 100 % | 3/8 | 37 % | 0 / 15 | none |
+| Unlimited slots | 19/19 | 100 % | 3/8 | 21 % | 0 / 15 | none |
+| Unlimited challenger limit only | 7/19 | 37 % | 3/8 | 44 % | 0 / 20 | 11 SCORE_EDGE_NOT_MET |
+| Score edge 0 only | 6/19 | 32 % | 3/8 | 35 % | 0 / 13 | 6 SCORE_EDGE_NOT_MET, 4 RANK_BELOW_CHALLENGER_LIMIT |
+| All relaxed | 19/19 | 100 % | 3/8 | 21 % | 0 / 15 | none |
+
+Findings (measured): (1) free streaming capacity is the dominant recall constraint; challenger limit and score edge alone do not move recall. (2) Recall gained by capacity is bought with precision (44 % -> 21 %): the same 3 traps are promoted in every run, so ranking quality is unchanged by capacity. (3) In the 12-slot run every promoted trap outscored every valid opportunity (trap scores 2.4-11.9, valid 1.2-4.0): the challenger score is |gap|-driven with no liquidity or persistence term. (4) Production reality is not "90 free slots": at 08:07 ET production showed 90/90 lines with ~38 temporary-rescue holders (mostly ROUTINE_RECOVERY of curated names) plus core symbols, so the free discovery capacity is unknown and this harness's 90-slot run is optimistic. NOT yet done: production-faithful capacity model (cap minus core/held/rescue/reservation), incumbent-vs-candidate component decomposition, perfect-ranking oracle run, trap score decomposition.

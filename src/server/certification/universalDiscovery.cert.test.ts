@@ -83,7 +83,16 @@ describe('UNIVERSAL_DISCOVERY baseline against a hidden-ground-truth 500-symbol 
     vi.spyOn(MUS, 'getCachedNewsCatalystSymbols').mockReturnValue([]);
 
     // market data capacity model: 12 slots total, dynamic slots filled by Argus's own subscribe requests (FIFO eviction when full)
-    const CAP = 12; const dynamic: string[] = [];
+    const CAP = Number(process.env.DISCOVERY_CAP ?? 12); const dynamic: string[] = [];
+    // COUNTERFACTUAL DIAGNOSTIC knobs (synthetic experiment only; production config is restored in finally). Never a proposed change.
+    const savedKnobs = { lim: continuousIntelligence.broadUniverseHotSwapChallengerLimit, edge: continuousIntelligence.snapshotMomentumScoreEdge, swaps: continuousIntelligence.momentumHotSwapSlotsPerCycle };
+    if (process.env.DISCOVERY_CHALLENGER_LIMIT) continuousIntelligence.broadUniverseHotSwapChallengerLimit = Number(process.env.DISCOVERY_CHALLENGER_LIMIT);
+    if (process.env.DISCOVERY_SCORE_EDGE) continuousIntelligence.snapshotMomentumScoreEdge = Number(process.env.DISCOVERY_SCORE_EDGE);
+    if (process.env.DISCOVERY_SWAPS) continuousIntelligence.momentumHotSwapSlotsPerCycle = Number(process.env.DISCOVERY_SWAPS);
+    // per-minute competition timeline for every hidden opportunity / trap that is not yet streaming: its real challenger score, its rank among everything
+    // the movers feed offers right now, and the weakest incumbent's real score (read-only)
+    const timeline = new Map<string, Array<{ m: number; score: number; rank: number | null; weakest: number | null; edgeNeeded: number; occupied: number }>>();
+    const watched = new Set<string>([...truth.opportunities.map((o) => o.symbol), ...truth.traps.map((t) => t.symbol)]);
     vi.spyOn(marketDataWorker, 'getActiveSymbols').mockImplementation(() => [...dynamic]);
     vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockImplementation(() => [...dynamic]);
     vi.spyOn(marketDataWorker, 'getEvictionEligibleDynamicSymbols').mockImplementation(() => [...dynamic]);
@@ -109,6 +118,19 @@ describe('UNIVERSAL_DISCOVERY baseline against a hidden-ground-truth 500-symbol 
         minuteNow = m; feed.minute = m;
         const now = new Date(OPEN_MS + m * 60_000);
         for (const sym of market.moversAt(Math.floor(m / Number(process.env.DISCOVERY_MOVERS_REFRESH_MIN ?? 5)) * Number(process.env.DISCOVERY_MOVERS_REFRESH_MIN ?? 5), 20)) if (!log.moversOffered!.has(sym)) log.moversOffered!.set(sym, m);
+        { // pre-scan competition snapshot (what the planner is about to decide on)
+          const base = (s: string) => Snap.getLastSnapshotScore(s) ?? 0;
+          const scoreOf = (s: string) => Opp.scoreBroadUniverseChallenger(s, MUS.getCachedBroadUniverseGapPct(s), base);
+          const offered = [...new Set([...MUS.getCachedMoverSymbols(), ...MUS.getCachedBroadUniverseCandidatesWithVolume().map((c: any) => c.symbol)])].filter((s) => !dynamic.includes(s));
+          const offeredScores = offered.map((s) => scoreOf(s));
+          const inc = dynamic.map((d) => scoreOf(d));
+          for (const sym of watched) {
+            if (dynamic.includes(sym) || !offered.includes(sym)) continue;
+            const sc = scoreOf(sym);
+            const arr = timeline.get(sym) ?? []; timeline.set(sym, arr);
+            arr.push({ m, score: sc, rank: 1 + offeredScores.filter((x) => x > sc).length, weakest: inc.length ? Math.min(...inc) : null, edgeNeeded: continuousIntelligence.snapshotMomentumScoreEdge, occupied: dynamic.length });
+          }
+        }
         await Opp.runOpportunityScan(now);
         for (const sym of Opp.getOpportunityScanUniverse()) if (!log.scanned.has(sym)) log.scanned.set(sym, m);
         for (const sym of probeAt.get(m) ?? []) {
@@ -130,9 +152,26 @@ describe('UNIVERSAL_DISCOVERY baseline against a hidden-ground-truth 500-symbol 
       continuousIntelligence.seedSymbols = saved.seed; continuousIntelligence.watchUniverseSymbols = saved.watch; continuousIntelligence.campaignOpeningSurgeSymbols = saved.surge;
       continuousIntelligence.momentumScanUniverseSymbols = saved.mom; continuousIntelligence.coreStreamingSymbols = saved.core;
       delete process.env[flag];
+      continuousIntelligence.broadUniverseHotSwapChallengerLimit = savedKnobs.lim; continuousIntelligence.snapshotMomentumScoreEdge = savedKnobs.edge; continuousIntelligence.momentumHotSwapSlotsPerCycle = savedKnobs.swaps;
     }
+    // Loss-attribution matrix: why each NOT-promoted valid opportunity / each promoted trap behaved as it did, from the timeline above.
+    const limit = Number(process.env.DISCOVERY_CHALLENGER_LIMIT ?? savedKnobs.lim); const edgeUsed = Number(process.env.DISCOVERY_SCORE_EDGE ?? savedKnobs.edge);
+    const attribution = (sym: string, from: number, to: number) => {
+      const rows = (timeline.get(sym) ?? []).filter((r) => r.m >= from && r.m <= to);
+      if (!rows.length) return { minutesOffered: 0, bestRank: null as number | null, reason: 'NEVER_OFFERED_IN_WINDOW' };
+      const bestRank = Math.min(...rows.map((r) => r.rank as number));
+      const full = rows.some((r) => r.occupied >= CAP);
+      const scoreShort = rows.filter((r) => r.rank! <= limit && r.weakest != null && r.score < r.weakest + r.edgeNeeded).length;
+      const reason = bestRank > limit ? 'RANK_BELOW_CHALLENGER_LIMIT' : (full && scoreShort > 0 ? 'SCORE_EDGE_NOT_MET' : (full ? 'SWAP_BUDGET_OR_ORDER' : 'NOT_FULL_YET_UNEXPLAINED'));
+      return { minutesOffered: rows.length, bestRank, bestScore: +Math.max(...rows.map((r) => r.score)).toFixed(2), weakestIncumbentAtBest: rows.find((r) => r.rank === bestRank)?.weakest ?? null, reason };
+    };
+    const missed = truth.opportunities.filter((o) => o.firstObservableMin !== null && !log.promoted.has(o.symbol));
+    const lateOrMissed = truth.opportunities.filter((o) => o.firstObservableMin !== null).map((o) => ({ symbol: o.symbol, promotedMin: log.promoted.get(o.symbol) ?? null, ...attribution(o.symbol, o.firstObservableMin!, o.expiryMin) }));
+    const trapRows = truth.traps.map((t) => ({ symbol: t.symbol, kind: t.kind, promotedMin: log.promoted.get(t.symbol) ?? null, ...attribution(t.symbol, t.startMin, t.endMin) }));
+    const reasonCounts: Record<string, number> = {}; for (const o of missed) { const r = attribution(o.symbol, o.firstObservableMin!, o.expiryMin).reason; reasonCounts[r] = (reasonCounts[r] ?? 0) + 1; }
+    console.log(`[DISCOVERY-ATTRIBUTION ${label} cap=${CAP} limit=${limit} edge=${edgeUsed}] missedByReason=${JSON.stringify(reasonCounts)}`);
     const score = scoreDiscovery(truth, log, new Set(market.startingWatchlist));
-    const report = { label: label + `|broad${process.env.DISCOVERY_BROAD_REFRESH_MIN ?? 15}-movers${process.env.DISCOVERY_MOVERS_REFRESH_MIN ?? 5}`, cfg, wallS: +((Date.now() - t0) / 1000).toFixed(1), valid: truth.opportunities.length, traps: truth.traps.length, score, diag };
+    const report = { label: label + `|broad${process.env.DISCOVERY_BROAD_REFRESH_MIN ?? 15}-movers${process.env.DISCOVERY_MOVERS_REFRESH_MIN ?? 5}`, cfg, wallS: +((Date.now() - t0) / 1000).toFixed(1), valid: truth.opportunities.length, traps: truth.traps.length, knobs: { cap: CAP, limit, edge: edgeUsed, swaps: process.env.DISCOVERY_SWAPS ?? null }, reasonCounts, opportunityAttribution: lateOrMissed, trapAttribution: trapRows, score, diag };
     reports.push(report);
     console.log(`[DISCOVERY ${label}] eligible=${score.eligible} found=${score.discoveredInTime} recall=${score.recall} outsideRecall=${score.recallOutsideWatchlist} insideRecall=${score.recallInsideWatchlist} precision=${score.precision} promoted=${score.promotedTotal} trapHits=${score.promotedTrapHits} R@5=${score.recallAtK[5]} R@10=${score.recallAtK[10]} R@20=${score.recallAtK[20]} MRR=${score.meanReciprocalRank} latP50=${score.latencyMin.p50} latP95=${score.latencyMin.p95} classes=${JSON.stringify(score.missByClass)}`);
     return { market, truth, score, log };
