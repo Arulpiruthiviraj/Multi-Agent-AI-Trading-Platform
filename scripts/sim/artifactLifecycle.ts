@@ -81,10 +81,3 @@ export function cleanTestArtifacts(tmpDir: string, policy: ArtifactPolicy, opts:
 }
 
 export function defaultTmpDir(): string { return os.tmpdir(); }
-
-if (require.main === module) {
-  const policy = loadArtifactPolicy();
-  const dry = process.argv.includes('--dry-run');
-  const r = cleanTestArtifacts(defaultTmpDir(), policy, { dryRun: dry });
-  console.log(JSON.stringify({ dryRun: dry, removed: r.removed.length, skippedProtected: r.skippedProtected.length, skippedRecent: r.skippedRecent.length, freeGb: +freeDiskGb(defaultTmpDir()).toFixed(1) }));
-}
