@@ -39,6 +39,8 @@ export interface FullSessionSpec {
   initialCash?: number;
   /** Per-trade cap and daily-loss limit for the session's replay risk config (see SyntheticSessionOptions.riskProfile). */
   riskProfile?: { maxPositionSizeUsd?: number; maxDailyLossUsd?: number };
+  /** Agent calibration + weights loaded into the session's isolated DB (see AgentCalibrationProfiles.ts). Undefined = legacy uncalibrated session (NOT production-faithful). */
+  calibrationProfile?: 'PRODUCTION_OCT14' | 'POSITIVE_CAPABILITY';
   resume?: { startBarIndex: number; brokerState: HistoricalReplayBrokerState };
   /**
    * Operator-gated cold-start bootstrap (2026-10-11): when true, the parent sets

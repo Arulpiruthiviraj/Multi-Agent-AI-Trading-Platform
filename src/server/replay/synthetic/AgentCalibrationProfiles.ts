@@ -81,3 +81,24 @@ export async function seedAgentCalibrationProfile(name: AgentCalibrationProfileN
   }
   return { profile: name, rows: rows.length, label: name === 'PRODUCTION_OCT14' ? 'PRODUCTION_SNAPSHOT_2026_10_14' : 'SYNTHETIC_SEEDED_NON_ORGANIC_CERTIFICATION_FIXTURE_ONLY' };
 }
+
+/** Seeds agent_performance_stats.current_weight (consensus weighting) for the production profile; positive-capability keeps the defaults. */
+export async function seedAgentWeights(name: AgentCalibrationProfileName): Promise<number> {
+  if (name !== 'PRODUCTION_OCT14') return 0;
+  const { db } = await import('../../db');
+  const schema = await import('../../db/schema');
+  const now = new Date().toISOString();
+  let n = 0;
+  for (const [agentName, currentWeight] of Object.entries(PRODUCTION_OCT14_WEIGHTS)) {
+    await db.insert(schema.agentPerformanceStats).values({ agentName, currentWeight, lastEvaluated: now }).onConflictDoUpdate({ target: schema.agentPerformanceStats.agentName, set: { currentWeight, lastEvaluated: now } });
+    n++;
+  }
+  return n;
+}
+
+/** Calibration + weights in one call; the result is recorded in the session artifact so a run's decision realism is auditable. */
+export async function seedAgentProfile(name: AgentCalibrationProfileName): Promise<{ profile: string; rows: number; weights: number; label: string }> {
+  const cal = await seedAgentCalibrationProfile(name);
+  const weights = await seedAgentWeights(name);
+  return { profile: name, rows: cal.rows, weights, label: cal.label };
+}

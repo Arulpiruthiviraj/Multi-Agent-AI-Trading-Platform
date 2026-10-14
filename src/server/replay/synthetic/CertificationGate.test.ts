@@ -66,6 +66,7 @@ function fakeResult(
     wallClockDurationMs: 1000,
     dbPath: '/tmp/fake.db',
     calibrationSeedResults: [],
+    agentCalibrationProfile: null,
     costProfile,
     faultOutcomes: [],
     stoppedEarly: false,

@@ -46,6 +46,12 @@ export interface ChildRunResult {
 }
 
 export async function runSpecInChild(spec: FullSessionSpec): Promise<ChildRunResult> {
+  // Any driver (fullSession, soak, restartBattery) can run under a calibration profile via ARGUS_SYNTH_CALIBRATION_PROFILE without a code change.
+  const envProfile = process.env.ARGUS_SYNTH_CALIBRATION_PROFILE;
+  if (spec.calibrationProfile === undefined && envProfile) {
+    if (envProfile !== 'PRODUCTION_OCT14' && envProfile !== 'POSITIVE_CAPABILITY') throw new Error(`ARGUS_SYNTH_CALIBRATION_PROFILE must be PRODUCTION_OCT14 or POSITIVE_CAPABILITY (got ${envProfile})`);
+    spec = { ...spec, calibrationProfile: envProfile };
+  }
   const { dbPath } = computeSyntheticSimulationPaths(spec.simulationId);
   const policy = loadArtifactPolicy();
   // Disk preflight (2026-10-14): never start a session the drive cannot hold (the system drive had 4.3 GB free during the Oct 14 incident).

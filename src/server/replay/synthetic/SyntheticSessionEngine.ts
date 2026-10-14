@@ -118,6 +118,8 @@ export interface SyntheticSessionOptions {
    * replay config's allocationBudget/initialCapital/buyingPower follow it; these two add the per-trade and daily-loss limits.
    */
   riskProfile?: { maxPositionSizeUsd?: number; maxDailyLossUsd?: number };
+  /** Load an agent calibration + weight profile into the isolated DB before the session (AgentCalibrationProfiles.ts). Production-faithful sessions use PRODUCTION_OCT14; POSITIVE_CAPABILITY is a labeled synthetic fixture. */
+  agentCalibrationProfile?: 'PRODUCTION_OCT14' | 'POSITIVE_CAPABILITY';
   /** Real seconds : simulated seconds. Governs only how fast the clock ITSELF reports simulated
    *  time to consumers (SessionLifecycle, RiskEngine's market_hours-via-classifyMarketSession) -
    *  does not change the real wall-clock pacing of bar delivery (see REAL_MS_BETWEEN_BARS above). */
@@ -215,6 +217,8 @@ export interface SyntheticSessionResult {
    *  own header for the full disclosure. CertificationGate.ts surfaces this as calibrationSeeded
    *  so a Test B PASS achieved this way is never confused with organic calibration proof. */
   calibrationSeedResults: CalibrationSeedResult[];
+  /** Non-null when options.agentCalibrationProfile was supplied: which calibration/weight profile the session's agents ran under (decision-realism disclosure). */
+  agentCalibrationProfile: { profile: string; rows: number; weights: number; label: string } | null;
   /** The transaction-cost profile the session's broker actually filled against
    *  (commission/spread/slippage). CertificationGate.ts uses it to prove the cost model was
    *  live in the run: fills under a non-zero profile must show deducted costs. */
@@ -511,6 +515,11 @@ export class SyntheticSessionEngine {
       // so any real consensus reached during the session sees an already-established (real,
       // genuinely-computed) calibration champion for these specific agent/bucket pairs, exactly as a
       // deployment with real prior history would.
+      let agentCalibrationProfileResult: { profile: string; rows: number; weights: number; label: string } | null = null;
+      if (options.agentCalibrationProfile) {
+        const { seedAgentProfile } = await import('./AgentCalibrationProfiles');
+        agentCalibrationProfileResult = await seedAgentProfile(options.agentCalibrationProfile);
+      }
       let calibrationSeedResults: import('./CalibrationHistorySeeder').CalibrationSeedResult[] = [];
       if (options.calibrationSeeds && options.calibrationSeeds.length > 0) {
         const { seedSyntheticCalibrationHistory } = await import('./CalibrationHistorySeeder');
@@ -913,6 +922,7 @@ export class SyntheticSessionEngine {
         wallClockDurationMs: Date.now() - wallClockStart,
         dbPath: this.dbPath,
         calibrationSeedResults,
+        agentCalibrationProfile: agentCalibrationProfileResult,
         costProfile: costs,
         faultOutcomes,
         stoppedEarly,

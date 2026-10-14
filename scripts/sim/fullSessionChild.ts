@@ -79,6 +79,7 @@ async function main() {
     universeSize: spec.symbols,
     initialCash: spec.initialCash ?? 100_000,
     riskProfile: spec.riskProfile,
+    agentCalibrationProfile: spec.calibrationProfile,
     faultPlan: spec.faultPlan,
     lateMoverConfigs: spec.lateMoverConfigs,
     staleCacheSymbols: spec.staleCacheSymbols,
@@ -162,6 +163,7 @@ async function main() {
     },
     wallClockDurationMs: result.wallClockDurationMs,
     dbPath: result.dbPath,
+    agentCalibrationProfile: (result as any).agentCalibrationProfile ?? null,
     calibrationSeeded: result.calibrationSeedResults.length > 0,
     // 2026-10-11: the idea-generation-gate proof (held-gate sessions fail loud in
     // evaluateCertification). Carried through the child output so the parent/driver
