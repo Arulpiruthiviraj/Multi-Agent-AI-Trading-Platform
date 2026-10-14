@@ -483,6 +483,8 @@ describe('Discovery-to-quantitative-assessment real cross-service trace (2026-09
       expect(outcomeCalls[0][1].requestedBy).toBe('OpportunityDiscovery:BROAD_UNIVERSE_HOT_SWAP');
     });
 
+    // 2026-10-14: rescue immunity for an already-streaming symbol is now granted by priority classes only (ROUTINE_RECOVERY renewals no longer pin
+    // eviction immunity), so these rescue-protected-incumbent fixtures use EXPLORATION.
     it('rescue-protected incumbents: a genuinely full, dwell-CLEARED pool where every occupant instead holds an active temporary data rescue still refuses the request - a distinct protection mechanism from dwell, not a duplicate test', () => {
       const cap = continuousIntelligence.maxActiveSubscriptions;
       for (let i = 0; i < cap; i++) {
@@ -493,7 +495,7 @@ describe('Discovery-to-quantitative-assessment real cross-service trace (2026-09
         // budget (continuousIntelligence.maxConcurrentTemporaryDataRescues), so all cap occupants
         // can genuinely hold an active rescue at once, exactly reproducing the real IOVA-day
         // pattern of many simultaneous rescue grants (27 in the 15:55-16:01 window).
-        const grant = marketDataWorker.requestTemporaryDataRescue(sym, 'test-rescue', { requestClass: 'ROUTINE_RECOVERY' });
+        const grant = marketDataWorker.requestTemporaryDataRescue(sym, 'test-rescue', { requestClass: 'EXPLORATION' });
         expect(grant.granted).toBe(true);
       }
       expect(marketDataWorker.getActiveSymbols().length).toBe(cap);
@@ -520,7 +522,7 @@ describe('Discovery-to-quantitative-assessment real cross-service trace (2026-09
         const sym = fillerSymbol(i);
         realSubscribe(sym, 0);
         clearDwellProtection(sym);
-        marketDataWorker.requestTemporaryDataRescue(sym, 'test-rescue', { requestClass: 'ROUTINE_RECOVERY' });
+        marketDataWorker.requestTemporaryDataRescue(sym, 'test-rescue', { requestClass: 'EXPLORATION' });
       }
       // Remaining occupants: dwell-protected (fresh), filling out the rest of capacity.
       for (let i = half + 1; i < cap; i++) {
