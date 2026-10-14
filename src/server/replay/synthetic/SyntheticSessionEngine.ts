@@ -203,6 +203,8 @@ export interface SyntheticSessionResult {
   newsItems: SyntheticNewsItem[];
   broker: HistoricalReplayBroker;
   memorySamples: MemorySample[];
+  /** Resource-growth samples (2026-10-13 soak): listeners, active handles/timers, non-terminal orders, pending capital reservations. */
+  resourceSamples: ResourceSample[];
   eventLoopP50Ms: number | null;
   eventLoopP95Ms: number | null;
   eventLoopP99Ms: number | null;
@@ -651,6 +653,7 @@ export class SyntheticSessionEngine {
       elHistogram = monitorEventLoopDelay({ resolution: 20 });
       elHistogram.enable();
       const memorySamples: MemorySample[] = [];
+      const resourceSamples: ResourceSample[] = [];
 
       // --- Register symbols with the real MarketDataWorker so QuantSignalAgent's getActiveSymbols()
       // includes them (subscribe() is safe to call directly here - it only opens a real stream when
@@ -830,6 +833,7 @@ export class SyntheticSessionEngine {
         }
 
         memorySamples.push(sampleMemory(i));
+        if (i % RESOURCE_SAMPLE_EVERY_BARS === 0) resourceSamples.push(await sampleResources(i));
         await sleep(realMsBetweenBars);
 
         // Restart certification, first half: stop after the configured bar; the resume half
@@ -883,6 +887,7 @@ export class SyntheticSessionEngine {
         newsItems,
         broker: this.broker,
         memorySamples,
+        resourceSamples: [...resourceSamples, await sampleResources(lastProcessedBar)],
         eventLoopP50Ms: toMs(elHistogram.percentile(50)),
         eventLoopP95Ms: toMs(elHistogram.percentile(95)),
         eventLoopP99Ms: toMs(elHistogram.percentile(99)),
@@ -919,6 +924,37 @@ export class SyntheticSessionEngine {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export interface ResourceSample {
+  atBarIndex: number;
+  heapUsedMb: number;
+  /** total EventBus listeners across all event names (a leak shows as monotone growth) */
+  listenerTotal: number;
+  /** active libuv resources by type (Timeout, TCPSocketWrap, ...) from process.getActiveResourcesInfo() */
+  activeResources: Record<string, number>;
+  activeTimers: number;
+  /** orders not in a terminal state (open OMS records) */
+  nonTerminalOrders: number;
+  /** in-memory pending BUY capital reservations, USD */
+  reservedNotionalUsd: number;
+}
+const RESOURCE_SAMPLE_EVERY_BARS = 10;
+
+async function sampleResources(atBarIndex: number): Promise<ResourceSample> {
+  const { eventBus } = await import('../../core/EventBus');
+  const { snapshotReservedNotional } = await import('../../engines/PendingCapitalReservations');
+  const { db: sdb } = await import('../../db');
+  const sch = await import('../../db/schema');
+  const listenerTotal = eventBus.eventNames().reduce((s: number, n: string | symbol) => s + eventBus.listenerCount(n), 0);
+  const activeResources: Record<string, number> = {};
+  for (const r of process.getActiveResourcesInfo()) activeResources[r] = (activeResources[r] ?? 0) + 1;
+  const terminal = new Set(['FILLED', 'REJECTED', 'CANCELED', 'CANCELLED', 'EXTERNAL_MANUAL', 'ARCHIVED_DIAGNOSTIC']);
+  const nonTerminalOrders = (await sdb.select().from(sch.trades)).filter((t: any) => !terminal.has(String(t.status))).length;
+  return {
+    atBarIndex, heapUsedMb: +(process.memoryUsage().heapUsed / (1024 * 1024)).toFixed(1), listenerTotal, activeResources,
+    activeTimers: activeResources.Timeout ?? 0, nonTerminalOrders, reservedNotionalUsd: snapshotReservedNotional(),
+  };
 }
 
 function sampleMemory(atBarIndex: number): MemorySample {

@@ -131,6 +131,7 @@ async function main() {
     },
     certification,
     wallClockCallers,
+    resourceSamples: result.resourceSamples,
     faultOutcomes: result.faultOutcomes,
     // Full timeline (needed by the parent to merge restart halves and to audit invariants).
     timeline: result.timeline,

@@ -44,6 +44,7 @@ function fakeResult(
   return {
     simulationId: 'sim_test',
     scenarioId,
+    resourceSamples: [],
     seed: 12345,
     universe: ['AAPL'],
     sessionStartMs: 1_700_000_000_000,
