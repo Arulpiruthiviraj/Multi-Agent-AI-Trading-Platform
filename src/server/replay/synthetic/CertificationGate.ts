@@ -27,6 +27,10 @@ export interface CertificationResult {
   seed: number;
   tradeObserved: boolean;
   expectedTrade: boolean;
+  /** TRADE (a qualifying opportunity must reach the full lifecycle), ABSTAIN_EXPLAINED (production-faithful fixture: legible abstention is the correct outcome), ANY_SAFE. */
+  expectation?: 'TRADE' | 'ABSTAIN_EXPLAINED' | 'ANY_SAFE';
+  /** Histogram of the leading text of every DESK_NO_TRADE reason (explains abstentions). */
+  abstentionReasons?: Record<string, number>;
   completeLifecycle: boolean;
   stages: Record<PipelineStage, boolean>;
   firstBlockingStage: PipelineStage | null;
@@ -127,7 +131,7 @@ function inferZeroTradeReason(timeline: readonly TimelineEntry[]): string {
 export function evaluateCertification(
   result: SyntheticSessionResult,
   requireTrade: boolean,
-  opts: { outageWindows?: OutageWindow[] } = {},
+  opts: { outageWindows?: OutageWindow[]; expectation?: 'TRADE' | 'ABSTAIN_EXPLAINED' } = {},
 ): CertificationResult {
   const timeline = result.timeline;
 
@@ -222,6 +226,26 @@ export function evaluateCertification(
   } else if (costsNotApplied) {
     certification = 'FAIL';
     reason = 'Fills occurred under a non-zero cost profile but the broker recorded zero fees/slippage - the transaction-cost model is not live in this run; simulated P&L would be gross-fiction.';
+  } else if (opts.expectation === 'ABSTAIN_EXPLAINED') {
+    // Production-faithful fixture (e.g. the Oct 14 calibration): the CORRECT outcome is a legible abstention. PASS requires the funnel to have run
+    // (ideas generated and consensus evaluated), NO approval/order, and every abstention carrying a non-empty reason. A trade here means the fixture is
+    // not behaving like the production configuration it claims to reproduce, which is surfaced as a FAIL (fidelity), not silently accepted.
+    const noTrades = timeline.filter((e) => e.eventType === 'DESK_NO_TRADE');
+    const unexplained = noTrades.filter((e) => !String((e as any).reason ?? '').trim());
+    const consensusRounds = countEvents(timeline, 'CHIEF_CONSENSUS_COMPLETED');
+    if (ideasGenerated === 0 || consensusRounds === 0) {
+      certification = 'FAIL';
+      reason = `Abstention fixture proved nothing: ${ideasGenerated} ideas and ${consensusRounds} consensus rounds ran (the funnel must be exercised before abstaining counts as correct).`;
+    } else if (consensusApprovals > 0 || ordersSubmitted > 0) {
+      certification = 'FAIL';
+      reason = `Production-faithful fixture expected to abstain but produced ${consensusApprovals} approvals / ${ordersSubmitted} orders - the fixture no longer reproduces the production decision conditions it claims to (investigate calibration/lifecycle/config parity).`;
+    } else if (unexplained.length > 0) {
+      certification = 'FAIL';
+      reason = `${unexplained.length} abstentions carried no reason; every no-trade decision must be explained.`;
+    } else {
+      certification = 'PASS';
+      zeroTradeReason = 'EXPLAINED_ABSTENTION';
+    }
   } else if (requireTrade) {
     certification = completeLifecycle ? 'PASS' : 'FAIL';
     reason = completeLifecycle ? null : `Blocked at ${firstBlockingStage} - see the decision timeline for the exact rejecting event.`;
@@ -247,7 +271,9 @@ export function evaluateCertification(
     scenarioId: result.scenarioId,
     seed: result.seed,
     tradeObserved,
-    expectedTrade: requireTrade,
+    expectedTrade: requireTrade && opts.expectation !== 'ABSTAIN_EXPLAINED',
+    expectation: opts.expectation ?? (requireTrade ? 'TRADE' : 'ANY_SAFE'),
+    abstentionReasons: (() => { const h: Record<string, number> = {}; for (const e of timeline.filter((x) => x.eventType === 'DESK_NO_TRADE')) { const m = /\[(?:NO TRADE|[^\]]*)\]\s*([^.:(]{0,60})/.exec(String((e as any).reason ?? '')); const k = (m?.[1] ?? 'UNPARSED').trim() || 'UNPARSED'; h[k] = (h[k] || 0) + 1; } return h; })(),
     completeLifecycle,
     stages,
     firstBlockingStage,

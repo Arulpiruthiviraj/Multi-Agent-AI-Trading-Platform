@@ -101,7 +101,9 @@ async function main() {
         toMs: result.sessionStartMs + ((f.toBar ?? f.fromBar) + 1) * 60_000,
         label: `fault:FEED_INTERRUPTION@${f.fromBar}`,
       }));
-    certification = evaluateCertification(result, spec.requireTradeForCertification, { outageWindows });
+    // Expectation follows the decision-realism class: a production-calibrated fixture must ABSTAIN (explained); everything else keeps its trade requirement.
+    const expectation = spec.calibrationProfile === 'PRODUCTION_OCT14' ? 'ABSTAIN_EXPLAINED' as const : undefined;
+    certification = evaluateCertification(result, spec.requireTradeForCertification, { outageWindows, expectation });
     console.log(`\nCertification: ${certification.certification} (tradeObserved=${certification.tradeObserved})`);
     if (certification.reason) console.log(`Reason: ${certification.reason}`);
     if (certification.firstBlockingStage) console.log(`First blocking stage: ${certification.firstBlockingStage}`);

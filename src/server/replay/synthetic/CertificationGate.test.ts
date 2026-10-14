@@ -239,3 +239,44 @@ describe('evaluateCertification', () => {
     expect(cert.costs.costProfile).toEqual({ commissionPerShare: 0.005, spreadBps: 2, slippageBps: 5 });
   });
 });
+
+describe('evaluateCertification - ABSTAIN_EXPLAINED expectation (production-faithful fixtures, 2026-10-14)', () => {
+  const abstain = (traceId: string, reason: string | null) => [
+    entry('TRADE_IDEA_GENERATED', { traceId, symbol: 'AAPL' }),
+    entry('CHIEF_CONSENSUS_STARTED', { traceId, symbol: 'AAPL' }),
+    entry('CHIEF_CONSENSUS_COMPLETED', { traceId, symbol: 'AAPL' }),
+    entry('DESK_NO_TRADE', { traceId, symbol: 'AAPL', reason }),
+  ];
+  it('PASSES when the funnel ran, nothing was approved/ordered, and every abstention is explained', () => {
+    seq = 0;
+    const tl = [entry('MARKET_DATA', { symbol: 'AAPL' }), ...abstain('t1', '[NO TRADE] Confidence 54.1% did not clear 75%.')];
+    const cert = evaluateCertification(fakeResult(tl), true, { expectation: 'ABSTAIN_EXPLAINED' });
+    expect(cert.certification).toBe('PASS');
+    expect(cert.zeroTradeReason).toBe('EXPLAINED_ABSTENTION');
+    expect(cert.expectedTrade).toBe(false);
+    expect(Object.keys(cert.abstentionReasons ?? {}).length).toBe(1);
+  });
+  it('FAILS when the fixture produces an approval (it no longer reproduces the production conditions it claims to)', () => {
+    seq = 0;
+    const tl = [entry('MARKET_DATA', { symbol: 'AAPL' }), ...validChain('t2', 'AAPL', 'o1', 'BUY')];
+    const cert = evaluateCertification(fakeResult(tl, 0, 'QUIET_OPEN', { feesPaid: 1, slippagePaid: 1 }), true, { expectation: 'ABSTAIN_EXPLAINED' });
+    expect(cert.certification).toBe('FAIL');
+    expect(cert.reason).toMatch(/expected to abstain/);
+  });
+  it('FAILS when an abstention carries no reason (every no-trade must be explained)', () => {
+    seq = 0;
+    const tl = [entry('MARKET_DATA', { symbol: 'AAPL' }), ...abstain('t3', null)];
+    expect(evaluateCertification(fakeResult(tl), true, { expectation: 'ABSTAIN_EXPLAINED' }).certification).toBe('FAIL');
+  });
+  it('FAILS when the funnel never ran (zero ideas/consensus rounds prove nothing about correct abstention)', () => {
+    seq = 0;
+    const cert = evaluateCertification(fakeResult([entry('MARKET_DATA', { symbol: 'AAPL' })]), true, { expectation: 'ABSTAIN_EXPLAINED' });
+    expect(cert.certification).toBe('FAIL');
+    expect(cert.reason).toMatch(/proved nothing/);
+  });
+  it('the TRADE expectation is unchanged: a scenario that must trade still FAILS with zero trades', () => {
+    seq = 0;
+    const tl = [entry('MARKET_DATA', { symbol: 'AAPL' }), ...abstain('t4', '[NO TRADE] x')];
+    expect(evaluateCertification(fakeResult(tl), true).certification).toBe('FAIL');
+  });
+});
