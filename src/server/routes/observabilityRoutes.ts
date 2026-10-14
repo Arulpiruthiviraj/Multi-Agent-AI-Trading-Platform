@@ -567,14 +567,19 @@ observabilityRouter.get('/rescue-outcomes', async (req, res) => {
   try {
     const hours = Math.min(parseFloat(String(req.query.hours || '24')) || 24, 24 * 30);
     const sinceIso = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-    const rows = await buildRescueOutcomeReport(sinceIso);
+    const rows = await guardHeavyReport('rescue-outcomes', () => buildRescueOutcomeReport(sinceIso));
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatRescueOutcomeReport(rows));
       return;
     }
     res.json({ ok: true, rows });
   } catch (e: any) {
-    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+    if (res.headersSent) return;
+    if (e instanceof HeavyReportRefusedError) {
+      res.status(429).json({ ok: false, refused: true, code: e.code, error: e.message });
+      return;
+    }
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -811,14 +816,19 @@ observabilityRouter.get('/discovery-challengers', async (req, res) => {
   try {
     const hours = Math.min(parseFloat(String(req.query.hours || '24')) || 24, 24 * 30);
     const sinceIso = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-    const report = await buildDiscoveryChallengerReport(sinceIso);
+    const report = await guardHeavyReport('discovery-challengers', () => buildDiscoveryChallengerReport(sinceIso));
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatDiscoveryChallengerReport(report));
       return;
     }
     res.json({ ok: true, ...report });
   } catch (e: any) {
-    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+    if (res.headersSent) return;
+    if (e instanceof HeavyReportRefusedError) {
+      res.status(429).json({ ok: false, refused: true, code: e.code, error: e.message });
+      return;
+    }
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -98,6 +98,18 @@ describe('rescueOutcomeReport', () => {
     expect(row.riskEngineReached).toBe(false);
     expect(row.riskApproved).toBe(false);
     expect(row.paperFillProduced).toBe(false);
+  });
+
+  it('REGRESSION 2026-10-14 (engine freeze): query count is constant, not proportional to the number of rescue grants', async () => {
+    const base = Date.now();
+    for (let i = 0; i < 300; i += 1) await seedRescueGrant(`FRZ${i % 25}`, base + i, 'renewal');
+    const spy = vi.spyOn(sqliteDb, 'prepare');
+    const rows = await mod.buildRescueOutcomeReport(new Date(base - 60_000).toISOString());
+    const prepared = spy.mock.calls.length;
+    spy.mockRestore();
+    expect(rows.filter((r) => r.symbol.startsWith('FRZ')).length).toBe(300);
+    // 1 grant query + 3 batched correlation queries (one chunk of <= 500 symbols); the old N+1 shape issued ~900 queries for 300 grants
+    expect(prepared).toBeLessThanOrEqual(8);
   });
 
   it('formatRescueOutcomeReport never crashes on zero rows', () => {

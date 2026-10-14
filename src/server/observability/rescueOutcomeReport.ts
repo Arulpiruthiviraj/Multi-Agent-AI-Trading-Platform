@@ -9,7 +9,7 @@
  */
 import { db } from '../db';
 import { observabilityEvents, riskAssessments, trades } from '../db/schema';
-import { and, eq, gte, asc } from 'drizzle-orm';
+import { and, eq, gte, asc, inArray } from 'drizzle-orm';
 import { classifyTradeEnvironment, isReplayTraceId } from '../research/organicPaper';
 
 export interface RescueOutcomeRow {
@@ -34,21 +34,39 @@ export async function buildRescueOutcomeReport(sinceIso: string): Promise<Rescue
     .where(and(eq(observabilityEvents.eventType, 'TEMPORARY_DATA_RESCUE_GRANTED'), gte(observabilityEvents.ts, since)))
     .orderBy(asc(observabilityEvents.ts));
 
+  // 2026-10-14 freeze fix (docs: ARGUS_REPORT_FREEZE_2026-10-14): this used to run THREE synchronous better-sqlite3 queries per grant
+  // (N+1). With thousands of renewals in a normal session that blocked the engine event loop for minutes (watchdog FROZEN_CONFIRMED at
+  // 12:54 ET). Now exactly three queries total, grouped in memory; per-grant semantics (follow-up window, replay exclusion) are unchanged.
+  const granted = events.filter((ev) => !!ev.symbol);
   const rows: RescueOutcomeRow[] = [];
-  for (const ev of events) {
-    if (!ev.symbol) continue;
+  if (granted.length === 0) return rows;
+  const symbols = [...new Set(granted.map((ev) => ev.symbol as string))];
+  const minGrantMs = granted[0].ts; // events are ordered ascending by ts
+  const minGrantIso = new Date(minGrantMs).toISOString();
+  const consensusBySymbol = new Map<string, Array<{ ts: number; payload: unknown }>>();
+  const riskBySymbol = new Map<string, Array<{ createdAt: string; approved: unknown; traceId: string | null }>>();
+  const fillsBySymbol = new Map<string, Array<any>>();
+  const CHUNK = 500; // stay well under SQLite's bound-variable limit
+  for (let i = 0; i < symbols.length; i += CHUNK) {
+    const chunk = symbols.slice(i, i + CHUNK);
+    const consensusAll = await db.select().from(observabilityEvents).where(
+      and(eq(observabilityEvents.eventType, 'CONSENSUS_TERMINAL_REASON'), inArray(observabilityEvents.symbol, chunk), gte(observabilityEvents.ts, minGrantMs)),
+    );
+    for (const r of consensusAll) { const k = r.symbol as string; (consensusBySymbol.get(k) ?? consensusBySymbol.set(k, []).get(k)!).push({ ts: r.ts, payload: r.payload }); }
+    const riskAll = await db.select().from(riskAssessments).where(and(inArray(riskAssessments.symbol, chunk), gte(riskAssessments.createdAt, minGrantIso)));
+    for (const r of riskAll) (riskBySymbol.get(r.symbol) ?? riskBySymbol.set(r.symbol, []).get(r.symbol)!).push(r as any);
+    const tradesAll = await db.select().from(trades).where(and(inArray(trades.symbol, chunk), eq(trades.status, 'FILLED'), gte(trades.timestamp, minGrantIso)));
+    for (const t of tradesAll) (fillsBySymbol.get(t.symbol) ?? fillsBySymbol.set(t.symbol, []).get(t.symbol)!).push(t);
+  }
+
+  for (const ev of granted) {
+    const symbol = ev.symbol as string;
     const grantedAtMs = ev.ts;
-    const windowEndIso = new Date(grantedAtMs + FOLLOWUP_WINDOW_MS).toISOString();
+    const windowEndMs = grantedAtMs + FOLLOWUP_WINDOW_MS;
+    const windowEndIso = new Date(windowEndMs).toISOString();
     const grantedAtIso = new Date(grantedAtMs).toISOString();
 
-    const consensusRows = await db.select().from(observabilityEvents).where(
-      and(
-        eq(observabilityEvents.eventType, 'CONSENSUS_TERMINAL_REASON'),
-        eq(observabilityEvents.symbol, ev.symbol),
-        gte(observabilityEvents.ts, grantedAtMs),
-      ),
-    );
-    const relevantConsensus = consensusRows.filter((r) => r.ts <= new Date(windowEndIso).getTime());
+    const relevantConsensus = (consensusBySymbol.get(symbol) ?? []).filter((r) => r.ts >= grantedAtMs && r.ts <= windowEndMs);
     let consensusApproved = false;
     for (const r of relevantConsensus) {
       try {
@@ -57,31 +75,22 @@ export async function buildRescueOutcomeReport(sinceIso: string): Promise<Rescue
       } catch { /* leave false */ }
     }
 
-    // Real defect found 2026-09-01: a rescue grant could be falsely correlated to an unrelated
-    // HISTORICAL_REPLAY run that happened to touch the same symbol within the 30-minute follow-up
-    // window (confirmed live: an AAPL/TSLA rescue grant showed RiskApproved/PaperFill=true purely
-    // from a same-symbol replay test run, not the rescue actually reaching RiskEngine organically).
-    const riskRowsAll = await db.select().from(riskAssessments).where(
-      and(eq(riskAssessments.symbol, ev.symbol), gte(riskAssessments.createdAt, grantedAtIso)),
-    );
-    const relevantRisk = riskRowsAll.filter((r) => r.createdAt <= windowEndIso && !isReplayTraceId(r.traceId));
-
-    const tradeRowsAll = await db.select().from(trades).where(
-      and(eq(trades.symbol, ev.symbol), eq(trades.status, 'FILLED'), gte(trades.timestamp, grantedAtIso)),
-    );
-    const relevantFills = tradeRowsAll.filter((t) => t.timestamp <= windowEndIso && classifyTradeEnvironment(t) !== 'REPLAY');
+    // Real defect found 2026-09-01: a rescue grant could be falsely correlated to an unrelated HISTORICAL_REPLAY run that touched the
+    // same symbol inside the follow-up window - replay traces and replay fills stay excluded.
+    const relevantRisk = (riskBySymbol.get(symbol) ?? []).filter((r) => r.createdAt >= grantedAtIso && r.createdAt <= windowEndIso && !isReplayTraceId(r.traceId as any));
+    const relevantFills = (fillsBySymbol.get(symbol) ?? []).filter((t) => t.timestamp >= grantedAtIso && t.timestamp <= windowEndIso && classifyTradeEnvironment(t) !== 'REPLAY');
 
     let reason = '';
     try { reason = JSON.parse(ev.payload as string).reasoning ?? ''; } catch { /* leave empty */ }
 
     rows.push({
-      symbol: ev.symbol,
+      symbol,
       grantedAt: grantedAtIso,
       reason,
       consensusRoundsObserved: relevantConsensus.length,
       consensusApproved,
       riskEngineReached: relevantRisk.length > 0,
-      riskApproved: relevantRisk.some((r) => r.approved),
+      riskApproved: relevantRisk.some((r) => !!r.approved),
       paperFillProduced: relevantFills.length > 0,
     });
   }
