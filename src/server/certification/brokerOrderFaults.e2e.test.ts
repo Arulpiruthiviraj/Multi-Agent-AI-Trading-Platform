@@ -168,6 +168,22 @@ describe('broker order-lifecycle faults (real spine, simulated broker + fault la
     expect((await sellTradesFor(symbol)).length).toBe(1);
   }, 180000);
 
+  it('UNKNOWN_AFTER_SUBMIT then a SECOND protective exit for the same symbol before reconciliation: no second broker order is placed (reconcile first, then decide)', async () => {
+    const { symbol, idea } = await runExit([{ filter: { side: 'SELL' }, behavior: { kind: 'UNKNOWN_AFTER_SUBMIT', executeUnderlying: true } }]);
+    await waitFor(async () => !!(await tradeFor(idea.traceId)), 45000, 'first trade row exists');
+    expect((await tradeFor(idea.traceId)).status).toBe('PENDING');
+    const placedBefore = faults!.underlyingPlaceCount();
+    const second = exitIdea(symbol);                       // PortfolioMonitor-style retry while the first outcome is still unknown
+    await chiefTrader.reviewIdea(second);
+    await new Promise((r) => setTimeout(r, 3000));
+    expect(faults!.underlyingPlaceCount()).toBe(placedBefore);          // nothing new reached the broker
+    expect((await sellTradesFor(symbol)).length).toBe(1);               // and no second SELL order row was submitted
+    await oms.reconcileStaleOrders();
+    await waitFor(async () => (await tradeFor(idea.traceId))?.status === 'FILLED', 45000, 'first order reconciled to FILLED');
+    expect(await brokerQty(symbol)).toBe(0);
+    expect((await sellTradesFor(symbol)).length).toBe(1);
+  }, 180000);
+
   it('UNKNOWN_AFTER_SUBMIT (broker never accepted it): after reconciliation the row is not FILLED, the position is intact, and still no second order was placed', async () => {
     const { symbol, idea, qty } = await runExit([{ filter: { side: 'SELL' }, behavior: { kind: 'UNKNOWN_AFTER_SUBMIT', executeUnderlying: false } }]);
     await waitFor(async () => !!(await tradeFor(idea.traceId)), 45000, 'trade row exists');

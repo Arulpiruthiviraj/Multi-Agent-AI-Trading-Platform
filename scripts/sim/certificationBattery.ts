@@ -69,6 +69,19 @@ const SUITE_AREAS: Record<string, string[]> = {
     'src/server/replay/synthetic/oracles/multiTradeMetrics.test.ts',
   ],
   SYMBOL_ROUTING: ['src/server/data/symbolFormat.test.ts'],
+  // Oct 13 incidents kept as permanent scenarios (each file reproduces the incident's failure mode and fails if the repair is removed):
+  //  1Min starvation (scheduler FAILURE MODE test), rejected protective exit then retry (exit-ownership cases), entries paused with active
+  //  protection (e2e), $1M broker vs $20K Argus capital (research-capital caps), main-thread DB pressure (off-thread + slow-SQL attribution),
+  //  bad symbols (routing). AI outage is exercised by every full synthetic session's AI_OUTAGE fault.
+  KNOWN_OCT13_INCIDENTS: [
+    'src/brokers/ibkrHistoricalScheduler.test.ts',
+    'src/server/continuous/portfolioIntel.exitOwnership.test.ts',
+    'src/server/certification/protectiveExitUnderPause.e2e.test.ts',
+    'src/server/engines/RiskEngine.researchCapitalCaps.test.ts',
+    'src/server/db/selectRowsOffThread.test.ts',
+    'src/server/db/slowSqlTiming.test.ts',
+    'src/server/data/symbolFormat.test.ts',
+  ],
 };
 
 function runSuite(files: string[]): { pass: boolean; summary: string; detail: string[] } {
