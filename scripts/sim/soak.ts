@@ -22,7 +22,7 @@ import { compareApprovalsToOracle } from '../../src/server/replay/synthetic/orac
 import { readBuyApprovals } from '../../src/server/replay/synthetic/oracles/riskAdapter';
 import { evaluateSoakInvariants, type SoakBounds } from '../../src/server/replay/synthetic/SoakInvariants';
 
-type Family = { id: string; scenarioId: string; faults?: (bars: number) => any[]; restartAtBar?: (bars: number) => number };
+type Family = { id: string; scenarioId: string; faults?: (bars: number) => any[]; restartAtBar?: (bars: number) => number; /** trading families run longer so opportunities, orders and exits actually occur */ bars?: number; symbols?: number };
 
 const THIN_LIQUIDITY = (bars: number) => [{ kind: 'PARTIAL_FILL_LIQUIDITY_CAP', fromBar: 0, toBar: bars, phase: 'OPEN', label: 'thin liquidity', params: { maxVolumeParticipationPct: 0.00002 } }];
 const FAMILIES: Family[] = [
@@ -32,11 +32,11 @@ const FAMILIES: Family[] = [
   { id: 'quiet', scenarioId: 'QUIET_OPEN' },
   { id: 'high-volume', scenarioId: 'HIGH_VOLATILITY_OPEN' },
   { id: 'losing', scenarioId: 'TRENDING_BEAR' },
-  { id: 'profitable-fixture', scenarioId: 'MULTI_TRADE_DAY' },
-  { id: 'broker-degraded', scenarioId: 'MULTI_TRADE_DAY', faults: THIN_LIQUIDITY },
-  { id: 'data-degraded', scenarioId: 'MULTI_TRADE_DAY', faults: (b) => [{ kind: 'FEED_INTERRUPTION', fromBar: Math.floor(b * 0.4), toBar: Math.floor(b * 0.4) + 8, phase: 'MORNING', label: 'feed interruption' }] },
-  { id: 'restart-heavy', scenarioId: 'MULTI_TRADE_DAY', restartAtBar: (b) => Math.floor(b / 2) },
-  { id: 'ai-off', scenarioId: 'MULTI_TRADE_DAY', faults: () => [{ kind: 'AI_OUTAGE', fromBar: 0, phase: 'OPEN', label: 'AI off for the whole session' }] },
+  { id: 'profitable-fixture', scenarioId: 'MULTI_TRADE_DAY', bars: 330, symbols: 10 },
+  { id: 'broker-degraded', scenarioId: 'MULTI_TRADE_DAY', bars: 300, faults: THIN_LIQUIDITY },
+  { id: 'data-degraded', scenarioId: 'MULTI_TRADE_DAY', bars: 300, faults: (b) => [{ kind: 'FEED_INTERRUPTION', fromBar: Math.floor(b * 0.4), toBar: Math.floor(b * 0.4) + 8, phase: 'MORNING', label: 'feed interruption' }] },
+  { id: 'restart-heavy', scenarioId: 'MULTI_TRADE_DAY', bars: 300, restartAtBar: (b) => Math.floor(b / 2) },
+  { id: 'ai-off', scenarioId: 'MULTI_TRADE_DAY', bars: 300, faults: () => [{ kind: 'AI_OUTAGE', fromBar: 0, phase: 'OPEN', label: 'AI off for the whole session' }] },
 ];
 
 const TECH = new Set(['AAPL', 'MSFT', 'NVDA', 'AMD', 'META', 'GOOGL', 'AMZN', 'TSLA']);
@@ -44,11 +44,11 @@ const TECH = new Set(['AAPL', 'MSFT', 'NVDA', 'AMD', 'META', 'GOOGL', 'AMZN', 'T
 function specFor(f: Family, seed: number, bars: number, outDir: string, idx: number): FullSessionSpec {
   const tag = `soak-${String(idx).padStart(3, '0')}-${f.id}-${seed}`;
   return {
-    simulationId: `${tag}-${Date.now().toString(36)}`, scenarioId: f.scenarioId, seed, speed: 60, durationMinutes: bars, symbols: 5,
-    faultPlan: f.faults ? f.faults(bars) : [], coldStartBootstrap: true, initialCash: 20_000,
+    simulationId: `${tag}-${Date.now().toString(36)}`, scenarioId: f.scenarioId, seed, speed: 60, durationMinutes: f.bars ?? bars, symbols: f.symbols ?? 5,
+    faultPlan: f.faults ? f.faults(f.bars ?? bars) : [], coldStartBootstrap: true, initialCash: 20_000,
     riskProfile: { maxPositionSizeUsd: 3_000, maxDailyLossUsd: 250 },
     requireTradeForCertification: false, outputPath: `${outDir}/${tag}.json`, label: `soak ${f.id} seed ${seed}`,
-    ...(f.restartAtBar ? { stopAfterBarIndex: f.restartAtBar(bars) } : {}),
+    ...(f.restartAtBar ? { stopAfterBarIndex: f.restartAtBar(f.bars ?? bars) } : {}),
   } as FullSessionSpec;
 }
 
