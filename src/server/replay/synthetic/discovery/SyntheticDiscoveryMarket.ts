@@ -185,6 +185,30 @@ export class SyntheticDiscoveryMarket {
     }).sort((a, b) => b.dollarVolume - a.dollarVolume);
   }
 
+  /** Published quote spread (bps) at `minute` - the PUBLIC feed. Liquid names are tight; thin/stale traps quote wide (what makes them traps). */
+  spreadBpsAt(symbol: string, minute: number): number {
+    const idx = this.symbols.indexOf(symbol);
+    const base = 3 + ((idx * 2654435761) % 10); // deterministic 3..12 bps
+    const spec = this.specs.find((x) => x.symbol === symbol);
+    if (!spec) return base;
+    const inWin = minute >= spec.startMin && minute < spec.startMin + spec.durationMin;
+    if ((spec.kind === 'LOW_LIQUIDITY_SPIKE' || spec.kind === 'TINY_VOLUME_HUGE_PCT') && inWin) return 140;
+    if (spec.kind === 'STALE_DATA' && minute >= spec.startMin) return 90;
+    if (spec.kind === 'GAP_AND_GO' && minute < 10) return base + 18;
+    return base;
+  }
+
+  /** Completed prior daily volumes (newest first) for ADV screens: prevVol with deterministic day-to-day variation. Never includes today. */
+  priorDailyVolumes(symbol: string, days: number): number[] {
+    const s = this.series.get(symbol); if (!s) return [];
+    const idx = this.symbols.indexOf(symbol);
+    return Array.from({ length: days }, (_, d) => Math.max(1, Math.round(s.prevVol * (0.8 + (((idx * 31 + d * 17) % 40) / 100)))));
+  }
+
+  /** Previous session close and today's open (public). */
+  prevCloseOf(symbol: string): number | undefined { return this.series.get(symbol)?.prevClose; }
+  openOf(symbol: string): number | undefined { return this.series.get(symbol)?.open; }
+
   // ---------------- ground truth: ORACLE / HARNESS ONLY ----------------
 
   /** Hidden specs. Production discovery code must never call or import this. */

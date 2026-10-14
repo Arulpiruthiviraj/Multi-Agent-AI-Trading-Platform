@@ -106,8 +106,36 @@ function httpsFetchWithSystemCa(urlStr: string, init?: RequestInit): Promise<Res
 }
 
 /** fetch with system CA store — used by Alpaca REST clients when default fetch fails TLS. */
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// SYNTHETIC EXTERNAL-PROVIDER SEAM (2026-10-14). Synthetic certification must run the REAL discovery stack (MarketUniverseScanner, SnapshotScanner,
+// OpportunityDiscovery ...) and replace only the external market-data boundary. In a synthetic process (SYNTHETIC_SIMULATION=true) every Alpaca REST
+// request is served by the installed provider; with NO provider installed the request is refused (HTTP 503, recorded) instead of reaching the real
+// network, so an unintended live call can never happen silently and can be asserted on. Production (flag unset) is byte-for-byte unchanged.
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+export type SyntheticAlpacaProvider = (url: string, init?: RequestInit) => Promise<Response>;
+let syntheticAlpacaProvider: SyntheticAlpacaProvider | null = null;
+const blockedSyntheticAlpacaCalls: string[] = [];
+
+function syntheticSeamAllowed(): boolean {
+  return process.env.SYNTHETIC_SIMULATION === 'true' || process.env.NODE_ENV === 'test' || !!process.env.VITEST;
+}
+
+export function installSyntheticAlpacaProvider(provider: SyntheticAlpacaProvider | null): void {
+  if (provider && !syntheticSeamAllowed()) throw new Error('installSyntheticAlpacaProvider is only permitted in a synthetic or test process');
+  syntheticAlpacaProvider = provider;
+}
+
+/** URLs refused because no synthetic provider was installed (certification asserts this is empty). */
+export function getBlockedSyntheticAlpacaCalls(): readonly string[] { return blockedSyntheticAlpacaCalls; }
+export function resetBlockedSyntheticAlpacaCalls(): void { blockedSyntheticAlpacaCalls.length = 0; }
+
 export async function alpacaFetch(input: string | URL, init?: RequestInit): Promise<Response> {
   const url = typeof input === 'string' ? input : input.toString();
+  if (syntheticAlpacaProvider) return syntheticAlpacaProvider(url, init);
+  if (process.env.SYNTHETIC_SIMULATION === 'true') {
+    blockedSyntheticAlpacaCalls.push(url);
+    return new Response('SYNTHETIC_NETWORK_BLOCKED', { status: 503, statusText: 'Synthetic mode: no provider installed' });
+  }
   try {
     return await fetch(url, init);
   } catch (err) {
