@@ -57,6 +57,7 @@ import { authorizeProductionOrder } from '../core/liveOrderAuthorization';
 import { resolveOmsPaperMode } from '../core/brokerEnvironment';
 import { isPaperTradingOnlyEnforced, normalizeTradingMode } from '../core/tradingModeEnv';
 import { getActiveReplaySession, notifyReplayOrder } from '../replay/ReplayContext';
+import { replayAwareNowMs } from '../core/replayAwareClock';
 import { releasePendingCapitalReservation } from '../engines/PendingCapitalReservations';
 import { insertIncrementalFill } from './fillLedger';
 import { prepareOrderPosition, latestPositionFill } from './positionFillEvidence';
@@ -74,14 +75,7 @@ import { marketDataWorker } from './MarketDataWorker';
  * matched (found by the 2026-10-13 synthetic lab). Outside replay this is exactly `new Date().toISOString()` - no live behaviour change.
  */
 function omsNowMs(): number {
-  try {
-    const session = getActiveReplaySession() as { clock?: { now(): number } } | null;
-    if (session?.clock && typeof session.clock.now === 'function') {
-      const t = session.clock.now();
-      if (Number.isFinite(t)) return t;
-    }
-  } catch { /* no active replay session */ }
-  return Date.now();
+  return replayAwareNowMs();
 }
 /**
  * Because order timestamps are replay-clock stamps inside a replay session, every AGE computed from them (follow-up min/max age,

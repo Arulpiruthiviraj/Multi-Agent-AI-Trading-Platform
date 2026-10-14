@@ -4,6 +4,7 @@
  */
 import { sqliteDb } from '../db';
 import { tradingSafety } from '../config/tradingSafety';
+import { replayAwareNowMs } from '../core/replayAwareClock';
 
 type Scope = { symbol: string; brokerId: string; environment: string };
 type Watermark = { id: number; quantity: number | null; averagePrice: number | null };
@@ -59,7 +60,7 @@ export function prepareOrderPosition(orderId: string, remote: { quantity: number
     // recovery paths use: a row older than crashRecoveryLookbackMs is definitively beyond
     // every recovery window, so it must not reserve the symbol. NULL submitted_at (legacy
     // rows) still blocks - unknown age fails closed.
-    const recoveryCutoffIso = new Date(Date.now() - tradingSafety.crashRecoveryLookbackMs).toISOString();
+    const recoveryCutoffIso = new Date(replayAwareNowMs() - tradingSafety.crashRecoveryLookbackMs).toISOString();
     const pending = sqliteDb.prepare(`SELECT id FROM trades WHERE symbol=? AND broker_id=?
       AND execution_environment=? AND id<>? AND status NOT IN
       ('FILLED','REJECTED','CANCELED','EXTERNAL_MANUAL','ARCHIVED_DIAGNOSTIC')
