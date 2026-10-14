@@ -872,6 +872,19 @@ export class SyntheticSessionEngine {
           await sleep(realMsBetweenBars);
         }
         await sleep(REAL_SETTLE_MS); // let the real async chain (debounce -> consensus -> risk -> OMS) drain
+        // End-of-session convergence (2026-10-14, soak finding): in production the OMS follow-up / crash-recovery workers keep running after the last
+        // bar and bring the ledger up to the broker's final truth; a session that ends the instant the last bar is processed measured the ledger MID-
+        // convergence (a thin-liquidity partial BUY completed by the broker on the final bar looked like an accounting mismatch). Give the real workers
+        // the same chance: advance the simulated clock past the follow-up minimum age, then run the real follow-up / reconciliation passes.
+        try {
+          this.clock.advance(this.clock.now() + 120_000);
+          const { oms: omsDrain } = await import('../../services/OrderManagement');
+          for (let k = 0; k < 4; k++) {
+            await omsDrain.followUpOpenOrders().catch(() => undefined);
+            await omsDrain.reconcileStaleOrders().catch(() => undefined);
+            await sleep(300);
+          }
+        } catch { /* convergence drain is best effort; the oracles judge the resulting state */ }
       } else {
         await sleep(500); // brief drain only - the resume half continues the session
       }
