@@ -207,7 +207,7 @@ export class PredictionOutcomeEvaluator {
   // see singleFlightInterval.ts's own doc comment for why. This protects the timer-driven cycle
   // AND any future direct/manual caller (an ops "re-run now" route, a test) uniformly, rather than
   // only the specific call path start() happens to use today.
-  private guard: SingleFlightGuard = createSingleFlightGuard((e) => console.error('[PredictionOutcomeEvaluator] Cycle failed', e));
+  private guard: SingleFlightGuard = createSingleFlightGuard((e) => console.error('[PredictionOutcomeEvaluator] Cycle failed', e), 'PredictionOutcomeEvaluator');
   private lastCycleStats: PredictionOutcomeEvaluatorCycleStats = EMPTY_CYCLE_STATS;
   // Scan positions are scheduling hints, never outcome watermarks. Wrap at the end
   // of pending work so unavailable rows are retried without monopolizing every page.

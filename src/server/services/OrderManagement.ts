@@ -145,8 +145,8 @@ export class OrderManagementService {
   // (broker round-trip + DB writes) is still in flight; they never change what a single tick does,
   // and never weaken the existing CAS protection. Coalesce (skip), never queue - the next scheduled
   // tick re-runs the same real check with nothing lost, matching singleFlightInterval.ts's contract.
-  private followUpGuard = createSingleFlightGuard((e) => console.error('[OMS] follow-up cycle failed', e));
-  private crashRecoveryGuard = createSingleFlightGuard((e) => console.error('[OMS] crash-recovery cycle failed', e));
+  private followUpGuard = createSingleFlightGuard((e) => console.error('[OMS] follow-up cycle failed', e), 'OMS.followUp');
+  private crashRecoveryGuard = createSingleFlightGuard((e) => console.error('[OMS] crash-recovery cycle failed', e), 'OMS.crashRecovery');
   /** Unrecognized-open-broker-order ids already warned/paused-for (2026-09-09 P0 sprint) - avoids re-pausing every CRASH_RECOVERY_INTERVAL_MS cycle for the same still-unresolved order. Bounded (2026-10-08 memory hunt) - see followUpWarned. */
   private unknownPendingOrderWarned = new BoundedWarnOnce();
 

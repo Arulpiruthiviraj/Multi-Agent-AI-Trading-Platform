@@ -88,7 +88,7 @@ class JavaQuantAdvisoryService {
   // round-robin cursor, not a correctness bug, but wasteful and adds unnecessary Java engine load
   // under a slow network condition - coalescing wastes nothing since the next tick just resumes
   // from the same cursor.
-  private tickGuard = createSingleFlightGuard(() => { /* analyzeSymbol already fails closed internally; defense in depth */ });
+  private tickGuard = createSingleFlightGuard(() => { /* analyzeSymbol already fails closed internally; defense in depth */ }, 'JavaQuantAdvisory');
 
   start(): void {
     if (this.intervalId || !isQuantJavaCoreEnabled()) return;

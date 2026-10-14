@@ -29,7 +29,7 @@ export class MissedOpportunityEvaluator {
   private intervalId: NodeJS.Timeout | null = null;
   // P1-A remediation (2026-09-14) - see PredictionOutcomeEvaluator.ts's identical comment: the
   // guard is intrinsic to evaluatePending() itself, protecting every caller, not just the timer.
-  private guard: SingleFlightGuard = createSingleFlightGuard((e) => console.error('[MissedOpportunityEvaluator] Cycle failed', e));
+  private guard: SingleFlightGuard = createSingleFlightGuard((e) => console.error('[MissedOpportunityEvaluator] Cycle failed', e), 'MissedOpportunityEvaluator');
 
   start() {
     if (this.intervalId) return;

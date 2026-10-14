@@ -14,6 +14,8 @@
  * obsolete outcome evaluations").
  */
 
+import { runWithDbCaller } from '../db/dbCallerContext';
+
 export interface SingleFlightIntervalMetrics {
   /** Every tick the interval timer fired, whether or not it actually ran fn. */
   totalScheduled: number;
@@ -59,7 +61,7 @@ export interface SingleFlightGuard {
   getMetrics(): SingleFlightIntervalMetrics;
 }
 
-export function createSingleFlightGuard(onError?: (e: unknown) => void): SingleFlightGuard {
+export function createSingleFlightGuard(onError?: (e: unknown) => void, name?: string): SingleFlightGuard {
   let running = false;
   const metrics: SingleFlightIntervalMetrics = {
     totalScheduled: 0,
@@ -85,7 +87,7 @@ export function createSingleFlightGuard(onError?: (e: unknown) => void): SingleF
       const startedAt = Date.now();
       metrics.lastRunStartedAt = new Date(startedAt).toISOString();
       try {
-        await fn();
+        await (name ? runWithDbCaller(`guard:${name}`, fn) : fn());
         metrics.totalRun += 1;
       } catch (e) {
         metrics.totalErrors += 1;

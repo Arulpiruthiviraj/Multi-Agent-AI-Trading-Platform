@@ -431,7 +431,7 @@ export class QuantSignalAgent {
   // runCycle() storm the same rate-limited API and double-evaluate symbols concurrently. Pure
   // addition: coalesces (skips), never queues; downstream duplicate-signal/cooldown gates were
   // already the real safety net for any idea this could double-emit - this only removes wasted work.
-  private cycleGuard = createSingleFlightGuard((e) => console.error('[QuantSignalAgent] Cycle failed', e));
+  private cycleGuard = createSingleFlightGuard((e) => console.error('[QuantSignalAgent] Cycle failed', e), 'QuantSignalAgent');
 
   private isEnabled(): boolean {
     return isRuntimeFlagEnabled('QUANT_ENGINE_ENABLED');

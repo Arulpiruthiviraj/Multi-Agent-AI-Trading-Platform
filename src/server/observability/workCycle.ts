@@ -11,6 +11,7 @@
 import { performance } from 'node:perf_hooks';
 import { tradingSafety } from '../config/tradingSafety';
 import { observeSafe, structuredLogger } from './StructuredLogger';
+import { runWithDbCaller } from '../db/dbCallerContext';
 
 export interface WorkCycleRecord {
   name: string;
@@ -73,7 +74,7 @@ export async function timedWorkCycle<T>(name: string, fn: () => Promise<T>, deps
   const c0 = deps.cpuMs();
   let outcome: 'OK' | 'ERROR' = 'OK';
   try {
-    return await fn();
+    return await runWithDbCaller(`cycle:${name}`, fn);
   } catch (e) {
     outcome = 'ERROR';
     throw e;

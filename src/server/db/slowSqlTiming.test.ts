@@ -46,3 +46,25 @@ describe('slowSqlTiming', () => {
     expect(rec.callerFrames.join('\n')).not.toMatch(/node_modules|slowSqlTiming\.ts/);
   });
 });
+
+describe('slow SQL attribution (2026-10-13): caller label and row count', () => {
+  it('records the active workload label and the number of rows a slow SELECT returned', async () => {
+    const Database = (await import('better-sqlite3')).default;
+    const { instrumentSlowSql, getRecentSlowSql } = await import('./slowSqlTiming');
+    const { runWithDbCaller } = await import('./dbCallerContext');
+    const db = new Database(':memory:');
+    db.exec('CREATE TABLE t(a INTEGER); WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<2000) INSERT INTO t SELECT x FROM c;');
+    instrumentSlowSql(db, 0); // threshold 0 -> every statement is "slow"
+    await runWithDbCaller('guard:TestWorkload', async () => {
+      await Promise.resolve();
+      db.prepare('SELECT a FROM t').all();
+    });
+    const rec = getRecentSlowSql().filter((r) => r.table === 't').pop()!;
+    expect(rec.caller).toBe('guard:TestWorkload');
+    expect(rec.rowCount).toBe(2000);
+    db.prepare('SELECT a FROM t WHERE a=1').get();
+    const unlabeled = getRecentSlowSql().filter((r) => r.table === 't').pop()!;
+    expect(unlabeled.caller).toBeNull();
+    expect(unlabeled.rowCount).toBeNull();
+  });
+});

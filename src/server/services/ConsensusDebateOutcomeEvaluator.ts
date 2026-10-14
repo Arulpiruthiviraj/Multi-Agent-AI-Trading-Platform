@@ -32,7 +32,7 @@ export class ConsensusDebateOutcomeEvaluator {
   private intervalId: NodeJS.Timeout | null = null;
   // P1-A remediation (2026-09-14) - see PredictionOutcomeEvaluator.ts's identical comment: the
   // guard is intrinsic to evaluatePending() itself, protecting every caller, not just the timer.
-  private guard: SingleFlightGuard = createSingleFlightGuard((e) => console.error('[ConsensusDebateOutcomeEvaluator] Cycle failed', e));
+  private guard: SingleFlightGuard = createSingleFlightGuard((e) => console.error('[ConsensusDebateOutcomeEvaluator] Cycle failed', e), 'ConsensusDebateOutcomeEvaluator');
 
   start() {
     if (this.intervalId) return;

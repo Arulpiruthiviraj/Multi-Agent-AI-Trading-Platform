@@ -8,8 +8,14 @@
  * Output: console.warn + a bounded in-memory ring (read by getRecentSlowSql()); the structured logger is
  * loaded lazily to avoid an import cycle with the observability store (which persists via this same handle).
  */
+import { currentDbCaller } from './dbCallerContext';
+
 export interface SlowSqlRecord {
   atMs: number; durationMs: number; method: string; sql: string;
+  /** Workload label (periodic cycle / HTTP request / guard) active when the statement was issued; null if unlabeled. */
+  caller: string | null;
+  /** Rows returned for all()/values(); null for get/run. A multi-thousand-row result explains a long synchronous block. */
+  rowCount: number | null;
   /** Stable grouping key computed from the FULL statement (before the 400-char truncation): `<verb> <table> #<hash>`. */
   signature: string;
   table: string | null;
@@ -64,11 +70,13 @@ export function instrumentSlowSql(sqlite: any, thresholdMs: number): void {
       if (typeof orig !== 'function') continue;
       (stmt as any)[method] = function (...args: any[]) {
         const t0 = performance.now();
+        let result: unknown;
         try {
-          return orig.apply(this, args);
+          result = orig.apply(this, args);
+          return result;
         } finally {
           const ms = performance.now() - t0;
-          if (ms >= thresholdMs) record(method, String(source), ms);
+          if (ms >= thresholdMs) record(method, String(source), ms, Array.isArray(result) ? result.length : null);
         }
       };
     }
@@ -76,12 +84,13 @@ export function instrumentSlowSql(sqlite: any, thresholdMs: number): void {
   };
 }
 
-function record(method: string, source: string, ms: number): void {
+function record(method: string, source: string, ms: number, rowCount: number | null = null): void {
   try {
     const sig = sqlSignature(source);
     const rec: SlowSqlRecord = {
       atMs: Date.now(), durationMs: Math.round(ms), method, sql: source.replace(/\s+/g, ' ').slice(0, 400),
       signature: sig.signature, table: sig.table, callerFrames: callerFramesFromStack(new Error().stack),
+      caller: currentDbCaller(), rowCount,
     };
     ring.push(rec);
     if (ring.length > RING_MAX) ring.shift();
@@ -89,7 +98,7 @@ function record(method: string, source: string, ms: number): void {
     void import('../observability/StructuredLogger').then(({ observeSafe, structuredLogger }) =>
       observeSafe(() => structuredLogger.warn('slow_sql_statement', {
         category: 'SYSTEM', eventType: 'SLOW_SQL_STATEMENT', durationMs: rec.durationMs, method, sql: rec.sql,
-        signature: rec.signature, table: rec.table, callerFrames: rec.callerFrames,
+        signature: rec.signature, table: rec.table, callerFrames: rec.callerFrames, caller: rec.caller, rowCount: rec.rowCount,
         reasoning: `A synchronous SQLite ${method} blocked the event loop for ${rec.durationMs}ms.`,
       }), 'slowSqlTiming')).catch(() => undefined);
   } catch { /* instrumentation must never throw */ }

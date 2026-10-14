@@ -72,6 +72,7 @@
 import { kronosEngine } from "./src/server/engines/kronos/KronosEngine";
 import { eq } from 'drizzle-orm';
 import { db, sqliteDb } from './src/server/db/index';
+import { runWithDbCaller } from './src/server/db/dbCallerContext';
 import * as schema from './src/server/db/schema';
 
 import { EncryptionService } from "./src/server/core/EncryptionService";
@@ -564,6 +565,8 @@ if (fs.existsSync(SECRETS_FILE_IGNORED)) {
   // (504) instead of holding a browser connection slot forever. `res.headersSent` guards against
   // racing a response that finishes right as the timer fires.
   app.use('/api', (req, res, next) => {
+    // 2026-10-13: label every DB statement issued while serving this request so a slow SELECT names its route
+    const dbCallerLabel = `http:${req.method} ${req.path.split('/').slice(0, 5).join('/')}`.slice(0, 120);
     const timer = setTimeout(() => {
       if (!res.headersSent) {
         console.error(`[server] Request timeout (15000ms) on ${req.method} ${req.path} - responding 504 instead of holding the connection.`);
@@ -572,7 +575,7 @@ if (fs.existsSync(SECRETS_FILE_IGNORED)) {
     }, 15000);
     res.once('finish', () => clearTimeout(timer));
     res.once('close', () => clearTimeout(timer));
-    next();
+    runWithDbCaller(dbCallerLabel, () => next());
   });
 
   // Credentialed CORS for remote mobile (Tailscale / LAN) when Origin differs from host.
