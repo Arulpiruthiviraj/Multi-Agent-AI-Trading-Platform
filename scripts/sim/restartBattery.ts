@@ -37,9 +37,9 @@ const CASES: CaseDef[] = [
 
 const TECH = new Set(['AAPL', 'MSFT', 'NVDA', 'AMD', 'META', 'GOOGL', 'AMZN', 'TSLA']);
 
-async function runCase(c: CaseDef, seed: number, outDir: string) {
+async function runCase(c: CaseDef, seed: number, outDir: string, symbols: number) {
   const tag = `${c.id.toLowerCase()}-${seed}`;
-  const first = buildMultiTradeDaySpec(`${outDir}/${tag}-half1.json`, seed);
+  const first = buildMultiTradeDaySpec(`${outDir}/${tag}-half1.json`, seed, symbols);
   first.simulationId = `restart-battery-${tag}-${Date.now().toString(36)}`;
   first.requireTradeForCertification = null;
   first.label = `restart battery ${c.id}: first half`;
@@ -84,13 +84,14 @@ async function runCase(c: CaseDef, seed: number, outDir: string) {
 async function main() {
   const outDir = (process.argv.find((a) => a.startsWith('--out=')) ?? '--out=/tmp/restart-battery').slice(6);
   const seed = Number((process.argv.find((a) => a.startsWith('--seed=')) ?? '--seed=11').slice(7));
+  const symbols = Number((process.argv.find((a) => a.startsWith('--symbols=')) ?? '--symbols=5').slice(10));
   const only = (process.argv.find((a) => a.startsWith('--cases=')) ?? '').slice(8).split(',').filter(Boolean);
   fs.mkdirSync(outDir, { recursive: true });
   const results = [];
   for (const c of CASES) {
     if (only.length && !only.includes(c.id)) continue;
     console.log(`\n##### restart case ${c.id} (seed ${seed})`);
-    results.push(await runCase(c, seed, outDir));
+    results.push(await runCase(c, seed, outDir, symbols));
     fs.writeFileSync(`${outDir}/restart-battery.json`, JSON.stringify(results, null, 2));
   }
   console.log('\n=== restart battery ===');
