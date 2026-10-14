@@ -1035,6 +1035,8 @@ export const COMMAND_HELP: Record<string, string> = {
   'health': 'Usage: argus health [--json]\nFull health report: runtime, broker, AI providers, Kronos/Chronos, QuantCore. --json prints pure JSON for scripting.',
   'ready': 'Usage: argus ready\nLive-readiness snapshot (paper/live posture, gates).',
   'wait-ready': 'Usage: argus wait-ready [--timeout-ms=N]\nBlock until the API answers /health (default timeout 240s). Prints progress.',
+  'strategy-lifecycle-baseline': 'Usage: argus strategy-lifecycle-baseline --reason="..." [--apply] [--strategy=ID ...]
+Record UNTESTED lifecycle baselines (NO authority; restores consensus routing) for CORE strategies that have no record. Dry-run unless --apply. Never overwrites an existing record; never writes VALIDATED/CHAMPION.',
   'resume': 'Usage: argus resume [--reason="..."]\nResume autonomous trading (operator-controlled; records the reason).',
   'pause': 'Usage: argus pause [--reason="..."]\nPause autonomous trading (records the reason).',
   'cover-short': 'Usage: argus cover-short <SYMBOL>\nOperator-directed BUY to cover an existing short, through RiskEngine gate 26 (close_short_position_exists) - clamps to exactly the short\'s quantity. Refuses if the symbol is not actually short. Requires TRADING_ENABLED (same gate 1 as any order).',
@@ -1539,6 +1541,18 @@ const commands: Record<string, () => Promise<void>> = {
     // anything in this codebase). Pass --reason="..." to record why; defaults to a generic reason.
     const reason = resumeReasonFromArgv(process.argv.slice(3), 'Operator resume via argus-cli');
     console.log(JSON.stringify(await resumeTrading(reason), null, 2));
+  },
+  async 'strategy-lifecycle-baseline'() {
+    const argv = process.argv.slice(3);
+    const reasonArg = argv.find((a) => a.startsWith('--reason='));
+    const strategyIds = argv.filter((a) => a.startsWith('--strategy=')).map((a) => a.slice('--strategy='.length));
+    const apply = argv.includes('--apply');
+    if (!reasonArg) { console.error('strategy-lifecycle-baseline: --reason="..." is required (min 10 chars).'); process.exit(1); }
+    console.log(JSON.stringify(await fetchJson('/api/v1/system/strategy-lifecycle-baseline', {
+      method: 'POST',
+      body: JSON.stringify({ reason: reasonArg.slice('--reason='.length), apply, ...(strategyIds.length ? { strategyIds } : {}) }),
+    }), null, 2));
+    if (!apply) console.log('DRY RUN only - nothing written. Re-run with --apply to record.');
   },
   async pause() {
     const reasonArg = process.argv.slice(3).find((a) => a.startsWith('--reason='));

@@ -114,6 +114,30 @@ systemRouter.post("/system/resume", tradingLimiter, async (req: Request & { acto
   }
 });
 
+/**
+ * Operator lifecycle baseline (2026-10-14, owner-authorized "Baseline CORE 5 only"). Records UNTESTED rows (NO authority) for CORE strategies that
+ * have no lifecycle record, restoring their consensus routing. See quant/strategies/lifecycleBaseline.ts for the hard guarantees. dryRun defaults TRUE.
+ */
+systemRouter.post("/system/strategy-lifecycle-baseline", tradingLimiter, async (req: Request & { actor?: string }, res: Response) => {
+  try {
+    const { recordUntestedBaselines, LifecycleBaselineRefusedError } = await import('../quant/strategies/lifecycleBaseline');
+    try {
+      const result = await recordUntestedBaselines({
+        strategyIds: Array.isArray(req.body?.strategyIds) ? req.body.strategyIds.map(String) : undefined,
+        reason: String(req.body?.reason ?? ''),
+        actor: req.actor || 'unknown',
+        dryRun: req.body?.apply !== true,
+      });
+      res.json({ ok: true, ...result });
+    } catch (e: any) {
+      if (e instanceof LifecycleBaselineRefusedError) { res.status(400).json({ ok: false, code: e.code, error: e.message }); return; }
+      throw e;
+    }
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 systemRouter.get("/system/trading-state", (req: Request, res: Response) => {
   res.json({
     tradingState: tradingEngine.state.tradingState,
