@@ -1,0 +1,176 @@
+{
+  "sha": "b8962ace94cbd1081ee1967a87e2e66b6a0c39bd",
+  "generatedAt": "2026-10-14T22:00:32.182Z",
+  "restoredClean": true,
+  "results": [
+    {
+      "id": "M1",
+      "defect": "Routine rescue renewal extends eviction immunity again (Oct 14 rescue pinning)",
+      "targetedTests": [
+        "src/server/services/MarketDataWorker.test.ts"
+      ],
+      "verdict": "CAUGHT",
+      "exit": 1,
+      "seconds": 3.9,
+      "failures": [
+        "× REGRESSION 2026-10-14 (rescue pinning): routine renewals of an already-streaming symbol never create or extend eviction immunity, so it stays evictable 20ms",
+        "× REPRODUCTION of the production pinning: many routine-renewed dynamic symbols stay evictable under the fix, and are ALL pinned under the legacy behavior 29ms"
+      ]
+    },
+    {
+      "id": "M2",
+      "defect": "Dwell protection released after 10 ticks again (CCI/CIEN premature eviction)",
+      "targetedTests": [
+        "src/server/services/MarketDataWorker.test.ts"
+      ],
+      "verdict": "CAUGHT",
+      "exit": 1,
+      "seconds": 5,
+      "failures": [
+        "× REGRESSION 2026-10-14 (Oct 9 CCI): a freshly promoted symbol that already has >= minDynamicDwellTicks ticks stays dwell-protected for the full minDynamicDwell"
+      ]
+    },
+    {
+      "id": "M3",
+      "defect": "Held-position streams become eviction candidates",
+      "targetedTests": [
+        "src/server/services/MarketDataWorker.test.ts"
+      ],
+      "verdict": "CAUGHT",
+      "exit": 1,
+      "seconds": 3.6,
+      "failures": [
+        "× held-position protection (2026-10-14): a symbol backing an open position is never an eviction candidate, and is evictable again once flat 10ms"
+      ]
+    },
+    {
+      "id": "M4",
+      "defect": "Operator report routes lose the heavy-report guard (diagnostic burst freeze)",
+      "targetedTests": [
+        "src/server/observability/operatorReportGuard.test.ts"
+      ],
+      "verdict": "CAUGHT",
+      "exit": 1,
+      "seconds": 4.4,
+      "failures": [
+        "× the router mounts operatorReportGuard on exactly the declared operator paths (and individually guarded routes are not double-wrapped) 11ms"
+      ]
+    },
+    {
+      "id": "M5",
+      "defect": "Score-edge non-promotions fall through to OTHER again (unexplained bucket)",
+      "targetedTests": [
+        "src/server/continuous/SubscriptionPriorityExplainer.test.ts"
+      ],
+      "verdict": "CAUGHT",
+      "exit": 1,
+      "seconds": 2.2,
+      "failures": [
+        "× maps the hysteresis/score-edge branch to SCORE_EDGE_NOT_MET, not OTHER 12ms",
+        "× maps every reason the explainer can emit to a specific code; none falls through to OTHER 4ms"
+      ]
+    },
+    {
+      "id": "M6",
+      "defect": "Agent calibration ignored: raw confidence used as decision confidence (the synthetic-vs-production mismatch)",
+      "targetedTests": [
+        "src/server/services/ChiefTraderAgent.productionCalibration.test.ts"
+      ],
+      "verdict": "CAUGHT",
+      "exit": 1,
+      "seconds": 10.4,
+      "failures": [
+        "× PRODUCTION_OCT14: the best realistic agreeing pair (Technical + Kronos, both BUY with raw 0.85) is correctly REJECTED below 0.75 44ms"
+      ]
+    },
+    {
+      "id": "M7",
+      "defect": "Missing lifecycle record silently treated as a recorded state (no NO_LIFECYCLE_RECORD)",
+      "targetedTests": [
+        "src/server/quant/QuantLifecycleMatrix.test.ts",
+        "src/server/quant/QuantStrategyAuthorization.test.ts"
+      ],
+      "verdict": "CAUGHT",
+      "exit": 1,
+      "seconds": 4.8,
+      "failures": [
+        "× a strategy with no lifecycle record at all is NOT_AUTHORIZED (NO_LIFECYCLE_RECORD) — missing state is never silently UNTESTED 14ms",
+        "× a strategy with NO lifecycle record is NOT_AUTHORIZED / NO_LIFECYCLE_RECORD (terminal), never silently UNTESTED 8ms"
+      ]
+    },
+    {
+      "id": "M8",
+      "defect": "Abstention fixture accepts an approval (production-fidelity check removed)",
+      "targetedTests": [
+        "src/server/replay/synthetic/CertificationGate.test.ts"
+      ],
+      "verdict": "CAUGHT",
+      "exit": 1,
+      "seconds": 1.5,
+      "failures": [
+        "× FAILS when the fixture produces an approval (it no longer reproduces the production conditions it claims to) 6ms"
+      ]
+    },
+    {
+      "id": "M9",
+      "defect": "Synthetic session no longer verifies required production flags / credential absence",
+      "targetedTests": [
+        "scripts/sim/sessionEnvGuard.test.ts"
+      ],
+      "verdict": "CAUGHT",
+      "exit": 1,
+      "seconds": 1.6,
+      "failures": [
+        "× refuses a session whose RESOLVED config lacks a required production-equivalent flag (the exact seed-33 failure) 6ms"
+      ]
+    },
+    {
+      "id": "M10",
+      "defect": "Artifact cleanup stops protecting certification evidence",
+      "targetedTests": [
+        "scripts/sim/artifactLifecycle.test.ts"
+      ],
+      "verdict": "CAUGHT",
+      "exit": 1,
+      "seconds": 1.2,
+      "failures": [
+        "× policy comes from config and protects certification evidence prefixes 8ms",
+        "× cleanup removes stale unit-test leftovers but NEVER a protected evidence database, a recent file, or an unrelated file 6ms",
+        "× teardown mode (createdSince) only touches this run's leftovers and still never touches protected evidence 3ms"
+      ]
+    },
+    {
+      "id": "M11",
+      "defect": "Lifecycle authority granted to DEGRADED strategies (revocation ignored)",
+      "targetedTests": [
+        "src/server/quant/QuantLifecycleMatrix.test.ts",
+        "src/server/quant/QuantStrategyAuthorization.test.ts"
+      ],
+      "verdict": "CAUGHT",
+      "exit": 1,
+      "seconds": 3.6,
+      "failures": [
+        "× DEGRADED lifecycle is terminally NOT_ELIGIBLE (never re-routed to consensus) 6ms",
+        "× every runtime state maps to exactly its documented authority, reason and emission eligibility; only VALIDATED/CHAMPION ever authorize 18ms",
+        "× state survives a restart: the lifecycle is read from the database on every resolution (no in-memory authority cache) 3ms"
+      ]
+    },
+    {
+      "id": "M12",
+      "defect": "Exploration-health N+1 queries return (per-promotion synchronous query)",
+      "targetedTests": [
+        "src/server/observability/rescueOutcomeReport.test.ts"
+      ],
+      "verdict": "CAUGHT",
+      "exit": 1,
+      "seconds": 2.6,
+      "failures": [
+        "× correctly correlates a rescue that led all the way to a real consensus approval, RiskEngine approval, and a paper fill 10ms",
+        "× REGRESSION 2026-10-14 (engine freeze): query count is constant, not proportional to the number of rescue grants 108ms"
+      ]
+    }
+  ],
+  "caught": 12,
+  "missed": 0,
+  "notApplicable": 0
+}
