@@ -1,0 +1,10 @@
+{
+  "_comment": "Accelerated multi-session soak bounds (2026-10-13). Evidence class SYNTHETIC_SEEDED / CERTIFICATION_FIXTURE_ONLY. Growth bounds compare the first post-warm-up resource sample (bar >= warmupBars) with the end-of-session sample inside ONE session child process. They are reviewed starting values grounded in the first observed runs (see docs/architecture/ARGUS_ARCHITECTURE.md 2026-10-13 evening); tighten from evidence, never loosen to make a session pass.",
+  "warmupBars": 10,
+  "maxListenerGrowth": 10,
+  "maxTimerGrowth": 25,
+  "maxHeapGrowthMb": 250,
+  "maxOpenOrdersAtEnd": 0,
+  "maxReservedNotionalAtEndUsd": 0.01,
+  "maxEventLoopMaxMs": 10000
+}
