@@ -1,0 +1,3181 @@
+{
+ "snapshot": "argus_oct14_postclose_1792008436014.db",
+ "observedMoverCount": 1055,
+ "top": [
+  {
+   "symbol": "DOCN",
+   "maxGapPct": -13.72,
+   "price": 109.66,
+   "prevClose": 128.17,
+   "at": "16:10:41Z",
+   "dollarVolMax": 24743517,
+   "spreadBpsMin": 23.7,
+   "rvolMax": null,
+   "adv": 2481420,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 7,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "14:40:00Z",
+   "promoted": {
+    "first": "14:51:36Z",
+    "n": 3
+   },
+   "subscribeOutcome": {
+    "first": "14:51:36Z",
+    "n": 55
+   },
+   "evicted": {
+    "first": "15:47:12Z",
+    "n": 3
+   },
+   "notPromoted": {
+    "first": "19:52:04Z",
+    "n": 1
+   },
+   "technical": {
+    "first": "14:53:35Z",
+    "n": 327
+   },
+   "quantAssessed": {
+    "first": "14:53:35Z",
+    "n": 59
+   },
+   "ideas": {
+    "first": "14:53:34Z",
+    "n": 161
+   },
+   "consensus": {
+    "first": "14:53:34Z",
+    "n": 74
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 69,
+    "AGENT_DATA_UNAVAILABLE": 4,
+    "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 1
+   }
+  },
+  {
+   "symbol": "SKYD",
+   "maxGapPct": -12.86,
+   "price": 6.675,
+   "prevClose": 9.26,
+   "at": "15:39:56Z",
+   "dollarVolMax": 21692770,
+   "spreadBpsMin": 13.5,
+   "rvolMax": null,
+   "adv": 34470672,
+   "sources": "MARKET_MOVER,BROAD_UNIVERSE,NEWS",
+   "admitted": 85,
+   "filtered": 36,
+   "filterReasons": {
+    "DOLLAR_VOLUME": 17,
+    "RANK_CAP": 13,
+    "NO_SNAPSHOT_DATA": 4,
+    "ADV_DATA_UNAVAILABLE": 2
+   },
+   "firstSeen": "13:34:51Z",
+   "promoted": {
+    "first": "15:55:22Z",
+    "n": 1
+   },
+   "subscribeOutcome": {
+    "first": "15:55:22Z",
+    "n": 26
+   },
+   "evicted": {
+    "first": "16:48:09Z",
+    "n": 1
+   },
+   "notPromoted": {
+    "first": "17:55:47Z",
+    "n": 6
+   },
+   "technical": {
+    "first": "15:57:19Z",
+    "n": 161
+   },
+   "quantAssessed": {
+    "first": "15:57:20Z",
+    "n": 30
+   },
+   "ideas": {
+    "first": "15:57:13Z",
+    "n": 63
+   },
+   "consensus": {
+    "first": "15:57:13Z",
+    "n": 38
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 35,
+    "AGENT_DATA_UNAVAILABLE": 3
+   }
+  },
+  {
+   "symbol": "VSTM",
+   "maxGapPct": 11.76,
+   "price": 8.93,
+   "prevClose": 7.45,
+   "at": "15:10:01Z",
+   "dollarVolMax": 12826220,
+   "spreadBpsMin": 11.3,
+   "rvolMax": null,
+   "adv": 2568969,
+   "sources": "MARKET_MOVER,BROAD_UNIVERSE",
+   "admitted": 23,
+   "filtered": 20,
+   "filterReasons": {
+    "DOLLAR_VOLUME": 8,
+    "RANK_CAP": 12
+   },
+   "firstSeen": "13:54:52Z",
+   "promoted": {
+    "first": "14:40:18Z",
+    "n": 2
+   },
+   "subscribeOutcome": {
+    "first": "14:40:18Z",
+    "n": 33
+   },
+   "evicted": {
+    "first": "15:25:18Z",
+    "n": 2
+   },
+   "notPromoted": {
+    "first": "15:55:22Z",
+    "n": 2
+   },
+   "technical": {
+    "first": "14:41:15Z",
+    "n": 155
+   },
+   "quantAssessed": {
+    "first": "14:41:15Z",
+    "n": 37
+   },
+   "ideas": {
+    "first": "14:41:14Z",
+    "n": 70
+   },
+   "consensus": {
+    "first": "14:41:15Z",
+    "n": 40
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 39,
+    "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 1
+   }
+  },
+  {
+   "symbol": "BSP",
+   "maxGapPct": 11.43,
+   "price": 56.83,
+   "prevClose": 37.96,
+   "at": "17:10:18Z",
+   "dollarVolMax": 46763899,
+   "spreadBpsMin": 18.5,
+   "rvolMax": null,
+   "adv": 3113202,
+   "sources": "MARKET_MOVER,BROAD_UNIVERSE",
+   "admitted": 9,
+   "filtered": 65,
+   "filterReasons": {
+    "DOLLAR_VOLUME": 1,
+    "SPREAD": 64
+   },
+   "firstSeen": "13:34:51Z",
+   "promoted": {
+    "first": "15:25:18Z",
+    "n": 3
+   },
+   "subscribeOutcome": {
+    "first": "15:25:18Z",
+    "n": 27
+   },
+   "evicted": {
+    "first": "16:08:39Z",
+    "n": 4
+   },
+   "notPromoted": {
+    "first": "18:11:29Z",
+    "n": 4
+   },
+   "technical": {
+    "first": "15:26:42Z",
+    "n": 148
+   },
+   "quantAssessed": {
+    "first": "15:27:10Z",
+    "n": 31
+   },
+   "ideas": {
+    "first": "15:27:09Z",
+    "n": 62
+   },
+   "consensus": {
+    "first": "15:27:09Z",
+    "n": 39
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 39
+   }
+  },
+  {
+   "symbol": "CRWV",
+   "maxGapPct": -10.33,
+   "price": 64.51,
+   "prevClose": 77.8,
+   "at": "18:10:28Z",
+   "dollarVolMax": 140612280,
+   "spreadBpsMin": 3.1,
+   "rvolMax": null,
+   "adv": 30902419,
+   "sources": "BROAD_UNIVERSE,NEWS",
+   "admitted": 32,
+   "filtered": 16,
+   "filterReasons": {
+    "SPREAD": 12,
+    "NO_SNAPSHOT_DATA": 4
+   },
+   "firstSeen": "13:39:46Z",
+   "promoted": {
+    "first": "13:40:05Z",
+    "n": 6
+   },
+   "subscribeOutcome": {
+    "first": "13:40:05Z",
+    "n": 151
+   },
+   "evicted": {
+    "first": "14:08:38Z",
+    "n": 5
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": "13:40:11Z",
+    "n": 767
+   },
+   "quantAssessed": {
+    "first": "13:41:12Z",
+    "n": 173
+   },
+   "ideas": {
+    "first": "13:41:10Z",
+    "n": 385
+   },
+   "consensus": {
+    "first": "13:41:10Z",
+    "n": 246
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 243,
+    "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 1,
+    "MODERATE_REJECT_CALIBRATION": 1,
+    "AGENT_DATA_UNAVAILABLE": 1
+   }
+  },
+  {
+   "symbol": "FAST",
+   "maxGapPct": 10.07,
+   "price": 52.29,
+   "prevClose": 51.46,
+   "at": "15:10:01Z",
+   "dollarVolMax": 95538022,
+   "spreadBpsMin": 1.9,
+   "rvolMax": null,
+   "adv": 7110436,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 23,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "13:39:46Z",
+   "promoted": {
+    "first": "13:49:46Z",
+    "n": 4
+   },
+   "subscribeOutcome": {
+    "first": "13:49:46Z",
+    "n": 186
+   },
+   "evicted": {
+    "first": "14:35:12Z",
+    "n": 3
+   },
+   "notPromoted": {
+    "first": "13:40:35Z",
+    "n": 3
+   },
+   "technical": {
+    "first": "13:50:18Z",
+    "n": 860
+   },
+   "quantAssessed": {
+    "first": "13:50:02Z",
+    "n": 207
+   },
+   "ideas": {
+    "first": "13:51:10Z",
+    "n": 432
+   },
+   "consensus": {
+    "first": "13:51:11Z",
+    "n": 269
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 268,
+    "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 1
+   }
+  },
+  {
+   "symbol": "CORZ",
+   "maxGapPct": -9.82,
+   "price": 13.45,
+   "prevClose": 15.44,
+   "at": "18:41:30Z",
+   "dollarVolMax": 27873077,
+   "spreadBpsMin": 7,
+   "rvolMax": null,
+   "adv": 11581498,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 20,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "14:24:56Z",
+   "promoted": {
+    "first": "14:34:11Z",
+    "n": 4
+   },
+   "subscribeOutcome": {
+    "first": "14:34:11Z",
+    "n": 107
+   },
+   "evicted": {
+    "first": "14:52:37Z",
+    "n": 4
+   },
+   "notPromoted": {
+    "first": "15:00:16Z",
+    "n": 2
+   },
+   "technical": {
+    "first": "14:35:14Z",
+    "n": 573
+   },
+   "quantAssessed": {
+    "first": "14:35:00Z",
+    "n": 128
+   },
+   "ideas": {
+    "first": "14:35:14Z",
+    "n": 227
+   },
+   "consensus": {
+    "first": "14:35:14Z",
+    "n": 141
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 141
+   }
+  },
+  {
+   "symbol": "WULF",
+   "maxGapPct": -9.14,
+   "price": 11.43,
+   "prevClose": 13.215,
+   "at": "18:41:30Z",
+   "dollarVolMax": 39763698,
+   "spreadBpsMin": 8.2,
+   "rvolMax": null,
+   "adv": 27770119,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 19,
+   "filtered": 2,
+   "filterReasons": {
+    "ADV_DATA_UNAVAILABLE": 2
+   },
+   "firstSeen": "14:09:50Z",
+   "promoted": {
+    "first": "14:17:18Z",
+    "n": 4
+   },
+   "subscribeOutcome": {
+    "first": "14:17:18Z",
+    "n": 122
+   },
+   "evicted": {
+    "first": "16:11:57Z",
+    "n": 3
+   },
+   "notPromoted": {
+    "first": "16:12:57Z",
+    "n": 1
+   },
+   "technical": {
+    "first": "14:17:37Z",
+    "n": 664
+   },
+   "quantAssessed": {
+    "first": "14:17:38Z",
+    "n": 147
+   },
+   "ideas": {
+    "first": "14:17:37Z",
+    "n": 287
+   },
+   "consensus": {
+    "first": "14:17:37Z",
+    "n": 183
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 183
+   }
+  },
+  {
+   "symbol": "AFRM",
+   "maxGapPct": -8.98,
+   "price": 68.86,
+   "prevClose": 77.92,
+   "at": "18:26:19Z",
+   "dollarVolMax": 20382600,
+   "spreadBpsMin": 5.7,
+   "rvolMax": null,
+   "adv": 3945795,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 6,
+   "filtered": 3,
+   "filterReasons": {
+    "RANK_CAP": 3
+   },
+   "firstSeen": "14:40:00Z",
+   "promoted": {
+    "first": "14:50:34Z",
+    "n": 3
+   },
+   "subscribeOutcome": {
+    "first": "14:50:34Z",
+    "n": 74
+   },
+   "evicted": {
+    "first": "17:26:31Z",
+    "n": 3
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": "14:51:28Z",
+    "n": 373
+   },
+   "quantAssessed": {
+    "first": "14:51:29Z",
+    "n": 89
+   },
+   "ideas": {
+    "first": "14:51:28Z",
+    "n": 187
+   },
+   "consensus": {
+    "first": "14:51:28Z",
+    "n": 126
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 125,
+    "AGENT_DATA_UNAVAILABLE": 1
+   }
+  },
+  {
+   "symbol": "IREN",
+   "maxGapPct": -8.94,
+   "price": 30.465,
+   "prevClose": 34.82,
+   "at": "18:20:27Z",
+   "dollarVolMax": 60955692,
+   "spreadBpsMin": 3.1,
+   "rvolMax": null,
+   "adv": 39353006,
+   "sources": "BROAD_UNIVERSE,NEWS",
+   "admitted": 42,
+   "filtered": 3,
+   "filterReasons": {
+    "NO_SNAPSHOT_DATA": 3
+   },
+   "firstSeen": "13:39:46Z",
+   "promoted": {
+    "first": "13:46:11Z",
+    "n": 2
+   },
+   "subscribeOutcome": {
+    "first": "13:46:11Z",
+    "n": 199
+   },
+   "evicted": {
+    "first": "19:09:21Z",
+    "n": 1
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": "13:46:22Z",
+    "n": 932
+   },
+   "quantAssessed": {
+    "first": "13:47:20Z",
+    "n": 213
+   },
+   "ideas": {
+    "first": "13:47:19Z",
+    "n": 482
+   },
+   "consensus": {
+    "first": "13:47:19Z",
+    "n": 293
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 293
+   }
+  },
+  {
+   "symbol": "AAOI",
+   "maxGapPct": -8.92,
+   "price": 86.49,
+   "prevClose": 97.83,
+   "at": "19:41:39Z",
+   "dollarVolMax": 31157763,
+   "spreadBpsMin": 8.8,
+   "rvolMax": null,
+   "adv": 9513576,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 3,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "14:54:59Z",
+   "promoted": {
+    "first": "15:16:40Z",
+    "n": 2
+   },
+   "subscribeOutcome": {
+    "first": "15:16:40Z",
+    "n": 17
+   },
+   "evicted": {
+    "first": "15:40:04Z",
+    "n": 2
+   },
+   "notPromoted": {
+    "first": "15:02:18Z",
+    "n": 2
+   },
+   "technical": {
+    "first": "15:16:59Z",
+    "n": 81
+   },
+   "quantAssessed": {
+    "first": "15:17:00Z",
+    "n": 18
+   },
+   "ideas": {
+    "first": "15:16:58Z",
+    "n": 35
+   },
+   "consensus": {
+    "first": "15:16:59Z",
+    "n": 25
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 25
+   }
+  },
+  {
+   "symbol": "ASST",
+   "maxGapPct": -8.38,
+   "price": 24.38,
+   "prevClose": 27.61,
+   "at": "19:41:39Z",
+   "dollarVolMax": 21833728,
+   "spreadBpsMin": 4,
+   "rvolMax": null,
+   "adv": 8422513,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 20,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "14:09:50Z",
+   "promoted": {
+    "first": "14:18:50Z",
+    "n": 2
+   },
+   "subscribeOutcome": {
+    "first": "14:18:50Z",
+    "n": 124
+   },
+   "evicted": {
+    "first": null,
+    "n": 0
+   },
+   "notPromoted": {
+    "first": "17:05:59Z",
+    "n": 1
+   },
+   "technical": {
+    "first": "14:19:12Z",
+    "n": 719
+   },
+   "quantAssessed": {
+    "first": "14:20:05Z",
+    "n": 161
+   },
+   "ideas": {
+    "first": "14:20:43Z",
+    "n": 317
+   },
+   "consensus": {
+    "first": "14:20:43Z",
+    "n": 197
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 197
+   }
+  },
+  {
+   "symbol": "HUT",
+   "maxGapPct": -8.25,
+   "price": 73.47,
+   "prevClose": 83.62,
+   "at": "16:56:15Z",
+   "dollarVolMax": 32423648,
+   "spreadBpsMin": 7.9,
+   "rvolMax": null,
+   "adv": 5085229,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 5,
+   "filtered": 1,
+   "filterReasons": {
+    "ADV_DATA_UNAVAILABLE": 1
+   },
+   "firstSeen": "15:40:11Z",
+   "promoted": {
+    "first": "15:50:16Z",
+    "n": 3
+   },
+   "subscribeOutcome": {
+    "first": "15:50:16Z",
+    "n": 49
+   },
+   "evicted": {
+    "first": "16:17:34Z",
+    "n": 2
+   },
+   "notPromoted": {
+    "first": "19:49:26Z",
+    "n": 1
+   },
+   "technical": {
+    "first": "15:50:48Z",
+    "n": 242
+   },
+   "quantAssessed": {
+    "first": "15:52:58Z",
+    "n": 56
+   },
+   "ideas": {
+    "first": "15:52:58Z",
+    "n": 105
+   },
+   "consensus": {
+    "first": "15:52:59Z",
+    "n": 74
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 74
+   }
+  },
+  {
+   "symbol": "SMR",
+   "maxGapPct": -8.24,
+   "price": 5.735,
+   "prevClose": 6.495,
+   "at": "19:11:45Z",
+   "dollarVolMax": 11191460,
+   "spreadBpsMin": 16.4,
+   "rvolMax": null,
+   "adv": 36061725,
+   "sources": "NEWS,BROAD_UNIVERSE",
+   "admitted": 14,
+   "filtered": 33,
+   "filterReasons": {
+    "DOLLAR_VOLUME": 18,
+    "RANK_CAP": 13,
+    "ADV_DATA_UNAVAILABLE": 2
+   },
+   "firstSeen": "14:09:52Z",
+   "promoted": {
+    "first": null,
+    "n": 0
+   },
+   "subscribeOutcome": {
+    "first": null,
+    "n": 0
+   },
+   "evicted": {
+    "first": null,
+    "n": 0
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": null,
+    "n": 0
+   },
+   "quantAssessed": {
+    "first": null,
+    "n": 0
+   },
+   "ideas": {
+    "first": null,
+    "n": 0
+   },
+   "consensus": {
+    "first": null,
+    "n": 0
+   },
+   "consensusReasons": {}
+  },
+  {
+   "symbol": "HALO",
+   "maxGapPct": 8.24,
+   "price": 118.75,
+   "prevClose": 109.615,
+   "at": "17:41:18Z",
+   "dollarVolMax": 19865035,
+   "spreadBpsMin": 7.7,
+   "rvolMax": null,
+   "adv": 2793846,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 8,
+   "filtered": 1,
+   "filterReasons": {
+    "RANK_CAP": 1
+   },
+   "firstSeen": "14:40:00Z",
+   "promoted": {
+    "first": "14:47:00Z",
+    "n": 6
+   },
+   "subscribeOutcome": {
+    "first": "14:47:00Z",
+    "n": 106
+   },
+   "evicted": {
+    "first": "16:09:54Z",
+    "n": 6
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": "14:48:14Z",
+    "n": 455
+   },
+   "quantAssessed": {
+    "first": "14:48:14Z",
+    "n": 115
+   },
+   "ideas": {
+    "first": "14:48:13Z",
+    "n": 231
+   },
+   "consensus": {
+    "first": "14:48:22Z",
+    "n": 144
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 144
+   }
+  },
+  {
+   "symbol": "CIEN",
+   "maxGapPct": -8.07,
+   "price": 358.75,
+   "prevClose": 400.3,
+   "at": "19:41:39Z",
+   "dollarVolMax": 50059975,
+   "spreadBpsMin": 13,
+   "rvolMax": null,
+   "adv": 3020328,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 5,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "15:10:01Z",
+   "promoted": {
+    "first": "16:21:08Z",
+    "n": 4
+   },
+   "subscribeOutcome": {
+    "first": "16:21:08Z",
+    "n": 58
+   },
+   "evicted": {
+    "first": "16:21:39Z",
+    "n": 5
+   },
+   "notPromoted": {
+    "first": "15:16:09Z",
+    "n": 3
+   },
+   "technical": {
+    "first": "17:33:06Z",
+    "n": 273
+   },
+   "quantAssessed": {
+    "first": "17:33:07Z",
+    "n": 61
+   },
+   "ideas": {
+    "first": "17:33:06Z",
+    "n": 125
+   },
+   "consensus": {
+    "first": "17:33:06Z",
+    "n": 81
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 79,
+    "AGENT_DATA_UNAVAILABLE": 1,
+    "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 1
+   }
+  },
+  {
+   "symbol": "BE",
+   "maxGapPct": -7.78,
+   "price": 237.47,
+   "prevClose": 263.445,
+   "at": "18:11:27Z",
+   "dollarVolMax": 85656534,
+   "spreadBpsMin": 22.8,
+   "rvolMax": null,
+   "adv": 16540548,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 5,
+   "filtered": 1,
+   "filterReasons": {
+    "ADV_DATA_UNAVAILABLE": 1
+   },
+   "firstSeen": "13:39:46Z",
+   "promoted": {
+    "first": "16:08:39Z",
+    "n": 3
+   },
+   "subscribeOutcome": {
+    "first": "16:08:39Z",
+    "n": 48
+   },
+   "evicted": {
+    "first": "16:23:41Z",
+    "n": 3
+   },
+   "notPromoted": {
+    "first": "15:58:25Z",
+    "n": 4
+   },
+   "technical": {
+    "first": "16:09:19Z",
+    "n": 233
+   },
+   "quantAssessed": {
+    "first": "16:09:57Z",
+    "n": 50
+   },
+   "ideas": {
+    "first": "16:10:31Z",
+    "n": 112
+   },
+   "consensus": {
+    "first": "16:10:32Z",
+    "n": 75
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 74,
+    "AGENT_DATA_UNAVAILABLE": 1
+   }
+  },
+  {
+   "symbol": "ORCL",
+   "maxGapPct": -7.66,
+   "price": 129.5,
+   "prevClose": 143.27,
+   "at": "19:10:36Z",
+   "dollarVolMax": 174258326,
+   "spreadBpsMin": 2.3,
+   "rvolMax": null,
+   "adv": 29644323,
+   "sources": "BROAD_UNIVERSE,NEWS",
+   "admitted": 31,
+   "filtered": 34,
+   "filterReasons": {
+    "SPREAD": 30,
+    "ADV_DATA_UNAVAILABLE": 1,
+    "NO_SNAPSHOT_DATA": 3
+   },
+   "firstSeen": "13:54:48Z",
+   "promoted": {
+    "first": "16:56:11Z",
+    "n": 2
+   },
+   "subscribeOutcome": {
+    "first": "13:30:20Z",
+    "n": 208
+   },
+   "evicted": {
+    "first": "17:55:47Z",
+    "n": 2
+   },
+   "notPromoted": {
+    "first": "19:15:17Z",
+    "n": 2
+   },
+   "technical": {
+    "first": "13:30:20Z",
+    "n": 1012
+   },
+   "quantAssessed": {
+    "first": "13:30:20Z",
+    "n": 247
+   },
+   "ideas": {
+    "first": "13:30:20Z",
+    "n": 542
+   },
+   "consensus": {
+    "first": "13:30:20Z",
+    "n": 349
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 348,
+    "AGENT_HOLD": 1
+   }
+  },
+  {
+   "symbol": "TTMI",
+   "maxGapPct": -7.64,
+   "price": 104.16,
+   "prevClose": 116.025,
+   "at": "18:26:19Z",
+   "dollarVolMax": 17969475,
+   "spreadBpsMin": 25.9,
+   "rvolMax": null,
+   "adv": 2207510,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 1,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "18:26:19Z",
+   "promoted": {
+    "first": "18:36:55Z",
+    "n": 1
+   },
+   "subscribeOutcome": {
+    "first": "18:36:55Z",
+    "n": 32
+   },
+   "evicted": {
+    "first": "19:07:59Z",
+    "n": 3
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": "18:38:37Z",
+    "n": 173
+   },
+   "quantAssessed": {
+    "first": "18:38:37Z",
+    "n": 40
+   },
+   "ideas": {
+    "first": "18:38:36Z",
+    "n": 71
+   },
+   "consensus": {
+    "first": "18:38:36Z",
+    "n": 44
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 44
+   }
+  },
+  {
+   "symbol": "CIFR",
+   "maxGapPct": -7.64,
+   "price": 9.855,
+   "prevClose": 11.34,
+   "at": "18:11:27Z",
+   "dollarVolMax": 41971788,
+   "spreadBpsMin": 9.3,
+   "rvolMax": null,
+   "adv": 38332185,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 23,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "13:39:46Z",
+   "promoted": {
+    "first": "16:18:35Z",
+    "n": 3
+   },
+   "subscribeOutcome": {
+    "first": "16:18:35Z",
+    "n": 78
+   },
+   "evicted": {
+    "first": "17:02:56Z",
+    "n": 3
+   },
+   "notPromoted": {
+    "first": "16:12:57Z",
+    "n": 4
+   },
+   "technical": {
+    "first": "16:19:10Z",
+    "n": 431
+   },
+   "quantAssessed": {
+    "first": "16:19:10Z",
+    "n": 96
+   },
+   "ideas": {
+    "first": "16:19:09Z",
+    "n": 190
+   },
+   "consensus": {
+    "first": "16:19:10Z",
+    "n": 120
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 120
+   }
+  },
+  {
+   "symbol": "APLD",
+   "maxGapPct": -7.6,
+   "price": 20.05,
+   "prevClose": 22.445,
+   "at": "18:41:30Z",
+   "dollarVolMax": 28545987,
+   "spreadBpsMin": 4.8,
+   "rvolMax": null,
+   "adv": 22367418,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 20,
+   "filtered": 1,
+   "filterReasons": {
+    "ADV_DATA_UNAVAILABLE": 1
+   },
+   "firstSeen": "14:09:50Z",
+   "promoted": {
+    "first": "14:15:46Z",
+    "n": 4
+   },
+   "subscribeOutcome": {
+    "first": "14:15:46Z",
+    "n": 153
+   },
+   "evicted": {
+    "first": "17:46:04Z",
+    "n": 5
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": "14:16:18Z",
+    "n": 753
+   },
+   "quantAssessed": {
+    "first": "14:19:18Z",
+    "n": 162
+   },
+   "ideas": {
+    "first": "14:19:17Z",
+    "n": 323
+   },
+   "consensus": {
+    "first": "14:19:17Z",
+    "n": 213
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 211,
+    "AGENT_DATA_UNAVAILABLE": 2
+   }
+  },
+  {
+   "symbol": "ASTS",
+   "maxGapPct": -7.55,
+   "price": 42.19,
+   "prevClose": 47.075,
+   "at": "19:50:39Z",
+   "dollarVolMax": 18449982,
+   "spreadBpsMin": 4.7,
+   "rvolMax": null,
+   "adv": 15060668,
+   "sources": "NEWS,BROAD_UNIVERSE",
+   "admitted": 16,
+   "filtered": 40,
+   "filterReasons": {
+    "DOLLAR_VOLUME": 8,
+    "RANK_CAP": 3,
+    "SPREAD": 25,
+    "NO_SNAPSHOT_DATA": 4
+   },
+   "firstSeen": "13:34:51Z",
+   "promoted": {
+    "first": "18:16:38Z",
+    "n": 1
+   },
+   "subscribeOutcome": {
+    "first": "18:16:38Z",
+    "n": 35
+   },
+   "evicted": {
+    "first": "18:32:46Z",
+    "n": 5
+   },
+   "notPromoted": {
+    "first": "18:15:36Z",
+    "n": 2
+   },
+   "technical": {
+    "first": "18:17:10Z",
+    "n": 188
+   },
+   "quantAssessed": {
+    "first": "18:17:11Z",
+    "n": 41
+   },
+   "ideas": {
+    "first": "18:17:10Z",
+    "n": 96
+   },
+   "consensus": {
+    "first": "18:17:10Z",
+    "n": 64
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 64
+   }
+  },
+  {
+   "symbol": "CLS",
+   "maxGapPct": -7.54,
+   "price": 324.62,
+   "prevClose": 357.45,
+   "at": "18:26:19Z",
+   "dollarVolMax": 42694022,
+   "spreadBpsMin": 18.5,
+   "rvolMax": null,
+   "adv": 2061414,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 5,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "15:10:01Z",
+   "promoted": {
+    "first": "15:47:43Z",
+    "n": 3
+   },
+   "subscribeOutcome": {
+    "first": "15:47:43Z",
+    "n": 43
+   },
+   "evicted": {
+    "first": "16:14:29Z",
+    "n": 3
+   },
+   "notPromoted": {
+    "first": "15:17:10Z",
+    "n": 2
+   },
+   "technical": {
+    "first": "15:49:05Z",
+    "n": 208
+   },
+   "quantAssessed": {
+    "first": "15:49:06Z",
+    "n": 45
+   },
+   "ideas": {
+    "first": "15:49:05Z",
+    "n": 87
+   },
+   "consensus": {
+    "first": "15:49:05Z",
+    "n": 58
+   },
+   "consensusReasons": {
+    "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 1,
+    "CONFIDENCE_BELOW_STRONG": 57
+   }
+  },
+  {
+   "symbol": "U",
+   "maxGapPct": -7.52,
+   "price": 41.55,
+   "prevClose": 46.625,
+   "at": "18:11:27Z",
+   "dollarVolMax": 24050602,
+   "spreadBpsMin": 2.4,
+   "rvolMax": null,
+   "adv": 10466313,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 19,
+   "filtered": 2,
+   "filterReasons": {
+    "ADV_DATA_UNAVAILABLE": 2
+   },
+   "firstSeen": "14:09:50Z",
+   "promoted": {
+    "first": "14:16:16Z",
+    "n": 3
+   },
+   "subscribeOutcome": {
+    "first": "14:16:16Z",
+    "n": 144
+   },
+   "evicted": {
+    "first": "17:59:08Z",
+    "n": 3
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": "14:16:46Z",
+    "n": 705
+   },
+   "quantAssessed": {
+    "first": "14:16:46Z",
+    "n": 167
+   },
+   "ideas": {
+    "first": "14:16:45Z",
+    "n": 331
+   },
+   "consensus": {
+    "first": "14:16:45Z",
+    "n": 206
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 204,
+    "AGENT_DATA_UNAVAILABLE": 1,
+    "AGENT_HOLD": 1
+   }
+  },
+  {
+   "symbol": "FN",
+   "maxGapPct": -7.21,
+   "price": 392.5,
+   "prevClose": 428.09,
+   "at": "18:41:31Z",
+   "dollarVolMax": 28037845,
+   "spreadBpsMin": 13.3,
+   "rvolMax": null,
+   "adv": 873652,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 3,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "15:40:11Z",
+   "promoted": {
+    "first": "17:53:38Z",
+    "n": 1
+   },
+   "subscribeOutcome": {
+    "first": "17:53:38Z",
+    "n": 9
+   },
+   "evicted": {
+    "first": "17:56:55Z",
+    "n": 2
+   },
+   "notPromoted": {
+    "first": "15:50:16Z",
+    "n": 3
+   },
+   "technical": {
+    "first": "17:55:49Z",
+    "n": 40
+   },
+   "quantAssessed": {
+    "first": "17:55:44Z",
+    "n": 11
+   },
+   "ideas": {
+    "first": "17:58:32Z",
+    "n": 18
+   },
+   "consensus": {
+    "first": "17:58:33Z",
+    "n": 13
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 13
+   }
+  },
+  {
+   "symbol": "RIOT",
+   "maxGapPct": -7.14,
+   "price": 14.825,
+   "prevClose": 16.67,
+   "at": "18:41:30Z",
+   "dollarVolMax": 15654225,
+   "spreadBpsMin": 6.4,
+   "rvolMax": null,
+   "adv": 17232762,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 4,
+   "filtered": 14,
+   "filterReasons": {
+    "RANK_CAP": 14
+   },
+   "firstSeen": "14:54:59Z",
+   "promoted": {
+    "first": "16:56:11Z",
+    "n": 1
+   },
+   "subscribeOutcome": {
+    "first": "13:30:01Z",
+    "n": 162
+   },
+   "evicted": {
+    "first": null,
+    "n": 0
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": "13:30:00Z",
+    "n": 886
+   },
+   "quantAssessed": {
+    "first": "13:30:03Z",
+    "n": 196
+   },
+   "ideas": {
+    "first": "13:30:01Z",
+    "n": 371
+   },
+   "consensus": {
+    "first": "13:30:01Z",
+    "n": 246
+   },
+   "consensusReasons": {
+    "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 1,
+    "CONFIDENCE_BELOW_STRONG": 245
+   }
+  },
+  {
+   "symbol": "P",
+   "maxGapPct": -7.05,
+   "price": 142.25,
+   "prevClose": 156.965,
+   "at": "18:41:30Z",
+   "dollarVolMax": 30765403,
+   "spreadBpsMin": 11.9,
+   "rvolMax": null,
+   "adv": 8381822,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 4,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "14:09:50Z",
+   "promoted": {
+    "first": "18:20:46Z",
+    "n": 1
+   },
+   "subscribeOutcome": {
+    "first": "18:20:46Z",
+    "n": 33
+   },
+   "evicted": {
+    "first": "19:08:26Z",
+    "n": 2
+   },
+   "notPromoted": {
+    "first": "14:13:13Z",
+    "n": 5
+   },
+   "technical": {
+    "first": "18:23:15Z",
+    "n": 226
+   },
+   "quantAssessed": {
+    "first": "18:23:16Z",
+    "n": 40
+   },
+   "ideas": {
+    "first": "18:23:15Z",
+    "n": 108
+   },
+   "consensus": {
+    "first": "18:23:15Z",
+    "n": 62
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 60,
+    "AGENT_DATA_UNAVAILABLE": 2
+   }
+  },
+  {
+   "symbol": "SNAP",
+   "maxGapPct": -7,
+   "price": 5.98,
+   "prevClose": 6.49,
+   "at": "18:26:19Z",
+   "dollarVolMax": 14045351,
+   "spreadBpsMin": 16.1,
+   "rvolMax": null,
+   "adv": 35041846,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 2,
+   "filtered": 13,
+   "filterReasons": {
+    "RANK_CAP": 13
+   },
+   "firstSeen": "15:40:11Z",
+   "promoted": {
+    "first": "14:38:46Z",
+    "n": 2
+   },
+   "subscribeOutcome": {
+    "first": "14:38:46Z",
+    "n": 119
+   },
+   "evicted": {
+    "first": "19:58:25Z",
+    "n": 1
+   },
+   "notPromoted": {
+    "first": "13:30:56Z",
+    "n": 62
+   },
+   "technical": {
+    "first": "14:40:23Z",
+    "n": 697
+   },
+   "quantAssessed": {
+    "first": "14:40:00Z",
+    "n": 158
+   },
+   "ideas": {
+    "first": "14:40:54Z",
+    "n": 283
+   },
+   "consensus": {
+    "first": "14:40:54Z",
+    "n": 184
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 184
+   }
+  },
+  {
+   "symbol": "DELL",
+   "maxGapPct": -6.67,
+   "price": 506.85,
+   "prevClose": 572.46,
+   "at": "17:41:18Z",
+   "dollarVolMax": 155718512,
+   "spreadBpsMin": 12.3,
+   "rvolMax": null,
+   "adv": 7078846,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 7,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "14:09:50Z",
+   "promoted": {
+    "first": "16:55:41Z",
+    "n": 1
+   },
+   "subscribeOutcome": {
+    "first": "13:30:26Z",
+    "n": 184
+   },
+   "evicted": {
+    "first": null,
+    "n": 0
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": "13:30:19Z",
+    "n": 970
+   },
+   "quantAssessed": {
+    "first": "13:30:26Z",
+    "n": 226
+   },
+   "ideas": {
+    "first": "13:30:26Z",
+    "n": 462
+   },
+   "consensus": {
+    "first": "13:30:26Z",
+    "n": 303
+   },
+   "consensusReasons": {
+    "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 1,
+    "CONFIDENCE_BELOW_STRONG": 301,
+    "AGENT_DATA_UNAVAILABLE": 1
+   }
+  },
+  {
+   "symbol": "IBRX",
+   "maxGapPct": 6.6,
+   "price": 10.33,
+   "prevClose": 9.82,
+   "at": "17:11:12Z",
+   "dollarVolMax": 15744072,
+   "spreadBpsMin": 9.7,
+   "rvolMax": null,
+   "adv": 14789220,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 2,
+   "filtered": 14,
+   "filterReasons": {
+    "RANK_CAP": 14
+   },
+   "firstSeen": "15:25:05Z",
+   "promoted": {
+    "first": null,
+    "n": 0
+   },
+   "subscribeOutcome": {
+    "first": null,
+    "n": 0
+   },
+   "evicted": {
+    "first": null,
+    "n": 0
+   },
+   "notPromoted": {
+    "first": "18:21:48Z",
+    "n": 1
+   },
+   "technical": {
+    "first": null,
+    "n": 0
+   },
+   "quantAssessed": {
+    "first": null,
+    "n": 0
+   },
+   "ideas": {
+    "first": null,
+    "n": 0
+   },
+   "consensus": {
+    "first": null,
+    "n": 0
+   },
+   "consensusReasons": {}
+  },
+  {
+   "symbol": "COHR",
+   "maxGapPct": -6.57,
+   "price": 262.94,
+   "prevClose": 290.05,
+   "at": "19:11:45Z",
+   "dollarVolMax": 62765092,
+   "spreadBpsMin": 6.4,
+   "rvolMax": null,
+   "adv": 7055608,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 10,
+   "filtered": 1,
+   "filterReasons": {
+    "ADV_DATA_UNAVAILABLE": 1
+   },
+   "firstSeen": "14:40:00Z",
+   "promoted": {
+    "first": "16:09:54Z",
+    "n": 4
+   },
+   "subscribeOutcome": {
+    "first": "16:09:54Z",
+    "n": 103
+   },
+   "evicted": {
+    "first": "17:03:26Z",
+    "n": 4
+   },
+   "notPromoted": {
+    "first": "15:10:32Z",
+    "n": 15
+   },
+   "technical": {
+    "first": "16:10:01Z",
+    "n": 615
+   },
+   "quantAssessed": {
+    "first": "16:10:01Z",
+    "n": 108
+   },
+   "ideas": {
+    "first": "16:10:00Z",
+    "n": 277
+   },
+   "consensus": {
+    "first": "16:10:01Z",
+    "n": 144
+   },
+   "consensusReasons": {
+    "AGENT_DATA_UNAVAILABLE": 2,
+    "CONFIDENCE_BELOW_STRONG": 142
+   }
+  },
+  {
+   "symbol": "LQDA",
+   "maxGapPct": -6.49,
+   "price": 33.41,
+   "prevClose": 26.81,
+   "at": "14:54:56Z",
+   "dollarVolMax": 16267499,
+   "spreadBpsMin": 20.7,
+   "rvolMax": null,
+   "adv": 5392947,
+   "sources": "MARKET_MOVER,BROAD_UNIVERSE",
+   "admitted": 3,
+   "filtered": 70,
+   "filterReasons": {
+    "DOLLAR_VOLUME": 12,
+    "SPREAD": 58
+   },
+   "firstSeen": "13:34:51Z",
+   "promoted": {
+    "first": "17:11:36Z",
+    "n": 1
+   },
+   "subscribeOutcome": {
+    "first": "17:11:36Z",
+    "n": 5
+   },
+   "evicted": {
+    "first": "17:25:22Z",
+    "n": 1
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": "17:12:26Z",
+    "n": 27
+   },
+   "quantAssessed": {
+    "first": "17:12:26Z",
+    "n": 6
+   },
+   "ideas": {
+    "first": "17:12:25Z",
+    "n": 15
+   },
+   "consensus": {
+    "first": "17:12:25Z",
+    "n": 10
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 10
+   }
+  },
+  {
+   "symbol": "SOFI",
+   "maxGapPct": -6.4,
+   "price": 13.97,
+   "prevClose": 15.225,
+   "at": "18:11:27Z",
+   "dollarVolMax": 44905790,
+   "spreadBpsMin": 6.8,
+   "rvolMax": null,
+   "adv": 46654353,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 22,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "13:54:48Z",
+   "promoted": {
+    "first": "16:56:11Z",
+    "n": 1
+   },
+   "subscribeOutcome": {
+    "first": "13:30:12Z",
+    "n": 213
+   },
+   "evicted": {
+    "first": null,
+    "n": 0
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": "13:30:11Z",
+    "n": 1004
+   },
+   "quantAssessed": {
+    "first": "13:30:12Z",
+    "n": 238
+   },
+   "ideas": {
+    "first": "13:30:12Z",
+    "n": 527
+   },
+   "consensus": {
+    "first": "13:30:12Z",
+    "n": 330
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 329,
+    "AGENT_HOLD": 1
+   }
+  },
+  {
+   "symbol": "JBL",
+   "maxGapPct": -6.36,
+   "price": 292.49,
+   "prevClose": 318.02,
+   "at": "18:26:19Z",
+   "dollarVolMax": 18497653,
+   "spreadBpsMin": 13.3,
+   "rvolMax": null,
+   "adv": 1620955,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 1,
+   "filtered": 3,
+   "filterReasons": {
+    "RANK_CAP": 3
+   },
+   "firstSeen": "15:25:05Z",
+   "promoted": {
+    "first": "18:36:23Z",
+    "n": 1
+   },
+   "subscribeOutcome": {
+    "first": "18:36:23Z",
+    "n": 25
+   },
+   "evicted": {
+    "first": "19:39:23Z",
+    "n": 1
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": "18:38:42Z",
+    "n": 135
+   },
+   "quantAssessed": {
+    "first": "18:40:34Z",
+    "n": 33
+   },
+   "ideas": {
+    "first": "18:41:24Z",
+    "n": 71
+   },
+   "consensus": {
+    "first": "18:41:24Z",
+    "n": 53
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 52,
+    "AGENT_DATA_UNAVAILABLE": 1
+   }
+  },
+  {
+   "symbol": "LITE",
+   "maxGapPct": -6.33,
+   "price": 899.75,
+   "prevClose": 987.8,
+   "at": "19:41:39Z",
+   "dollarVolMax": 163938049,
+   "spreadBpsMin": 4.6,
+   "rvolMax": null,
+   "adv": 4934394,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 10,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "13:54:48Z",
+   "promoted": {
+    "first": "15:41:05Z",
+    "n": 4
+   },
+   "subscribeOutcome": {
+    "first": "15:41:05Z",
+    "n": 42
+   },
+   "evicted": {
+    "first": "15:50:16Z",
+    "n": 5
+   },
+   "notPromoted": {
+    "first": "13:54:52Z",
+    "n": 17
+   },
+   "technical": {
+    "first": "15:41:28Z",
+    "n": 258
+   },
+   "quantAssessed": {
+    "first": "15:41:28Z",
+    "n": 56
+   },
+   "ideas": {
+    "first": "15:41:28Z",
+    "n": 109
+   },
+   "consensus": {
+    "first": "15:41:28Z",
+    "n": 72
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 71,
+    "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 1
+   }
+  },
+  {
+   "symbol": "CDE",
+   "maxGapPct": -6.31,
+   "price": 14.71,
+   "prevClose": 16.26,
+   "at": "18:11:27Z",
+   "dollarVolMax": 21540034,
+   "spreadBpsMin": 6.5,
+   "rvolMax": null,
+   "adv": 36344980,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 20,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "14:24:56Z",
+   "promoted": {
+    "first": "17:25:29Z",
+    "n": 2
+   },
+   "subscribeOutcome": {
+    "first": "17:25:29Z",
+    "n": 49
+   },
+   "evicted": {
+    "first": "17:57:34Z",
+    "n": 4
+   },
+   "notPromoted": {
+    "first": "14:29:35Z",
+    "n": 17
+   },
+   "technical": {
+    "first": "17:26:49Z",
+    "n": 256
+   },
+   "quantAssessed": {
+    "first": "17:26:49Z",
+    "n": 62
+   },
+   "ideas": {
+    "first": "17:26:49Z",
+    "n": 130
+   },
+   "consensus": {
+    "first": "17:26:49Z",
+    "n": 90
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 90
+   }
+  },
+  {
+   "symbol": "VST",
+   "maxGapPct": -6.27,
+   "price": 150.31,
+   "prevClose": 162.325,
+   "at": "19:11:45Z",
+   "dollarVolMax": 37784627,
+   "spreadBpsMin": 16,
+   "rvolMax": null,
+   "adv": 7072156,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 4,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "14:40:00Z",
+   "promoted": {
+    "first": "14:44:23Z",
+    "n": 2
+   },
+   "subscribeOutcome": {
+    "first": "14:44:23Z",
+    "n": 50
+   },
+   "evicted": {
+    "first": "15:53:49Z",
+    "n": 1
+   },
+   "notPromoted": {
+    "first": "19:15:17Z",
+    "n": 3
+   },
+   "technical": {
+    "first": "14:44:43Z",
+    "n": 227
+   },
+   "quantAssessed": {
+    "first": "14:44:43Z",
+    "n": 61
+   },
+   "ideas": {
+    "first": "14:44:42Z",
+    "n": 135
+   },
+   "consensus": {
+    "first": "14:44:42Z",
+    "n": 75
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 75
+   }
+  },
+  {
+   "symbol": "FRO",
+   "maxGapPct": -6.21,
+   "price": 55.55,
+   "prevClose": 59.02,
+   "at": "16:25:22Z",
+   "dollarVolMax": 17645017,
+   "spreadBpsMin": 10.7,
+   "rvolMax": null,
+   "adv": 4309151,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 4,
+   "filtered": 2,
+   "filterReasons": {
+    "RANK_CAP": 2
+   },
+   "firstSeen": "15:40:11Z",
+   "promoted": {
+    "first": "15:49:45Z",
+    "n": 2
+   },
+   "subscribeOutcome": {
+    "first": "15:49:45Z",
+    "n": 41
+   },
+   "evicted": {
+    "first": "18:02:14Z",
+    "n": 1
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": "15:51:52Z",
+    "n": 210
+   },
+   "quantAssessed": {
+    "first": "15:50:00Z",
+    "n": 49
+   },
+   "ideas": {
+    "first": "15:51:52Z",
+    "n": 91
+   },
+   "consensus": {
+    "first": "15:51:52Z",
+    "n": 59
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 59
+   }
+  },
+  {
+   "symbol": "AKAM",
+   "maxGapPct": -6.2,
+   "price": 91.7,
+   "prevClose": 99.895,
+   "at": "16:56:15Z",
+   "dollarVolMax": 22224137,
+   "spreadBpsMin": 22.8,
+   "rvolMax": null,
+   "adv": 6156086,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 3,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "16:10:41Z",
+   "promoted": {
+    "first": "16:21:39Z",
+    "n": 2
+   },
+   "subscribeOutcome": {
+    "first": "16:21:39Z",
+    "n": 13
+   },
+   "evicted": {
+    "first": "17:14:10Z",
+    "n": 1
+   },
+   "notPromoted": {
+    "first": "16:16:02Z",
+    "n": 1
+   },
+   "technical": {
+    "first": "16:22:28Z",
+    "n": 81
+   },
+   "quantAssessed": {
+    "first": "16:22:28Z",
+    "n": 16
+   },
+   "ideas": {
+    "first": "16:22:28Z",
+    "n": 25
+   },
+   "consensus": {
+    "first": "16:22:28Z",
+    "n": 16
+   },
+   "consensusReasons": {
+    "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 1,
+    "CONFIDENCE_BELOW_STRONG": 15
+   }
+  },
+  {
+   "symbol": "HL",
+   "maxGapPct": -6.18,
+   "price": 14.655,
+   "prevClose": 16.18,
+   "at": "18:11:27Z",
+   "dollarVolMax": 19542828,
+   "spreadBpsMin": 6.6,
+   "rvolMax": null,
+   "adv": 38127960,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 7,
+   "filtered": 9,
+   "filterReasons": {
+    "RANK_CAP": 9
+   },
+   "firstSeen": "15:25:05Z",
+   "promoted": {
+    "first": "17:48:38Z",
+    "n": 1
+   },
+   "subscribeOutcome": {
+    "first": "17:48:38Z",
+    "n": 47
+   },
+   "evicted": {
+    "first": "18:41:52Z",
+    "n": 4
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": "17:50:00Z",
+    "n": 263
+   },
+   "quantAssessed": {
+    "first": "17:50:21Z",
+    "n": 61
+   },
+   "ideas": {
+    "first": "17:53:06Z",
+    "n": 147
+   },
+   "consensus": {
+    "first": "17:53:07Z",
+    "n": 96
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 80,
+    "MODERATE_REJECT_CALIBRATION": 16
+   }
+  },
+  {
+   "symbol": "MMED",
+   "maxGapPct": -6.16,
+   "price": 17.06,
+   "prevClose": 18.45,
+   "at": "19:26:23Z",
+   "dollarVolMax": 25518723,
+   "spreadBpsMin": 5.8,
+   "rvolMax": null,
+   "adv": 9883174,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 15,
+   "filtered": 2,
+   "filterReasons": {
+    "ADV_DATA_UNAVAILABLE": 2
+   },
+   "firstSeen": "14:40:00Z",
+   "promoted": {
+    "first": "14:49:33Z",
+    "n": 4
+   },
+   "subscribeOutcome": {
+    "first": "14:49:33Z",
+    "n": 46
+   },
+   "evicted": {
+    "first": "15:41:05Z",
+    "n": 4
+   },
+   "notPromoted": {
+    "first": "15:46:42Z",
+    "n": 9
+   },
+   "technical": {
+    "first": "14:50:22Z",
+    "n": 199
+   },
+   "quantAssessed": {
+    "first": "14:49:56Z",
+    "n": 47
+   },
+   "ideas": {
+    "first": "14:50:22Z",
+    "n": 82
+   },
+   "consensus": {
+    "first": "14:50:32Z",
+    "n": 53
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 50,
+    "AGENT_DATA_UNAVAILABLE": 1,
+    "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 2
+   }
+  },
+  {
+   "symbol": "OKLO",
+   "maxGapPct": -6.09,
+   "price": 28.935,
+   "prevClose": 31.76,
+   "at": "19:11:45Z",
+   "dollarVolMax": 8552607,
+   "spreadBpsMin": 3.4,
+   "rvolMax": null,
+   "adv": 9963083,
+   "sources": "NEWS,BROAD_UNIVERSE",
+   "admitted": 11,
+   "filtered": 25,
+   "filterReasons": {
+    "DOLLAR_VOLUME": 8,
+    "RANK_CAP": 13,
+    "SPREAD": 3,
+    "NO_SNAPSHOT_DATA": 1
+   },
+   "firstSeen": "13:34:51Z",
+   "promoted": {
+    "first": null,
+    "n": 0
+   },
+   "subscribeOutcome": {
+    "first": null,
+    "n": 0
+   },
+   "evicted": {
+    "first": null,
+    "n": 0
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": null,
+    "n": 0
+   },
+   "quantAssessed": {
+    "first": null,
+    "n": 0
+   },
+   "ideas": {
+    "first": null,
+    "n": 0
+   },
+   "consensus": {
+    "first": null,
+    "n": 0
+   },
+   "consensusReasons": {}
+  },
+  {
+   "symbol": "NBIS",
+   "maxGapPct": -6.07,
+   "price": 183.25,
+   "prevClose": 206.895,
+   "at": "19:10:36Z",
+   "dollarVolMax": 159463697,
+   "spreadBpsMin": 5.9,
+   "rvolMax": null,
+   "adv": 16417952,
+   "sources": "BROAD_UNIVERSE,NEWS",
+   "admitted": 11,
+   "filtered": 28,
+   "filterReasons": {
+    "SPREAD": 24,
+    "NO_SNAPSHOT_DATA": 4
+   },
+   "firstSeen": "15:10:01Z",
+   "promoted": {
+    "first": "16:23:41Z",
+    "n": 3
+   },
+   "subscribeOutcome": {
+    "first": "16:23:41Z",
+    "n": 45
+   },
+   "evicted": {
+    "first": "18:10:27Z",
+    "n": 1
+   },
+   "notPromoted": {
+    "first": "15:12:04Z",
+    "n": 30
+   },
+   "technical": {
+    "first": "16:24:05Z",
+    "n": 197
+   },
+   "quantAssessed": {
+    "first": "16:24:05Z",
+    "n": 44
+   },
+   "ideas": {
+    "first": "16:24:05Z",
+    "n": 98
+   },
+   "consensus": {
+    "first": "16:24:05Z",
+    "n": 60
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 60
+   }
+  },
+  {
+   "symbol": "IONQ",
+   "maxGapPct": -6.04,
+   "price": 31.09,
+   "prevClose": 34.725,
+   "at": "19:15:39Z",
+   "dollarVolMax": 32466352,
+   "spreadBpsMin": 3.1,
+   "rvolMax": null,
+   "adv": 24842149,
+   "sources": "BROAD_UNIVERSE,NEWS",
+   "admitted": 30,
+   "filtered": 2,
+   "filterReasons": {
+    "ADV_DATA_UNAVAILABLE": 1,
+    "NO_SNAPSHOT_DATA": 1
+   },
+   "firstSeen": "13:54:48Z",
+   "promoted": {
+    "first": "15:13:05Z",
+    "n": 3
+   },
+   "subscribeOutcome": {
+    "first": "15:13:05Z",
+    "n": 114
+   },
+   "evicted": {
+    "first": "15:49:15Z",
+    "n": 3
+   },
+   "notPromoted": {
+    "first": "14:43:22Z",
+    "n": 12
+   },
+   "technical": {
+    "first": "15:13:27Z",
+    "n": 567
+   },
+   "quantAssessed": {
+    "first": "15:13:28Z",
+    "n": 135
+   },
+   "ideas": {
+    "first": "15:13:27Z",
+    "n": 289
+   },
+   "consensus": {
+    "first": "15:13:28Z",
+    "n": 176
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 174,
+    "AGENT_DATA_UNAVAILABLE": 1,
+    "INSUFFICIENT_AGENT_PARTICIPATION": 1
+   }
+  },
+  {
+   "symbol": "RKLB",
+   "maxGapPct": -6.04,
+   "price": 59.04,
+   "prevClose": 64.245,
+   "at": "19:50:39Z",
+   "dollarVolMax": 34890515,
+   "spreadBpsMin": 3.2,
+   "rvolMax": null,
+   "adv": 21276898,
+   "sources": "BROAD_UNIVERSE,NEWS",
+   "admitted": 52,
+   "filtered": 4,
+   "filterReasons": {
+    "NO_SNAPSHOT_DATA": 4
+   },
+   "firstSeen": "14:09:50Z",
+   "promoted": {
+    "first": "17:44:00Z",
+    "n": 2
+   },
+   "subscribeOutcome": {
+    "first": "17:44:00Z",
+    "n": 66
+   },
+   "evicted": {
+    "first": "19:37:44Z",
+    "n": 2
+   },
+   "notPromoted": {
+    "first": "15:41:36Z",
+    "n": 59
+   },
+   "technical": {
+    "first": "17:44:27Z",
+    "n": 338
+   },
+   "quantAssessed": {
+    "first": "17:44:27Z",
+    "n": 76
+   },
+   "ideas": {
+    "first": "17:44:17Z",
+    "n": 172
+   },
+   "consensus": {
+    "first": "17:44:17Z",
+    "n": 121
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 119,
+    "AGENT_DATA_UNAVAILABLE": 2
+   }
+  },
+  {
+   "symbol": "HOOD",
+   "maxGapPct": -6.04,
+   "price": 100.73,
+   "prevClose": 110.48,
+   "at": "18:41:30Z",
+   "dollarVolMax": 57396043,
+   "spreadBpsMin": 6.8,
+   "rvolMax": null,
+   "adv": 20900656,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 5,
+   "filtered": 1,
+   "filterReasons": {
+    "ADV_DATA_UNAVAILABLE": 1
+   },
+   "firstSeen": "14:09:50Z",
+   "promoted": {
+    "first": "16:56:11Z",
+    "n": 1
+   },
+   "subscribeOutcome": {
+    "first": "13:32:04Z",
+    "n": 215
+   },
+   "evicted": {
+    "first": null,
+    "n": 0
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": "13:30:11Z",
+    "n": 1013
+   },
+   "quantAssessed": {
+    "first": "13:32:04Z",
+    "n": 235
+   },
+   "ideas": {
+    "first": "13:32:04Z",
+    "n": 531
+   },
+   "consensus": {
+    "first": "13:32:04Z",
+    "n": 329
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 329
+   }
+  },
+  {
+   "symbol": "RGTI",
+   "maxGapPct": -6.03,
+   "price": 11.615,
+   "prevClose": 12.79,
+   "at": "19:11:45Z",
+   "dollarVolMax": 13140858,
+   "spreadBpsMin": 8.4,
+   "rvolMax": null,
+   "adv": 15486119,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 1,
+   "filtered": 14,
+   "filterReasons": {
+    "RANK_CAP": 14
+   },
+   "firstSeen": "15:40:11Z",
+   "promoted": {
+    "first": null,
+    "n": 0
+   },
+   "subscribeOutcome": {
+    "first": null,
+    "n": 0
+   },
+   "evicted": {
+    "first": null,
+    "n": 0
+   },
+   "notPromoted": {
+    "first": "19:23:31Z",
+    "n": 1
+   },
+   "technical": {
+    "first": null,
+    "n": 0
+   },
+   "quantAssessed": {
+    "first": null,
+    "n": 0
+   },
+   "ideas": {
+    "first": null,
+    "n": 0
+   },
+   "consensus": {
+    "first": null,
+    "n": 0
+   },
+   "consensusReasons": {}
+  },
+  {
+   "symbol": "SMCI",
+   "maxGapPct": -5.87,
+   "price": 35.735,
+   "prevClose": 39.07,
+   "at": "19:11:45Z",
+   "dollarVolMax": 37551141,
+   "spreadBpsMin": 2.7,
+   "rvolMax": null,
+   "adv": 35503467,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 21,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "14:09:50Z",
+   "promoted": {
+    "first": "14:20:21Z",
+    "n": 3
+   },
+   "subscribeOutcome": {
+    "first": "14:20:21Z",
+    "n": 28
+   },
+   "evicted": {
+    "first": "14:25:00Z",
+    "n": 3
+   },
+   "notPromoted": {
+    "first": "14:13:13Z",
+    "n": 21
+   },
+   "technical": {
+    "first": "14:20:46Z",
+    "n": 168
+   },
+   "quantAssessed": {
+    "first": "14:21:18Z",
+    "n": 40
+   },
+   "ideas": {
+    "first": "14:21:16Z",
+    "n": 83
+   },
+   "consensus": {
+    "first": "14:21:17Z",
+    "n": 62
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 61,
+    "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 1
+   }
+  },
+  {
+   "symbol": "GEV",
+   "maxGapPct": -5.86,
+   "price": 924.59,
+   "prevClose": 1003.16,
+   "at": "18:11:27Z",
+   "dollarVolMax": 94901552,
+   "spreadBpsMin": 17.3,
+   "rvolMax": null,
+   "adv": 2153212,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 8,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "13:39:46Z",
+   "promoted": {
+    "first": "14:42:20Z",
+    "n": 3
+   },
+   "subscribeOutcome": {
+    "first": "14:42:20Z",
+    "n": 55
+   },
+   "evicted": {
+    "first": "15:08:55Z",
+    "n": 4
+   },
+   "notPromoted": {
+    "first": "16:13:28Z",
+    "n": 8
+   },
+   "technical": {
+    "first": "14:42:46Z",
+    "n": 278
+   },
+   "quantAssessed": {
+    "first": "14:42:46Z",
+    "n": 66
+   },
+   "ideas": {
+    "first": "14:42:46Z",
+    "n": 128
+   },
+   "consensus": {
+    "first": "14:42:46Z",
+    "n": 85
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 85
+   }
+  },
+  {
+   "symbol": "VRT",
+   "maxGapPct": -5.83,
+   "price": 220.48,
+   "prevClose": 237.26,
+   "at": "18:11:27Z",
+   "dollarVolMax": 82100824,
+   "spreadBpsMin": 3.1,
+   "rvolMax": null,
+   "adv": 4448005,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 15,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "13:54:48Z",
+   "promoted": {
+    "first": "17:03:57Z",
+    "n": 2
+   },
+   "subscribeOutcome": {
+    "first": "17:03:57Z",
+    "n": 62
+   },
+   "evicted": {
+    "first": "17:05:59Z",
+    "n": 4
+   },
+   "notPromoted": {
+    "first": "14:00:28Z",
+    "n": 36
+   },
+   "technical": {
+    "first": "17:04:44Z",
+    "n": 271
+   },
+   "quantAssessed": {
+    "first": "17:05:23Z",
+    "n": 65
+   },
+   "ideas": {
+    "first": "17:12:38Z",
+    "n": 146
+   },
+   "consensus": {
+    "first": "17:12:38Z",
+    "n": 93
+   },
+   "consensusReasons": {
+    "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 1,
+    "CONFIDENCE_BELOW_STRONG": 91,
+    "AGENT_DATA_UNAVAILABLE": 1
+   }
+  },
+  {
+   "symbol": "ONTO",
+   "maxGapPct": -5.74,
+   "price": 242.97,
+   "prevClose": 263.8,
+   "at": "15:40:11Z",
+   "dollarVolMax": 9998944,
+   "spreadBpsMin": 40.8,
+   "rvolMax": null,
+   "adv": 806728,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 1,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "15:40:11Z",
+   "promoted": {
+    "first": "15:49:15Z",
+    "n": 1
+   },
+   "subscribeOutcome": {
+    "first": "15:49:15Z",
+    "n": 16
+   },
+   "evicted": {
+    "first": "16:19:36Z",
+    "n": 1
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": "15:50:23Z",
+    "n": 73
+   },
+   "quantAssessed": {
+    "first": "15:49:58Z",
+    "n": 17
+   },
+   "ideas": {
+    "first": "15:50:23Z",
+    "n": 32
+   },
+   "consensus": {
+    "first": "15:50:31Z",
+    "n": 24
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 23,
+    "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE": 1
+   }
+  },
+  {
+   "symbol": "HIMS",
+   "maxGapPct": -5.74,
+   "price": 27.61,
+   "prevClose": 29.72,
+   "at": "19:40:39Z",
+   "dollarVolMax": 6428480,
+   "spreadBpsMin": 10.8,
+   "rvolMax": null,
+   "adv": 10210477,
+   "sources": "NEWS,BROAD_UNIVERSE",
+   "admitted": 4,
+   "filtered": 5,
+   "filterReasons": {
+    "SPREAD": 3,
+    "RANK_CAP": 1,
+    "NO_SNAPSHOT_DATA": 1
+   },
+   "firstSeen": "19:20:39Z",
+   "promoted": {
+    "first": null,
+    "n": 0
+   },
+   "subscribeOutcome": {
+    "first": null,
+    "n": 0
+   },
+   "evicted": {
+    "first": null,
+    "n": 0
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": null,
+    "n": 0
+   },
+   "quantAssessed": {
+    "first": null,
+    "n": 0
+   },
+   "ideas": {
+    "first": null,
+    "n": 0
+   },
+   "consensus": {
+    "first": null,
+    "n": 0
+   },
+   "consensusReasons": {}
+  },
+  {
+   "symbol": "DKNG",
+   "maxGapPct": -5.68,
+   "price": 18.6,
+   "prevClose": 19.71,
+   "at": "16:56:15Z",
+   "dollarVolMax": 11944312,
+   "spreadBpsMin": 5.3,
+   "rvolMax": null,
+   "adv": 16110005,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 1,
+   "filtered": 13,
+   "filterReasons": {
+    "RANK_CAP": 13
+   },
+   "firstSeen": "15:54:55Z",
+   "promoted": {
+    "first": null,
+    "n": 0
+   },
+   "subscribeOutcome": {
+    "first": null,
+    "n": 0
+   },
+   "evicted": {
+    "first": null,
+    "n": 0
+   },
+   "notPromoted": {
+    "first": "19:23:31Z",
+    "n": 1
+   },
+   "technical": {
+    "first": null,
+    "n": 0
+   },
+   "quantAssessed": {
+    "first": null,
+    "n": 0
+   },
+   "ideas": {
+    "first": null,
+    "n": 0
+   },
+   "consensus": {
+    "first": null,
+    "n": 0
+   },
+   "consensusReasons": {}
+  },
+  {
+   "symbol": "TLN",
+   "maxGapPct": -5.62,
+   "price": 356.39,
+   "prevClose": 382.41,
+   "at": "19:11:45Z",
+   "dollarVolMax": 27526290,
+   "spreadBpsMin": 13.4,
+   "rvolMax": null,
+   "adv": 1141972,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 9,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "14:54:59Z",
+   "promoted": {
+    "first": "19:48:55Z",
+    "n": 1
+   },
+   "subscribeOutcome": {
+    "first": "19:48:55Z",
+    "n": 7
+   },
+   "evicted": {
+    "first": null,
+    "n": 0
+   },
+   "notPromoted": {
+    "first": "15:04:20Z",
+    "n": 10
+   },
+   "technical": {
+    "first": "19:49:30Z",
+    "n": 25
+   },
+   "quantAssessed": {
+    "first": "19:49:35Z",
+    "n": 7
+   },
+   "ideas": {
+    "first": "19:49:30Z",
+    "n": 11
+   },
+   "consensus": {
+    "first": "19:49:30Z",
+    "n": 7
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 7
+   }
+  },
+  {
+   "symbol": "FLEX",
+   "maxGapPct": -5.46,
+   "price": 102.29,
+   "prevClose": 110.885,
+   "at": "15:54:55Z",
+   "dollarVolMax": 8423582,
+   "spreadBpsMin": 34.9,
+   "rvolMax": null,
+   "adv": 3271543,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 1,
+   "filtered": 2,
+   "filterReasons": {
+    "RANK_CAP": 2
+   },
+   "firstSeen": "15:10:01Z",
+   "promoted": {
+    "first": "16:05:04Z",
+    "n": 1
+   },
+   "subscribeOutcome": {
+    "first": "16:05:04Z",
+    "n": 2
+   },
+   "evicted": {
+    "first": "16:11:26Z",
+    "n": 1
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": "16:06:10Z",
+    "n": 10
+   },
+   "quantAssessed": {
+    "first": "16:06:10Z",
+    "n": 2
+   },
+   "ideas": {
+    "first": "16:06:10Z",
+    "n": 2
+   },
+   "consensus": {
+    "first": "16:06:10Z",
+    "n": 1
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 1
+   }
+  },
+  {
+   "symbol": "TWST",
+   "maxGapPct": 5.35,
+   "price": 153.32,
+   "prevClose": 151.52,
+   "at": "15:54:55Z",
+   "dollarVolMax": 11894836,
+   "spreadBpsMin": 25.6,
+   "rvolMax": null,
+   "adv": 3294760,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 2,
+   "filtered": 1,
+   "filterReasons": {
+    "RANK_CAP": 1
+   },
+   "firstSeen": "15:40:11Z",
+   "promoted": {
+    "first": "15:52:18Z",
+    "n": 1
+   },
+   "subscribeOutcome": {
+    "first": "15:52:18Z",
+    "n": 14
+   },
+   "evicted": {
+    "first": "16:24:11Z",
+    "n": 1
+   },
+   "notPromoted": {
+    "first": null,
+    "n": 0
+   },
+   "technical": {
+    "first": "15:54:32Z",
+    "n": 70
+   },
+   "quantAssessed": {
+    "first": "15:54:32Z",
+    "n": 16
+   },
+   "ideas": {
+    "first": "15:54:31Z",
+    "n": 25
+   },
+   "consensus": {
+    "first": "15:54:40Z",
+    "n": 17
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 17
+   }
+  },
+  {
+   "symbol": "DASH",
+   "maxGapPct": -5.19,
+   "price": 180.66,
+   "prevClose": 193.06,
+   "at": "15:25:05Z",
+   "dollarVolMax": 19772339,
+   "spreadBpsMin": 20.3,
+   "rvolMax": null,
+   "adv": 4021461,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 3,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "14:09:50Z",
+   "promoted": {
+    "first": "15:28:21Z",
+    "n": 1
+   },
+   "subscribeOutcome": {
+    "first": "15:28:21Z",
+    "n": 11
+   },
+   "evicted": {
+    "first": "15:55:22Z",
+    "n": 1
+   },
+   "notPromoted": {
+    "first": "14:16:16Z",
+    "n": 1
+   },
+   "technical": {
+    "first": "15:29:18Z",
+    "n": 60
+   },
+   "quantAssessed": {
+    "first": "15:29:19Z",
+    "n": 15
+   },
+   "ideas": {
+    "first": "15:29:18Z",
+    "n": 31
+   },
+   "consensus": {
+    "first": "15:29:18Z",
+    "n": 21
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 21
+   }
+  },
+  {
+   "symbol": "GTLB",
+   "maxGapPct": 5.17,
+   "price": 53.32,
+   "prevClose": 51.87,
+   "at": "16:10:41Z",
+   "dollarVolMax": 13205179,
+   "spreadBpsMin": 13.3,
+   "rvolMax": null,
+   "adv": 4175225,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 7,
+   "filtered": 2,
+   "filterReasons": {
+    "RANK_CAP": 2
+   },
+   "firstSeen": "14:54:59Z",
+   "promoted": {
+    "first": "15:04:20Z",
+    "n": 2
+   },
+   "subscribeOutcome": {
+    "first": "15:04:20Z",
+    "n": 25
+   },
+   "evicted": {
+    "first": "15:28:51Z",
+    "n": 1
+   },
+   "notPromoted": {
+    "first": "15:46:12Z",
+    "n": 4
+   },
+   "technical": {
+    "first": "15:04:59Z",
+    "n": 125
+   },
+   "quantAssessed": {
+    "first": "15:04:58Z",
+    "n": 27
+   },
+   "ideas": {
+    "first": "15:04:59Z",
+    "n": 47
+   },
+   "consensus": {
+    "first": "15:04:59Z",
+    "n": 30
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 30
+   }
+  },
+  {
+   "symbol": "ALAB",
+   "maxGapPct": -5.14,
+   "price": 302.02,
+   "prevClose": 325.29,
+   "at": "19:41:39Z",
+   "dollarVolMax": 42815865,
+   "spreadBpsMin": 10.7,
+   "rvolMax": null,
+   "adv": 4352157,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 7,
+   "filtered": 0,
+   "filterReasons": {},
+   "firstSeen": "14:09:50Z",
+   "promoted": {
+    "first": "19:47:19Z",
+    "n": 1
+   },
+   "subscribeOutcome": {
+    "first": "19:47:19Z",
+    "n": 5
+   },
+   "evicted": {
+    "first": "19:49:26Z",
+    "n": 1
+   },
+   "notPromoted": {
+    "first": "15:47:43Z",
+    "n": 4
+   },
+   "technical": {
+    "first": "19:48:06Z",
+    "n": 27
+   },
+   "quantAssessed": {
+    "first": "19:49:13Z",
+    "n": 6
+   },
+   "ideas": {
+    "first": "19:49:13Z",
+    "n": 12
+   },
+   "consensus": {
+    "first": "19:49:13Z",
+    "n": 9
+   },
+   "consensusReasons": {
+    "CONFIDENCE_BELOW_STRONG": 9
+   }
+  },
+  {
+   "symbol": "OWL",
+   "maxGapPct": -5.11,
+   "price": 8.73,
+   "prevClose": 9.3,
+   "at": "18:41:30Z",
+   "dollarVolMax": 11213386,
+   "spreadBpsMin": 11.3,
+   "rvolMax": null,
+   "adv": 18756689,
+   "sources": "BROAD_UNIVERSE",
+   "admitted": 1,
+   "filtered": 12,
+   "filterReasons": {
+    "RANK_CAP": 12
+   },
+   "firstSeen": "16:10:41Z",
+   "promoted": {
+    "first": null,
+    "n": 0
+   },
+   "subscribeOutcome": {
+    "first": null,
+    "n": 0
+   },
+   "evicted": {
+    "first": null,
+    "n": 0
+   },
+   "notPromoted": {
+    "first": "19:24:02Z",
+    "n": 1
+   },
+   "technical": {
+    "first": null,
+    "n": 0
+   },
+   "quantAssessed": {
+    "first": null,
+    "n": 0
+   },
+   "ideas": {
+    "first": null,
+    "n": 0
+   },
+   "consensus": {
+    "first": null,
+    "n": 0
+   },
+   "consensusReasons": {}
+  }
+ ]
+}

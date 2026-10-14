@@ -1,0 +1,193 @@
+{
+ "snapshot": "argus_oct14_postclose_1792008436014.db",
+ "records": 27191,
+ "agentParticipation": {
+  "KronosEngine": 24865,
+  "MacroAgent": 16338,
+  "TechnicalAgent": 10534,
+  "JavaCoreEnsemble": 501,
+  "ConsensusDebate": 6
+ },
+ "agentSide": {
+  "KronosEngine|BUY": 4581,
+  "MacroAgent|HOLD": 16294,
+  "TechnicalAgent|BUY": 10513,
+  "JavaCoreEnsemble|SELL": 501,
+  "KronosEngine|SELL": 20284,
+  "MacroAgent|BUY": 44,
+  "ConsensusDebate|HOLD": 6,
+  "TechnicalAgent|SELL": 21
+ },
+ "finalConfidenceBins": {
+  "0.4": 2962,
+  "0.3": 6669,
+  "0.5": 16401,
+  "0.6": 87,
+  "0.0": 140,
+  "0.1": 40,
+  "0.2": 865,
+  "0.7": 27
+ },
+ "independentGroupsHistogram": {
+  "0": 140,
+  "1": 24850,
+  "2": 2198,
+  "3": 3
+ },
+ "requiredGroups": {
+  "2": 27191
+ },
+ "recordsWith2PlusGroupsAgreeingBUY": 1826,
+ "recordsWith2PlusGroupsAgreeingSELL": 411,
+ "recordsWithAny2PlusAgreement": 2237,
+ "symbolsWithAny2PlusAgreement": 147,
+ "maxFinalConfidence": 0.773,
+ "finalConfidenceGE60": 114,
+ "finalConfidenceGE75": 2,
+ "technicalBuyConfidenceGE75Evaluations": 11,
+ "technicalBuyGE75Symbols": 8,
+ "quantEngineParticipations": 0,
+ "sampleBUY2Groups": [
+  {
+   "s": "ISRG",
+   "ts": "14:40:49",
+   "fc": 0.6251207146306133,
+   "side": "BUY",
+   "code": "MODERATE_REJECT_CALIBRATION",
+   "agents": [
+    "TechnicalAgent:BUY:0.71",
+    "MacroAgent:HOLD:0.00",
+    "KronosEngine:BUY:0.61"
+   ]
+  },
+  {
+   "s": "DDOG",
+   "ts": "13:30:06",
+   "fc": 0.5632605658694225,
+   "side": "BUY",
+   "code": "CONFIDENCE_BELOW_STRONG",
+   "agents": [
+    "KronosEngine:BUY:0.61",
+    "TechnicalAgent:BUY:0.39"
+   ]
+  },
+  {
+   "s": "DDOG",
+   "ts": "13:30:06",
+   "fc": 0.5632605658694225,
+   "side": "BUY",
+   "code": "CONFIDENCE_BELOW_STRONG",
+   "agents": [
+    "KronosEngine:BUY:0.61",
+    "TechnicalAgent:BUY:0.39",
+    "MacroAgent:HOLD:0.00"
+   ]
+  },
+  {
+   "s": "IONQ",
+   "ts": "16:24:14",
+   "fc": 0.5550918337326104,
+   "side": "BUY",
+   "code": "CONFIDENCE_BELOW_STRONG",
+   "agents": [
+    "TechnicalAgent:BUY:0.77",
+    "MacroAgent:HOLD:0.00",
+    "KronosEngine:BUY:0.50"
+   ]
+  },
+  {
+   "s": "VRT",
+   "ts": "17:12:40",
+   "fc": 0.5495144534778682,
+   "side": "BUY",
+   "code": "CONFIDENCE_BELOW_STRONG",
+   "agents": [
+    "TechnicalAgent:BUY:0.71",
+    "MacroAgent:HOLD:0.00",
+    "KronosEngine:BUY:0.51"
+   ]
+  },
+  {
+   "s": "GS",
+   "ts": "16:40:32",
+   "fc": 0.5440290323341431,
+   "side": "BUY",
+   "code": "CONFIDENCE_BELOW_STRONG",
+   "agents": [
+    "TechnicalAgent:BUY:0.71",
+    "MacroAgent:HOLD:0.00",
+    "KronosEngine:BUY:0.50"
+   ]
+  },
+  {
+   "s": "MMED",
+   "ts": "16:11:27",
+   "fc": 0.5423229069414565,
+   "side": "BUY",
+   "code": "CONFIDENCE_BELOW_STRONG",
+   "agents": [
+    "TechnicalAgent:BUY:0.71",
+    "MacroAgent:HOLD:0.00",
+    "KronosEngine:BUY:0.50"
+   ]
+  },
+  {
+   "s": "KLAC",
+   "ts": "16:13:29",
+   "fc": 0.5423229069414565,
+   "side": "BUY",
+   "code": "CONFIDENCE_BELOW_STRONG",
+   "agents": [
+    "TechnicalAgent:BUY:0.71",
+    "MacroAgent:HOLD:0.00",
+    "KronosEngine:BUY:0.50"
+   ]
+  },
+  {
+   "s": "HD",
+   "ts": "14:04:10",
+   "fc": 0.5414516437308868,
+   "side": "BUY",
+   "code": "CONFIDENCE_BELOW_STRONG",
+   "agents": [
+    "TechnicalAgent:BUY:0.71",
+    "MacroAgent:HOLD:0.70",
+    "KronosEngine:BUY:0.50"
+   ]
+  },
+  {
+   "s": "FAST",
+   "ts": "14:43:25",
+   "fc": 0.5414516437308868,
+   "side": "BUY",
+   "code": "CONFIDENCE_BELOW_STRONG",
+   "agents": [
+    "TechnicalAgent:BUY:0.71",
+    "MacroAgent:HOLD:0.00",
+    "KronosEngine:BUY:0.50"
+   ]
+  },
+  {
+   "s": "SHOP",
+   "ts": "15:08:56",
+   "fc": 0.5414516437308868,
+   "side": "BUY",
+   "code": "CONFIDENCE_BELOW_STRONG",
+   "agents": [
+    "TechnicalAgent:BUY:0.71",
+    "KronosEngine:BUY:0.50"
+   ]
+  },
+  {
+   "s": "SQQQ",
+   "ts": "18:57:30",
+   "fc": 0.5278046223858465,
+   "side": "BUY",
+   "code": "CONFIDENCE_BELOW_STRONG",
+   "agents": [
+    "KronosEngine:BUY:0.51",
+    "MacroAgent:BUY:0.70"
+   ]
+  }
+ ]
+}

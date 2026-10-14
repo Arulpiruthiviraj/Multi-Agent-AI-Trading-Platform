@@ -1,0 +1,1262 @@
+{
+ "snapshot": "argus_oct14_postclose_1792008436014.db",
+ "window": [
+  "2026-10-14T13:30:00Z",
+  "2026-10-14T20:00:00Z"
+ ],
+ "eventTypeCounts": [
+  {
+   "event_type": "QUANT_BRIDGE_CALL_OUTCOME",
+   "c": 1072727,
+   "syms": 164,
+   "a": "2026-10-14T13:30:01.368Z",
+   "b": "2026-10-14T19:59:58.469Z"
+  },
+  {
+   "event_type": "TECHNICAL_ANALYSIS_STARTED",
+   "c": 86600,
+   "syms": 163,
+   "a": "2026-10-14T13:30:00.038Z",
+   "b": "2026-10-14T19:59:59.952Z"
+  },
+  {
+   "event_type": "TECHNICAL_ANALYSIS_COMPLETED",
+   "c": 86600,
+   "syms": 163,
+   "a": "2026-10-14T13:30:00.039Z",
+   "b": "2026-10-14T19:59:59.952Z"
+  },
+  {
+   "event_type": "DESK_NO_TRADE",
+   "c": 46295,
+   "syms": 162,
+   "a": "2026-10-14T13:30:00.790Z",
+   "b": "2026-10-14T19:59:59.973Z"
+  },
+  {
+   "event_type": "TRADE_IDEA_GENERATED",
+   "c": 43904,
+   "syms": 162,
+   "a": "2026-10-14T13:30:00.392Z",
+   "b": "2026-10-14T19:59:59.948Z"
+  },
+  {
+   "event_type": "QUANT_BAR_INPUT_AVAILABILITY",
+   "c": 40006,
+   "syms": 162,
+   "a": "2026-10-14T13:30:00.394Z",
+   "b": "2026-10-14T19:59:59.954Z"
+  },
+  {
+   "event_type": "KRONOS_FORECAST_STARTED",
+   "c": 37646,
+   "syms": 163,
+   "a": "2026-10-14T13:30:00.044Z",
+   "b": "2026-10-14T19:59:59.999Z"
+  },
+  {
+   "event_type": "KRONOS_FORECAST_COMPLETED",
+   "c": 37011,
+   "syms": 163,
+   "a": "2026-10-14T13:30:00.090Z",
+   "b": "2026-10-14T19:59:59.940Z"
+  },
+  {
+   "event_type": "KRONOS_HIGH_CONFIDENCE",
+   "c": 34159,
+   "syms": 163,
+   "a": "2026-10-14T13:30:00.090Z",
+   "b": "2026-10-14T19:59:59.940Z"
+  },
+  {
+   "event_type": "TRADE_LIFECYCLE",
+   "c": 28436,
+   "syms": 162,
+   "a": "2026-10-14T13:30:00.791Z",
+   "b": "2026-10-14T19:59:58.817Z"
+  },
+  {
+   "event_type": "CONSENSUS_TERMINAL_REASON",
+   "c": 27191,
+   "syms": 162,
+   "a": "2026-10-14T13:30:00.786Z",
+   "b": "2026-10-14T19:59:58.806Z"
+  },
+  {
+   "event_type": "CONSENSUS_MODEL_COMPARISON",
+   "c": 27191,
+   "syms": 162,
+   "a": "2026-10-14T13:30:00.787Z",
+   "b": "2026-10-14T19:59:58.808Z"
+  },
+  {
+   "event_type": "CHIEF_CONSENSUS_STARTED",
+   "c": 27191,
+   "syms": 162,
+   "a": "2026-10-14T13:30:00.784Z",
+   "b": "2026-10-14T19:59:58.802Z"
+  },
+  {
+   "event_type": "CHIEF_CONSENSUS_COMPLETED",
+   "c": 27191,
+   "syms": 162,
+   "a": "2026-10-14T13:30:00.785Z",
+   "b": "2026-10-14T19:59:58.805Z"
+  },
+  {
+   "event_type": "QUANT_CORE_PARITY_DIVERGENCE",
+   "c": 26046,
+   "syms": 163,
+   "a": "2026-10-14T13:30:23.026Z",
+   "b": "2026-10-14T19:59:17.549Z"
+  },
+  {
+   "event_type": "CONSENSUS_INTERIM_EVALUATIONS_COLLAPSED",
+   "c": 21629,
+   "syms": 162,
+   "a": "2026-10-14T13:30:04.988Z",
+   "b": "2026-10-14T19:59:10.144Z"
+  },
+  {
+   "event_type": "IDEA_RATE_LIMITED",
+   "c": 20362,
+   "syms": 163,
+   "a": "2026-10-14T13:30:00.056Z",
+   "b": "2026-10-14T19:59:59.476Z"
+  },
+  {
+   "event_type": "QUANT_SYMBOL_EVAL_STARTED",
+   "c": 20003,
+   "syms": 162,
+   "a": "2026-10-14T13:30:00.391Z",
+   "b": "2026-10-14T19:59:59.943Z"
+  },
+  {
+   "event_type": "QUANT_SYMBOL_EVAL_FINISHED",
+   "c": 20003,
+   "syms": 162,
+   "a": "2026-10-14T13:30:01.345Z",
+   "b": "2026-10-14T19:59:59.987Z"
+  },
+  {
+   "event_type": "QUANT_SELECTION_POOL",
+   "c": 20003,
+   "syms": 162,
+   "a": "2026-10-14T13:30:01.329Z",
+   "b": "2026-10-14T19:59:59.968Z"
+  },
+  {
+   "event_type": "QUANT_QUOTE_EVIDENCE",
+   "c": 20003,
+   "syms": 162,
+   "a": "2026-10-14T13:30:01.332Z",
+   "b": "2026-10-14T19:59:59.973Z"
+  },
+  {
+   "event_type": "QUANT_ASSESSMENT_COMPLETED",
+   "c": 20003,
+   "syms": 162,
+   "a": "2026-10-14T13:30:01.332Z",
+   "b": "2026-10-14T19:59:59.973Z"
+  },
+  {
+   "event_type": "MARKET_DATA_SUBSCRIPTION_OUTCOME",
+   "c": 19287,
+   "syms": 165,
+   "a": "2026-10-14T13:30:00.773Z",
+   "b": "2026-10-14T19:59:59.947Z"
+  },
+  {
+   "event_type": "CONFLUENCE_COORDINATOR_TRIGGERED",
+   "c": 18760,
+   "syms": 162,
+   "a": "2026-10-14T13:30:00.391Z",
+   "b": "2026-10-14T19:59:59.948Z"
+  },
+  {
+   "event_type": "PRICE_SNAPSHOT_REQUESTED",
+   "c": 16956,
+   "syms": 162,
+   "a": "2026-10-14T13:30:00.773Z",
+   "b": "2026-10-14T19:59:59.945Z"
+  },
+  {
+   "event_type": "FRESH_PRICE_WAIT_OUTCOME",
+   "c": 16955,
+   "syms": 162,
+   "a": "2026-10-14T13:30:00.776Z",
+   "b": "2026-10-14T19:59:58.368Z"
+  },
+  {
+   "event_type": "QUANT_EVIDENCE_PRODUCED",
+   "c": 16584,
+   "syms": 162,
+   "a": "2026-10-14T13:30:01.370Z",
+   "b": "2026-10-14T19:59:58.471Z"
+  },
+  {
+   "event_type": "QUANT_CORE_STRATEGY_PARITY_DIVERGENCE",
+   "c": 16584,
+   "syms": 162,
+   "a": "2026-10-14T13:30:01.368Z",
+   "b": "2026-10-14T19:59:58.469Z"
+  },
+  {
+   "event_type": "DISCOVERY_CANDIDATE_FILTERED",
+   "c": 15415,
+   "syms": 1066,
+   "a": "2026-10-14T13:34:51.429Z",
+   "b": "2026-10-14T19:55:57.510Z"
+  },
+  {
+   "event_type": "TEMPORARY_DATA_RESCUE_GRANTED",
+   "c": 14538,
+   "syms": 159,
+   "a": "2026-10-14T13:30:00.773Z",
+   "b": "2026-10-14T19:59:59.947Z"
+  },
+  {
+   "event_type": "SUBSCRIPTION_NOT_PROMOTED",
+   "c": 10591,
+   "syms": 188,
+   "a": "2026-10-14T13:30:56.012Z",
+   "b": "2026-10-14T19:59:56.208Z"
+  },
+  {
+   "event_type": "IBKR_HISTORICAL_DATA_TIMING",
+   "c": 7354,
+   "syms": 309,
+   "a": "2026-10-14T13:30:00.032Z",
+   "b": "2026-10-14T19:59:54.664Z"
+  },
+  {
+   "event_type": "AGENT_DISAGREEMENT",
+   "c": 6656,
+   "syms": 156,
+   "a": "2026-10-14T13:30:01.377Z",
+   "b": "2026-10-14T19:59:58.379Z"
+  },
+  {
+   "event_type": "AI_COST_GOVERNOR_SHADOW_COMPARISON",
+   "c": 6123,
+   "syms": 0,
+   "a": "2026-10-14T13:30:28.539Z",
+   "b": "2026-10-14T19:59:51.268Z"
+  },
+  {
+   "event_type": "DISCOVERY_CANDIDATE_ADMITTED",
+   "c": 6046,
+   "syms": 443,
+   "a": "2026-10-14T13:30:56.018Z",
+   "b": "2026-10-14T19:59:56.210Z"
+  },
+  {
+   "event_type": "SUBSCRIPTION_ALREADY_ACTIVE",
+   "c": 5810,
+   "syms": 32,
+   "a": "2026-10-14T13:30:56.011Z",
+   "b": "2026-10-14T19:59:56.205Z"
+  },
+  {
+   "event_type": "QUANT_SYMBOL_SUPERSEDED_BY_RECENT_EVALUATION",
+   "c": 5419,
+   "syms": 161,
+   "a": "2026-10-14T13:34:51.070Z",
+   "b": "2026-10-14T19:55:52.528Z"
+  },
+  {
+   "event_type": "NEWS_PROVIDER_FAILED",
+   "c": 4486,
+   "syms": 0,
+   "a": "2026-10-14T13:34:51.281Z",
+   "b": "2026-10-14T19:59:56.945Z"
+  },
+  {
+   "event_type": "AI_CALL",
+   "c": 4056,
+   "syms": 0,
+   "a": "2026-10-14T13:33:58.308Z",
+   "b": "2026-10-14T19:59:58.797Z"
+  },
+  {
+   "event_type": "UI_UPDATE",
+   "c": 3971,
+   "syms": 0,
+   "a": "2026-10-14T13:33:58.306Z",
+   "b": "2026-10-14T19:59:58.788Z"
+  },
+  {
+   "event_type": "QUANT_CORE_TICK_RESYNC_SENT",
+   "c": 2660,
+   "syms": 159,
+   "a": "2026-10-14T13:30:30.091Z",
+   "b": "2026-10-14T19:59:55.382Z"
+  },
+  {
+   "event_type": "WATCHLIST_SUBSCRIBE_REQUESTED",
+   "c": 2311,
+   "syms": 157,
+   "a": "2026-10-14T13:30:10.907Z",
+   "b": "2026-10-14T19:59:56.211Z"
+  },
+  {
+   "event_type": "QUANT_ENSEMBLE_CALL_OUTCOME",
+   "c": 2155,
+   "syms": 0,
+   "a": "2026-10-14T13:30:28.606Z",
+   "b": "2026-10-14T19:59:51.372Z"
+  },
+  {
+   "event_type": "NEWS_PIPELINE_TICK",
+   "c": 2149,
+   "syms": 0,
+   "a": "2026-10-14T13:34:54.748Z",
+   "b": "2026-10-14T19:59:56.946Z"
+  },
+  {
+   "event_type": "TEMPORARY_DATA_RESCUE_DENIED",
+   "c": 1788,
+   "syms": 139,
+   "a": "2026-10-14T13:30:11.263Z",
+   "b": "2026-10-14T19:59:42.778Z"
+  },
+  {
+   "event_type": "STRATEGY_AUTHORIZATION_CHECKED",
+   "c": 1758,
+   "syms": 28,
+   "a": "2026-10-14T13:30:01.374Z",
+   "b": "2026-10-14T19:59:22.911Z"
+  },
+  {
+   "event_type": "CHIEF_DECISION_POLICY_SELECTED",
+   "c": 1758,
+   "syms": 28,
+   "a": "2026-10-14T13:30:01.374Z",
+   "b": "2026-10-14T19:59:22.911Z"
+  },
+  {
+   "event_type": "AI_DEBATE_FAIL_CLOSED_EXCLUDED",
+   "c": 1751,
+   "syms": 148,
+   "a": "2026-10-14T13:33:58.309Z",
+   "b": "2026-10-14T19:59:58.800Z"
+  },
+  {
+   "event_type": "SYSTEM_METRICS",
+   "c": 1504,
+   "syms": 0,
+   "a": "2026-10-14T13:30:06.365Z",
+   "b": "2026-10-14T19:59:57.433Z"
+  },
+  {
+   "event_type": "TEMPORARY_DATA_RESCUE_RELEASED",
+   "c": 1499,
+   "syms": 156,
+   "a": "2026-10-14T13:30:00.366Z",
+   "b": "2026-10-14T19:59:49.878Z"
+  },
+  {
+   "event_type": "QUANT_SYMBOL_EVALUATION_STARTED",
+   "c": 1341,
+   "syms": 153,
+   "a": "2026-10-14T13:34:51.071Z",
+   "b": "2026-10-14T19:55:51.608Z"
+  },
+  {
+   "event_type": "QUANT_SYMBOL_EVALUATION_FINISHED",
+   "c": 1341,
+   "syms": 153,
+   "a": "2026-10-14T13:34:51.320Z",
+   "b": "2026-10-14T19:55:52.527Z"
+  },
+  {
+   "event_type": "CAMPAIGN_CONFLUENCE_NUDGE",
+   "c": 878,
+   "syms": 10,
+   "a": "2026-10-14T13:33:41.884Z",
+   "b": "2026-10-14T19:59:20.861Z"
+  },
+  {
+   "event_type": "KRONOS_STATUS_CHANGE",
+   "c": 764,
+   "syms": 0,
+   "a": "2026-10-14T13:30:11.091Z",
+   "b": "2026-10-14T19:59:55.211Z"
+  },
+  {
+   "event_type": "IBKR_HISTORICAL_QUEUE_STATS",
+   "c": 756,
+   "syms": 0,
+   "a": "2026-10-14T13:30:05.254Z",
+   "b": "2026-10-14T19:59:57.568Z"
+  },
+  {
+   "event_type": "OPPORTUNITY_SCAN_COMPLETED",
+   "c": 731,
+   "syms": 0,
+   "a": "2026-10-14T13:30:56.030Z",
+   "b": "2026-10-14T19:59:56.224Z"
+  },
+  {
+   "event_type": "DISCOVERY_CHALLENGER_SWAP_OUTCOME",
+   "c": 731,
+   "syms": 0,
+   "a": "2026-10-14T13:30:56.011Z",
+   "b": "2026-10-14T19:59:56.204Z"
+  },
+  {
+   "event_type": "DISCOVERY_CHALLENGER_CYCLE_SNAPSHOT",
+   "c": 731,
+   "syms": 0,
+   "a": "2026-10-14T13:30:56.010Z",
+   "b": "2026-10-14T19:59:56.203Z"
+  },
+  {
+   "event_type": "BROAD_UNIVERSE_TOPN_TRUNCATED",
+   "c": 671,
+   "syms": 0,
+   "a": "2026-10-14T13:30:55.520Z",
+   "b": "2026-10-14T19:55:42.800Z"
+  },
+  {
+   "event_type": "BROAD_UNIVERSE_CHALLENGER_EXCLUDED",
+   "c": 602,
+   "syms": 0,
+   "a": "2026-10-14T13:30:56.009Z",
+   "b": "2026-10-14T19:56:14.631Z"
+  },
+  {
+   "event_type": "SYMBOL_NOT_SUBSCRIBED",
+   "c": 577,
+   "syms": 152,
+   "a": "2026-10-14T13:30:56.018Z",
+   "b": "2026-10-14T19:59:59.946Z"
+  },
+  {
+   "event_type": "CAMPAIGN_EFFORT_TELEMETRY",
+   "c": 573,
+   "syms": 0,
+   "a": "2026-10-14T13:30:04.675Z",
+   "b": "2026-10-14T19:59:09.906Z"
+  },
+  {
+   "event_type": "QUANT_CONFLUENCE_SIDE_MISMATCH",
+   "c": 547,
+   "syms": 6,
+   "a": "2026-10-14T13:30:28.606Z",
+   "b": "2026-10-14T19:53:51.056Z"
+  },
+  {
+   "event_type": "IBKR_MARKET_DATA_SUBSCRIPTION_RECOVERED",
+   "c": 540,
+   "syms": 156,
+   "a": "2026-10-14T13:30:56.252Z",
+   "b": "2026-10-14T19:59:56.466Z"
+  },
+  {
+   "event_type": "IBKR_MARKET_DATA_SUBSCRIPTION_ACKNOWLEDGED",
+   "c": 540,
+   "syms": 156,
+   "a": "2026-10-14T13:30:56.242Z",
+   "b": "2026-10-14T19:59:56.466Z"
+  },
+  {
+   "event_type": "TRADE_IDEA_REJECTED",
+   "c": 509,
+   "syms": 22,
+   "a": "2026-10-14T13:31:02.034Z",
+   "b": "2026-10-14T19:59:56.461Z"
+  },
+  {
+   "event_type": "ASSET_CANDIDATE_BLOCKED",
+   "c": 469,
+   "syms": 2,
+   "a": "2026-10-14T13:31:02.033Z",
+   "b": "2026-10-14T19:59:56.459Z"
+  },
+  {
+   "event_type": "SUBSCRIPTION_EVICTED",
+   "c": 452,
+   "syms": 149,
+   "a": "2026-10-14T13:30:56.019Z",
+   "b": "2026-10-14T19:59:59.947Z"
+  },
+  {
+   "event_type": "SUBSCRIPTION_PROMOTED",
+   "c": 381,
+   "syms": 144,
+   "a": "2026-10-14T13:30:56.012Z",
+   "b": "2026-10-14T19:59:56.205Z"
+  },
+  {
+   "event_type": "CAMPAIGN_PROGRESS_UPDATED",
+   "c": 381,
+   "syms": 0,
+   "a": "2026-10-14T13:30:04.675Z",
+   "b": "2026-10-14T19:59:09.905Z"
+  },
+  {
+   "event_type": "QUANT_ADVISORY_PAYLOAD_STREAMED",
+   "c": 366,
+   "syms": 97,
+   "a": "2026-10-14T13:30:04.848Z",
+   "b": "2026-10-14T19:53:30.141Z"
+  },
+  {
+   "event_type": "QUANT_ADVISORY_ANALYSIS_COMPLETED",
+   "c": 254,
+   "syms": 115,
+   "a": "2026-10-14T13:30:04.826Z",
+   "b": "2026-10-14T19:59:33.293Z"
+  },
+  {
+   "event_type": "SLOW_SQL_STATEMENT",
+   "c": 174,
+   "syms": 0,
+   "a": "2026-10-14T14:09:27.777Z",
+   "b": "2026-10-14T19:59:32.986Z"
+  },
+  {
+   "event_type": "NEWS_OPEN_CONTRADICTORY_PRICE_ACTION",
+   "c": 139,
+   "syms": 14,
+   "a": "2026-10-14T13:30:06.369Z",
+   "b": "2026-10-14T16:57:17.236Z"
+  },
+  {
+   "event_type": "NEWS_CATALYST",
+   "c": 136,
+   "syms": 86,
+   "a": "2026-10-14T14:07:02.478Z",
+   "b": "2026-10-14T19:16:12.482Z"
+  },
+  {
+   "event_type": "MODERATE_TIER_EVALUATED",
+   "c": 112,
+   "syms": 39,
+   "a": "2026-10-14T13:30:01.796Z",
+   "b": "2026-10-14T19:57:50.075Z"
+  },
+  {
+   "event_type": "SYNC_PERSIST_SLOW",
+   "c": 104,
+   "syms": 0,
+   "a": "2026-10-14T13:36:22.906Z",
+   "b": "2026-10-14T19:55:51.317Z"
+  },
+  {
+   "event_type": "NEWS_SENTIMENT_SCORED",
+   "c": 85,
+   "syms": 44,
+   "a": "2026-10-14T13:34:54.146Z",
+   "b": "2026-10-14T19:16:12.468Z"
+  },
+  {
+   "event_type": "NEWS_ANALYZED",
+   "c": 85,
+   "syms": 49,
+   "a": "2026-10-14T13:34:54.164Z",
+   "b": "2026-10-14T19:16:12.483Z"
+  },
+  {
+   "event_type": "NEWS_ANALYSIS_STARTED",
+   "c": 85,
+   "syms": 0,
+   "a": "2026-10-14T13:34:54.163Z",
+   "b": "2026-10-14T19:16:12.477Z"
+  },
+  {
+   "event_type": "ESCALATION_DECISION",
+   "c": 85,
+   "syms": 0,
+   "a": "2026-10-14T13:34:54.164Z",
+   "b": "2026-10-14T19:16:12.479Z"
+  },
+  {
+   "event_type": "NEWS_CLUSTER_CREATED",
+   "c": 84,
+   "syms": 48,
+   "a": "2026-10-14T13:34:54.163Z",
+   "b": "2026-10-14T19:16:12.477Z"
+  },
+  {
+   "event_type": "RECONCILIATION_MATCH",
+   "c": 76,
+   "syms": 0,
+   "a": "2026-10-14T13:34:51.045Z",
+   "b": "2026-10-14T19:55:42.117Z"
+  },
+  {
+   "event_type": "QUANT_CYCLE_STARTED",
+   "c": 76,
+   "syms": 0,
+   "a": "2026-10-14T13:34:51.070Z",
+   "b": "2026-10-14T19:55:42.130Z"
+  },
+  {
+   "event_type": "QUANT_CYCLE_COMPLETED",
+   "c": 76,
+   "syms": 0,
+   "a": "2026-10-14T13:35:06.330Z",
+   "b": "2026-10-14T19:55:52.531Z"
+  },
+  {
+   "event_type": null,
+   "c": 76,
+   "syms": 0,
+   "a": "2026-10-14T13:34:51.039Z",
+   "b": "2026-10-14T19:55:42.109Z"
+  },
+  {
+   "event_type": "MEMORY_TELEMETRY_SAMPLE",
+   "c": 75,
+   "syms": 0,
+   "a": "2026-10-14T13:34:51.153Z",
+   "b": "2026-10-14T19:55:45.651Z"
+  },
+  {
+   "event_type": "AI_PROVIDERS_EXHAUSTED",
+   "c": 74,
+   "syms": 0,
+   "a": "2026-10-14T13:31:59.082Z",
+   "b": "2026-10-14T19:55:05.796Z"
+  },
+  {
+   "event_type": "MARKET_REGIME_DETECTED",
+   "c": 71,
+   "syms": 0,
+   "a": "2026-10-14T13:34:29.429Z",
+   "b": "2026-10-14T19:55:07.146Z"
+  },
+  {
+   "event_type": "AI_CALL_CONSIDERED",
+   "c": 58,
+   "syms": 49,
+   "a": "2026-10-14T14:07:02.472Z",
+   "b": "2026-10-14T19:16:12.478Z"
+  },
+  {
+   "event_type": "JEV_DECISION_COMPLETED",
+   "c": 56,
+   "syms": 49,
+   "a": "2026-10-14T14:07:02.792Z",
+   "b": "2026-10-14T19:16:12.610Z"
+  },
+  {
+   "event_type": "AI_CALL_STARTED",
+   "c": 56,
+   "syms": 49,
+   "a": "2026-10-14T14:07:02.472Z",
+   "b": "2026-10-14T19:16:12.478Z"
+  },
+  {
+   "event_type": "AI_CALL_COMPLETED",
+   "c": 56,
+   "syms": 49,
+   "a": "2026-10-14T14:07:02.791Z",
+   "b": "2026-10-14T19:16:12.610Z"
+  },
+  {
+   "event_type": "AI_ADVISORY_NEWS_CATALYST",
+   "c": 56,
+   "syms": 49,
+   "a": "2026-10-14T14:07:02.792Z",
+   "b": "2026-10-14T19:16:12.611Z"
+  },
+  {
+   "event_type": "QUANT_BRIDGE_MALFORMED_RESPONSE",
+   "c": 53,
+   "syms": 4,
+   "a": "2026-10-14T13:53:26.103Z",
+   "b": "2026-10-14T19:30:52.565Z"
+  },
+  {
+   "event_type": "MARKET_DATA_CAPACITY_FULL",
+   "c": 45,
+   "syms": 22,
+   "a": "2026-10-14T18:00:56.965Z",
+   "b": "2026-10-14T19:53:40.757Z"
+  },
+  {
+   "event_type": "RUNTIME_ORDERS_STARTED",
+   "c": 43,
+   "syms": 0,
+   "a": "2026-10-14T13:31:56.839Z",
+   "b": "2026-10-14T19:14:41.593Z"
+  },
+  {
+   "event_type": "RUNTIME_ORDERS_FINISHED",
+   "c": 43,
+   "syms": 0,
+   "a": "2026-10-14T13:31:56.841Z",
+   "b": "2026-10-14T19:14:41.596Z"
+  },
+  {
+   "event_type": "IBKR_HISTORICAL_DATA_ERROR",
+   "c": 38,
+   "syms": 38,
+   "a": "2026-10-14T16:55:44.162Z",
+   "b": "2026-10-14T17:54:10.692Z"
+  },
+  {
+   "event_type": "WORK_CYCLE_SLOW",
+   "c": 33,
+   "syms": 0,
+   "a": "2026-10-14T13:31:34.530Z",
+   "b": "2026-10-14T19:33:14.396Z"
+  },
+  {
+   "event_type": "CALIBRATION_VALIDATION_DEFERRED",
+   "c": 26,
+   "syms": 0,
+   "a": "2026-10-14T13:39:48.492Z",
+   "b": "2026-10-14T19:55:42.093Z"
+  },
+  {
+   "event_type": "QUANT_IDEA_DISCARDED_STALE_DATA",
+   "c": 19,
+   "syms": 7,
+   "a": "2026-10-14T14:29:35.261Z",
+   "b": "2026-10-14T19:53:17.041Z"
+  },
+  {
+   "event_type": "KRONOS_UNAVAILABLE",
+   "c": 14,
+   "syms": 13,
+   "a": "2026-10-14T15:01:40.627Z",
+   "b": "2026-10-14T19:55:30.024Z"
+  },
+  {
+   "event_type": "EVENT_LOOP_LAG_WARN",
+   "c": 10,
+   "syms": 0,
+   "a": "2026-10-14T15:01:40.624Z",
+   "b": "2026-10-14T19:56:42.087Z"
+  },
+  {
+   "event_type": "MODEL_HEALTH",
+   "c": 4,
+   "syms": 0,
+   "a": "2026-10-14T16:55:28.610Z",
+   "b": "2026-10-14T16:55:28.611Z"
+  },
+  {
+   "event_type": "TRADING_STATE_CHANGED",
+   "c": 2,
+   "syms": 0,
+   "a": "2026-10-14T16:55:16.995Z",
+   "b": "2026-10-14T16:56:01.674Z"
+  },
+  {
+   "event_type": "RUNTIME_PHASE_CHANGED",
+   "c": 2,
+   "syms": 0,
+   "a": "2026-10-14T16:54:50.655Z",
+   "b": "2026-10-14T16:55:28.621Z"
+  },
+  {
+   "event_type": "PRIMARY_DATA_RESERVATION_RELEASED",
+   "c": 2,
+   "syms": 2,
+   "a": "2026-10-14T13:30:04.983Z",
+   "b": "2026-10-14T13:30:04.985Z"
+  },
+  {
+   "event_type": "NEWS_OPEN_CONFLUENCE",
+   "c": 2,
+   "syms": 2,
+   "a": "2026-10-14T13:30:21.377Z",
+   "b": "2026-10-14T13:30:36.381Z"
+  },
+  {
+   "event_type": "KRONOS_LOW_CONFIDENCE",
+   "c": 2,
+   "syms": 1,
+   "a": "2026-10-14T16:10:25.481Z",
+   "b": "2026-10-14T16:10:28.660Z"
+  },
+  {
+   "event_type": "AI_CALL_SKIPPED",
+   "c": 2,
+   "syms": 2,
+   "a": "2026-10-14T18:15:13.757Z",
+   "b": "2026-10-14T18:15:14.906Z"
+  },
+  {
+   "event_type": "UNCLEAN_SHUTDOWN_DETECTED",
+   "c": 1,
+   "syms": 0,
+   "a": "2026-10-14T16:54:50.656Z",
+   "b": "2026-10-14T16:54:50.656Z"
+  },
+  {
+   "event_type": "STALL_DETECTED",
+   "c": 1,
+   "syms": 0,
+   "a": "2026-10-14T19:02:24.437Z",
+   "b": "2026-10-14T19:02:24.437Z"
+  },
+  {
+   "event_type": "SESSION_LIFECYCLE_STATE_CHANGED",
+   "c": 1,
+   "syms": 0,
+   "a": "2026-10-14T13:30:04.935Z",
+   "b": "2026-10-14T13:30:04.935Z"
+  },
+  {
+   "event_type": "RUNTIME_SESSION_STARTED",
+   "c": 1,
+   "syms": 0,
+   "a": "2026-10-14T16:55:17.023Z",
+   "b": "2026-10-14T16:55:17.023Z"
+  },
+  {
+   "event_type": "QUANT_INTRADAY_FETCH_DEADLINE",
+   "c": 1,
+   "syms": 1,
+   "a": "2026-10-14T13:42:14.979Z",
+   "b": "2026-10-14T13:42:14.979Z"
+  },
+  {
+   "event_type": "PREMARKET_PLAN_HANDED_TO_RTH",
+   "c": 1,
+   "syms": 0,
+   "a": "2026-10-14T13:30:04.985Z",
+   "b": "2026-10-14T13:30:04.985Z"
+  },
+  {
+   "event_type": "NEWS_CLUSTER_UPDATED",
+   "c": 1,
+   "syms": 1,
+   "a": "2026-10-14T17:15:40.380Z",
+   "b": "2026-10-14T17:15:40.380Z"
+  },
+  {
+   "event_type": "MODEL_FALLBACK",
+   "c": 1,
+   "syms": 0,
+   "a": "2026-10-14T18:25:12.719Z",
+   "b": "2026-10-14T18:25:12.719Z"
+  },
+  {
+   "event_type": "IBKR_MARKET_DATA_ERROR",
+   "c": 1,
+   "syms": 1,
+   "a": "2026-10-14T16:57:14.450Z",
+   "b": "2026-10-14T16:57:14.450Z"
+  }
+ ],
+ "_ms_eventTypeCounts": 27024,
+ "sessionBounds": {
+  "c": 2021503,
+  "a": 1791984600032,
+  "b": 1792007999999
+ },
+ "_ms_sessionBounds": 1650,
+ "trades": [],
+ "_ms_trades": 2,
+ "riskAssessments": [],
+ "_ms_riskAssessments": 4,
+ "fillsToday": {
+  "error": "no such column: timestamp"
+ },
+ "_ms_fillsToday": 0,
+ "consensusTerminal": [
+  {
+   "key": "CONFIDENCE_BELOW_STRONG|false",
+   "count": 26937,
+   "uniqueSymbols": 162,
+   "first": "2026-10-14T13:30:00.786Z",
+   "last": "2026-10-14T19:59:58.806Z"
+  },
+  {
+   "key": "AGENT_DATA_UNAVAILABLE|false",
+   "count": 132,
+   "uniqueSymbols": 56,
+   "first": "2026-10-14T13:30:07.466Z",
+   "last": "2026-10-14T19:58:31.111Z"
+  },
+  {
+   "key": "MODERATE_REJECT_CALIBRATION|false",
+   "count": 67,
+   "uniqueSymbols": 6,
+   "first": "2026-10-14T13:35:05.163Z",
+   "last": "2026-10-14T19:37:57.060Z"
+  },
+  {
+   "key": "MODERATE_REJECT_INSUFFICIENT_INDEPENDENCE|false",
+   "count": 45,
+   "uniqueSymbols": 37,
+   "first": "2026-10-14T13:30:01.795Z",
+   "last": "2026-10-14T19:57:50.074Z"
+  },
+  {
+   "key": "AGENT_HOLD|false",
+   "count": 8,
+   "uniqueSymbols": 7,
+   "first": "2026-10-14T14:24:55.028Z",
+   "last": "2026-10-14T19:57:16.779Z"
+  },
+  {
+   "key": "INSUFFICIENT_AGENT_PARTICIPATION|false",
+   "count": 2,
+   "uniqueSymbols": 2,
+   "first": "2026-10-14T16:24:12.052Z",
+   "last": "2026-10-14T16:34:23.165Z"
+  }
+ ],
+ "_ms_consensusTerminal": 4458,
+ "deskNoTrade": [
+  {
+   "key": "?|?",
+   "count": 46295,
+   "uniqueSymbols": 162,
+   "first": "2026-10-14T13:30:00.790Z",
+   "last": "2026-10-14T19:59:59.973Z"
+  }
+ ],
+ "_ms_deskNoTrade": 4147,
+ "quantNotAuthorizedSample": [
+  {
+   "symbol": "INTC",
+   "payload": "{\"side\":\"SELL\",\"agent\":\"QuantEngine\",\"ideaOrigin\":\"QUANT_STRATEGY\",\"strategyId\":\"RANGE_REVERSION\",\"strategyLifecycle\":null,\"decisionPolicy\":\"CONSENSUS\",\"authorization\":\"NOT_AUTHORIZED\",\"authorizationReason\":\"NO_LIFECYCLE_RECORD\"}"
+  },
+  {
+   "symbol": "INTC",
+   "payload": "{\"strategyId\":\"RANGE_REVERSION\",\"strategyLifecycle\":null,\"authorization\":\"NOT_AUTHORIZED\",\"authorizationReason\":\"NO_LIFECYCLE_RECORD\"}"
+  },
+  {
+   "symbol": "INTC",
+   "payload": "{\"payload\":{\"symbol\":\"INTC\",\"side\":\"SELL\",\"confidence\":0.708,\"reason\":\"[Quant Not Eligible] strategy RANGE_REVERSION: NO_LIFECYCLE_RECORD (lifecycle unknown). No consensus attempted.\"}}"
+  }
+ ],
+ "_ms_quantNotAuthorizedSample": 18,
+ "quantNotAuthorizedCount": {
+  "c": 4980,
+  "syms": 19,
+  "a": 1791984629254,
+  "b": 1792007962928
+ },
+ "_ms_quantNotAuthorizedCount": 13383,
+ "discoveryFiltered": [
+  {
+   "key": "PRICE",
+   "count": 6105,
+   "uniqueSymbols": 241,
+   "first": "2026-10-14T13:34:51.429Z",
+   "last": "2026-10-14T19:50:36.572Z"
+  },
+  {
+   "key": "DOLLAR_VOLUME",
+   "count": 3313,
+   "uniqueSymbols": 128,
+   "first": "2026-10-14T13:34:51.430Z",
+   "last": "2026-10-14T19:50:36.572Z"
+  },
+  {
+   "key": "RANK_CAP",
+   "count": 3219,
+   "uniqueSymbols": 574,
+   "first": "2026-10-14T14:54:59.262Z",
+   "last": "2026-10-14T19:41:39.689Z"
+  },
+  {
+   "key": "NO_SNAPSHOT_DATA",
+   "count": 1386,
+   "uniqueSymbols": 118,
+   "first": "2026-10-14T14:14:54.876Z",
+   "last": "2026-10-14T19:55:57.510Z"
+  },
+  {
+   "key": "SPREAD",
+   "count": 942,
+   "uniqueSymbols": 55,
+   "first": "2026-10-14T13:34:51.435Z",
+   "last": "2026-10-14T19:50:36.515Z"
+  },
+  {
+   "key": "ADV_DATA_UNAVAILABLE",
+   "count": 305,
+   "uniqueSymbols": 219,
+   "first": "2026-10-14T16:10:41.306Z",
+   "last": "2026-10-14T19:11:45.251Z"
+  },
+  {
+   "key": "ADV_BELOW_FLOOR",
+   "count": 145,
+   "uniqueSymbols": 34,
+   "first": "2026-10-14T14:54:59.255Z",
+   "last": "2026-10-14T19:41:39.653Z"
+  }
+ ],
+ "_ms_discoveryFiltered": 209,
+ "subscriptionNotPromoted": [
+  {
+   "key": "OTHER",
+   "count": 5790,
+   "uniqueSymbols": 151,
+   "first": "2026-10-14T13:38:02.600Z",
+   "last": "2026-10-14T19:53:07.823Z"
+  },
+  {
+   "key": "SWAP_CAP_REACHED",
+   "count": 4348,
+   "uniqueSymbols": 157,
+   "first": "2026-10-14T13:30:56.012Z",
+   "last": "2026-10-14T19:59:56.208Z"
+  },
+  {
+   "key": "INCUMBENT_NOT_EVICTABLE",
+   "count": 453,
+   "uniqueSymbols": 85,
+   "first": "2026-10-14T16:12:27.436Z",
+   "last": "2026-10-14T19:55:11.623Z"
+  }
+ ],
+ "_ms_subscriptionNotPromoted": 133,
+ "subscriptionPromoted": [
+  {
+   "key": "CHALLENGER_SELECTED|BROAD_UNIVERSE_CHALLENGER",
+   "count": 360,
+   "uniqueSymbols": 133,
+   "first": "2026-10-14T13:32:57.704Z",
+   "last": "2026-10-14T19:59:56.205Z"
+  },
+  {
+   "key": "CHALLENGER_SELECTED|MOMENTUM_UNIVERSE",
+   "count": 21,
+   "uniqueSymbols": 18,
+   "first": "2026-10-14T13:30:56.012Z",
+   "last": "2026-10-14T19:56:14.636Z"
+  }
+ ],
+ "_ms_subscriptionPromoted": 7,
+ "subscriptionEvicted": [
+  {
+   "k": "Lowest-ranked non-protected dynamic symbol (score=_, ticks=_) - evicted to stay within cap 90.",
+   "c": 452
+  }
+ ],
+ "_ms_subscriptionEvicted": 12,
+ "rescueGrants": {
+  "byClass": [
+   {
+    "k": "ROUTINE_RECOVERY|RENEWAL|alreadySubscribed=true",
+    "count": 14536,
+    "uniqueSymbols": 159
+   },
+   {
+    "k": "NEWS_CATALYST|RENEWAL|alreadySubscribed=true",
+    "count": 2,
+    "uniqueSymbols": 1
+   }
+  ],
+  "perHourUTC": {
+   "13": 1194,
+   "14": 2380,
+   "15": 2356,
+   "16": 2139,
+   "17": 2297,
+   "18": 2155,
+   "19": 2017
+  }
+ },
+ "_ms_rescueGrants": 431,
+ "rescueDenied": [
+  {
+   "key": "ROUTINE_RECOVERY|RENEWAL|RESCUE_RENEWAL_EXTENSION_CAP",
+   "count": 1737,
+   "uniqueSymbols": 137,
+   "first": "2026-10-14T13:30:11.263Z",
+   "last": "2026-10-14T19:59:42.778Z"
+  },
+  {
+   "key": "ROUTINE_RECOVERY|NEW_DATA_ACQUISITION|AT_CAPACITY_NO_SAFE_EVICTION",
+   "count": 46,
+   "uniqueSymbols": 21,
+   "first": "2026-10-14T18:00:56.966Z",
+   "last": "2026-10-14T19:53:40.758Z"
+  },
+  {
+   "key": "NEWS_CATALYST|NEW_DATA_ACQUISITION|AT_CAPACITY_NO_SAFE_EVICTION",
+   "count": 5,
+   "uniqueSymbols": 1,
+   "first": "2026-10-14T19:15:54.486Z",
+   "last": "2026-10-14T19:51:57.189Z"
+  }
+ ],
+ "_ms_rescueDenied": 59,
+ "promotedThenEvictedWithin60s": {
+  "promotions": 381,
+  "evictions": 452,
+  "quickEvictions": 26,
+  "sample": [
+   {
+    "symbol": "TMO",
+    "promoted": "2026-10-14T15:47:12.842Z",
+    "evictedAfterSec": 30.6
+   },
+   {
+    "symbol": "JPM",
+    "promoted": "2026-10-14T15:57:24.115Z",
+    "evictedAfterSec": 48.4
+   },
+   {
+    "symbol": "CIEN",
+    "promoted": "2026-10-14T16:21:08.555Z",
+    "evictedAfterSec": 30.6
+   },
+   {
+    "symbol": "COHR",
+    "promoted": "2026-10-14T17:02:56.303Z",
+    "evictedAfterSec": 30.6
+   },
+   {
+    "symbol": "TXN",
+    "promoted": "2026-10-14T17:12:07.528Z",
+    "evictedAfterSec": 30.6
+   },
+   {
+    "symbol": "CVNA",
+    "promoted": "2026-10-14T17:13:08.950Z",
+    "evictedAfterSec": 30.6
+   },
+   {
+    "symbol": "TXN",
+    "promoted": "2026-10-14T17:14:10.193Z",
+    "evictedAfterSec": 30.4
+   },
+   {
+    "symbol": "JPM",
+    "promoted": "2026-10-14T17:31:38.643Z",
+    "evictedAfterSec": 30.6
+   },
+   {
+    "symbol": "TXN",
+    "promoted": "2026-10-14T17:54:10.341Z",
+    "evictedAfterSec": 58.3
+   },
+   {
+    "symbol": "CCJ",
+    "promoted": "2026-10-14T17:55:47.644Z",
+    "evictedAfterSec": 37.1
+   },
+   {
+    "symbol": "NIO",
+    "promoted": "2026-10-14T18:02:45.130Z",
+    "evictedAfterSec": 34.8
+   },
+   {
+    "symbol": "COST",
+    "promoted": "2026-10-14T18:59:10.530Z",
+    "evictedAfterSec": 43.7
+   },
+   {
+    "symbol": "TXN",
+    "promoted": "2026-10-14T19:09:21.090Z",
+    "evictedAfterSec": 18.2
+   },
+   {
+    "symbol": "KLAC",
+    "promoted": "2026-10-14T19:11:55.259Z",
+    "evictedAfterSec": 9.4
+   },
+   {
+    "symbol": "S",
+    "promoted": "2026-10-14T19:13:34.605Z",
+    "evictedAfterSec": 40.9
+   },
+   {
+    "symbol": "ARM",
+    "promoted": "2026-10-14T19:14:14.617Z",
+    "evictedAfterSec": 9.4
+   },
+   {
+    "symbol": "COST",
+    "promoted": "2026-10-14T19:19:54.836Z",
+    "evictedAfterSec": 9.1
+   },
+   {
+    "symbol": "COST",
+    "promoted": "2026-10-14T19:24:02.356Z",
+    "evictedAfterSec": 18.6
+   },
+   {
+    "symbol": "WMT",
+    "promoted": "2026-10-14T19:32:13.986Z",
+    "evictedAfterSec": 12.8
+   },
+   {
+    "symbol": "WMT",
+    "promoted": "2026-10-14T19:32:44.641Z",
+    "evictedAfterSec": 5.2
+   },
+   {
+    "symbol": "LITE",
+    "promoted": "2026-10-14T19:36:19.286Z",
+    "evictedAfterSec": 44.5
+   },
+   {
+    "symbol": "RKLB",
+    "promoted": "2026-10-14T19:37:51.632Z",
+    "evictedAfterSec": 19.6
+   },
+   {
+    "symbol": "INTU",
+    "promoted": "2026-10-14T19:40:27.034Z",
+    "evictedAfterSec": 30.7
+   },
+   {
+    "symbol": "COHR",
+    "promoted": "2026-10-14T19:40:57.679Z",
+    "evictedAfterSec": 1.9
+   },
+   {
+    "symbol": "MSFT",
+    "promoted": "2026-10-14T19:50:30.859Z",
+    "evictedAfterSec": 37.7
+   }
+  ]
+ },
+ "_ms_promotedThenEvictedWithin60s": 28,
+ "quietGaps": [
+  {
+   "from": "2026-10-14T16:49:00.000Z",
+   "to": "2026-10-14T16:54:30.000Z",
+   "minutes": 5.5
+  }
+ ],
+ "_ms_quietGaps": 1725,
+ "lifecycleRows": [
+  {
+   "version_type": "strategyEligibility:PULLBACK_CONTINUATION",
+   "status": "RETIRED",
+   "created_at": "2026-08-31T21:42:38.558Z",
+   "h": "Repeatedly verified (Phase 10-13 audits), real organic evidence: effective N ~22"
+  }
+ ],
+ "_ms_lifecycleRows": 1469,
+ "quantBridge": [
+  {
+   "key": "?|?",
+   "count": 1072727,
+   "uniqueSymbols": 165,
+   "first": "2026-10-14T13:30:01.368Z",
+   "last": "2026-10-14T19:59:58.469Z"
+  }
+ ],
+ "_ms_quantBridge": 9264,
+ "quantAssessed": [
+  {
+   "event_type": "QUANT_ASSESSMENT_COMPLETED",
+   "c": 20003,
+   "syms": 162
+  },
+  {
+   "event_type": "QUANT_CORE_PARITY_DIVERGENCE",
+   "c": 26046,
+   "syms": 163
+  }
+ ],
+ "_ms_quantAssessed": 647
+}
