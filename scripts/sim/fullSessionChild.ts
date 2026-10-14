@@ -17,10 +17,9 @@ import fs from 'node:fs';
 import { assertSyntheticSimulationNotOpeningProductionDb } from '../../src/server/db/syntheticSimulationDbGuard';
 import { resolveDbDir } from '../../src/server/db/resolveDbDir';
 import type { FullSessionSpec } from './fullSessionPlan';
-import { assertProductionEnvPresentForSession } from './sessionEnvGuard';
+import { assertSessionEffectiveConfiguration, requiredFlagNamesFromConfig } from './sessionEnvGuard';
 
 function assertChildEnvironmentIsIsolated(): void {
-  assertProductionEnvPresentForSession(process.cwd(), process.env);
   if (process.env.SYNTHETIC_SIMULATION !== 'true') {
     throw new Error(
       'FATAL: fullSessionChild.ts must be launched by fullSession.ts (the parent launcher) with ' +
@@ -52,6 +51,8 @@ async function main() {
     scenarioId: spec.scenarioId,
     seed: spec.seed,
   });
+  // Resolved-configuration guard AFTER module imports (dotenv has loaded by now): certifiable only with production-equivalent flags and NO credentials.
+  assertSessionEffectiveConfiguration(process.env, requiredFlagNamesFromConfig(process.cwd()), spec.outputPath ? path.dirname(spec.outputPath) : undefined);
 
   console.log(
     `\n=== Full session: ${spec.label}\n` +
