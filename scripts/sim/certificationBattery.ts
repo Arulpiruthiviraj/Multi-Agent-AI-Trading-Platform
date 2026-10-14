@@ -13,6 +13,7 @@
  * Labels: SYNTHETIC_SEEDED / CERTIFICATION_FIXTURE_ONLY. A PASS proves mechanical capability of the platform, not market alpha, and does not
  * change LIVE_NO_GO. Strategy authorization (no lifecycle records) and Jev (advisory) are reported separately and never gate controlled PAPER.
  */
+import { sectorOf } from './oraclePolicy';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -106,7 +107,6 @@ function runSuite(files: string[]): { pass: boolean; summary: string; detail: st
 
 /** Scenarios whose design intentionally leaves positions open at the close (Argus has no end-of-day flatten configured; it is a swing system). */
 const SWING_BY_DESIGN = new Set(['MULTI_TRADE_DAY']);
-const TECH = new Set(['AAPL', 'MSFT', 'NVDA', 'AMD', 'META', 'GOOGL', 'AMZN', 'TSLA']);
 
 function sessionOracles(resultFile: string, initialCash: number) {
   const j = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
@@ -119,7 +119,7 @@ function sessionOracles(resultFile: string, initialCash: number) {
   const risk = compareApprovalsToOracle(readBuyApprovals(j.dbPath, {
     maxPortfolioRiskPct: 0.02, stopLossAssumptionPct: Number(safety.stopLossAssumptionPct),
     maxSingleSymbolConcentrationPct: Number(safety.maxSingleSymbolConcentrationPct), maxSectorConcentrationPct: Number(safety.maxSectorConcentrationPct),
-    sectorOf: (s) => (TECH.has(s) ? 'TECH' : null),
+    sectorOf,
   })).filter((m) => m.code !== 'UNDER_SIZED');
   // multi-trade facts for the aggregate bar
   const db = new Database(j.dbPath, { readonly: true, fileMustExist: true });
@@ -212,11 +212,14 @@ async function main() {
   } else {
     const rows = restarts.flatMap((f) => JSON.parse(fs.readFileSync(f, 'utf8')) as any[]);
     const bad = rows.filter((r) => r.verdict === 'FAIL' || r.verdict === 'ERROR');
-    const inconclusive = rows.filter((r) => r.verdict === 'INCONCLUSIVE');
+    // A restart condition depends on what the real pipeline chooses to do in that seeded session, so one seed may never reach it. A case is
+    // PROVEN only if at least one seed reached the condition AND passed; a case no seed reached is NOT_PROVEN (never silently PASS).
+    const ids = [...new Set(rows.map((r) => r.id))];
+    const notProven = ids.filter((id) => !rows.some((r) => r.id === id && r.verdict === 'PASS'));
     areas.push({
-      area: 'RESTART_BATTERY', verdict: bad.length ? 'FAIL' : rows.every((r) => r.verdict === 'PASS') ? 'PASS' : 'INFO',
-      evidence: rows.map((r) => `${r.id}=${r.verdict}`).join(' '),
-      detail: [...bad.flatMap((r) => r.failures ?? [r.detail]), ...inconclusive.map((r) => `INCONCLUSIVE ${r.id}: ${r.detail}`)],
+      area: 'RESTART_BATTERY', verdict: bad.length ? 'FAIL' : notProven.length ? 'INFO' : 'PASS',
+      evidence: ids.map((id) => `${id}=${rows.filter((r) => r.id === id).map((r) => r.verdict).join('/')}`).join(' '),
+      detail: [...bad.flatMap((r) => (r.failures ?? [r.detail]).map((x: string) => `${r.id}: ${x}`)), ...notProven.map((id) => `NOT_PROVEN ${id}: no seed both reached the restart condition and passed`)],
     });
   }
 

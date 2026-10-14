@@ -1720,7 +1720,7 @@ export class ChiefTraderAgent {
    * anything - the threshold/independence logic is untouched - and an unplanned crash still loses in-memory ideas (unavoidable).
    */
   async flushPendingIdeasAtShutdown(): Promise<void> {
-    try { await this.recordUnresolvedAsNoConsensus(); } catch (e) { console.error('[ChiefTrader] shutdown flush failed (ideas stay unrecorded)', e); }
+    try { await this.recordUnresolvedAsNoConsensus({ includeDebatePending: true }); } catch (e) { console.error('[ChiefTrader] shutdown flush failed (ideas stay unrecorded)', e); }
     this.recentIdeas = [];
   }
 
@@ -1734,10 +1734,12 @@ export class ChiefTraderAgent {
     }
   }
 
-  private async recordUnresolvedAsNoConsensus() {
+  private async recordUnresolvedAsNoConsensus(opts: { includeDebatePending?: boolean } = {}) {
     const symbols = Array.from(new Set(this.recentIdeas.map(i => i.symbol)));
     for (const symbol of symbols) {
-      if (this.debatePending(symbol)) continue;
+      // A symbol with an AI debate still in flight is normally left alone (the debate will conclude and decide). At a PLANNED STOP that debate is
+      // about to be abandoned with the process, so its ideas must get an explicit fate too (found by the restart battery's lineage oracle).
+      if (!opts.includeDebatePending && this.debatePending(symbol)) continue;
       // 2026-10-13 lineage: an idea that waits past consensusIdeaMaxAgeMs for a second voice used to be dropped by the TTL filter below with
       // NO recorded fate (only still-fresh ideas were persisted). Persist the expired ones as their own NO_CONSENSUS decision (the filter
       // removes them right after, so each is recorded exactly once). Records only; no vote, threshold or independence logic is touched.

@@ -10,6 +10,7 @@
  * invariants. P&L is reported, never a pass criterion. Every failing session writes its exact spec (seed + family) to failures/ so it can be
  * replayed and converted into a permanent regression. Concurrency only affects wall time; each session has its own isolated DB.
  */
+import { sectorOf } from './oraclePolicy';
 import fs from 'node:fs';
 import { loadRepoConfigJson } from '../../src/server/config/loadRepoConfigJson';
 import type { FullSessionSpec } from './fullSessionPlan';
@@ -39,7 +40,6 @@ const FAMILIES: Family[] = [
   { id: 'ai-off', scenarioId: 'MULTI_TRADE_DAY', bars: 300, faults: () => [{ kind: 'AI_OUTAGE', fromBar: 0, phase: 'OPEN', label: 'AI off for the whole session' }] },
 ];
 
-const TECH = new Set(['AAPL', 'MSFT', 'NVDA', 'AMD', 'META', 'GOOGL', 'AMZN', 'TSLA']);
 
 function specFor(f: Family, seed: number, bars: number, outDir: string, idx: number): FullSessionSpec {
   const tag = `soak-${String(idx).padStart(3, '0')}-${f.id}-${seed}`;
@@ -72,7 +72,7 @@ async function runOne(f: Family, seed: number, bars: number, outDir: string, idx
     for (const m of compareApprovalsToOracle(readBuyApprovals(data.dbPath, {
       maxPortfolioRiskPct: 0.02, stopLossAssumptionPct: Number(safety.stopLossAssumptionPct),
       maxSingleSymbolConcentrationPct: Number(safety.maxSingleSymbolConcentrationPct), maxSectorConcentrationPct: Number(safety.maxSectorConcentrationPct),
-      sectorOf: (s) => (TECH.has(s) ? 'TECH' : null),
+      sectorOf,
     })).filter((x) => x.code !== 'UNDER_SIZED')) findings.push({ code: `RISK_${m.code}`, detail: m.detail });
   } catch (e) { findings.push({ code: 'ORACLE_ERROR', detail: (e as Error).message }); }
   const orphan = (data.brokerSummary.positions ?? []).length;

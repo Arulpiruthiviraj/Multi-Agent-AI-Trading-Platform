@@ -11,6 +11,7 @@
  * A case whose restart condition was never reached is INCONCLUSIVE (reported, never counted as PASS): the point of the case is the state at
  * the restart, so a session that never got there proves nothing about it. Labeled SYNTHETIC_SEEDED / CERTIFICATION_FIXTURE_ONLY.
  */
+import { sectorOf } from './oraclePolicy';
 import fs from 'node:fs';
 import { loadRepoConfigJson } from '../../src/server/config/loadRepoConfigJson';
 import { buildMultiTradeDaySpec, type FullSessionSpec } from './fullSessionPlan';
@@ -35,7 +36,6 @@ const CASES: CaseDef[] = [
   { id: 'WORKING_ORDER_OPEN', extraBars: 0, thinLiquidity: true, note: 'restart with an order still working at the broker (thin liquidity)' },
 ];
 
-const TECH = new Set(['AAPL', 'MSFT', 'NVDA', 'AMD', 'META', 'GOOGL', 'AMZN', 'TSLA']);
 
 async function runCase(c: CaseDef, seed: number, outDir: string, symbols: number) {
   const tag = `${c.id.toLowerCase()}-${seed}`;
@@ -67,7 +67,7 @@ async function runCase(c: CaseDef, seed: number, outDir: string, symbols: number
   const risk = compareApprovalsToOracle(readBuyApprovals(r2.data.dbPath, {
     maxPortfolioRiskPct: 0.02, stopLossAssumptionPct: Number(safety.stopLossAssumptionPct),
     maxSingleSymbolConcentrationPct: Number(safety.maxSingleSymbolConcentrationPct), maxSectorConcentrationPct: Number(safety.maxSectorConcentrationPct),
-    sectorOf: (s) => (TECH.has(s) ? 'TECH' : null),
+    sectorOf,
   })).filter((m) => m.code !== 'UNDER_SIZED');
   const half1Orders = r1.data.brokerSummary?.orderCount ?? 0;
   const failures = [...accounting.map((m) => `ACCOUNTING ${m.code}: ${m.detail}`), ...lineage.map((m) => `LINEAGE ${m.code}: ${m.detail}`), ...risk.map((m) => `RISK ${m.code}: ${m.detail}`)];

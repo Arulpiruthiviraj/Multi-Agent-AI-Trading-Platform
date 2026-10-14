@@ -67,3 +67,17 @@ describe('ChiefTraderAgent sweep records expired ideas exactly once (2026-10-13)
     expect(recordConsensusTransaction).not.toHaveBeenCalled();
   });
 });
+
+describe('ChiefTraderAgent.flushPendingIdeasAtShutdown with an AI debate in flight (2026-10-14)', () => {
+  beforeEach(() => recordConsensusTransaction.mockClear());
+  it('ideas of a symbol whose debate is still pending are recorded at a planned stop, but the normal sweep still leaves them to the debate', async () => {
+    const agent: any = new ChiefTraderAgent();
+    agent.recentIdeas = [{ traceId: 'tD', symbol: 'AAPL', side: 'SELL', confidence: 0.47, agent: 'KronosEngine', reasoning: 'k', receivedAt: Date.now() }];
+    agent.pendingDebates.set('AAPL', 1);
+    await agent.recordUnresolvedAsNoConsensus();               // routine sweep: untouched (the debate will decide)
+    expect(recordConsensusTransaction).not.toHaveBeenCalled();
+    await agent.flushPendingIdeasAtShutdown();                 // planned stop: the debate dies with the process -> explicit fate
+    expect(recordConsensusTransaction).toHaveBeenCalledTimes(1);
+    expect((recordConsensusTransaction.mock.calls[0] as any[])[0].evidence.map((e: any) => e.sourceTraceId)).toEqual(['tD']);
+  });
+});
