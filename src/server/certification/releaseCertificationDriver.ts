@@ -365,8 +365,25 @@ export async function runReleaseCertification(input: ReleaseDriverInput): Promis
       need('JEV_FAILURE_MODE', 'NOT_CERTIFIED', 'configured',
         'Jev is configured: failure-mode must be certified by jevFailureSemantics.test.ts (not run by this probe)');
     }
+    // CONFIGURATION_PARITY (2026-10-15): "configured" is not "working". Jev had a key, a provider, tests and a governor, and received zero events in production because
+    // the shadow flag defaulted off. State what the EFFECTIVE configuration does against what this release INTENDS (ARGUS_RELEASE_INTENDS_JEV_SHADOW=true|false).
+    try {
+      const { getJevShadowStatus } = await import('../news/JevNewsTriage');
+      const { classifyFeatureParity } = await import('./featureParity');
+      const st = getJevShadowStatus();
+      const intendRaw = (process.env.ARGUS_RELEASE_INTENDS_JEV_SHADOW ?? '').trim().toLowerCase();
+      if (intendRaw !== 'true' && intendRaw !== 'false') {
+        need('JEV_SHADOW_PARITY', 'NOT_CERTIFIED', st.active ? 'ENABLED_INTENT_UNSTATED' : 'DISABLED_INTENT_UNSTATED',
+          `release intent not stated (set ARGUS_RELEASE_INTENDS_JEV_SHADOW=true|false); effective configuration: ${st.active ? 'shadow scoring ACTIVE' : `IDLE - ${st.idleReason}`}`);
+      } else {
+        const v = classifyFeatureParity({ implemented: true, enabled: st.active, blockedReason: st.idleReason, intendedActive: intendRaw === 'true', eventsInvoked: null, resultsPersisted: null });
+        need('JEV_SHADOW_PARITY', v.verdict === 'PASS' ? 'PASS' : v.verdict === 'FAIL' ? 'FAIL' : 'NOT_CERTIFIED', v.status, v.reason);
+      }
+    } catch (e: any) {
+      need('JEV_SHADOW_PARITY', 'UNKNOWN', null, `parity probe errored: ${(e as any)?.message}`);
+    }
   } catch (e: any) {
-    for (const f of ['JEV_CONFIGURED', 'JEV_WIRING', 'JEV_GOVERNOR', 'JEV_SCHEMA', 'JEV_FAILURE_MODE']) {
+    for (const f of ['JEV_CONFIGURED', 'JEV_WIRING', 'JEV_GOVERNOR', 'JEV_SCHEMA', 'JEV_FAILURE_MODE', 'JEV_SHADOW_PARITY']) {
       need(f, 'UNKNOWN', null, `Jev probe errored: ${(e as any)?.message}`);
     }
   }

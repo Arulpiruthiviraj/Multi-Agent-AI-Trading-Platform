@@ -114,6 +114,78 @@
       "severity": "P0",
       "status": "fixed-on-branch-ci-pending-runtime-unverified",
       "title": "Protective exit retry suppressed for five minutes after Risk rejection"
+    },
+    {
+      "date": "2026-10-15",
+      "detectedIn": "prod",
+      "fixRef": "8b0a47e3",
+      "id": "idea-rate-cap-throttles-protective-exits-20261015",
+      "notes": "Escaped certification because synthetic sessions disabled MacroAgent and ran no Kronos (idea volume far below the cap) and the exit oracle default grace is 15 minutes, so a dropped-then-retried exit still passed. Fix: dual-key exemption (risk-exit agent + SELL + origin PORTFOLIO_EXIT), per-agent drop attribution. Test C replay saturates the real EventBus at production-equivalent rates and asserts same-tick delivery; verified to fail on 32613911 and pass on the fix.",
+      "regressionTest": "src/server/certification/productionFailureReplay/D1_protectiveExitUnderIdeaSaturation.test.ts",
+      "rootCause": "EventBus.emit applied a first-come 120 ideas/min window to every TRADE_IDEA_GENERATED including genuine protective exits. Production research traffic (Kronos+Macro+Technical+Quant ~162/min) saturated it and dropped 28-33% of ideas. The 2026-10-13 repair accepted drops and released the exit cooldown for retry (~60 s) rather than exempting exits.",
+      "severity": "P1",
+      "status": "fixed-merged-to-main-not-deployed-2026-10-15",
+      "title": "Global idea cap applied to protective exits"
+    },
+    {
+      "date": "2026-10-15",
+      "detectedIn": "prod",
+      "fixRef": "3e327626",
+      "id": "jev-shadow-scoring-idle-configured-not-enabled-20261015",
+      "notes": "Fix: ledger dedupe (duplicate article double-counted rows/tokens/cost), getJevShadowStatus() surfaced in the jev-calibration report, end-to-end test with a real HTTP boundary, JEV_SHADOW_PARITY certification check and classifyFeatureParity (configured != enabled != invoked != verified). A real authenticated isolated call succeeded on 2026-10-15. Production activation requires the flag plus a controlled restart.",
+      "regressionTest": "src/server/news/JevShadowIntegration.e2e.test.ts",
+      "rootCause": "ARGUS_JEV_SHADOW_SCORING_ENABLED defaults off and was never set; kickOffJevShadowScoring returns at its first line. The wiring (NewsEngine -> governor -> provider -> ledger) exists. Release certification reported JEV_CONFIGURED PASS from key presence and explicitly did not run wiring checks. The ledger test skipped DB round trips.",
+      "severity": "P2",
+      "status": "fixed-visibility-merged-activation-pending-deployment",
+      "title": "Jev configured and implemented but receiving zero events"
+    },
+    {
+      "date": "2026-10-15",
+      "detectedIn": "prod",
+      "fixRef": "d6efe67b",
+      "id": "calibration-provider-row-selection-20261015",
+      "notes": "Measured effect: only NewsAgent has per-provider rows (12 of 41), News idea toggle is off, so no effect on 2026-10-15 confidences. Synthetic calibration seeding never wrote provider-specific rows, so the condition could not occur in any fixture.",
+      "regressionTest": "src/server/services/ChiefTraderAgent.calibrationProviderSelection.test.ts",
+      "rootCause": "calibrateConfidenceDetailed selected rows[0] with no provider filter; per-provider UUID rows sort before ALL in the unique index.",
+      "severity": "P2",
+      "status": "fixed-merged-to-main-not-deployed-2026-10-15",
+      "title": "ChiefTrader calibration lookup could return a per-provider row instead of the ALL row"
+    },
+    {
+      "date": "2026-10-15",
+      "detectedIn": "prod",
+      "fixRef": "a084d853",
+      "id": "operator-funnel-report-stalls-event-loop-20261015",
+      "notes": "Fix: bounded 2h default and 24h cap. The route was already covered by the router-level operatorReportGuard; a first attempt to add guardHeavyReport deadlocks against it (caught by operatorReportGuard.test.ts during certification) and was removed.",
+      "regressionTest": "src/server/observability/tradingFunnelWindow.test.ts",
+      "rootCause": "Route defaulted to a 24h (max 30d) window and ran synchronous observability_events queries on the engine event loop despite the router-level operatorReportGuard (which serializes but cannot make a sync query non-blocking) (7.5 s SLOW_SQL, 7.6 s loop lag at 09:37:55 ET). Attribution to the audit operator is inferred from timing.",
+      "severity": "P2",
+      "status": "fixed-merged-to-main-not-deployed-2026-10-15",
+      "title": "Default 24h trading-funnel report ran unguarded inside the trading process"
+    },
+    {
+      "date": "2026-10-15",
+      "detectedIn": "prod",
+      "fixRef": "9720c01a",
+      "id": "news-provider-failed-payload-lost-20261015",
+      "notes": "362 failures in 30 minutes could not be attributed to a provider.",
+      "regressionTest": "src/server/observability/instrumentEventBus.test.ts",
+      "rootCause": "Fifth instance of the fixed-field observability whitelist gap in instrumentEventBus.",
+      "severity": "P2",
+      "status": "fixed-merged-to-main-not-deployed-2026-10-15",
+      "title": "NEWS_PROVIDER_FAILED persisted as {} (provider and cause unrecoverable)"
+    },
+    {
+      "date": "2026-10-15",
+      "detectedIn": "prod",
+      "fixRef": "open",
+      "id": "kronos-repeated-predictions-20261015",
+      "notes": "Deliberately not in the 2026-10-15 release: de-duplication changes how many votes reach ChiefTrader and needs its own validation. Synthetic sessions ran no Kronos, so no certification covers this.",
+      "regressionTest": "src/server/certification/productionFailureReplay/D1_protectiveExitUnderIdeaSaturation.test.ts",
+      "rootCause": "Not yet root-caused; repeats inflate evidence counts, database growth and the grading backlog.",
+      "severity": "P2",
+      "status": "open",
+      "title": "~28 near-identical Kronos predictions per symbol per 30 minutes"
     }
   ],
   "version": 1

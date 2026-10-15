@@ -313,20 +313,17 @@ observabilityRouter.get('/trading-funnel', async (req, res) => {
   try {
     const hours = resolveFunnelWindowHours(req.query.hours);
     const sinceIso = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-    // 2026-10-15 (D8): serialized + memory-gated like the other heavy operator reports, and a bounded default window (see resolveFunnelWindowHours).
-    const report = await guardHeavyReport('trading-funnel', () => buildTradingFunnelReport(sinceIso));
+    // 2026-10-15 (D8): bounded default window (see resolveFunnelWindowHours). This path is already serialized/memory-gated by the router-level operatorReportGuard
+    // (OPERATOR_REPORT_PATHS); it must NOT also call guardHeavyReport (operatorReportGuard.test.ts: the nested guard would deadlock against its own outer guard).
+    // That outer guard did not prevent the 2026-10-15 stall - the query is synchronous on the event loop - so the window, not the guard, is the fix.
+    const report = await buildTradingFunnelReport(sinceIso);
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatTradingFunnelReport(report));
       return;
     }
     res.json({ ok: true, report });
   } catch (e: any) {
-    if (res.headersSent) return;
-    if (e instanceof HeavyReportRefusedError) {
-      res.status(429).json({ ok: false, refused: true, code: e.code, error: e.message });
-      return;
-    }
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
