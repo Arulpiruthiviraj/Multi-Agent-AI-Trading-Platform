@@ -1,0 +1,287 @@
+{
+ "columns": {
+  "observability_events": [
+   "id",
+   "ts",
+   "level",
+   "category",
+   "event_type",
+   "logger_name",
+   "message",
+   "session_id",
+   "correlation_id",
+   "decision_id",
+   "trace_id",
+   "order_id",
+   "symbol",
+   "component",
+   "payload"
+  ],
+  "quant_assessments": [
+   "id",
+   "symbol",
+   "timeframe",
+   "regime",
+   "market_context",
+   "strategy_evaluations",
+   "grouped_scores",
+   "emitted_trade_idea",
+   "created_at",
+   "ai_contradiction_analysis"
+  ],
+  "decision_provenance": [
+   "id",
+   "decision_id",
+   "symbol",
+   "timeframe",
+   "decision_time_ms",
+   "bar_evidence_json",
+   "quote_json",
+   "bid_ask_json",
+   "current_price",
+   "price_observed_at_ms",
+   "strategy_context_json",
+   "context_truncated",
+   "regime",
+   "strategy_versions_json",
+   "config_version",
+   "build_sha",
+   "lifecycle_states_json",
+   "strategy_id",
+   "evaluations_json",
+   "evaluation_fingerprint",
+   "data_source",
+   "created_at"
+  ],
+  "event_traces": [
+   "id",
+   "correlation_id",
+   "trade_id",
+   "timestamp",
+   "source",
+   "destination",
+   "event_type",
+   "payload",
+   "duration_ms",
+   "success",
+   "error_info",
+   "transaction_id"
+  ],
+  "agent_reasoning_logs": [
+   "id",
+   "trace_id",
+   "timestamp",
+   "agent_name",
+   "symbol",
+   "action",
+   "confidence",
+   "indicators_snapshot",
+   "prompt_context",
+   "reasoning_summary",
+   "execution_latency_ms"
+  ]
+ },
+ "widest_quant_assessments": [
+  [
+   "strategy_evaluations",
+   17093
+  ],
+  [
+   "market_context",
+   7728
+  ],
+  [
+   "regime",
+   2042
+  ],
+  [
+   "grouped_scores",
+   453
+  ]
+ ],
+ "widest_quant_assessments_s": 27.714,
+ "widest_decision_provenance": [
+  [
+   "bar_evidence_json",
+   24592
+  ],
+  [
+   "evaluations_json",
+   17495
+  ],
+  [
+   "strategy_context_json",
+   14056
+  ],
+  [
+   "strategy_versions_json",
+   1024
+  ]
+ ],
+ "widest_decision_provenance_s": 41.993,
+ "widest_event_traces": [
+  [
+   "payload",
+   859
+  ],
+  [
+   "id",
+   36
+  ],
+  [
+   "correlation_id",
+   26
+  ],
+  [
+   "transaction_id",
+   21
+  ]
+ ],
+ "widest_event_traces_s": 89.964,
+ "widest_agent_reasoning_logs": [
+  [
+   "indicators_snapshot",
+   8621
+  ],
+  [
+   "prompt_context",
+   394
+  ],
+  [
+   "reasoning_summary",
+   87
+  ],
+  [
+   "trace_id",
+   25
+  ]
+ ],
+ "widest_agent_reasoning_logs_s": 106.305,
+ "daily_observability_events": [
+  {
+   "d": "2026-09-30",
+   "c": 59297
+  },
+  {
+   "d": "2026-10-01",
+   "c": 1079345
+  },
+  {
+   "d": "2026-10-02",
+   "c": 1152027
+  },
+  {
+   "d": "2026-10-04",
+   "c": 25
+  },
+  {
+   "d": "2026-10-05",
+   "c": 359734
+  },
+  {
+   "d": "2026-10-06",
+   "c": 135628
+  },
+  {
+   "d": "2026-10-07",
+   "c": 1031659
+  },
+  {
+   "d": "2026-10-08",
+   "c": 1460396
+  },
+  {
+   "d": "2026-10-09",
+   "c": 944164
+  },
+  {
+   "d": "2026-10-10",
+   "c": 15907
+  },
+  {
+   "d": "2026-10-12",
+   "c": 890434
+  },
+  {
+   "d": "2026-10-13",
+   "c": 1428724
+  },
+  {
+   "d": "2026-10-14",
+   "c": 2626748
+  }
+ ],
+ "daily_observability_events_s": 124.886,
+ "daily_quant_assessments": "ERR no such column: timestamp",
+ "daily_quant_assessments_s": 124.887,
+ "daily_decision_provenance": [
+  {
+   "d": "2026-10-12",
+   "c": 12268
+  },
+  {
+   "d": "2026-10-13",
+   "c": 23075
+  },
+  {
+   "d": "2026-10-14",
+   "c": 33927
+  }
+ ],
+ "daily_decision_provenance_s": 196.299,
+ "daily_event_traces": [
+  {
+   "d": "2026-09-29",
+   "c": 52988
+  },
+  {
+   "d": "2026-09-30",
+   "c": 44444
+  },
+  {
+   "d": "2026-10-01",
+   "c": 205805
+  },
+  {
+   "d": "2026-10-02",
+   "c": 178695
+  },
+  {
+   "d": "2026-10-05",
+   "c": 64115
+  },
+  {
+   "d": "2026-10-06",
+   "c": 15096
+  },
+  {
+   "d": "2026-10-07",
+   "c": 196332
+  },
+  {
+   "d": "2026-10-08",
+   "c": 245533
+  },
+  {
+   "d": "2026-10-09",
+   "c": 172541
+  },
+  {
+   "d": "2026-10-10",
+   "c": 2560
+  },
+  {
+   "d": "2026-10-12",
+   "c": 140457
+  },
+  {
+   "d": "2026-10-13",
+   "c": 206381
+  },
+  {
+   "d": "2026-10-14",
+   "c": 299342
+  }
+ ],
+ "daily_event_traces_s": 200.077
+}

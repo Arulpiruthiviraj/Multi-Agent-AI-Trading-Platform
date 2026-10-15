@@ -1,0 +1,439 @@
+{
+ "snapshotAt": "2026-10-14T20:07:15.000Z",
+ "retentionDays": 30,
+ "agentPredictionsPending": {
+  "QuantEngine": {
+   "pending": 19921,
+   "oldestDays": 30.1,
+   "byAge": {
+    "29-30d+": 409,
+    "23-29d": 1188,
+    "14-23d": 7208,
+    "7-14d": 4903,
+    "1-7d": 4645,
+    "0-1d": 1568
+   },
+   "expireWithin1d": 409,
+   "expireWithin7d": 1597
+  },
+  "TechnicalAgent": {
+   "pending": 76869,
+   "oldestDays": 30.1,
+   "byAge": {
+    "29-30d+": 367,
+    "23-29d": 1429,
+    "14-23d": 9795,
+    "7-14d": 22209,
+    "1-7d": 34255,
+    "0-1d": 8814
+   },
+   "expireWithin1d": 367,
+   "expireWithin7d": 1796
+  },
+  "MacroAgent": {
+   "pending": 128788,
+   "oldestDays": 30.1,
+   "byAge": {
+    "29-30d+": 435,
+    "23-29d": 1997,
+    "14-23d": 17619,
+    "7-14d": 36670,
+    "1-7d": 55166,
+    "0-1d": 16901
+   },
+   "expireWithin1d": 435,
+   "expireWithin7d": 2432
+  },
+  "JavaCoreEnsemble": {
+   "pending": 3978,
+   "oldestDays": 30,
+   "byAge": {
+    "29-30d+": 17,
+    "23-29d": 196,
+    "14-23d": 1172,
+    "7-14d": 361,
+    "1-7d": 1481,
+    "0-1d": 751
+   },
+   "expireWithin1d": 17,
+   "expireWithin7d": 213
+  },
+  "OpportunityScreener": {
+   "pending": 334,
+   "oldestDays": 29.3,
+   "byAge": {
+    "29-30d+": 16,
+    "23-29d": 51,
+    "14-23d": 244,
+    "7-14d": 23
+   },
+   "expireWithin1d": 16,
+   "expireWithin7d": 67
+  },
+  "PortfolioManager": {
+   "pending": 13,
+   "oldestDays": 23,
+   "byAge": {
+    "23-29d": 1,
+    "7-14d": 2,
+    "1-7d": 10
+   },
+   "expireWithin1d": 0,
+   "expireWithin7d": 1
+  }
+ },
+ "kronosPending": {
+  "pending": 307041,
+  "oldestDays": 30.1,
+  "byAge": {
+   "29-30d+": 753,
+   "23-29d": 4350,
+   "14-23d": 35704,
+   "7-14d": 87648,
+   "1-7d": 132651,
+   "0-1d": 45935
+  },
+  "expireWithin1d": 753,
+  "expireWithin7d": 5103
+ },
+ "generationPerDay": {
+  "agent_predictions_nonKronos": [
+   {
+    "d": "2026-09-21",
+    "c": 5336
+   },
+   {
+    "d": "2026-09-22",
+    "c": 7753
+   },
+   {
+    "d": "2026-09-23",
+    "c": 9155
+   },
+   {
+    "d": "2026-09-24",
+    "c": 12028
+   },
+   {
+    "d": "2026-09-25",
+    "c": 10452
+   },
+   {
+    "d": "2026-09-26",
+    "c": 977
+   },
+   {
+    "d": "2026-09-27",
+    "c": 35
+   },
+   {
+    "d": "2026-09-28",
+    "c": 8272
+   },
+   {
+    "d": "2026-09-29",
+    "c": 16857
+   },
+   {
+    "d": "2026-09-30",
+    "c": 15062
+   },
+   {
+    "d": "2026-10-01",
+    "c": 32601
+   },
+   {
+    "d": "2026-10-02",
+    "c": 27924
+   },
+   {
+    "d": "2026-10-05",
+    "c": 13934
+   },
+   {
+    "d": "2026-10-06",
+    "c": 10420
+   },
+   {
+    "d": "2026-10-07",
+    "c": 30008
+   },
+   {
+    "d": "2026-10-08",
+    "c": 37811
+   },
+   {
+    "d": "2026-10-09",
+    "c": 24688
+   },
+   {
+    "d": "2026-10-10",
+    "c": 369
+   },
+   {
+    "d": "2026-10-12",
+    "c": 20719
+   },
+   {
+    "d": "2026-10-13",
+    "c": 32896
+   },
+   {
+    "d": "2026-10-14",
+    "c": 35840
+   }
+  ],
+  "kronos_predictions": [
+   {
+    "d": "2026-09-15",
+    "c": 1562
+   },
+   {
+    "d": "2026-09-16",
+    "c": 1624
+   },
+   {
+    "d": "2026-09-21",
+    "c": 3144
+   },
+   {
+    "d": "2026-09-22",
+    "c": 6486
+   },
+   {
+    "d": "2026-09-23",
+    "c": 4341
+   },
+   {
+    "d": "2026-09-24",
+    "c": 5713
+   },
+   {
+    "d": "2026-09-25",
+    "c": 5730
+   },
+   {
+    "d": "2026-09-28",
+    "c": 3798
+   },
+   {
+    "d": "2026-09-29",
+    "c": 5625
+   },
+   {
+    "d": "2026-09-30",
+    "c": 3990
+   },
+   {
+    "d": "2026-10-01",
+    "c": 29903
+   },
+   {
+    "d": "2026-10-02",
+    "c": 32315
+   },
+   {
+    "d": "2026-10-05",
+    "c": 11112
+   },
+   {
+    "d": "2026-10-06",
+    "c": 324
+   },
+   {
+    "d": "2026-10-07",
+    "c": 25570
+   },
+   {
+    "d": "2026-10-08",
+    "c": 50128
+   },
+   {
+    "d": "2026-10-09",
+    "c": 21903
+   },
+   {
+    "d": "2026-10-10",
+    "c": 13
+   },
+   {
+    "d": "2026-10-12",
+    "c": 21995
+   },
+   {
+    "d": "2026-10-13",
+    "c": 26910
+   },
+   {
+    "d": "2026-10-14",
+    "c": 45935
+   }
+  ]
+ },
+ "gradedPerDayByEvaluationDate": [
+  {
+   "d": "2026-08-10",
+   "s": "agent_predictions",
+   "c": 921
+  },
+  {
+   "d": "2026-08-13",
+   "s": "agent_predictions",
+   "c": 130
+  },
+  {
+   "d": "2026-08-16",
+   "s": "agent_predictions",
+   "c": 3
+  },
+  {
+   "d": "2026-08-17",
+   "s": "agent_predictions",
+   "c": 14
+  },
+  {
+   "d": "2026-08-18",
+   "s": "kronos_predictions",
+   "c": 251
+  },
+  {
+   "d": "2026-08-18",
+   "s": "agent_predictions",
+   "c": 51222
+  },
+  {
+   "d": "2026-08-19",
+   "s": "kronos_predictions",
+   "c": 441
+  },
+  {
+   "d": "2026-08-19",
+   "s": "agent_predictions",
+   "c": 842
+  },
+  {
+   "d": "2026-08-20",
+   "s": "kronos_predictions",
+   "c": 1777
+  },
+  {
+   "d": "2026-08-20",
+   "s": "agent_predictions",
+   "c": 2262
+  },
+  {
+   "d": "2026-08-21",
+   "s": "kronos_predictions",
+   "c": 3262
+  },
+  {
+   "d": "2026-08-21",
+   "s": "agent_predictions",
+   "c": 1652
+  },
+  {
+   "d": "2026-08-24",
+   "s": "kronos_predictions",
+   "c": 103
+  },
+  {
+   "d": "2026-08-24",
+   "s": "agent_predictions",
+   "c": 159
+  },
+  {
+   "d": "2026-08-25",
+   "s": "agent_predictions",
+   "c": 3984
+  },
+  {
+   "d": "2026-08-26",
+   "s": "agent_predictions",
+   "c": 7
+  },
+  {
+   "d": "2026-08-28",
+   "s": "agent_predictions",
+   "c": 2
+  },
+  {
+   "d": "2026-09-02",
+   "s": "agent_predictions",
+   "c": 587
+  },
+  {
+   "d": "2026-09-04",
+   "s": "kronos_predictions",
+   "c": 2324
+  },
+  {
+   "d": "2026-09-04",
+   "s": "agent_predictions",
+   "c": 8132
+  },
+  {
+   "d": "2026-09-05",
+   "s": "agent_predictions",
+   "c": 388
+  },
+  {
+   "d": "2026-09-07",
+   "s": "agent_predictions",
+   "c": 1335
+  },
+  {
+   "d": "2026-09-09",
+   "s": "kronos_predictions",
+   "c": 1
+  },
+  {
+   "d": "2026-09-09",
+   "s": "agent_predictions",
+   "c": 1559
+  },
+  {
+   "d": "2026-10-09",
+   "s": "agent_predictions",
+   "c": 1
+  },
+  {
+   "d": "2026-10-13",
+   "s": "kronos_predictions",
+   "c": 77
+  },
+  {
+   "d": "2026-10-14",
+   "s": "kronos_predictions",
+   "c": 1604
+  },
+  {
+   "d": "2026-10-14",
+   "s": "agent_predictions",
+   "c": 457
+  }
+ ],
+ "ageAtGradingOct14": {
+  "src": "agent_predictions",
+  "avgAgeDays": 29.6,
+  "minAge": 29.5,
+  "maxAge": 30.1,
+  "n": 320
+ },
+ "ageAtGradingKronosOct14": {
+  "avgAgeDays": 28.6,
+  "minAge": 27.6,
+  "maxAge": 30.1,
+  "n": 1594
+ },
+ "outcomeSurvival": {
+  "agent_orphans": 73337,
+  "agent_total": 73657,
+  "kronos_orphans": 8246,
+  "kronos_total": 9840,
+  "earliestRawAgentPrediction": "2026-09-14T16:56:12.666Z",
+  "earliestRawKronosPrediction": "2026-09-14T17:06:03.834Z",
+  "earliestOutcomeEvaluated": "2026-08-10T14:14:36.790Z",
+  "outcomeRetentionDays": 90
+ },
+ "done": true
+}
