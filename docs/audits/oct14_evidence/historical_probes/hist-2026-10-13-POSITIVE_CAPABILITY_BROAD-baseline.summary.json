@@ -1,0 +1,114 @@
+{
+ "file": "C:/Users/ithay/AppData/Local/Temp/J/hist/hist-2026-10-13-POSITIVE_CAPABILITY_BROAD-baseline.json",
+ "symbols": [
+  "UNH",
+  "INTC",
+  "ARM",
+  "COST",
+  "SPY",
+  "QQQ",
+  "GLD",
+  "MDB",
+  "AAPL",
+  "META",
+  "SOXL",
+  "TSLA"
+ ],
+ "forwardFilled": {
+  "UNH": 57,
+  "INTC": 0,
+  "ARM": 0,
+  "COST": 0,
+  "SPY": 0,
+  "QQQ": 4,
+  "GLD": 0,
+  "MDB": 49,
+  "AAPL": 0,
+  "META": 0,
+  "SOXL": 58,
+  "TSLA": 0
+ },
+ "ideasByAgentSide": [
+  {
+   "a": "TechnicalAgent",
+   "s": "BUY",
+   "c": 167
+  },
+  {
+   "a": "KronosEngine",
+   "s": "SELL",
+   "c": 33
+  },
+  {
+   "a": "KronosEngine",
+   "s": "BUY",
+   "c": 27
+  },
+  {
+   "a": "TechnicalAgent",
+   "s": "SELL",
+   "c": 20
+  },
+  {
+   "a": "QuantEngine",
+   "s": "BUY",
+   "c": 3
+  },
+  {
+   "a": "QuantEngine",
+   "s": "SELL",
+   "c": 1
+  }
+ ],
+ "rounds": 153,
+ "approvedRounds": 12,
+ "confidence": {
+  "max": 0.8023809523809524,
+  "p50": 0.4,
+  "p90": 0.797,
+  "p99": 0.802,
+  "atLeast0_6": 53,
+  "atLeast0_75": 36
+ },
+ "topReasons": [
+  [
+   "[NO TRADE] Confidence # did not clear ##",
+   100
+  ],
+  [
+   "[NO TRADE] Confidence # did not clear ## MODERATE tier also declined: At least one participating agent lacks a",
+   17
+  ],
+  [
+   "[NO TRADE] Only # independent evidence group(s) agreed on BUY (need #) from producers [TechnicalAgent] resolvi",
+   16
+  ],
+  [
+   "[Chief Consensus Approval] Strong agreement# Final Confidence: ## Agreed: [TechnicalAgent(wt:#), KronosEngine(",
+   7
+  ],
+  [
+   "[Chief Consensus Approval] Strong agreement# Final Confidence: ## Agreed: [KronosEngine(wt:#), TechnicalAgent(",
+   5
+  ],
+  [
+   "[NO TRADE] Only # independent evidence group(s) agreed on SELL (need #) from producers [KronosEngine] resolvin",
+   4
+  ],
+  [
+   "[NO TRADE] Only # independent evidence group(s) agreed on BUY (need #) from producers [KronosEngine] resolving",
+   3
+  ],
+  [
+   "[NO TRADE] Only # independent evidence group(s) agreed on SELL (need #) from producers [TechnicalAgent] resolv",
+   1
+  ]
+ ],
+ "orders": [
+  {
+   "side": "BUY",
+   "status": "FILLED",
+   "c": 6
+  }
+ ]
+}

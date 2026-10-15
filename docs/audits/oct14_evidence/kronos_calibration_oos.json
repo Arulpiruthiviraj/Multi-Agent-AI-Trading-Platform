@@ -1,0 +1,190 @@
+{
+ "n": 1496,
+ "range": {
+  "first": "2026-09-14T17:06:03.834Z",
+  "last": "2026-09-16T15:42:48.031Z"
+ },
+ "bySide": {
+  "BUY": {
+   "n": 111,
+   "winRate": 0.5225225225225225
+  },
+  "SELL": {
+   "n": 1385,
+   "winRate": 0.5097472924187726
+  },
+  "HOLD": {
+   "n": 0,
+   "winRate": null
+  }
+ },
+ "baseRate": {
+  "upMoves": 0.49264705882352944,
+  "downMoves": 0.5073529411764706,
+  "flat": 0
+ },
+ "split": {
+  "trainN": 1047,
+  "testN": 449,
+  "trainThrough": "2026-09-15T19:14:51.645Z",
+  "testFrom": "2026-09-15T19:14:51.972Z"
+ },
+ "buckets": {
+  "0": {
+   "trainN": 19,
+   "trainWinRate": 0.631578947368421,
+   "trainEffectiveN": 8,
+   "calibratedRaw": 0.5172,
+   "calibratedEffective": 0.4563,
+   "testN": 0,
+   "testWinRate": null,
+   "testEffectiveN": 0
+  },
+  "0.6": {
+   "trainN": 8,
+   "trainWinRate": 0.625,
+   "trainEffectiveN": 5,
+   "calibratedRaw": 0.6389,
+   "calibratedEffective": 0.6333,
+   "testN": 0,
+   "testWinRate": null,
+   "testEffectiveN": 0
+  },
+  "0.7": {
+   "trainN": 0,
+   "trainWinRate": null,
+   "trainEffectiveN": 0,
+   "calibratedRaw": 0.75,
+   "calibratedEffective": 0.75,
+   "testN": 0,
+   "testWinRate": null,
+   "testEffectiveN": 0
+  },
+  "0.8": {
+   "trainN": 1020,
+   "trainWinRate": 0.5225490196078432,
+   "trainEffectiveN": 138,
+   "calibratedRaw": 0.5257,
+   "calibratedEffective": 0.5583,
+   "testN": 449,
+   "testWinRate": 0.4766146993318486,
+   "testEffectiveN": 63
+  },
+  "0.9": {
+   "trainN": 0,
+   "trainWinRate": null,
+   "trainEffectiveN": 0,
+   "calibratedRaw": 0.95,
+   "calibratedEffective": 0.95,
+   "testN": 0,
+   "testWinRate": null,
+   "testEffectiveN": 0
+  }
+ },
+ "oosBrier": {
+  "n": 449,
+  "calibratedRaw": 0.25187,
+  "calibratedEffective": 0.25612,
+  "coinFlip0_5": 0.25,
+  "statedConfidence": 0.38641
+ },
+ "halves": {
+  "first": {
+   "n": 748,
+   "winRate": 0.5334224598930482,
+   "effective": {
+    "n": 102,
+    "wins": 53.98619795237442,
+    "losses": 48.01380204762558
+   },
+   "buyWin": {
+    "n": 45,
+    "winRate": 0.5111111111111111
+   },
+   "sellWin": {
+    "n": 703,
+    "winRate": 0.534850640113798
+   }
+  },
+  "second": {
+   "n": 748,
+   "winRate": 0.4879679144385027,
+   "effective": {
+    "n": 101,
+    "wins": 51.24377044524106,
+    "losses": 49.75622955475894
+   },
+   "buyWin": {
+    "n": 66,
+    "winRate": 0.5303030303030303
+   },
+   "sellWin": {
+    "n": 682,
+    "winRate": 0.4838709677419355
+   }
+  }
+ },
+ "horizonSensitivity": {
+  "sampleSize": 1496,
+  "overall": {
+   "1": {
+    "n": 1446,
+    "hitRate": 0.5076,
+    "fractionUp": 0.4993
+   },
+   "5": {
+    "n": 1446,
+    "hitRate": 0.5124,
+    "fractionUp": 0.5007
+   },
+   "15": {
+    "n": 1407,
+    "hitRate": 0.5586,
+    "fractionUp": 0.4478
+   },
+   "60": {
+    "n": 1105,
+    "hitRate": 0.5946,
+    "fractionUp": 0.4335
+   }
+  },
+  "bySide": {
+   "BUY": {
+    "1": {
+     "n": 106,
+     "hitRate": 0.5472
+    },
+    "5": {
+     "n": 101,
+     "hitRate": 0.5941
+    },
+    "15": {
+     "n": 97,
+     "hitRate": 0.5464
+    },
+    "60": {
+     "n": 57,
+     "hitRate": 0.7719
+    }
+   },
+   "SELL": {
+    "1": {
+     "n": 1340,
+     "hitRate": 0.5045
+    },
+    "5": {
+     "n": 1345,
+     "hitRate": 0.5063
+    },
+    "15": {
+     "n": 1310,
+     "hitRate": 0.5595
+    },
+    "60": {
+     "n": 1048,
+     "hitRate": 0.5849
+    }
+   }
+  }
+ }
+}

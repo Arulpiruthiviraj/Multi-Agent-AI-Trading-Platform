@@ -1,0 +1,207 @@
+{
+ "promotionToFirstTechnical": {
+  "promotions": 381,
+  "withAnalysisAfter": 377,
+  "neverAnalyzedAfter": 4,
+  "evictedBeforeAnalysis": 10,
+  "secP50": 1.4,
+  "secP90": 98,
+  "secP99": 2185.2,
+  "over10min": 4,
+  "over30min": 4
+ },
+ "longDelays": {
+  "count": 4,
+  "evictedInBetweenCount": 4,
+  "top": [
+   {
+    "symbol": "CIEN",
+    "promoted": "16:21:08Z",
+    "firstAnalysis": "17:33:06Z",
+    "minutes": 72,
+    "evictedInBetween": true
+   },
+   {
+    "symbol": "TXN",
+    "promoted": "17:12:07Z",
+    "firstAnalysis": "17:50:35Z",
+    "minutes": 38.5,
+    "evictedInBetween": true
+   },
+   {
+    "symbol": "CVNA",
+    "promoted": "17:13:08Z",
+    "firstAnalysis": "17:49:39Z",
+    "minutes": 36.5,
+    "evictedInBetween": true
+   },
+   {
+    "symbol": "TXN",
+    "promoted": "17:14:10Z",
+    "firstAnalysis": "17:50:35Z",
+    "minutes": 36.4,
+    "evictedInBetween": true
+   }
+  ]
+ },
+ "symbol_IBRX": {
+  "firstSeenByDiscovery": "15:25:05Z",
+  "firstAdmitted": "18:11:27Z",
+  "admittedEvents": 2,
+  "notPromoted": {
+   "OTHER": 1
+  },
+  "promotedAt": [],
+  "evictedAt": [],
+  "firstIdea": null,
+  "ideas": 0
+ },
+ "symbol_SMR": {
+  "firstSeenByDiscovery": "14:09:52Z",
+  "firstAdmitted": "15:39:59Z",
+  "admittedEvents": 14,
+  "notPromoted": {},
+  "promotedAt": [],
+  "evictedAt": [],
+  "firstIdea": null,
+  "ideas": 0
+ },
+ "symbol_VSTM": {
+  "firstSeenByDiscovery": "13:54:52Z",
+  "firstAdmitted": "14:34:55Z",
+  "admittedEvents": 23,
+  "notPromoted": {
+   "SWAP_CAP_REACHED": 2
+  },
+  "promotedAt": [
+   "14:40:18Z",
+   "15:55:52Z"
+  ],
+  "evictedAt": [
+   "15:25:18Z",
+   "16:18:04Z"
+  ],
+  "firstIdea": "14:41:14Z",
+  "ideas": 70
+ },
+ "symbol_BSP": {
+  "firstSeenByDiscovery": "13:34:51Z",
+  "firstAdmitted": "14:59:59Z",
+  "admittedEvents": 9,
+  "notPromoted": {
+   "SWAP_CAP_REACHED": 4
+  },
+  "promotedAt": [
+   "15:25:18Z",
+   "18:12:00Z",
+   "18:19:14Z"
+  ],
+  "evictedAt": [
+   "16:08:39Z",
+   "18:15:25Z",
+   "18:29:06Z",
+   "18:40:51Z"
+  ],
+  "firstIdea": "15:27:09Z",
+  "ideas": 62
+ },
+ "symbol_FAST": {
+  "firstSeenByDiscovery": "13:39:46Z",
+  "firstAdmitted": "13:39:46Z",
+  "admittedEvents": 23,
+  "notPromoted": {
+   "SWAP_CAP_REACHED": 2,
+   "OTHER": 1
+  },
+  "promotedAt": [
+   "13:49:46Z",
+   "14:43:22Z",
+   "15:11:33Z",
+   "16:57:43Z"
+  ],
+  "evictedAt": [
+   "14:35:12Z",
+   "15:08:25Z",
+   "19:13:04Z"
+  ],
+  "firstIdea": "13:51:10Z",
+  "ideas": 432
+ },
+ "symbol_HALO": {
+  "firstSeenByDiscovery": "14:40:00Z",
+  "firstAdmitted": "14:40:00Z",
+  "admittedEvents": 8,
+  "notPromoted": {},
+  "promotedAt": [
+   "14:47:00Z",
+   "16:11:57Z",
+   "17:06:30Z",
+   "17:46:04Z",
+   "18:53:21Z",
+   "19:35:48Z"
+  ],
+  "evictedAt": [
+   "16:09:54Z",
+   "16:42:33Z",
+   "17:37:49Z",
+   "17:58:32Z",
+   "18:12:00Z",
+   "18:55:59Z"
+  ],
+  "firstIdea": "14:48:13Z",
+  "ideas": 231
+ },
+ "symbol_CIEN": {
+  "firstSeenByDiscovery": "15:10:01Z",
+  "firstAdmitted": "15:10:01Z",
+  "admittedEvents": 5,
+  "notPromoted": {
+   "OTHER": 3
+  },
+  "promotedAt": [
+   "16:21:08Z",
+   "17:32:09Z",
+   "18:29:11Z",
+   "19:46:47Z"
+  ],
+  "evictedAt": [
+   "16:21:39Z",
+   "17:58:34Z",
+   "18:22:49Z",
+   "19:08:31Z",
+   "19:20:27Z"
+  ],
+  "firstIdea": "17:33:06Z",
+  "ideas": 125
+ },
+ "incumbentNotEvictable": {
+  "c": 453,
+  "s": 85
+ },
+ "stateEvents": [
+  {
+   "event_type": "RECONCILIATION_MATCH",
+   "c": 76,
+   "a": "13:34:51Z",
+   "b": "19:55:42Z"
+  },
+  {
+   "event_type": "SESSION_LIFECYCLE_STATE_CHANGED",
+   "c": 1,
+   "a": "13:30:04Z",
+   "b": "13:30:04Z"
+  },
+  {
+   "event_type": "TRADING_STATE_CHANGED",
+   "c": 2,
+   "a": "16:55:16Z",
+   "b": "16:56:01Z"
+  },
+  {
+   "event_type": "UNCLEAN_SHUTDOWN_DETECTED",
+   "c": 1,
+   "a": "16:54:50Z",
+   "b": "16:54:50Z"
+  }
+ ]
+}
