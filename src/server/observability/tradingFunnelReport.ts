@@ -16,6 +16,20 @@ export interface TradingFunnelReport {
   providers: ProviderHealthRow[];
 }
 
+/**
+ * Look-back window for the operator funnel report, in hours (2026-10-15, D8). The route used to default to 24 h (max 30 d) and ran its observability_events
+ * queries synchronously inside the trading process: a default `argus trading-funnel` at 09:37 ET stalled the event loop for ~8 s (WARN lag 7.6 s, SLOW_SQL 7.5 s).
+ * Operators almost always want the recent funnel, so default to 2 h; observability_events retention is 14 days, so cap at 24 h unless a longer window is genuinely
+ * needed offline. Garbage input falls back to the default; sub-minute windows are floored.
+ */
+export const FUNNEL_DEFAULT_HOURS = 2;
+export const FUNNEL_MAX_HOURS = 24;
+export function resolveFunnelWindowHours(raw: unknown): number {
+  const n = parseFloat(String(raw ?? ''));
+  if (!Number.isFinite(n) || n <= 0) return FUNNEL_DEFAULT_HOURS;
+  return Math.min(Math.max(n, 1 / 60), FUNNEL_MAX_HOURS);
+}
+
 export async function buildTradingFunnelReport(sinceIso: string): Promise<TradingFunnelReport> {
   const candidatesByState: Record<string, number> = {};
   for (const c of listCandidates()) {

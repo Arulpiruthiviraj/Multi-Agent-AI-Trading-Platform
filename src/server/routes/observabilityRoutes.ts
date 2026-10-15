@@ -9,7 +9,7 @@ import { observabilityEvents } from '../db/schema';
 import { desc, eq } from 'drizzle-orm';
 import { buildProviderHealthMatrix } from '../observability/providerHealthMatrix';
 import { buildConsensusPipelineReport, formatConsensusPipelineReport } from '../observability/consensusPipelineReport';
-import { buildTradingFunnelReport, formatTradingFunnelReport } from '../observability/tradingFunnelReport';
+import { buildTradingFunnelReport, formatTradingFunnelReport, resolveFunnelWindowHours } from '../observability/tradingFunnelReport';
 import { buildQuantEvidenceReport, formatQuantEvidenceReport } from '../observability/quantEvidenceReport';
 import { buildReflectionEngineHealthReport, formatReflectionEngineHealthReport } from '../observability/reflectionEngineHealthReport';
 import { buildExtendedHoursSpreadReport, formatExtendedHoursSpreadReport } from '../observability/extendedHoursSpreadReport';
@@ -311,16 +311,22 @@ observabilityRouter.get('/daily-attribution', async (req, res) => {
 // - composes candidateLifecycle counts + consensusPipelineReport + providerHealthMatrix, no new data path.
 observabilityRouter.get('/trading-funnel', async (req, res) => {
   try {
-    const hours = Math.min(parseFloat(String(req.query.hours || '24')) || 24, 24 * 30);
+    const hours = resolveFunnelWindowHours(req.query.hours);
     const sinceIso = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-    const report = await buildTradingFunnelReport(sinceIso);
+    // 2026-10-15 (D8): serialized + memory-gated like the other heavy operator reports, and a bounded default window (see resolveFunnelWindowHours).
+    const report = await guardHeavyReport('trading-funnel', () => buildTradingFunnelReport(sinceIso));
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatTradingFunnelReport(report));
       return;
     }
     res.json({ ok: true, report });
   } catch (e: any) {
-    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+    if (res.headersSent) return;
+    if (e instanceof HeavyReportRefusedError) {
+      res.status(429).json({ ok: false, refused: true, code: e.code, error: e.message });
+      return;
+    }
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
