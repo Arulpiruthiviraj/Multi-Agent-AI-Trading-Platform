@@ -1,0 +1,81 @@
+{
+ "rowsQuantAssessments": 3000,
+ "rowsProvenance": 3000,
+ "sourceJsonBytes": {
+  "qa": 90790971,
+  "dp": 188882284
+ },
+ "zstdLevel": 3,
+ "envelopeFormat": 1,
+ "walMode": "WAL synchronous=NORMAL",
+ "stats": {
+  "baseline": {
+   "dbBytes": 262520832,
+   "bytesPerRow": 43753,
+   "walPeakBytes": 4194192,
+   "insertMs": {
+    "p50": 0.37,
+    "p95": 0.926,
+    "p99": 19.578
+   },
+   "readReconstructMs": {
+    "p50": 0.123,
+    "p95": 0.206,
+    "p99": 0.319
+   },
+   "cpuUserMsTotalWrite": 1235,
+   "reportQueryMsMedian": 47.19,
+   "rowsVerifiedByteExact": 6000,
+   "rowsMismatched": 0,
+   "evidenceBlobStore": null,
+   "rssMb": 657
+  },
+  "A_compressed": {
+   "dbBytes": 70569984,
+   "bytesPerRow": 11762,
+   "walPeakBytes": 4152992,
+   "insertMs": {
+    "p50": 0.748,
+    "p95": 1.608,
+    "p99": 3.982
+   },
+   "readReconstructMs": {
+    "p50": 0.417,
+    "p95": 0.755,
+    "p99": 1.572
+   },
+   "cpuUserMsTotalWrite": 4954,
+   "reportQueryMsMedian": 16.97,
+   "rowsVerifiedByteExact": 6000,
+   "rowsMismatched": 0,
+   "evidenceBlobStore": null,
+   "rssMb": 723
+  },
+  "B_shared": {
+   "dbBytes": 57561088,
+   "bytesPerRow": 9594,
+   "walPeakBytes": 4157112,
+   "insertMs": {
+    "p50": 1.392,
+    "p95": 3.676,
+    "p99": 6.368
+   },
+   "readReconstructMs": {
+    "p50": 0.712,
+    "p95": 1.836,
+    "p99": 2.891
+   },
+   "cpuUserMsTotalWrite": 7219,
+   "reportQueryMsMedian": 49.96,
+   "rowsVerifiedByteExact": 6000,
+   "rowsMismatched": 0,
+   "evidenceBlobStore": {
+    "n": 432,
+    "b": 1095976,
+    "r": 6000
+   },
+   "rssMb": 698,
+   "fallbackToFullEnvelope": 0
+  }
+ }
+}

@@ -1,0 +1,176 @@
+{
+ "snapshot": "argus_oct14_postclose_1792008436014.db",
+ "sampleSize": 800,
+ "node": "v24.18.0",
+ "quant_assessments": {
+  "random": {
+   "n": 656,
+   "zlib": {
+    "ratio": 0.2518,
+    "ci95": [
+     0.2515,
+     0.2522
+    ],
+    "avgRaw": 29867
+   },
+   "zstd3": {
+    "ratio": 0.2703,
+    "ci95": [
+     0.27,
+     0.2707
+    ],
+    "avgRaw": 29867
+   }
+  },
+  "adjacentWindow": {
+   "n": 800,
+   "zlib": {
+    "ratio": 0.2506,
+    "ci95": [
+     0.2503,
+     0.2509
+    ],
+    "avgRaw": 29714
+   },
+   "zstd3": {
+    "ratio": 0.2695,
+    "ci95": [
+     0.2691,
+     0.2699
+    ],
+    "avgRaw": 29714
+   }
+  },
+  "stratifiedBySymbol": {
+   "symbols": [
+    "QQQ",
+    "SPY",
+    "GLD",
+    "META",
+    "TSLA",
+    "NVDA",
+    "IWM",
+    "MSFT"
+   ],
+   "n": 800,
+   "zlib": {
+    "ratio": 0.2498,
+    "ci95": [
+     0.2495,
+     0.2502
+    ],
+    "avgRaw": 29725
+   },
+   "zstd3": {
+    "ratio": 0.2677,
+    "ci95": [
+     0.2673,
+     0.2681
+    ],
+    "avgRaw": 29725
+   }
+  }
+ },
+ "decision_provenance": {
+  "random": {
+   "n": 800,
+   "zlib": {
+    "ratio": 0.1943,
+    "ci95": [
+     0.1938,
+     0.1947
+    ],
+    "avgRaw": 63793
+   },
+   "zstd3": {
+    "ratio": 0.197,
+    "ci95": [
+     0.1965,
+     0.1975
+    ],
+    "avgRaw": 63793
+   }
+  },
+  "adjacentWindow": {
+   "n": 800,
+   "zlib": {
+    "ratio": 0.1957,
+    "ci95": [
+     0.1954,
+     0.196
+    ],
+    "avgRaw": 62883
+   },
+   "zstd3": {
+    "ratio": 0.1985,
+    "ci95": [
+     0.1981,
+     0.1989
+    ],
+    "avgRaw": 62883
+   }
+  },
+  "stratifiedBySymbol": {
+   "symbols": [
+    "SPY",
+    "QQQ",
+    "NVDA",
+    "INTC",
+    "GLD",
+    "TQQQ",
+    "META",
+    "SQQQ"
+   ],
+   "n": 800,
+   "zlib": {
+    "ratio": 0.194,
+    "ci95": [
+     0.1938,
+     0.1942
+    ],
+    "avgRaw": 63144
+   },
+   "zstd3": {
+    "ratio": 0.1968,
+    "ci95": [
+     0.1966,
+     0.197
+    ],
+    "avgRaw": 63144
+   }
+  }
+ },
+ "marketContextDedupAdjacentWindow": {
+  "rows": 6000,
+  "distinctWholeObjects": 650,
+  "wholeObjectDupRate": 0.892,
+  "distinctSubObjects": {
+   "spy": 8,
+   "qqq": 8,
+   "iwm": 8,
+   "sector": 60,
+   "breadth": 1
+  },
+  "note": "sub-object distinct counts over the window vs rows: low counts = the same SPY/QQQ/IWM/sector/breadth snapshot is stored once per distinct minute, not per symbol"
+ },
+ "provenanceBarEvidence": {
+  "rowsChecked": 300,
+  "rowsWithOHLCVValuesInline": 0,
+  "byTimeframe": {
+   "1Day": 300
+  },
+  "rawAvgBytes": 24577,
+  "compactJsonAvgBytes": 5936,
+  "compactZstdAvgBytes": 930,
+  "recentRefsChecked": 1500,
+  "foundInOhlcvBars": 1500,
+  "foundFraction": 1,
+  "foundSources": {
+   "ibkr": 1026,
+   "alpaca": 474
+  },
+  "foundButProvisional": 95,
+  "availabilityLagMsP50": 86400000,
+  "availabilityLagMsP95": 86400000
+ }
+}
