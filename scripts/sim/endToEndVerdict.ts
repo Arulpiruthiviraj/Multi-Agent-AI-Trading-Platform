@@ -63,6 +63,14 @@ if (which.toUpperCase() === 'A') {
   add('REAL_CONSENSUS_APPROVALS', consensus.c > 0 ? 'PASS' : 'FAIL', `approved consensus rounds: ${consensus.c}`);
   add('SESSION_CERTIFICATION_GATE', j.certification?.certification === 'PASS' ? 'PASS' : 'FAIL', `${j.certification?.certification} firstBlockingStage=${j.certification?.firstBlockingStage ?? 'none'}`);
 }
+// Simulated-time integrity: in a real-discovery session Date.now is bound to the simulated clock, so (nearly) every persisted event must fall inside the
+// simulated session window. Rows outside it are wall-clock contamination (a small boot-phase allowance is tolerated).
+{
+  const total = (db.prepare('select count(*) c from observability_events').get() as any).c as number;
+  const inside = (db.prepare('select count(*) c from observability_events where ts between ? and ?').get(j.sessionStartMs - 3600_000, j.sessionEndMs + 6 * 3600_000) as any).c as number;
+  const outsideFrac = total > 0 ? (total - inside) / total : 1;
+  add('SIMULATED_TIME_INTEGRITY', d && outsideFrac <= 0.02 ? 'PASS' : d ? 'FAIL' : 'NOT_PROVEN', `${total - inside} of ${total} persisted events outside the simulated session window (${(outsideFrac * 100).toFixed(2)}%)`);
+}
 add('TIMELINE_INVARIANTS', (j.certification?.invariantViolations ?? []).length === 0 ? 'PASS' : 'FAIL', `violations=${(j.certification?.invariantViolations ?? []).length}`);
 // Opportunity funnel: for every oracle opportunity the allocator promoted in time, how far did the real pipeline take it (first blocking stage evidence).
 const funnel = (d?.opportunities ?? []).filter((o: any) => o.cls === 'DISCOVERED_IN_TIME' || o.cls === 'PROMOTED_BUT_LATE').map((o: any) => {
