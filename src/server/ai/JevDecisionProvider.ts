@@ -22,7 +22,9 @@
  * tests use mocked fetch only — never real network.
  *
  * Called By:
- * - Future: AICallGovernor event-driven enrichment (not wired yet)
+ * - AICallGovernor (STRUCTURED_DECISION) - wired. Callers: news/JevNewsTriage.ts kickOffJevShadowScoring (flag ARGUS_JEV_SHADOW_SCORING_ENABLED,
+ *   default OFF) and NewsEngine.tryJevFirstAnalysis (flag ARGUS_JEV_ESCALATION_ENABLED, default OFF). The wiring exists; whether it is
+ *   active is a flag question - see getJevShadowStatus() and docs/audits/ARGUS_JEV_INTEGRATION_FAILURE_ROOT_CAUSE.md.
  *
  * Never:
  * - Import BrokerManager/OrderManagement/RiskEngine/ChiefTraderAgent
