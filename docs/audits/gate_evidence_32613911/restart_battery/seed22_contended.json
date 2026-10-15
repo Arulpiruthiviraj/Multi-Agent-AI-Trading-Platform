@@ -1,0 +1,64 @@
+[
+  {
+    "id": "FIRST_BUY_SUBMITTED",
+    "verdict": "INCONCLUSIVE",
+    "detail": "restart condition FIRST_BUY_SUBMITTED was never reached in this session (no stop); nothing about the restart state was exercised"
+  },
+  {
+    "id": "FIRST_BUY_FILLED",
+    "verdict": "PASS",
+    "note": "restart immediately after the first BUY filled",
+    "stopBar": 149,
+    "stateAtRestart": {
+      "brokerOrders": 1,
+      "heldPositions": 1,
+      "workingOrders": 0
+    },
+    "ordersAfterResume": 1,
+    "realizedPnl": 0,
+    "failures": []
+  },
+  {
+    "id": "HOLDING_ONE_POSITION",
+    "verdict": "INCONCLUSIVE",
+    "detail": "restart condition HOLDING_ONE_POSITION was never reached in this session (no stop); nothing about the restart state was exercised"
+  },
+  {
+    "id": "HOLDING_TWO_POSITIONS",
+    "verdict": "INCONCLUSIVE",
+    "detail": "restart condition HOLDING_TWO_POSITIONS was never reached in this session (no stop); nothing about the restart state was exercised"
+  },
+  {
+    "id": "SELL_SUBMITTED",
+    "verdict": "PASS",
+    "note": "restart right after the first protective/exit SELL exists",
+    "stopBar": 291,
+    "stateAtRestart": {
+      "brokerOrders": 2,
+      "heldPositions": 0,
+      "workingOrders": 0
+    },
+    "ordersAfterResume": 2,
+    "realizedPnl": 449.6946699999995,
+    "failures": []
+  },
+  {
+    "id": "PARTIAL_FILL_RECORDED",
+    "verdict": "PASS",
+    "note": "restart during a partial fill (thin liquidity)",
+    "stopBar": 149,
+    "stateAtRestart": {
+      "brokerOrders": 1,
+      "heldPositions": 1,
+      "workingOrders": 1
+    },
+    "ordersAfterResume": 1,
+    "realizedPnl": 0,
+    "failures": []
+  },
+  {
+    "id": "WORKING_ORDER_OPEN",
+    "verdict": "INCONCLUSIVE",
+    "detail": "restart condition WORKING_ORDER_OPEN was never reached in this session (no stop); nothing about the restart state was exercised"
+  }
+]
