@@ -13,7 +13,7 @@ import { SyntheticRandom } from '../SyntheticRandom';
 
 export const SESSION_MINUTES = 390;
 
-export type ValidKind = 'MOMENTUM_BREAKOUT' | 'GAP_AND_GO' | 'HIGH_VOLUME_MOVER' | 'CONTINUATION' | 'MEAN_REVERSION';
+export type ValidKind = 'CERTIFIED_PATH' | 'MOMENTUM_BREAKOUT' | 'GAP_AND_GO' | 'HIGH_VOLUME_MOVER' | 'CONTINUATION' | 'MEAN_REVERSION';
 export type TrapKind = 'FALSE_BREAKOUT' | 'LOW_LIQUIDITY_SPIKE' | 'TINY_VOLUME_HUGE_PCT' | 'STALE_DATA';
 
 export interface HiddenSpec {
@@ -37,6 +37,9 @@ export interface DiscoveryMarketConfig {
   /** Exit-path fixture (default off): after a VALID opportunity window ends the price decays at this per-minute drift for `reversalMinutes`, so a position
    *  opened on the opportunity meets a real adverse move (protective exit / stop path). Environment control only - the decision to exit is Argus's. */
   postWindowReversal?: { driftPerMin: number; minutes: number };
+  /** Number of VALID opportunities generated with the multi-phase CERTIFIED_PATH shape (breakout -> continuation -> reversal) that the proven positive
+   *  scenarios (CERTIFIED_BULLISH_ENTRY_EXIT) use, so the CORE strategies' own trigger/EV filters can legitimately fire. Default 0 (baseline unchanged). */
+  certifiedPathCount?: number;
 }
 
 export interface RawSnapshot {
@@ -84,11 +87,11 @@ export class SyntheticDiscoveryMarket {
     const used = new Set<string>();
     const kinds: ValidKind[] = ['MOMENTUM_BREAKOUT', 'GAP_AND_GO', 'HIGH_VOLUME_MOVER', 'CONTINUATION', 'MEAN_REVERSION'];
     for (let i = 0; i < cfg.validCount; i++) {
-      const kind = kinds[i % kinds.length];
+      const kind: ValidKind = i < (cfg.certifiedPathCount ?? 0) ? 'CERTIFIED_PATH' : kinds[i % kinds.length];
       const isOutside = rng.next() < cfg.outsideFraction;
       const symbol = pick(isOutside ? outside : insideList, used);
-      const start = kind === 'GAP_AND_GO' ? 0 : Math.floor(rng.range(15, 230));
-      this.specs.push({ symbol, cls: 'VALID', kind, startMin: start, durationMin: Math.floor(rng.range(35, 70)), strength: +rng.range(0.55, 1).toFixed(2), insideStartingWatchlist: !isOutside });
+      const start = kind === 'GAP_AND_GO' ? 0 : kind === 'CERTIFIED_PATH' ? Math.floor(rng.range(20, 120)) : Math.floor(rng.range(15, 230));
+      this.specs.push({ symbol, cls: 'VALID', kind, startMin: start, durationMin: kind === 'CERTIFIED_PATH' ? 75 : Math.floor(rng.range(35, 70)), strength: +rng.range(0.55, 1).toFixed(2), insideStartingWatchlist: !isOutside });
     }
     const trapKinds: TrapKind[] = ['FALSE_BREAKOUT', 'LOW_LIQUIDITY_SPIKE', 'TINY_VOLUME_HUGE_PCT', 'STALE_DATA'];
     for (let i = 0; i < cfg.trapCount; i++) {
@@ -117,6 +120,13 @@ export class SyntheticDiscoveryMarket {
         const rel = m - spec.startMin; const inWin = rel >= 0 && rel < spec.durationMin;
         const k = spec.strength;
         switch (spec.kind) {
+          case 'CERTIFIED_PATH': {
+            // breakout (0-15) -> continuation (15-75 = window end) -> reversal (75-155). Shape follows CERTIFIED_BULLISH_ENTRY_EXIT's D/E/F phases, time-compressed.
+            if (rel >= 0 && rel < 15) { drift = 0.0022 * k; volMult = 4 + 2.5 * k; }
+            else if (rel >= 15 && rel < 75) { drift = 0.0007 * k; volMult = 2.2 + 1.2 * k; }
+            else if (rel >= 75 && rel < 155) { drift = -0.0012; volMult = 1.8; }
+            break;
+          }
           case 'MOMENTUM_BREAKOUT': if (inWin) { drift = rel < 25 ? 0.0024 * k : 0.0004 * k; volMult = 3 + 3 * k; } break;
           case 'GAP_AND_GO': if (m < spec.durationMin) { drift = 0.0006 * k; volMult = 3 + 2 * k; } break;
           case 'HIGH_VOLUME_MOVER': if (inWin) { drift = rel < 15 ? 0.0022 * k : 0.0002; volMult = 6 + 4 * k; } break;
@@ -128,7 +138,7 @@ export class SyntheticDiscoveryMarket {
           case 'STALE_DATA': break; // handled below: published data freezes while a big apparent move exists
         }
       }
-      if (spec && spec.cls === 'VALID' && this.cfg.postWindowReversal) {
+      if (spec && spec.cls === 'VALID' && spec.kind !== 'CERTIFIED_PATH' && this.cfg.postWindowReversal) {
         const after = m - (spec.startMin + spec.durationMin);
         if (after >= 0 && after < this.cfg.postWindowReversal.minutes) drift = this.cfg.postWindowReversal.driftPerMin;
       }

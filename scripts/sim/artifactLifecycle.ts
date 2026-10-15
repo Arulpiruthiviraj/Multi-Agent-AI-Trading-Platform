@@ -19,8 +19,12 @@ export function loadArtifactPolicy(repoRoot: string = process.cwd()): ArtifactPo
   const raw = JSON.parse(fs.readFileSync(path.join(repoRoot, 'config', 'syntheticArtifacts.json'), 'utf8')) as Record<string, unknown>;
   const num = (k: string): number => { const v = raw[k]; if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) throw new Error(`config/syntheticArtifacts.json: ${k} must be a non-negative number`); return v; };
   const strs = (k: string): string[] => { const v = raw[k]; if (!Array.isArray(v) || v.some((x) => typeof x !== 'string' || !x)) throw new Error(`config/syntheticArtifacts.json: ${k} must be a non-empty string array`); return v as string[]; };
+  // DEVELOPMENT-LOOP override only (never for the release run): may lower the threshold but never below 8 GB, and is announced loudly.
+  let minFree = num('minFreeDiskGb');
+  const override = Number(process.env.ARGUS_SYNTH_MIN_FREE_DISK_GB);
+  if (Number.isFinite(override) && override >= 8 && override < minFree) { console.warn(`[artifactLifecycle] DEV OVERRIDE: min free disk lowered ${minFree} -> ${override} GB via ARGUS_SYNTH_MIN_FREE_DISK_GB (not valid for release certification)`); minFree = override; }
   return {
-    minFreeDiskGb: num('minFreeDiskGb'), retainSessionDatabases: raw.retainSessionDatabases === true, evidenceSubfolder: String(raw.evidenceSubfolder || 'evidence'),
+    minFreeDiskGb: minFree, retainSessionDatabases: raw.retainSessionDatabases === true, evidenceSubfolder: String(raw.evidenceSubfolder || 'evidence'),
     testArtifactMaxAgeMinutes: num('testArtifactMaxAgeMinutes'), testArtifactPrefixes: strs('testArtifactPrefixes'), protectedPrefixes: strs('protectedPrefixes'),
   };
 }

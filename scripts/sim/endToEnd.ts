@@ -11,6 +11,15 @@ async function main() {
   const out = arg('out') ?? '/tmp/e2e'; const test = (arg('test') ?? 'B').toUpperCase(); const seed = Number(arg('seed') ?? 102);
   fs.mkdirSync(out, { recursive: true });
   const spec = (test === 'A' ? buildTestASpec : buildTestBSpec)(`${out}/test${test}-seed${seed}.json`, seed);
+  // Development-loop overrides (smaller line allocation = much faster sessions). The release gate uses the defaults (87 incumbents, cap 90, 37 renewals/min).
+  const num = (k: string) => (arg(k) !== undefined ? Number(arg(k)) : undefined);
+  const d = spec.discovery as any;
+  if (num('incumbents') !== undefined) d.incumbentCount = num('incumbents');
+  if (num('hardcap') !== undefined) d.hardCap = num('hardcap');
+  if (num('renewals') !== undefined) d.renewalsPerMinute = num('renewals');
+  if (num('startingWatchlist') !== undefined) d.startingWatchlistSize = num('startingWatchlist');
+  if (num('duration') !== undefined) spec.durationMinutes = num('duration')!;
+  if (arg('profile')) spec.calibrationProfile = arg('profile') as any;
   const r = await runSpecInChild(spec);
   const summary = { test, seed, ok: r.ok, error: r.error ?? null, ...(r.data ? summarizeResult(r.data) : {}), discovery: r.data?.discovery ? { score: r.data.discovery.score, promotedNew: r.data.discovery.promotedNew?.length, admitted: r.data.discovery.admittedToSession, blocked: r.data.discovery.blockedProviderCalls, reasons: r.data.discovery.notPromotedReasons } : null, lifecycleSeed: r.data?.lifecycleSeed ? r.data.lifecycleSeed.length : null };
   fs.writeFileSync(`${out}/test${test}-seed${seed}-summary.json`, JSON.stringify(summary, null, 2));

@@ -285,7 +285,8 @@ export function buildTestBSpec(outputPath: string, seed = 102): FullSessionSpec 
     calibrationProfile: 'POSITIVE_CAPABILITY_BROAD',
     // production fixture parity: PULLBACK_CONTINUATION is RETIRED in production (baseline skips it), so it must not be revived by a fresh-DB baseline
     lifecycle: { baselineCoreUntested: true, records: [{ strategyId: 'PULLBACK_CONTINUATION', status: 'RETIRED', reason: 'production parity: retired strategy stays retired' }] },
-    discovery: { ...END_TO_END_DISCOVERY, seed, postWindowReversal: { driftPerMin: -0.0016, minutes: 60 } },
+    discovery: { ...END_TO_END_DISCOVERY, seed, postWindowReversal: { driftPerMin: -0.0016, minutes: 60 }, certifiedPathCount: 3 },
+    scenarioId: 'CERTIFIED_BULLISH_ENTRY_EXIT', // only shapes the prior-day history (uptrend); intraday bars come from the hidden market
     label: 'TEST B: 500 hidden stocks -> real discovery -> real consensus (labeled synthetic calibration, UNTESTED baseline lifecycle) -> Risk -> BUY -> monitor -> SELL',
   };
 }
