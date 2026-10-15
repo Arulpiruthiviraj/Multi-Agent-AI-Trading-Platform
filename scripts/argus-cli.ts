@@ -38,6 +38,7 @@ import {
   writeSessionCookie,
 } from './cli/cliSession';
 import { buildEngineEnv, DEFAULT_START_TIMEOUT_MS, DEFAULT_RECONCILIATION_WAIT_MS, shouldRestoreTrading, waitForCleanReconciliation, type ReconciliationSnapshot } from './cli/lifecycle';
+import { EXIT, DEFAULT_STOP_TIMEOUT_MS, classifyLifecycleState, transportCodeOf, type LifecycleResult } from './cli/lifecycleCodes';
 import {
   argusBanner,
   badge,
@@ -597,14 +598,14 @@ async function startEngine(overrides: { enableTrading?: boolean } = {}) {
   const flags = parseFlags(process.argv.slice(3));
   if (overrides.enableTrading) flags.enableTrading = true;
   if (isEngineProcessRunning()) {
-    console.log(JSON.stringify({ ok: true, message: 'Engine already running', pid: readEnginePid() }, null, 2));
+    console.log(JSON.stringify({ ok: true, code: 'ENGINE_ALREADY_RUNNING', message: 'Engine already running (nothing was spawned)', pid: readEnginePid() }, null, 2));
     return;
   }
   const distServer = join(ROOT, 'dist', 'server.cjs');
   // Explicit --prod only; --dev (or default) uses tsx engine entry. Never auto-pick prod just because dist exists.
   const useProd = flags.prod && !flags.dev;
   if (useProd && !existsSync(distServer)) {
-    throw new Error('Production start requested but dist/server.cjs is missing. Run: npm run build');
+    throw new Error('ENGINE_PROD_BUILD_MISSING: production start requested but dist/server.cjs is missing. Run: npm run build');
   }
   // Snapshot whatever is answering /health right now (should normally be nothing, since
   // isEngineProcessRunning() above returned false - but the whole point of this check is to
@@ -624,6 +625,7 @@ async function startEngine(overrides: { enableTrading?: boolean } = {}) {
   if (staleAnsweringPid !== undefined) {
     console.log(JSON.stringify({
       ok: false,
+      code: 'ENGINE_ALREADY_RUNNING_UNTRACKED',
       message: `Refusing to start a new engine: pid ${staleAnsweringPid} is already answering ${BASE}/health, even though this CLI's own pid file did not report it as running. Stop pid ${staleAnsweringPid} (or investigate why it is untracked) before starting a new one - spawning anyway would create a second, real, untracked engine process.`,
       pid: staleAnsweringPid,
     }, null, 2));
@@ -664,6 +666,7 @@ async function startEngine(overrides: { enableTrading?: boolean } = {}) {
   }
   console.log(JSON.stringify({
     ok: ready,
+    code: ready ? 'ENGINE_STARTED' : stillAlive ? 'ENGINE_BOOT_TIMEOUT' : 'ENGINE_EXITED_DURING_BOOT',
     pid: reportedPid,
     headless: true,
     api: BASE,
@@ -698,6 +701,7 @@ async function startEngine(overrides: { enableTrading?: boolean } = {}) {
         console.error(JSON.stringify({
           enableTrading: true,
           ok: false,
+          code: 'RECONCILIATION_NOT_CLEAN',
           reconciliation: unclean.lastSeen,
           message: `Reconciliation was not clean after ${Math.round(unclean.waitedMs / 1000)}s (${unclean.lastSeen}). Engine left PAUSED. Inspect: argus reconciliation-status   then: argus resume`,
         }, null, 2));
@@ -710,8 +714,10 @@ async function startEngine(overrides: { enableTrading?: boolean } = {}) {
       console.error(JSON.stringify({
         enableTrading: true,
         ok: false,
+        code: 'RESUME_REFUSED',
         message: `Engine started but resume failed: ${e.message || e}. Trading remains whatever state it was already in - not forced.`,
       }, null, 2));
+      process.exitCode = EXIT.PAUSED_BY_SAFETY; // the engine is up but deliberately NOT trading: never report that as a plain success
     }
   }
   // "make sure everything is working fine" - print the same broker/AI-provider/Kronos/
@@ -733,75 +739,110 @@ async function startEngine(overrides: { enableTrading?: boolean } = {}) {
   }
 }
 
-async function stopEngine() {
-  const pid = readEnginePid();
-  if (!pid) {
-    console.log(JSON.stringify({ ok: true, message: 'No engine PID file' }, null, 2));
-    return;
+/**
+ * Stop the engine and RETURN what happened (2026-10-15 lifecycle hardening). `stopEngine()` prints it and sets the exit code; `restart` consumes it directly.
+ *
+ * Defects fixed here (each reproduced in isolation first, see scripts/cli/lifecycle.isolation.test.ts and docs/operations/ARGUS_CLI_LIFECYCLE_TROUBLESHOOTING.md):
+ *  - STOP-1: with no pid file the CLI printed "No engine PID file" and exited 0 even while an engine was answering /health: a false "stopped" that left the
+ *    engine (and its broker connection) running. The API is now the source of truth: whatever answers /health is asked to shut down gracefully.
+ *  - STOP-2: a dead pid in the pid file produced ok:false and a message claiming the process was "alive", and also blocked shutting down an engine that was
+ *    actually answering. A dead pid is a stale file: cleared, never described as alive, never an obstacle.
+ *  - STOP-3: a graceful shutdown the engine did not complete within the wait was reported ok:true / exit 0 and the pid file was cleared anyway. It is now
+ *    STOP_TIMEOUT_STILL_ANSWERING / exit 2 (INCONCLUSIVE) and the pid file is kept, so the next stop/start still knows the process may be alive.
+ */
+async function stopEngineCore(): Promise<LifecycleResult> {
+  const pidFilePid = readEnginePid();
+  const pidFileAlive = pidFilePid !== null && isPidAlive(pidFilePid);
+  const stopTimeoutMs = Number(process.env.ARGUS_CLI_STOP_TIMEOUT_MS || DEFAULT_STOP_TIMEOUT_MS);
+
+  let probe = await probeHealth();
+  if (probe.kind === 'unknown') {
+    // Slow or busy is not the same as gone: give it one more look before concluding anything.
+    await new Promise((r) => setTimeout(r, 1500));
+    probe = await probeHealth();
   }
-  // PID-reuse guard: if the original engine crashed without clearing the pid file and the OS
-  // later reassigned this exact PID to an unrelated process, sending SIGTERM would kill a
-  // stranger, not Argus. isPidLikelyArgusProcess fails open (returns true) when it can't verify,
-  // so this only ever blocks a stop when it has positive evidence the PID is NOT Argus.
-  const looksLikeArgus = await isPidLikelyArgusProcess(pid);
-  if (!looksLikeArgus) {
-    clearEnginePid();
-    console.log(JSON.stringify({
-      ok: false,
-      message: `Refusing to signal pid ${pid} - it is alive but its command line does not look like an Argus engine process (likely PID reuse after an unclean prior exit). Cleared the stale pid file instead of sending SIGTERM.`,
-      pid,
-    }, null, 2));
-    return;
+  const answeringPid = probe.kind === 'answered' ? probe.pid : undefined;
+
+  if (pidFilePid !== null && !pidFileAlive) {
+    clearEnginePid(); // stale file: the recorded process does not exist
   }
 
-  // DEF-26 fix (2026-08-26): `process.kill(pid, 'SIGTERM')` does not invoke the target process's
-  // SIGTERM handler on Windows - empirically confirmed live (isolated parent/child probe: the
-  // child was force-terminated, handler never ran, both cross-process and via self-signal). Every
-  // prior stop/restart on this platform was therefore an unconditional hard-kill, never a real
-  // drain - which is exactly why the successor process's "did not shut down cleanly" report was
-  // accurate, not a logging bug (see gracefulShutdown.ts's requestGracefulShutdown()). Prefer a
-  // real graceful shutdown via HTTP (same-process function call, no OS signal involved); fall back
-  // to SIGTERM only when that request itself cannot be made (server unreachable/wedged).
-  let gracefulRequested = false;
-  try {
-    await fetchJson('/api/v1/system/shutdown', { method: 'POST' });
-    gracefulRequested = true;
-  } catch (e) {
-    if (e instanceof AuthRequiredError) throw e;
-    /* fall through to the SIGTERM fallback below */
+  if (probe.kind !== 'answered' && !pidFileAlive) {
+    return {
+      ok: true, code: 'ENGINE_NOT_RUNNING', exitCode: EXIT.OK, pid: pidFilePid,
+      message: pidFilePid !== null
+        ? `No engine is running: the pid file named ${pidFilePid}, which does not exist; the stale pid file was cleared and nothing answers ${BASE}.`
+        : `No engine is running: no pid file and nothing answers ${BASE}.`,
+    };
   }
+
+  // Something is (or may be) alive. Prefer a real graceful shutdown over any signal (DEF-26: on Windows SIGTERM is a hard kill).
+  const looksLikeArgus = pidFileAlive ? await isPidLikelyArgusProcess(pidFilePid as number) : false;
+  let gracefulRequested = false;
+  if (probe.kind === 'answered' || looksLikeArgus) {
+    try {
+      await fetchJson('/api/v1/system/shutdown', { method: 'POST' });
+      gracefulRequested = true;
+    } catch (e) {
+      if (e instanceof AuthRequiredError) throw e;
+      /* fall through: maybe a SIGTERM fallback below */
+    }
+  }
+  const targetPid = pidFileAlive && looksLikeArgus ? (pidFilePid as number) : (answeringPid ?? null);
 
   if (gracefulRequested) {
-    const stopped = await waitForHealthGone(15_000);
-    clearEnginePid();
-    console.log(JSON.stringify({
-      ok: true,
-      message: stopped
-        ? 'Graceful shutdown requested and confirmed (process stopped answering /health).'
-        : 'Graceful shutdown requested but the process was still answering /health after 15s - it may still be draining, or may be wedged. Check the process directly before assuming it is stopped.',
-      pid,
-      graceful: true,
-    }, null, 2));
-    return;
+    const gone = await waitForHealthGone(stopTimeoutMs);
+    if (gone) {
+      clearEnginePid();
+      return { ok: true, code: 'ENGINE_STOPPED', exitCode: EXIT.OK, pid: targetPid, graceful: true, message: 'Graceful shutdown requested and confirmed (the engine stopped answering /health).' };
+    }
+    return {
+      ok: false, code: 'STOP_TIMEOUT_STILL_ANSWERING', exitCode: EXIT.INCONCLUSIVE, pid: targetPid, graceful: true,
+      message: `Graceful shutdown was accepted but the engine was still answering /health after ${Math.round(stopTimeoutMs / 1000)}s: it may still be draining or may be wedged. `
+        + 'The pid file was NOT cleared. Check: argus status ; argus health ; the engine log. Do not start a second engine and do not kill the process until you have established which it is.',
+    };
   }
 
-  try {
-    process.kill(pid, 'SIGTERM');
-  } catch (e: unknown) {
+  // The HTTP shutdown request could not be made. Only fall back to a signal for a pid that positively looks like an Argus engine.
+  if (pidFileAlive && looksLikeArgus) {
+    try { process.kill(pidFilePid as number, 'SIGTERM'); } catch (e) { clearEnginePid(); throw e; }
     clearEnginePid();
-    throw e;
+    await new Promise((r) => setTimeout(r, 1000));
+    return {
+      ok: true, code: 'ENGINE_FORCE_TERMINATED', exitCode: EXIT.OK, pid: pidFilePid, graceful: false,
+      message: 'The graceful HTTP shutdown request failed (server unreachable), so SIGTERM was sent as a fallback. On Windows that terminates the process WITHOUT running its drain sequence; '
+        + 'the next boot will report an unclean shutdown and will hold entries until reconciliation completes.',
+    };
   }
-  clearEnginePid();
-  // No positive confirmation the port is free yet in this fallback path (unlike the graceful
-  // path's waitForHealthGone) - give the OS a brief moment before a caller tries to start a new
-  // engine on the same port.
-  await new Promise((r) => setTimeout(r, 1000));
-  console.log(JSON.stringify({
-    ok: true,
-    message: 'Graceful HTTP shutdown request failed (server unreachable) - sent SIGTERM as a fallback. On Windows this forcefully terminates the process without running its drain sequence; the next boot will correctly report an unclean shutdown, because this one genuinely was.',
-    pid,
-    graceful: false,
-  }, null, 2));
+  if (pidFileAlive && !looksLikeArgus) {
+    clearEnginePid();
+    return {
+      ok: false, code: 'STOP_REFUSED_PID_NOT_ARGUS', exitCode: EXIT.FAILED, pid: pidFilePid,
+      message: `Refusing to signal pid ${pidFilePid}: it is alive but its command line does not look like an Argus engine (likely PID reuse after an unclean exit). The stale pid file was cleared. Nothing answers ${BASE}.`,
+    };
+  }
+  return {
+    ok: false, code: 'STOP_REQUEST_FAILED', exitCode: EXIT.FAILED, pid: targetPid,
+    message: `Something answers ${BASE}/health (pid ${answeringPid ?? 'unknown'}) but the graceful shutdown request was refused or failed, and there is no verified Argus pid to signal. Inspect: argus health ; argus status.`,
+  };
+}
+
+/** A server refusal (HTTP 4xx/5xx with an error body) gets a stable code prefix; auth and transport failures keep their own reasons. */
+function relabelRefusal(e: unknown, code: 'RESUME_REFUSED' | 'PAUSE_REFUSED'): unknown {
+  if (e instanceof AuthRequiredError) return e;
+  const msg = e instanceof Error ? e.message : String(e);
+  if (transportCodeOf(msg)) return e;
+  return new Error(`${code}: ${msg}`);
+}
+
+function printLifecycleResult(r: LifecycleResult): void {
+  const { exitCode, ...printable } = r;
+  console.log(JSON.stringify(printable, null, 2));
+  if (exitCode !== 0) process.exitCode = exitCode;
+}
+
+async function stopEngine() {
+  printLifecycleResult(await stopEngineCore());
 }
 
 /**
@@ -1415,7 +1456,21 @@ const commands: Record<string, () => Promise<void>> = {
         ? 'Trading was ENABLED before the restart - it will be resumed once the new process is up and reconciliation is clean.'
         : `Trading was not enabled before the restart (${pre.tradingState ?? 'unknown'}) - it will stay paused.`);
     }
-    await stopEngine().catch(() => undefined);
+    // 2026-10-15: the stop result decides whether a start may follow. Previously every stop error was swallowed and a start was attempted regardless.
+    let stop: LifecycleResult;
+    try {
+      stop = await stopEngineCore();
+    } catch (e: any) {
+      stop = { ok: false, code: 'STOP_REQUEST_FAILED', exitCode: EXIT.FAILED, message: String(e?.message ?? e) };
+    }
+    printLifecycleResult(stop);
+    if (!stop.ok) {
+      printLifecycleResult({
+        ok: false, code: 'RESTART_ABORTED_STOP_INCOMPLETE', exitCode: stop.exitCode, pid: stop.pid ?? null,
+        message: `Restart aborted: the stop step did not complete (${stop.code}). No new engine was started. Resolve the stop first (see the troubleshooting guide), then run restart again.`,
+      });
+      return;
+    }
     return startEngine({ enableTrading: restore });
   },
   async 'watchdog-start'() {
@@ -1473,7 +1528,22 @@ const commands: Record<string, () => Promise<void>> = {
     if (!cleared) process.exit(1);
   },
   async status() {
-    const data = await fetchJson('/api/v2/runtime/status');
+    let data: unknown;
+    try {
+      data = await fetchJson('/api/v2/runtime/status');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const code = transportCodeOf(msg);
+      if (!code || e instanceof AuthRequiredError) throw e;
+      // 2026-10-15: say what the lifecycle state IS instead of an opaque transport error. STOPPED needs positive evidence (connection refused AND no live pid);
+      // a live pid that does not answer is reported as such, never as stopped.
+      const pidFilePid = readEnginePid();
+      const pidFileAlive = pidFilePid !== null && isPidAlive(pidFilePid);
+      const lifecycleState = classifyLifecycleState({ answering: false, refused: code === 'ENGINE_UNREACHABLE', pidFileAlive });
+      console.log(JSON.stringify({ ok: false, code, lifecycleState, pidFilePid, pidFileAlive, message: msg }, null, 2));
+      process.exitCode = EXIT.FAILED;
+      return;
+    }
     if (isPretty()) {
       printPrettyStatus(data);
       return;
@@ -1539,7 +1609,11 @@ const commands: Record<string, () => Promise<void>> = {
     // both explicit human/authorized-caller actions - never called automatically on a timer by
     // anything in this codebase). Pass --reason="..." to record why; defaults to a generic reason.
     const reason = resumeReasonFromArgv(process.argv.slice(3), 'Operator resume via argus-cli');
-    console.log(JSON.stringify(await resumeTrading(reason), null, 2));
+    try {
+      console.log(JSON.stringify(await resumeTrading(reason), null, 2));
+    } catch (e) {
+      throw relabelRefusal(e, 'RESUME_REFUSED'); // a refusal names its cause; a transport failure keeps its own ENGINE_UNREACHABLE-style reason
+    }
   },
   async 'strategy-lifecycle-baseline'() {
     const argv = process.argv.slice(3);
@@ -1556,10 +1630,14 @@ const commands: Record<string, () => Promise<void>> = {
   async pause() {
     const reasonArg = process.argv.slice(3).find((a) => a.startsWith('--reason='));
     const reason = reasonArg ? reasonArg.slice('--reason='.length) : 'Operator pause via argus-cli';
-    console.log(JSON.stringify(await fetchJson('/api/v1/system/pause', {
-      method: 'POST',
-      body: JSON.stringify({ reason }),
-    }), null, 2));
+    try {
+      console.log(JSON.stringify(await fetchJson('/api/v1/system/pause', {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      }), null, 2));
+    } catch (e) {
+      throw relabelRefusal(e, 'PAUSE_REFUSED');
+    }
   },
   /**
    * 2026-10-07: real, missing CLI capability found while resolving the OKTA PAPER short
