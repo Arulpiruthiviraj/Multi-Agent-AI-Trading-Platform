@@ -132,12 +132,12 @@
       "detectedIn": "prod",
       "fixRef": "3e327626",
       "id": "jev-shadow-scoring-idle-configured-not-enabled-20261015",
-      "notes": "Fix: ledger dedupe (duplicate article double-counted rows/tokens/cost), getJevShadowStatus() surfaced in the jev-calibration report, end-to-end test with a real HTTP boundary, JEV_SHADOW_PARITY certification check and classifyFeatureParity (configured != enabled != invoked != verified). A real authenticated isolated call succeeded on 2026-10-15. Production activation requires the flag plus a controlled restart.",
+      "notes": "CORRECTION 2026-10-15 14:05 ET: Jev API calls were live via AiAdvisoryService (160 completed calls that day). Only the shadow ledger (jev_shadow_scores) path was idle. Fix: ledger dedupe (duplicate article double-counted rows/tokens/cost), getJevShadowStatus() surfaced in the jev-calibration report, end-to-end test with a real HTTP boundary, JEV_SHADOW_PARITY certification check and classifyFeatureParity (configured != enabled != invoked != verified). A real authenticated isolated call succeeded on 2026-10-15. Production activation requires the flag plus a controlled restart.",
       "regressionTest": "src/server/news/JevShadowIntegration.e2e.test.ts",
       "rootCause": "ARGUS_JEV_SHADOW_SCORING_ENABLED defaults off and was never set; kickOffJevShadowScoring returns at its first line. The wiring (NewsEngine -> governor -> provider -> ledger) exists. Release certification reported JEV_CONFIGURED PASS from key presence and explicitly did not run wiring checks. The ledger test skipped DB round trips.",
       "severity": "P2",
       "status": "fixed-visibility-merged-activation-pending-deployment",
-      "title": "Jev configured and implemented but receiving zero events"
+      "title": "Jev shadow-scoring LEDGER idle (configured, flag unset); the advisory Jev path was live"
     },
     {
       "date": "2026-10-15",
