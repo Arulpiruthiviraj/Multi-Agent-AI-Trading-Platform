@@ -1,0 +1,4 @@
+=== SOAK SUMMARY ===
+sessions=24 pass=24 fail=0
+  trend                n=3 fail=0 realizedPnl=0.00
+  chop                 n=3 fail=0 realizedPnl=0.00
