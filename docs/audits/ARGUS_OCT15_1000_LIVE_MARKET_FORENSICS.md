@@ -41,13 +41,13 @@ Example top-confidence rejected round: GLD 10:09 ET, Technical BUY 0.40 vs Krono
 ## 4. Defects and findings (ranked; none is a proven cause of zero trades)
 | ID | Sev | Finding | Evidence | Fix / status |
 |---|---|---|---|---|
-| D1 | P1 (exit latency) / P2 | `allowTradeIdea()` is a global first-come sliding window (120 ideas/min, `src/server/core/pipelineRateLimit.ts`, applied in `EventBus.emit`, no priority, no exemption). It was saturated (120 in window; 3,547 dropped since boot). Over the last ~30 min of `event_traces`: dropped/(emitted+dropped) = Kronos 28%, Macro 28%, Technical 33%, JavaCoreEnsemble 43%; Quant had 132 drops (its passed ideas are not labeled by agent in that sample, so no rate is stated). MacroAgent HOLD ideas alone spend ~20% of the budget on zero-information messages. | [V] counters and tail sample. Protective exits are subject to the same cap, but a dropped exit releases its cooldown (`portfolioIntel.ts` `IDEA_RATE_LIMITED` handler) and is re-emitted on the next ~60 s monitor cycle, so the loss is delay, not abandonment [V by code]. | Candidate fix (safe, no consensus/risk change): do not count zero-information HOLD ideas and exact repeats of an unchanged Kronos signal against the cap; reserve capacity for `PORTFOLIO_EXIT`/Quant ideas. Changes how many votes reach ChiefTrader, so needs review + certification. Not started. |
-| D2 | P2 | Movers funnel kept 0 of 100 at the open. | [V] counts; [O] reasons (the lineage ledger has per-candidate reasons; not queried to avoid scanning `observability_events`). | Investigate offline whether the screen uses a partial-day volume at the open. |
+| D1 | P1 (exit latency) / P2 | `allowTradeIdea()` is a global first-come sliding window (120 ideas/min, `src/server/core/pipelineRateLimit.ts`, applied in `EventBus.emit`, no priority, no exemption). It was saturated (120 in window; 3,547 dropped since boot). Over the last ~30 min of `event_traces`: dropped/(emitted+dropped) = Kronos 28%, Macro 28%, Technical 33%, JavaCoreEnsemble 43%; Quant had 132 drops (its passed ideas are not labeled by agent in that sample, so no rate is stated). MacroAgent HOLD ideas alone spend ~20% of the budget on zero-information messages. | [V] counters and tail sample. Protective exits are subject to the same cap, but a dropped exit releases its cooldown (`portfolioIntel.ts` `IDEA_RATE_LIMITED` handler) and is re-emitted on the next ~60 s monitor cycle, so the loss is delay, not abandonment [V by code]. | **UPDATE (after this audit):** genuine protective exits (risk-exit agent SELL with origin PORTFOLIO_EXIT, same dual-key predicate as ChiefTrader) are now exempt from the cap and drops are attributed per agent - FIXED_AND_TESTED, MERGED_TO_MAIN (`8b0a47e3`), not deployed. Research-vote fairness (Macro HOLDs, Kronos repeats) is NOT changed (would alter how many votes reach ChiefTrader; needs separate review). |
+| D2 | P2 -> reclassified | Movers funnel kept 0 of 100 at the open. | [V] Lineage ledger tail sample: PRICE 271 rejections (sub-$5 warrants/penny names, e.g. SEATW at $0.0029), DOLLAR_VOLUME 129 (thin leveraged single-stock ETFs and tiny names, mostly < $0.5M partial-day IEX dollar volume). | Reclassified as **genuine rejection**. Caveat [I]: the gate compares partial-day IEX volume to a full-day $5M threshold, biasing against the morning; a few names (SNDQ ~$1.8M, FMC ~$1.4M) might be liquid on consolidated volume. No proven blocked valid setup; research item only. |
 | D3 | P2 | Kronos emits ~28 predictions per symbol per 30 min with saturated confidence; drives DB growth, grading starvation, and inflated evidence counts. | [V] | Dedup/throttle repeats; relates to the grading redesign. |
 | D4 | P3/[O] | Technical 568 BUY / 2 SELL; Kronos SELL-heavy. Directional bias vs. market regime not established. | [V] counts, [O] cause | Research. |
 | D5 | P2/[O] | Calibration reduces nearly every round. A provider-row selection defect (per-provider rows returned before the `ALL` row) is fixed on `dev/calibration-grading` (d6efe67b) but is **not** in production; its quantitative effect on today's confidences is not measured. | [V] fix exists; [O] effect | Measure on an isolated copy before any release. |
 | D6 | [O] | SELL ideas on symbols not held cannot trade (RiskEngine gate 22) yet appear as dissent; how ChiefTrader weighs them was not verified. | [I] | Research/verify. |
-| D7 | P2 | Jev shadow scoring never runs because `ARGUS_JEV_SHADOW_SCORING_ENABLED` is unset (default off). See `ARGUS_JEV_INTEGRATION_FAILURE_ROOT_CAUSE.md`. | [V] | See that document. |
+| D7 | P2 | Jev shadow scoring never runs because `ARGUS_JEV_SHADOW_SCORING_ENABLED` is unset (default off). See `ARGUS_JEV_INTEGRATION_FAILURE_ROOT_CAUSE.md`. | [V] | Ledger dedupe, idle-reason status and an end-to-end test are FIXED_AND_TESTED and MERGED_TO_MAIN; activation needs the flag and a controlled restart. See that document. |
 Runtime notes: `EVENT_LOOP_LAG_WARN` last logged 09:37:55 ET and `SLOW_SQL_STATEMENT` 09:50:47 ET (detail not examined, **[O]**); `NEWS_PROVIDER_FAILED` is being emitted (providers not enumerated, **[O]**).
 
 ## 5. Runtime and safety (10:08-10:12 ET)
@@ -70,13 +70,13 @@ Process liveness vs pipeline progress: the pipeline is progressing (Quant cycle 
 
 ## 6. Midday release decision
 * CURRENT_PRODUCTION_SHA: `32613911842dfce05b722360bf67b7fb673dbb7b`
-* MAIN_SHA: see `git log origin/main` (documentation and CLI-lifecycle fixes merged; no trading-path change)
-* CANDIDATE_SHA: none
-* CERTIFICATION_STATUS: no candidate; nothing certified beyond `32613911`
+* MAIN_SHA: `8b0a47e329bb7b3bc8fcc1e5eeff22a9d6176fc3` (at the time of this update)
+* CANDIDATE_SHA: `8b0a47e3` - certification IN PROGRESS (typecheck PASS, production build PASS, full suite running); production-calibrated and positive-capability synthetic sessions NOT RUN (heavy; not run during market hours)
+* CERTIFICATION_STATUS: NOT_PROVEN until the full suite result is in
 * OPEN_POSITIONS: none; WORKING_ORDERS: none
 * BACKUP_RECOVERY_STATUS: no full recoverable backup
-* INTRADAY_RESTART_SAFE: **NO** - nothing warrants one (no verified defect blocking valid trades; flat book would otherwise permit a restart)
-* RECOMMENDED_ACTION: keep production running; do not restart.
+* INTRADAY_RESTART_SAFE: not decided - depends on the certification result; the book is flat, which would permit a restart, but none happens without explicit owner approval
+* RECOMMENDED_ACTION: keep production running until certification completes, then request approval.
 * REQUIRED_OWNER_APPROVAL: any deployment.
 
 ## 7. Next measurements (no engine disruption)
