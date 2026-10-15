@@ -27,7 +27,7 @@
 import { JevProvider, JevQuestion, JevEvaluationResult, JevAnswer } from '../ai/providers/JevProvider';
 import { looksLikeListedTicker, clampScore } from '../ai/AIOutputValidator';
 import { AICallGovernor, JevDecisionResult } from '../ai/AICallGovernor';
-import { aiCallGovernor } from '../config/aiCallGovernor';
+import { aiCallGovernor, isJevCapabilityEnabled } from '../config/aiCallGovernor';
 import { JevNewsScore, mapJevScoreToAnalysisFields } from './JevNewsTypes';
 /** Re-exported from JevNewsTypes (circular-dep refactor, 2026-10-06) — prefer importing from './JevNewsTypes'. */
 export type { JevNewsScore };
@@ -82,6 +82,24 @@ export function getJevShadowTimeoutMs(): number {
 
 export function isJevShadowEnabled(): boolean {
   return process.env.ARGUS_JEV_SHADOW_SCORING_ENABLED === 'true';
+}
+
+/**
+ * Why Jev is (or is not) receiving requests, stated explicitly (2026-10-15). A configured provider that never receives requests used to look
+ * identical to a healthy idle one: JEV_API_KEY set, governor enabled, shadow flag silently defaulting to off. The first blocking reason wins.
+ */
+export function getJevShadowStatus(): { shadowScoringEnabled: boolean; keyConfigured: boolean; governorJevEnabled: boolean; active: boolean; idleReason: string | null } {
+  const keyConfigured = !!(process.env.JEV_API_KEY || process.env.TYPESAFE_API_KEY || '').trim();
+  const governorJevEnabled = isJevCapabilityEnabled();
+  const shadowScoringEnabled = isJevShadowEnabled();
+  const idleReason = !shadowScoringEnabled
+    ? "ARGUS_JEV_SHADOW_SCORING_ENABLED is not 'true' (default off): no article is ever sent to Jev"
+    : !keyConfigured
+      ? 'no JEV_API_KEY / TYPESAFE_API_KEY configured: governor gate NO_API_KEY denies every request'
+      : !governorJevEnabled
+        ? 'AICallGovernor Jev capability disabled (config/aiCallGovernor.json jevEnabled / ARGUS_JEV_ENABLED)'
+        : null;
+  return { shadowScoringEnabled, keyConfigured, governorJevEnabled, active: idleReason === null, idleReason };
 }
 
 /**

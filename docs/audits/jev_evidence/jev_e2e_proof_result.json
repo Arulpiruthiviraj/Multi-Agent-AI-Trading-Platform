@@ -1,0 +1,59 @@
+{
+ "input": {
+  "symbol": "NOK",
+  "source": "GlobeNewswire Inc.",
+  "publishedAt": "2026-10-15T14:00:00.000Z",
+  "titleChars": 51,
+  "bodyChars": 229,
+  "deterministic": {
+   "category": "Technology",
+   "credibility": 0.9,
+   "isNewCluster": true,
+   "priorArticleCount": 0,
+   "impactScore01": 0.5,
+   "timeHorizon": "Intraday"
+  }
+ },
+ "rowsBefore": 0,
+ "firstCallRecorded": true,
+ "firstCallWallMs": 558,
+ "rowsAfterFirst": 1,
+ "firstRow": {
+  "id": "7b20aa27-7bba-4e0d-b6f1-1603fa6530ed",
+  "article_fingerprint": "ccc2bf1be6d782edd891233b837fd7118a4dc62b",
+  "symbol": "NOK",
+  "trace_id": "jev-proof-1792073705769",
+  "jev_model": "jev-1.13.0",
+  "jev_relevant_prob": 0.81,
+  "jev_relevant_conf": 0.46,
+  "jev_sentiment": "neutral",
+  "jev_sentiment_conf": 0.46,
+  "jev_sentiment_probs": "{\"bullish\":0.18,\"bearish\":0.18,\"neutral\":0.64}",
+  "jev_impact_score": 1.4000000000000001,
+  "jev_impact_conf": 0.53,
+  "jev_surprise_prob": 0.28,
+  "jev_contradiction_prob": 0.03,
+  "jev_urgency_score": 3.9250000000000003,
+  "jev_urgency_conf": 0.47,
+  "jev_input_tokens": 856,
+  "jev_latency_ms": 393,
+  "llm_sentiment_score": null,
+  "llm_trading_bias": null,
+  "llm_market_impact_score": null,
+  "llm_confidence": null,
+  "llm_surprise": null,
+  "sentiment_agree": null,
+  "scored_at": "2026-10-15T14:15:06.169Z"
+ },
+ "rowsAfterDuplicate": 2,
+ "rowsAfterNoInput": 2,
+ "calibrationSummary": {
+  "totalScored": 2,
+  "withLlmComparison": 0,
+  "sentimentAgreementRate": null,
+  "avgJevLatencyMs": 393,
+  "totalJevInputTokens": 1712,
+  "estimatedCostUsd": 0.00007190400000000001
+ },
+ "governorSnapshot": "no getSnapshot"
+}

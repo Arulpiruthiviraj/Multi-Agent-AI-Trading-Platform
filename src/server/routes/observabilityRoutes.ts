@@ -770,9 +770,14 @@ observabilityRouter.get('/jev-calibration', async (req, res) => {
     const { getCalibrationSummary, analyzeAgreementByConfidence } = await import('../news/JevShadowLedger');
     const summary = await getCalibrationSummary();
     const thresholdAnalysis = await analyzeAgreementByConfidence();
+    const { getJevShadowStatus } = await import('../news/JevNewsTriage');
+    const status = getJevShadowStatus();
     if (req.query.format === 'text') {
       const lines = [
         'JEV SHADOW CALIBRATION (jev_shadow_scores ledger, read-only)',
+        status.active
+          ? 'shadow scoring: ACTIVE (flag on, key configured, governor Jev capability enabled)'
+          : `shadow scoring: IDLE - ${status.idleReason}`,
         `articles scored: ${summary.totalScored} | with LLM comparison: ${summary.withLlmComparison}`,
         `sentiment agreement rate: ${summary.sentimentAgreementRate == null ? 'n/a (no comparisons yet)' : (summary.sentimentAgreementRate * 100).toFixed(1) + '%'}`,
         `avg Jev latency: ${summary.avgJevLatencyMs == null ? 'n/a' : summary.avgJevLatencyMs.toFixed(0) + 'ms'} | est. cost: $${summary.estimatedCostUsd.toFixed(4)}`,
@@ -785,7 +790,7 @@ observabilityRouter.get('/jev-calibration', async (req, res) => {
       res.type('text/plain').send(lines.join('\n'));
       return;
     }
-    res.json({ ok: true, summary, thresholdAnalysis });
+    res.json({ ok: true, status, summary, thresholdAnalysis });
   } catch (e: any) {
     if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }

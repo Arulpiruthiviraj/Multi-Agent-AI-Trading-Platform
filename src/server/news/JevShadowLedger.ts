@@ -19,7 +19,7 @@
 import { randomUUID } from 'crypto';
 import { db } from '../db';
 import * as schema from '../db/schema';
-import { sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { JevNewsScore, mapJevScoreToAnalysisFields } from './JevNewsTypes';
 import { AIAnalysisResult } from './NewsScoringEngine';
 
@@ -50,6 +50,16 @@ export async function recordShadowScore(entry: ShadowLedgerEntry): Promise<void>
   const mapped = mapJevScoreToAnalysisFields(entry.jevScore);
   const llm = entry.llmAnalysis ?? null;
   try {
+    // 2026-10-15 (Jev E2E proof): the same (article, symbol) observation arriving twice - e.g. a re-ingested article served from the governor's
+    // cache - used to write a second row, double-counting scored articles, input tokens and cost in the calibration summary. One observation per
+    // (article fingerprint, symbol). The check and the insert both run synchronously (better-sqlite3), so no other task can interleave between them.
+    const existing = db
+      .select({ id: schema.jevShadowScores.id })
+      .from(schema.jevShadowScores)
+      .where(and(eq(schema.jevShadowScores.articleFingerprint, entry.articleFingerprint), eq(schema.jevShadowScores.symbol, entry.symbol)))
+      .limit(1)
+      .all();
+    if (existing.length > 0) return;
     await db.insert(schema.jevShadowScores).values({
       id: randomUUID(),
       articleFingerprint: entry.articleFingerprint,
