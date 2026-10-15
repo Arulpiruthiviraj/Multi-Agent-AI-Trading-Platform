@@ -14,6 +14,7 @@ import { sqliteDb } from './index';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 
 let retentionTimer: ReturnType<typeof setInterval> | null = null;
+let retentionAborted = false; // set by stopOperationalRetentionSweep so an in-flight sliced sweep never touches a closed DB
 
 /**
  * 2026-10-01 defect verification pass: previously one single unbatched DELETE, same class of
@@ -50,6 +51,7 @@ export async function sweepCandidateRankingsRetention(nowMs = Date.now()): Promi
 
 export function startOperationalRetentionSweep(): void {
   if (retentionTimer) return;
+  retentionAborted = false;
   retentionTimer = setInterval(() => {
     for (const { sweep } of RETENTION_SWEEPERS) void sweep();
   }, runtimeIntervals.candidateRankingsRetentionSweepMs);
@@ -91,6 +93,7 @@ export async function sweepReservationLedgerRetention(nowMs = Date.now()): Promi
 }
 
 export function stopOperationalRetentionSweep(): void {
+  retentionAborted = true;
   if (retentionTimer) {
     clearInterval(retentionTimer);
     retentionTimer = null;
@@ -400,8 +403,10 @@ export async function sweepConsensusDecisionsRetention(nowMs = Date.now()): Prom
  */
 export async function sweepConsensusEvidenceRetention(nowMs = Date.now()): Promise<number> {
   const cutoffIso = new Date(nowMs - runtimeIntervals.consensusEvidenceRetentionDays * 24 * 60 * 60 * 1000).toISOString();
-  const batchSize = runtimeIntervals.newsRetentionSweepBatchSize;
-  const maxBatches = runtimeIntervals.newsRetentionSweepMaxBatchesPerCall;
+  // 2026-10-15 D9: dedicated small slice + real pause (see config/runtimeIntervals.json). The shared news batch size (5,000) made one statement take 2.6 s on the trading loop.
+  const batchSize = runtimeIntervals.consensusEvidenceSweepBatchSize;
+  const maxBatches = runtimeIntervals.consensusEvidenceSweepMaxBatchesPerCall;
+  const pauseMs = runtimeIntervals.consensusEvidenceSweepPauseMs;
   let totalDeleted = 0;
   try {
     // 2026-10-10: prepare() calls inside the try - "never throws" contract (see sweepIsoTextTable).
@@ -418,16 +423,18 @@ export async function sweepConsensusEvidenceRetention(nowMs = Date.now()): Promi
          LIMIT ?)`
     );
     for (let i = 0; i < maxBatches; i++) {
+      if (retentionAborted) break;
       const result = deleteByParentAge.run(cutoffIso, batchSize);
       totalDeleted += result.changes;
       if (result.changes < batchSize) break;
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setTimeout(resolve, pauseMs));
     }
     for (let i = 0; i < maxBatches; i++) {
+      if (retentionAborted) break;
       const result = deleteOrphans.run(batchSize);
       totalDeleted += result.changes;
       if (result.changes < batchSize) break;
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setTimeout(resolve, pauseMs));
     }
     return totalDeleted;
   } catch (e) {

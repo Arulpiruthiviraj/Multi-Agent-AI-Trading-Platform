@@ -30,6 +30,8 @@ export interface ObservabilityConfig {
    *  backlog drains progressively across multiple sweep intervals instead of blocking in one shot. */
   retentionSweepBatchSize: number;
   retentionSweepMaxBatchesPerCall: number;
+  /** Real pause (ms) between retention delete slices so the event loop (timers, I/O, protective-exit delivery) runs between them. 2026-10-15 D9. */
+  retentionSweepPauseMs: number;
   /** Daily Learning Compaction Phase 1 (2026-10-01) - off by default, see config/observability.json's
    *  own comment. retentionDays above still governs the purge cutoff; this only gates whether the
    *  compact/verify/purge scheduler runs at all. */
@@ -101,7 +103,7 @@ const LEVEL_SET = new Set(['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL']);
 
 const REQUIRED_NUMBERS: (keyof ObservabilityConfig)[] = [
   'schemaVersion', 'batchFlushMs', 'maxBatchSize', 'maxQueueSize',
-  'retentionDays', 'retentionSweepMs', 'retentionSweepBatchSize', 'retentionSweepMaxBatchesPerCall',
+  'retentionDays', 'retentionSweepMs', 'retentionSweepBatchSize', 'retentionSweepMaxBatchesPerCall', 'retentionSweepPauseMs',
   'dailyCompactionSweepMs', 'marketDataSampleEveryN',
   'processTelemetryIntervalMs', 'processTelemetryRingSize', 'reflectionEngineMetricsRingSize',
   'memoryTelemetryPersistIntervalMs', 'memoryTelemetryWarningRssMb', 'memoryTelemetryCriticalRssMb',

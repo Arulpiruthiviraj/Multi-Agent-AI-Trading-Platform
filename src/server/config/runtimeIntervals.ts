@@ -154,6 +154,10 @@ export interface RuntimeIntervals {
   consensusDebatePredictionsRetentionDays: number;
   consensusDecisionsRetentionDays: number;
   consensusEvidenceRetentionDays: number;
+  /** 2026-10-15 D9: slice size, per-call cap and real pause for the consensus_evidence sweep (see config comment). */
+  consensusEvidenceSweepBatchSize: number;
+  consensusEvidenceSweepMaxBatchesPerCall: number;
+  consensusEvidenceSweepPauseMs: number;
   reconciliationEventsRetentionDays: number;
   /** 2026-10-10 defect hunt (Track 1, soak-path retention, part 2): twelve more
    *  append-only tables on the session path with no prune path. None fired in the
@@ -215,7 +219,7 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'sessionLifecycleSnapshotsRetentionDays', 'tradeLifecycleTransitionsRetentionDays',
   'decisionProvenanceRetentionDays',
   'consensusDebatePredictionsRetentionDays', 'consensusDecisionsRetentionDays',
-  'consensusEvidenceRetentionDays', 'reconciliationEventsRetentionDays',
+  'consensusEvidenceRetentionDays', 'consensusEvidenceSweepBatchSize', 'consensusEvidenceSweepMaxBatchesPerCall', 'consensusEvidenceSweepPauseMs', 'reconciliationEventsRetentionDays',
   'portfolioSnapshotsRetentionDays', 'aiUsageRetentionDays',
   'kronosPredictionsRetentionDays', 'predictionOutcomesRetentionDays',
   'predictionOutcomeHorizonsRetentionDays', 'missedOpportunitiesRetentionDays',

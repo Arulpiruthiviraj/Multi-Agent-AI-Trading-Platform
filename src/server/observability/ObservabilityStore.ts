@@ -114,6 +114,8 @@ export async function flushObservabilityStore(): Promise<void> {
  * time-based delete below is BYTE-FOR-BYTE UNCHANGED for every deployment that hasn't explicitly
  * opted in - this is what keeps "existing retention behavior is not weakened" true for Phase 1.
  */
+let sweepAborted = false;
+
 export async function sweepObservabilityRetention(nowMs = Date.now()): Promise<number> {
   if (observabilityConfig.dailyCompactionEnabled) {
     const result = await purgeVerifiedDays(observabilityEventsSource, observabilityConfig.retentionDays, nowMs);
@@ -132,12 +134,15 @@ export async function sweepObservabilityRetention(nowMs = Date.now()): Promise<n
     'DELETE FROM observability_events WHERE id IN (SELECT id FROM observability_events WHERE ts < ? LIMIT ?)'
   );
   let totalDeleted = 0;
+  sweepAborted = false;
   try {
     for (let i = 0; i < maxBatches; i++) {
+      if (sweepAborted) break; // stop requested between slices: never touch the DB after the drain began
       const result = deleteBatch.run(cutoff, batchSize);
       totalDeleted += result.changes;
       if (result.changes < batchSize) break; // caught up - fewer than a full batch matched
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      // 2026-10-15 D9: a REAL pause (not setImmediate) so timers, I/O and protective-exit delivery run between slices.
+      await new Promise<void>((resolve) => setTimeout(resolve, observabilityConfig.retentionSweepPauseMs));
     }
     return totalDeleted;
   } catch {
@@ -156,6 +161,7 @@ export function startObservabilityRetentionSweep(): void {
 }
 
 export function stopObservabilityRetentionSweep(): void {
+  sweepAborted = true;
   if (retentionTimer) {
     clearInterval(retentionTimer);
     retentionTimer = null;

@@ -198,6 +198,18 @@
       "severity": "P1",
       "status": "fixed-merged-to-main-not-deployed-2026-10-15",
       "title": "Quant idea currentPrice used a final bar from an earlier session instead of the live quote"
+    },
+    {
+      "date": "2026-10-15",
+      "detectedIn": "prod",
+      "fixRef": "see git log (sliced retention deletes)",
+      "id": "retention-sweep-blocks-event-loop-20261015",
+      "notes": "Fix: 250-row slices with a real 200 ms pause (config-driven; capacity 250k and 150k rows per call), same rows deleted, abort flag on stop. D10 (0.25-0.8 s ObservabilityStore.defaultPersist, already capped at 100 rows) is NOT addressed: cold-page/checkpoint cost. Escaped certification: synthetic databases are small and warm, so a delete batch never took seconds; no certification measured event-loop lag during maintenance on a production-sized database.",
+      "regressionTest": "src/server/observability/retentionSlices.test.ts",
+      "rootCause": "sweepObservabilityRetention deleted 5,000 rows per statement and the consensus_evidence sweep used the shared 5,000-row news batch with a subselect-join delete. On the 31 GB production database each statement took 1.7-2.6 s of synchronous main-thread time (about 0.4 ms/row, random I/O over five indexes) with only a setImmediate yield between statements: 5.9 s event-loop lag at 19:03:30Z with trading enabled; also 09:37 and 13:33-13:35 ET. Software-managed protective exits share that loop.",
+      "severity": "P1",
+      "status": "fixed-merged-to-main-not-deployed-2026-10-15",
+      "title": "Hourly retention sweeps block the trading event loop for seconds (D9)"
     }
   ],
   "version": 1
