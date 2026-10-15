@@ -1074,6 +1074,37 @@ describe('RiskEngine.evaluateRisk', () => {
     expect(assessment.reasoning).toMatch(/Broker buying power is irrelevant/);
   });
 
+
+  it('uses $20,000 research equity for sizing/concentration even when PAPER broker equity is $1M', async () => {
+    const previous = tradingSafety.researchEquityRiskBasisEnabled;
+    (tradingSafety as any).researchEquityRiskBasisEnabled = true;
+    try {
+      mockTradingEngine.state.budget = 20_000;
+      setTableRows(schema.settings, [{
+        riskLevel: 'Balanced',
+        maxTradeSize: 100_000,
+        budget: 20_000,
+        maxOpenPositions: 10,
+      }]);
+      setTableRows(schema.trades, []);
+      mockBrokerHolder.broker = makeBroker(basePortfolio({
+        cash: 1_000_000,
+        buyingPower: 3_000_000,
+        equity: 1_000_000,
+        positions: [],
+      }));
+
+      await riskEngine.evaluateRisk({ traceId: 'sizing-20k-vs-1m', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+
+      const assessment = lastAssessment();
+      // With a $20K research basis, the 20% single-symbol cap is $4K => 40 shares.
+      // If broker equity leaked into sizing this would be up to $200K / 2,000 shares instead.
+      expect(assessment.maxQuantity).toBe(40);
+    } finally {
+      (tradingSafety as any).researchEquityRiskBasisEnabled = previous;
+    }
+  });
+
   it('approves a $60 BUY against $100 unused allocation, then rejects a second $50 BUY', async () => {
     mockTradingEngine.state.budget = 100;
     setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 60, budget: 100 }]);
