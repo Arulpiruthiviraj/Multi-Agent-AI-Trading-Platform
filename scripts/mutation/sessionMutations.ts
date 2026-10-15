@@ -40,14 +40,19 @@ function evaluate(resultJson: string): { red: boolean; reasons: string[]; detail
   if (!fs.existsSync(resultJson)) return { red: true, reasons: ['SESSION_DID_NOT_PRODUCE_A_RESULT'], detail };
   const parse = (s: string) => { try { return JSON.parse(s.slice(s.indexOf('{'))); } catch { return null; } };
   const v = run(process.execPath, ['--use-system-ca', tsx, 'scripts/sim/endToEndVerdict.ts', resultJson, 'B', '20000'], repo);
-  const vj = parse(v.stdout ?? ''); detail.verdict = vj?.areas?.map((a: any) => `${a.verdict} ${a.area}`) ?? null;
+  const vj = parse(v.stdout ?? '');
+  if (!vj) reasons.push('ORACLE_CRASH:endToEndVerdict (no parsable output; not a clean assertion)');
+  detail.verdict = vj?.areas?.map((a: any) => `${a.verdict} ${a.area}`) ?? null;
   for (const a of vj?.areas ?? []) if (a.verdict !== 'PASS') reasons.push(`${a.area}:${a.verdict}`);
   const risk = parse(run(process.execPath, ['--use-system-ca', tsx, 'scripts/sim/riskCheck.ts', resultJson], repo).stdout ?? '');
+  if (!risk) reasons.push('ORACLE_CRASH:riskCheck');
   if ((risk?.hardViolations ?? []).length) reasons.push(`RISK_ORACLE:${risk.hardViolations.length}`);
   const lin = parse(run(process.execPath, ['--use-system-ca', tsx, 'scripts/sim/lineageCheck.ts', resultJson], repo).stdout ?? '');
+  if (!lin) reasons.push('ORACLE_CRASH:lineageCheck');
   const linBad = (lin?.violations ?? []).filter((x: any) => x.code !== 'IDEA_UNTERMINATED');
   if (linBad.length) reasons.push(`LINEAGE:${[...new Set(linBad.map((x: any) => x.code))].join(',')}`);
   const ex = parse(run(process.execPath, ['--use-system-ca', tsx, 'scripts/sim/exitCheck.ts', resultJson], repo).stdout ?? '');
+  if (!ex) reasons.push('ORACLE_CRASH:exitCheck');
   if ((ex?.violations ?? []).length) reasons.push(`EXIT_ORACLE:${ex.violations.length}`);
   return { red: reasons.length > 0, reasons, detail };
 }

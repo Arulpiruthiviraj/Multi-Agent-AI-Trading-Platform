@@ -14,6 +14,7 @@ const j = JSON.parse(readFileSync(file, 'utf8'));
 const dbPath: string = existsSync(j.evidenceRetention?.path ?? '') ? j.evidenceRetention.path : j.dbPath;
 const db = new Database(dbPath, { readonly: true });
 const areas: Array<{ area: string; verdict: Verdict; evidence: string }> = [];
+const fmt = (x: unknown, digits: number) => (typeof x === 'number' && Number.isFinite(x) ? x.toFixed(digits) : 'n/a');
 const add = (area: string, verdict: Verdict, evidence: string) => areas.push({ area, verdict, evidence });
 
 const trades = db.prepare("select id,symbol,side,status,quantity,price,trace_id,profit_loss,filled_at from trades order by timestamp").all() as any[];
@@ -28,7 +29,7 @@ const injected = trades.filter((t) => String(t.id).startsWith('cert-') || String
 if (!d) add('REAL_DISCOVERY_IN_SESSION', 'FAIL', 'session ran without the real-discovery path');
 else {
   add('REAL_DISCOVERY_IN_SESSION', d.blockedProviderCalls === 0 && (d.unsupportedProviderCalls ?? []).length === 0 ? 'PASS' : 'FAIL',
-    `production scanners/allocator at cap via provider seam; blocked=${d.blockedProviderCalls} unsupported=${(d.unsupportedProviderCalls ?? []).length}; recall=${d.score.recall.toFixed(2)} precision=${d.score.precision.toFixed(3)} promotedNew=${d.promotedNew.length} trapHits=${d.score.trapHits}`);
+    `production scanners/allocator at cap via provider seam; blocked=${d.blockedProviderCalls} unsupported=${(d.unsupportedProviderCalls ?? []).length}; recall=${fmt(d.score?.recall, 2)} precision=${fmt(d.score?.precision, 3)} promotedNew=${d.promotedNew?.length ?? 'n/a'} trapHits=${d.score?.trapHits ?? 'n/a'}`);
 }
 
 // --- accounting / risk oracles ---
