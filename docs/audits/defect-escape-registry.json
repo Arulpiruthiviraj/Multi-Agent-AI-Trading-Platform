@@ -210,6 +210,18 @@
       "severity": "P1",
       "status": "fixed-merged-to-main-not-deployed-2026-10-15",
       "title": "Hourly retention sweeps block the trading event loop for seconds (D9)"
+    },
+    {
+      "date": "2026-10-15",
+      "detectedIn": "prod",
+      "fixRef": "open",
+      "id": "engine-prediction-reads-block-trading-loop-20261015",
+      "notes": "Software-managed protective exits share this loop. No position existed during any stall. Not fixed: needs bounded windows, an index or off-thread reads, plus a certification measure of event-loop lag on a production-sized database. Related: retention-sweep-blocks-event-loop-20261015 (fixed on main).",
+      "regressionTest": "src/server/observability/retentionSlices.test.ts",
+      "rootCause": "Regular session 2026-10-15: 118 slow SQL statements (max 36.8 s), 11 event-loop lags (max 16.5 s) and one 39.6 s CRITICAL stall. (a) The engine itself repeatedly runs agent_predictions (6-9 s) and kronos_predictions (5-7 s) selects every 10-60 s in bursts from 10:46 ET onward on the main thread (unbounded per-agent reads; grading backlog of ~300k Kronos rows). (b) Operator endpoints run unindexed full scans on the trading thread: select event_traces where timestamp >= ? took 36.8 s (event_traces has no timestamp index) when session-checkpoint was called at 10:08 ET.",
+      "severity": "P1",
+      "status": "open",
+      "title": "Engine prediction/outcome reads and unindexed operator scans block the trading event loop for 6-40 s"
     }
   ],
   "version": 1
