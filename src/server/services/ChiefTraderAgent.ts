@@ -954,7 +954,9 @@ export class ChiefTraderAgent {
     try {
       const bucket = bucketFor(rawConfidence);
       const rows = await db.select().from(agentConfidenceCalibration).where(
-        and(eq(agentConfidenceCalibration.agentName, agentName), eq(agentConfidenceCalibration.bucketLow, bucket.low))
+        // 2026-10-15: ONLY the 'ALL' aggregate row. The table is keyed (agent, bucket, provider); per-provider rows (UUID ids that sort BEFORE 'ALL' in the unique
+        // index) existed for NewsAgent, and an unfiltered rows[0] returned an arbitrary provider's row. Per-provider rows feed the AI Cost Governor only.
+        and(eq(agentConfidenceCalibration.agentName, agentName), eq(agentConfidenceCalibration.bucketLow, bucket.low), eq(agentConfidenceCalibration.provider, 'ALL'))
       );
       const row = rows[0];
       if (!row) {
