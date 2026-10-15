@@ -222,6 +222,18 @@
       "severity": "P1",
       "status": "open",
       "title": "Engine prediction/outcome reads and unindexed operator scans block the trading event loop for 6-40 s"
+    },
+    {
+      "date": "2026-10-15",
+      "detectedIn": "prod",
+      "fixRef": "scripts/ops/diskFloorGuard.ts",
+      "id": "disk-guard-response-never-executed-20261015",
+      "notes": "Fixed in the repo as a tested module: argv-array execFile with no shell, reason restricted to [A-Za-z0-9_.-], success only when the engine reports TRADING_PAUSED, distinct PAUSE_FAILED events with retry, idempotent while paused and re-armed after recovery. End-to-end run against the real CLI verified (PAUSE_VERIFIED). The unexplained cause of the disk drops themselves remains OPEN.",
+      "regressionTest": "scripts/ops/diskFloorGuard.test.ts",
+      "rootCause": "At 15:31 ET free space fell 17.95 -> 10.44 GB in ~10 s. The scratch guard passed the pause reason (...below_<15GB) through cmd /c, where < is input redirection, so the CLI was never invoked and entries stayed enabled until a manual pause. Detection was tested; the response path was not.",
+      "severity": "P0",
+      "status": "fixed",
+      "title": "Disk-floor guard detected the breach but its pause command never ran (shell redirection in the reason string)"
     }
   ],
   "version": 1
