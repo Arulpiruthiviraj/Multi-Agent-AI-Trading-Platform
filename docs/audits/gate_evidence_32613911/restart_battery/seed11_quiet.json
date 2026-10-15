@@ -1,0 +1,64 @@
+[
+  {
+    "id": "FIRST_BUY_SUBMITTED",
+    "verdict": "PASS",
+    "note": "restart immediately after the first BUY order exists",
+    "stopBar": 129,
+    "stateAtRestart": {
+      "brokerOrders": 1,
+      "heldPositions": 1,
+      "workingOrders": 0
+    },
+    "ordersAfterResume": 1,
+    "realizedPnl": 0,
+    "failures": []
+  },
+  {
+    "id": "FIRST_BUY_FILLED",
+    "verdict": "PASS",
+    "note": "restart immediately after the first BUY filled",
+    "stopBar": 31,
+    "stateAtRestart": {
+      "brokerOrders": 1,
+      "heldPositions": 1,
+      "workingOrders": 0
+    },
+    "ordersAfterResume": 2,
+    "realizedPnl": 484.8157299999997,
+    "failures": []
+  },
+  {
+    "id": "HOLDING_ONE_POSITION",
+    "verdict": "PASS",
+    "note": "restart while holding one position",
+    "stopBar": 39,
+    "stateAtRestart": {
+      "brokerOrders": 1,
+      "heldPositions": 1,
+      "workingOrders": 0
+    },
+    "ordersAfterResume": 2,
+    "realizedPnl": 438.4879500000005,
+    "failures": []
+  },
+  {
+    "id": "HOLDING_TWO_POSITIONS",
+    "verdict": "INCONCLUSIVE",
+    "detail": "restart condition HOLDING_TWO_POSITIONS was never reached in this session (no stop); nothing about the restart state was exercised"
+  },
+  {
+    "id": "SELL_SUBMITTED",
+    "verdict": "INCONCLUSIVE",
+    "detail": "restart condition SELL_SUBMITTED was never reached in this session (no stop); nothing about the restart state was exercised"
+  },
+  {
+    "id": "PARTIAL_FILL_RECORDED",
+    "verdict": "INCONCLUSIVE",
+    "detail": "restart condition PARTIAL_FILL_RECORDED was never reached in this session (no stop); nothing about the restart state was exercised"
+  },
+  {
+    "id": "WORKING_ORDER_OPEN",
+    "verdict": "INCONCLUSIVE",
+    "detail": "restart condition WORKING_ORDER_OPEN was never reached in this session (no stop); nothing about the restart state was exercised"
+  }
+]

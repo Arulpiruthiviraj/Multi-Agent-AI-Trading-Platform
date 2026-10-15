@@ -1,0 +1,7 @@
+PASS         FIRST_BUY_SUBMITTED  
+PASS         FIRST_BUY_FILLED  
+PASS         HOLDING_ONE_POSITION  
+PASS         HOLDING_TWO_POSITIONS  
+PASS         SELL_SUBMITTED  
+INCONCLUSIVE PARTIAL_FILL_RECORDED  restart condition PARTIAL_FILL_RECORDED was never reached in this session (no stop); nothing about the r
+PASS         WORKING_ORDER_OPEN  

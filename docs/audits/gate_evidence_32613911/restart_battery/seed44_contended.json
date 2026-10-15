@@ -1,0 +1,12 @@
+[
+  {
+    "id": "HOLDING_TWO_POSITIONS",
+    "verdict": "INCONCLUSIVE",
+    "detail": "restart condition HOLDING_TWO_POSITIONS was never reached in this session (no stop); nothing about the restart state was exercised"
+  },
+  {
+    "id": "WORKING_ORDER_OPEN",
+    "verdict": "INCONCLUSIVE",
+    "detail": "restart condition WORKING_ORDER_OPEN was never reached in this session (no stop); nothing about the restart state was exercised"
+  }
+]

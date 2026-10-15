@@ -1,0 +1,7 @@
+INCONCLUSIVE FIRST_BUY_SUBMITTED  restart condition FIRST_BUY_SUBMITTED was never reached in this session (no stop); nothing about the resta
+PASS         FIRST_BUY_FILLED  
+INCONCLUSIVE HOLDING_ONE_POSITION  restart condition HOLDING_ONE_POSITION was never reached in this session (no stop); nothing about the res
+INCONCLUSIVE HOLDING_TWO_POSITIONS  restart condition HOLDING_TWO_POSITIONS was never reached in this session (no stop); nothing about the r
+PASS         SELL_SUBMITTED  
+PASS         PARTIAL_FILL_RECORDED  
+INCONCLUSIVE WORKING_ORDER_OPEN  restart condition WORKING_ORDER_OPEN was never reached in this session (no stop); nothing about the restart

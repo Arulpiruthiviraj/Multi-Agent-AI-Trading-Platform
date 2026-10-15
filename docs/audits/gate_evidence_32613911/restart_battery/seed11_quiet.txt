@@ -1,0 +1,7 @@
+PASS         FIRST_BUY_SUBMITTED  
+PASS         FIRST_BUY_FILLED  
+PASS         HOLDING_ONE_POSITION  
+INCONCLUSIVE HOLDING_TWO_POSITIONS  restart condition HOLDING_TWO_POSITIONS was never reached in this session (no stop); nothing about the r
+INCONCLUSIVE SELL_SUBMITTED  restart condition SELL_SUBMITTED was never reached in this session (no stop); nothing about the restart state w
+INCONCLUSIVE PARTIAL_FILL_RECORDED  restart condition PARTIAL_FILL_RECORDED was never reached in this session (no stop); nothing about the r
+INCONCLUSIVE WORKING_ORDER_OPEN  restart condition WORKING_ORDER_OPEN was never reached in this session (no stop); nothing about the restart
