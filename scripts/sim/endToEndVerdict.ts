@@ -63,6 +63,22 @@ if (which.toUpperCase() === 'A') {
   add('REAL_CONSENSUS_APPROVALS', consensus.c > 0 ? 'PASS' : 'FAIL', `approved consensus rounds: ${consensus.c}`);
   add('SESSION_CERTIFICATION_GATE', j.certification?.certification === 'PASS' ? 'PASS' : 'FAIL', `${j.certification?.certification} firstBlockingStage=${j.certification?.firstBlockingStage ?? 'none'}`);
 }
+// Research-capital basis (independent): every Argus capital-allocation gate evaluation must have been made against exactly the capital the session was
+// given (the verdict's cash argument is an independent input), and no approved BUY may exceed the remaining allocation it reports.
+{
+  const rows = db.prepare("select passed, detail from risk_gate_results where gate_name='argus_capital_allocation'").all() as Array<{ passed: number; detail: string }>;
+  if (rows.length > 0) {
+    const bad: string[] = []; let checked = 0;
+    for (const r of rows) {
+      let dj: any; try { dj = JSON.parse(r.detail); } catch { continue; }
+      if (typeof dj?.allocated !== 'number') continue;
+      checked++;
+      if (Math.abs(dj.allocated - Number(cash)) > 0.01) bad.push(`allocated ${dj.allocated} != session capital ${cash}`);
+      else if (r.passed === 1 && dj.requestedNotional > dj.remaining + 0.01) bad.push(`approved BUY ${dj.requestedNotional} exceeds remaining ${dj.remaining}`);
+    }
+    add('RESEARCH_CAPITAL_BASIS', checked > 0 && bad.length === 0 ? 'PASS' : 'FAIL', `${checked} capital-allocation gate evaluations vs session capital ${cash}; violations=${bad.length}${bad[0] ? ' (' + bad[0] + ')' : ''}`);
+  }
+}
 // Simulated-time integrity: in a real-discovery session Date.now is bound to the simulated clock, so (nearly) every persisted event must fall inside the
 // simulated session window. Rows outside it are wall-clock contamination (a small boot-phase allowance is tolerated).
 {
