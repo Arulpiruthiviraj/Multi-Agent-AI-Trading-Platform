@@ -48,6 +48,19 @@ const MUTATIONS: Mutation[] = [
   { id: 'M12', defect: 'Exploration-health N+1 queries return (per-promotion synchronous query)', file: 'src/server/observability/rescueOutcomeReport.ts',
     find: 'for (let i = 0; i < symbols.length; i += CHUNK) {', replace: 'for (let i = 0; i < symbols.length; i += 1) {',
     tests: ['src/server/observability/rescueOutcomeReport.test.ts'] },
+  // 2026-10-15 (D1): adversarial mutations of the protective-exit exemption. Each must be caught by Test C and/or the EventBus/limiter tests.
+  { id: 'M13', defect: 'Protective-exit exemption removed: genuine exits are throttled by the research idea cap again (the Oct 15 defect)', file: 'src/server/core/EventBus.ts',
+    find: 'const protectiveExit = ratedIdea.agent === agentWeightConfig.riskExitAgent', replace: 'const protectiveExit = false && ratedIdea.agent === agentWeightConfig.riskExitAgent',
+    tests: ['src/server/certification/productionFailureReplay/D1_protectiveExitUnderIdeaSaturation.test.ts', 'src/server/core/EventBus.protectiveExitRate.test.ts', 'src/server/core/pipelineRateLimit.test.ts'] },
+  { id: 'M14', defect: 'Exemption keyed on agent name + SELL only (origin check dropped): a spoofed exit bypasses the cap', file: 'src/server/core/EventBus.ts',
+    find: "&& normalizeTradeIdeaOrigin(ratedIdea.origin) === 'PORTFOLIO_EXIT';", replace: ';',
+    tests: ['src/server/certification/productionFailureReplay/D1_protectiveExitUnderIdeaSaturation.test.ts', 'src/server/core/EventBus.protectiveExitRate.test.ts', 'src/server/core/pipelineRateLimit.test.ts'] },
+  { id: 'M15', defect: 'Exemption no longer requires side SELL: an exit-shaped BUY bypasses the cap', file: 'src/server/core/EventBus.ts',
+    find: "&& ratedIdea.side === 'SELL'", replace: '',
+    tests: ['src/server/certification/productionFailureReplay/D1_protectiveExitUnderIdeaSaturation.test.ts', 'src/server/core/EventBus.protectiveExitRate.test.ts', 'src/server/core/pipelineRateLimit.test.ts'] },
+  { id: 'M16', defect: 'Exempt exits still consume / are blocked by the research window (exemption short-circuit disabled)', file: 'src/server/core/pipelineRateLimit.ts',
+    find: 'if (ctx.protectiveExit === true) {', replace: 'if (false && ctx.protectiveExit === true) {',
+    tests: ['src/server/certification/productionFailureReplay/D1_protectiveExitUnderIdeaSaturation.test.ts', 'src/server/core/EventBus.protectiveExitRate.test.ts', 'src/server/core/pipelineRateLimit.test.ts'] },
 ];
 
 function sh(cmd: string, args: string[], cwd: string, timeoutMs = 600_000) { return spawnSync(cmd, args, { cwd, encoding: 'utf8', timeout: timeoutMs, shell: process.platform === 'win32' && cmd === 'npx' }); }
