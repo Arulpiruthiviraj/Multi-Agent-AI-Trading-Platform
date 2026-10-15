@@ -6,6 +6,8 @@ import { contextFromEventPayload, getObservabilityContext, runWithObservabilityC
 import { gateTradeIdea } from './tradeIdeaContract';
 import { applyAssetIdeaGate } from '../multiAsset/ideaEligibility';
 import { allowTradeIdea, getPipelineRateSnapshot } from './pipelineRateLimit';
+import { normalizeTradeIdeaOrigin } from './tradeIdeaProvenance';
+import { agentWeightConfig } from '../config/agentWeights';
 
 const CORE_EVENTS_REQUIRING_TRACE_ID = new Set(
   tracingConfig.coreEventsRequiringTraceId.map(k => eventName(k)),
@@ -97,7 +99,11 @@ class EventBus extends EventEmitter {
           });
         }
         args[0] = eligible.idea;
-        if (!allowTradeIdea()) {
+        const ratedIdea = eligible.idea as Record<string, unknown>;
+        const protectiveExit = ratedIdea.agent === agentWeightConfig.riskExitAgent
+          && ratedIdea.side === 'SELL'
+          && normalizeTradeIdeaOrigin(ratedIdea.origin) === 'PORTFOLIO_EXIT';
+        if (!allowTradeIdea(Date.now(), { agent: typeof ratedIdea.agent === 'string' ? ratedIdea.agent : undefined, protectiveExit })) {
           this.emit(EVENTS.IDEA_RATE_LIMITED, {
             reason: 'MAX_TRADE_IDEAS_PER_MINUTE',
             symbol: eligible.idea.symbol,
