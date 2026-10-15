@@ -1,0 +1,1009 @@
+{
+ "snapshot": "argus_oct14_postclose (SHA-256 verified)",
+ "pageSize": 4096,
+ "pageCount": 6067478,
+ "freelistCount": 1348,
+ "totalBytes": 24852389888,
+ "freeBytes": 5521408,
+ "dbstatSeconds": 626.579,
+ "top": [
+  {
+   "table": "observability_events",
+   "totalGB": 7.066,
+   "tableGB": 4.844,
+   "indexGB": 2.222,
+   "pctOfDb": 28.4,
+   "unusedMB": 593.5,
+   "topIndexes": [
+    {
+     "name": "sqlite_autoindex_observability_events_1",
+     "mb": 587.8
+    },
+    {
+     "name": "idx_observability_events_type",
+     "mb": 514.9
+    },
+    {
+     "name": "idx_observability_events_decision",
+     "mb": 363.3
+    },
+    {
+     "name": "idx_observability_events_category",
+     "mb": 335.7
+    }
+   ],
+   "rows": 11184088,
+   "avgBytesPerRow": 632,
+   "countSeconds": 8.877
+  },
+  {
+   "table": "quant_assessments",
+   "totalGB": 6.378,
+   "tableGB": 6.36,
+   "indexGB": 0.019,
+   "pctOfDb": 25.7,
+   "unusedMB": 170.1,
+   "topIndexes": [
+    {
+     "name": "idx_quant_assessments_symbol",
+     "mb": 9.7
+    },
+    {
+     "name": "sqlite_autoindex_quant_assessments_1",
+     "mb": 8.9
+    }
+   ],
+   "rows": 224927,
+   "avgBytesPerRow": 28356,
+   "countSeconds": 0.015
+  },
+  {
+   "table": "decision_provenance",
+   "totalGB": 4.117,
+   "tableGB": 4.11,
+   "indexGB": 0.007,
+   "pctOfDb": 16.6,
+   "unusedMB": 57.2,
+   "topIndexes": [
+    {
+     "name": "idx_decision_provenance_decision",
+     "mb": 2.8
+    },
+    {
+     "name": "sqlite_autoindex_decision_provenance_1",
+     "mb": 2.8
+    },
+    {
+     "name": "idx_decision_provenance_symbol",
+     "mb": 1.5
+    }
+   ],
+   "rows": 69270,
+   "avgBytesPerRow": 59434,
+   "countSeconds": 0.095
+  },
+  {
+   "table": "event_traces",
+   "totalGB": 2.981,
+   "tableGB": 2.659,
+   "indexGB": 0.321,
+   "pctOfDb": 12,
+   "unusedMB": 127.9,
+   "topIndexes": [
+    {
+     "name": "sqlite_autoindex_event_traces_1",
+     "mb": 128.2
+    },
+    {
+     "name": "idx_event_traces_correlation",
+     "mb": 102.6
+    },
+    {
+     "name": "idx_event_traces_transaction",
+     "mb": 45.3
+    },
+    {
+     "name": "idx_event_traces_trade",
+     "mb": 45.2
+    }
+   ],
+   "rows": 2533422,
+   "avgBytesPerRow": 1177,
+   "countSeconds": 0.2
+  },
+  {
+   "table": "agent_reasoning_logs",
+   "totalGB": 1.114,
+   "tableGB": 1.059,
+   "indexGB": 0.055,
+   "pctOfDb": 4.5,
+   "unusedMB": 34.1,
+   "topIndexes": [
+    {
+     "name": "idx_agent_reasoning_logs_symbol",
+     "mb": 28.8
+    },
+    {
+     "name": "idx_agent_reasoning_logs_trace_id",
+     "mb": 26.5
+    }
+   ],
+   "rows": 684643,
+   "avgBytesPerRow": 1627,
+   "countSeconds": 1.158
+  },
+  {
+   "table": "candidate_rankings",
+   "totalGB": 0.653,
+   "tableGB": 0.596,
+   "indexGB": 0.057,
+   "pctOfDb": 2.6,
+   "unusedMB": 46.9,
+   "topIndexes": [
+    {
+     "name": "idx_candidate_rankings_symbol",
+     "mb": 30.5
+    },
+    {
+     "name": "idx_candidate_rankings_cycle",
+     "mb": 26.5
+    }
+   ],
+   "rows": 698206,
+   "avgBytesPerRow": 935,
+   "countSeconds": 1.061
+  },
+  {
+   "table": "trade_lifecycle_transitions",
+   "totalGB": 0.598,
+   "tableGB": 0.492,
+   "indexGB": 0.106,
+   "pctOfDb": 2.4,
+   "unusedMB": 59.7,
+   "topIndexes": [
+    {
+     "name": "sqlite_autoindex_trade_lifecycle_transitions_1",
+     "mb": 42.5
+    },
+    {
+     "name": "idx_trade_lifecycle_candidate",
+     "mb": 32
+    },
+    {
+     "name": "idx_trade_lifecycle_created",
+     "mb": 31.3
+    }
+   ],
+   "rows": 838615,
+   "avgBytesPerRow": 713,
+   "countSeconds": 1.064
+  },
+  {
+   "table": "pit_decision_ledger",
+   "totalGB": 0.386,
+   "tableGB": 0.296,
+   "indexGB": 0.09,
+   "pctOfDb": 1.6,
+   "unusedMB": 23,
+   "topIndexes": [
+    {
+     "name": "sqlite_autoindex_pit_decision_ledger_1",
+     "mb": 46.2
+    },
+    {
+     "name": "idx_pit_decision_ledger_asof",
+     "mb": 15.6
+    },
+    {
+     "name": "idx_pit_decision_ledger_published",
+     "mb": 15.5
+    },
+    {
+     "name": "idx_pit_decision_ledger_symbol",
+     "mb": 12.7
+    }
+   ],
+   "rows": 911722,
+   "avgBytesPerRow": 423,
+   "countSeconds": 0.562
+  },
+  {
+   "table": "agent_predictions",
+   "totalGB": 0.314,
+   "tableGB": 0.24,
+   "indexGB": 0.074,
+   "pctOfDb": 1.3,
+   "unusedMB": 20.3,
+   "topIndexes": [
+    {
+     "name": "sqlite_autoindex_agent_predictions_1",
+     "mb": 34.6
+    },
+    {
+     "name": "idx_agent_predictions_timestamp",
+     "mb": 25.9
+    },
+    {
+     "name": "idx_agent_predictions_trace_id",
+     "mb": 13.2
+    }
+   ],
+   "rows": 681051,
+   "avgBytesPerRow": 461,
+   "countSeconds": 0.37
+  },
+  {
+   "table": "ai_calls",
+   "totalGB": 0.287,
+   "tableGB": 0.268,
+   "indexGB": 0.019,
+   "pctOfDb": 1.2,
+   "unusedMB": 43,
+   "topIndexes": [
+    {
+     "name": "sqlite_autoindex_ai_calls_1",
+     "mb": 12.2
+    },
+    {
+     "name": "idx_ai_calls_created_at",
+     "mb": 7.1
+    }
+   ],
+   "rows": 207452,
+   "avgBytesPerRow": 1383,
+   "countSeconds": 0.127
+  },
+  {
+   "table": "kronos_predictions",
+   "totalGB": 0.193,
+   "tableGB": 0.181,
+   "indexGB": 0.012,
+   "pctOfDb": 0.8,
+   "unusedMB": 8.7,
+   "topIndexes": [
+    {
+     "name": "idx_kronos_predictions_timestamp",
+     "mb": 11.7
+    }
+   ],
+   "rows": 308635,
+   "avgBytesPerRow": 625,
+   "countSeconds": 0.681
+  },
+  {
+   "table": "transaction_traces",
+   "totalGB": 0.16,
+   "tableGB": 0.093,
+   "indexGB": 0.067,
+   "pctOfDb": 0.6,
+   "unusedMB": 14.8,
+   "topIndexes": [
+    {
+     "name": "idx_transaction_traces_status",
+     "mb": 25.6
+    },
+    {
+     "name": "idx_transaction_traces_symbol",
+     "mb": 21.6
+    },
+    {
+     "name": "sqlite_autoindex_transaction_traces_1",
+     "mb": 19.9
+    }
+   ],
+   "rows": 522761,
+   "avgBytesPerRow": 306,
+   "countSeconds": 0.031
+  },
+  {
+   "table": "ohlcv_bars",
+   "totalGB": 0.101,
+   "tableGB": 0.061,
+   "indexGB": 0.041,
+   "pctOfDb": 0.4,
+   "unusedMB": 8.2,
+   "topIndexes": [
+    {
+     "name": "sqlite_autoindex_ohlcv_bars_1",
+     "mb": 22.9
+    },
+    {
+     "name": "idx_ohlcv_symbol_tf_time",
+     "mb": 17.8
+    }
+   ],
+   "rows": 625461,
+   "avgBytesPerRow": 161,
+   "countSeconds": 0.054
+  },
+  {
+   "table": "consensus_debate_predictions",
+   "totalGB": 0.1,
+   "tableGB": 0.07,
+   "indexGB": 0.029,
+   "pctOfDb": 0.4,
+   "unusedMB": 6.5,
+   "topIndexes": [
+    {
+     "name": "sqlite_autoindex_consensus_debate_predictions_1",
+     "mb": 9
+    },
+    {
+     "name": "idx_consensus_debate_predictions_symbol",
+     "mb": 7.7
+    },
+    {
+     "name": "idx_consensus_debate_predictions_trace",
+     "mb": 7.1
+    },
+    {
+     "name": "idx_consensus_debate_predictions_status",
+     "mb": 5.6
+    }
+   ],
+   "rows": 180543,
+   "avgBytesPerRow": 554,
+   "countSeconds": 0.225
+  },
+  {
+   "table": "consensus_evidence",
+   "totalGB": 0.086,
+   "tableGB": 0.075,
+   "indexGB": 0.011,
+   "pctOfDb": 0.3,
+   "unusedMB": 2.3,
+   "topIndexes": [
+    {
+     "name": "idx_consensus_evidence_transaction_id",
+     "mb": 11
+    }
+   ]
+  },
+  {
+   "table": "ai_usage",
+   "totalGB": 0.066,
+   "tableGB": 0.053,
+   "indexGB": 0.013,
+   "pctOfDb": 0.3,
+   "unusedMB": 5.6,
+   "topIndexes": [
+    {
+     "name": "sqlite_autoindex_ai_usage_1",
+     "mb": 13.1
+    }
+   ]
+  },
+  {
+   "table": "consensus_decisions",
+   "totalGB": 0.047,
+   "tableGB": 0.041,
+   "indexGB": 0.006,
+   "pctOfDb": 0.2,
+   "unusedMB": 1.6,
+   "topIndexes": [
+    {
+     "name": "sqlite_autoindex_consensus_decisions_1",
+     "mb": 6.1
+    }
+   ]
+  },
+  {
+   "table": "learning_versions",
+   "totalGB": 0.046,
+   "tableGB": 0.036,
+   "indexGB": 0.01,
+   "pctOfDb": 0.2,
+   "unusedMB": 3,
+   "topIndexes": [
+    {
+     "name": "sqlite_autoindex_learning_versions_1",
+     "mb": 5.7
+    },
+    {
+     "name": "idx_learning_versions_type",
+     "mb": 4.4
+    }
+   ]
+  },
+  {
+   "table": "transactions",
+   "totalGB": 0.025,
+   "tableGB": 0.018,
+   "indexGB": 0.006,
+   "pctOfDb": 0.1,
+   "unusedMB": 0.9,
+   "topIndexes": [
+    {
+     "name": "sqlite_autoindex_transactions_1",
+     "mb": 6.1
+    }
+   ]
+  },
+  {
+   "table": "postmarket_reports",
+   "totalGB": 0.019,
+   "tableGB": 0.019,
+   "indexGB": 0,
+   "pctOfDb": 0.1,
+   "unusedMB": 0,
+   "topIndexes": [
+    {
+     "name": "idx_postmarket_reports_trading_date",
+     "mb": 0
+    },
+    {
+     "name": "postmarket_reports_trading_date_unique",
+     "mb": 0
+    },
+    {
+     "name": "sqlite_autoindex_postmarket_reports_1",
+     "mb": 0
+    }
+   ]
+  },
+  {
+   "table": "prediction_outcomes",
+   "totalGB": 0.017,
+   "tableGB": 0.011,
+   "indexGB": 0.006,
+   "pctOfDb": 0.1,
+   "unusedMB": 1.2,
+   "topIndexes": [
+    {
+     "name": "idx_prediction_outcomes_source",
+     "mb": 6
+    }
+   ]
+  },
+  {
+   "table": "quant_strategy_backtests",
+   "totalGB": 0.017,
+   "tableGB": 0.017,
+   "indexGB": 0,
+   "pctOfDb": 0.1,
+   "unusedMB": 0.2,
+   "topIndexes": [
+    {
+     "name": "idx_quant_strategy_backtests_strategy_symbol",
+     "mb": 0
+    },
+    {
+     "name": "sqlite_autoindex_quant_strategy_backtests_1",
+     "mb": 0
+    }
+   ]
+  },
+  {
+   "table": "quant_forecasts",
+   "totalGB": 0.016,
+   "tableGB": 0.012,
+   "indexGB": 0.004,
+   "pctOfDb": 0.1,
+   "unusedMB": 1.2,
+   "topIndexes": [
+    {
+     "name": "idx_quant_forecasts_lookup",
+     "mb": 2.3
+    },
+    {
+     "name": "sqlite_autoindex_quant_forecasts_1",
+     "mb": 1.1
+    },
+    {
+     "name": "idx_quant_forecasts_symbol",
+     "mb": 1
+    }
+   ]
+  },
+  {
+   "table": "news_clusters",
+   "totalGB": 0.012,
+   "tableGB": 0.01,
+   "indexGB": 0.002,
+   "pctOfDb": 0,
+   "unusedMB": 0.8,
+   "topIndexes": [
+    {
+     "name": "sqlite_autoindex_news_clusters_1",
+     "mb": 1.5
+    }
+   ]
+  },
+  {
+   "table": "news_articles",
+   "totalGB": 0.008,
+   "tableGB": 0.007,
+   "indexGB": 0.001,
+   "pctOfDb": 0,
+   "unusedMB": 1.3,
+   "topIndexes": [
+    {
+     "name": "sqlite_autoindex_news_articles_1",
+     "mb": 1.2
+    }
+   ]
+  },
+  {
+   "table": "risk_gate_results",
+   "totalGB": 0.008,
+   "tableGB": 0.008,
+   "indexGB": 0,
+   "pctOfDb": 0,
+   "unusedMB": 0.2,
+   "topIndexes": []
+  },
+  {
+   "table": "news_predictions",
+   "totalGB": 0.007,
+   "tableGB": 0.005,
+   "indexGB": 0.002,
+   "pctOfDb": 0,
+   "unusedMB": 0.5,
+   "topIndexes": [
+    {
+     "name": "idx_news_predictions_cluster",
+     "mb": 0.8
+    },
+    {
+     "name": "sqlite_autoindex_news_predictions_1",
+     "mb": 0.6
+    },
+    {
+     "name": "idx_news_predictions_symbol",
+     "mb": 0.5
+    },
+    {
+     "name": "idx_news_predictions_created_at",
+     "mb": 0.4
+    }
+   ]
+  },
+  {
+   "table": "backtest_runs",
+   "totalGB": 0.005,
+   "tableGB": 0.005,
+   "indexGB": 0,
+   "pctOfDb": 0,
+   "unusedMB": 0.1,
+   "topIndexes": [
+    {
+     "name": "sqlite_autoindex_backtest_runs_1",
+     "mb": 0
+    }
+   ]
+  },
+  {
+   "table": "session_lifecycle_snapshots",
+   "totalGB": 0.003,
+   "tableGB": 0.002,
+   "indexGB": 0.001,
+   "pctOfDb": 0,
+   "unusedMB": 0.1,
+   "topIndexes": [
+    {
+     "name": "idx_session_lifecycle_snapshots_date",
+     "mb": 1.1
+    }
+   ]
+  },
+  {
+   "table": "trade_plan_revalidations",
+   "totalGB": 0.003,
+   "tableGB": 0.002,
+   "indexGB": 0.001,
+   "pctOfDb": 0,
+   "unusedMB": 0.2,
+   "topIndexes": [
+    {
+     "name": "idx_trade_plan_revalidations_plan",
+     "mb": 0.8
+    }
+   ]
+  }
+ ],
+ "allTables": [
+  {
+   "table": "observability_events",
+   "totalMB": 7065.6
+  },
+  {
+   "table": "quant_assessments",
+   "totalMB": 6378.5
+  },
+  {
+   "table": "decision_provenance",
+   "totalMB": 4117.1
+  },
+  {
+   "table": "event_traces",
+   "totalMB": 2980.6
+  },
+  {
+   "table": "agent_reasoning_logs",
+   "totalMB": 1114.1
+  },
+  {
+   "table": "candidate_rankings",
+   "totalMB": 652.6
+  },
+  {
+   "table": "trade_lifecycle_transitions",
+   "totalMB": 597.6
+  },
+  {
+   "table": "pit_decision_ledger",
+   "totalMB": 386.2
+  },
+  {
+   "table": "agent_predictions",
+   "totalMB": 313.7
+  },
+  {
+   "table": "ai_calls",
+   "totalMB": 286.9
+  },
+  {
+   "table": "kronos_predictions",
+   "totalMB": 192.8
+  },
+  {
+   "table": "transaction_traces",
+   "totalMB": 159.8
+  },
+  {
+   "table": "ohlcv_bars",
+   "totalMB": 101.3
+  },
+  {
+   "table": "consensus_debate_predictions",
+   "totalMB": 99.5
+  },
+  {
+   "table": "consensus_evidence",
+   "totalMB": 86
+  },
+  {
+   "table": "ai_usage",
+   "totalMB": 65.8
+  },
+  {
+   "table": "consensus_decisions",
+   "totalMB": 47
+  },
+  {
+   "table": "learning_versions",
+   "totalMB": 46.3
+  },
+  {
+   "table": "transactions",
+   "totalMB": 24.6
+  },
+  {
+   "table": "postmarket_reports",
+   "totalMB": 19.4
+  },
+  {
+   "table": "prediction_outcomes",
+   "totalMB": 17.4
+  },
+  {
+   "table": "quant_strategy_backtests",
+   "totalMB": 16.8
+  },
+  {
+   "table": "quant_forecasts",
+   "totalMB": 16.4
+  },
+  {
+   "table": "news_clusters",
+   "totalMB": 11.8
+  },
+  {
+   "table": "news_articles",
+   "totalMB": 8.3
+  },
+  {
+   "table": "risk_gate_results",
+   "totalMB": 7.9
+  },
+  {
+   "table": "news_predictions",
+   "totalMB": 7
+  },
+  {
+   "table": "backtest_runs",
+   "totalMB": 4.8
+  },
+  {
+   "table": "session_lifecycle_snapshots",
+   "totalMB": 3.3
+  },
+  {
+   "table": "trade_plan_revalidations",
+   "totalMB": 2.6
+  },
+  {
+   "table": "missed_opportunities",
+   "totalMB": 2.4
+  },
+  {
+   "table": "prediction_outcome_horizons",
+   "totalMB": 2.3
+  },
+  {
+   "table": "trade_plan_revisions",
+   "totalMB": 1.7
+  },
+  {
+   "table": "trade_plans",
+   "totalMB": 1.4
+  },
+  {
+   "table": "explainability_reports",
+   "totalMB": 1.4
+  },
+  {
+   "table": "risk_assessments",
+   "totalMB": 0.7
+  },
+  {
+   "table": "learning_observations",
+   "totalMB": 0.7
+  },
+  {
+   "table": "promotion_decisions",
+   "totalMB": 0.6
+  },
+  {
+   "table": "reconciliation_events",
+   "totalMB": 0.5
+  },
+  {
+   "table": "premarket_focus_reports",
+   "totalMB": 0.5
+  },
+  {
+   "table": "escalation_decisions",
+   "totalMB": 0.4
+  },
+  {
+   "table": "replay_runs",
+   "totalMB": 0.4
+  },
+  {
+   "table": "trades",
+   "totalMB": 0.3
+  },
+  {
+   "table": "portfolio_snapshots",
+   "totalMB": 0.3
+  },
+  {
+   "table": "training_examples",
+   "totalMB": 0.3
+  },
+  {
+   "table": "external_data_cache",
+   "totalMB": 0.2
+  },
+  {
+   "table": "staged_news_catalysts",
+   "totalMB": 0.2
+  },
+  {
+   "table": "kill_switch_events",
+   "totalMB": 0.1
+  },
+  {
+   "table": "openalice_verifications",
+   "totalMB": 0.1
+  },
+  {
+   "table": "sqlite_schema",
+   "totalMB": 0.1
+  },
+  {
+   "table": "learned_rules",
+   "totalMB": 0.1
+  },
+  {
+   "table": "fills",
+   "totalMB": 0
+  },
+  {
+   "table": "research_agent_runs",
+   "totalMB": 0
+  },
+  {
+   "table": "premarket_data_reservations",
+   "totalMB": 0
+  },
+  {
+   "table": "strategy_candidates",
+   "totalMB": 0
+  },
+  {
+   "table": "__drizzle_migrations",
+   "totalMB": 0
+  },
+  {
+   "table": "agent_confidence_calibration",
+   "totalMB": 0
+  },
+  {
+   "table": "crypto_paper_orders",
+   "totalMB": 0
+  },
+  {
+   "table": "historical_fundamental_snapshots",
+   "totalMB": 0
+  },
+  {
+   "table": "historical_macro_releases",
+   "totalMB": 0
+  },
+  {
+   "table": "historical_news_archive",
+   "totalMB": 0
+  },
+  {
+   "table": "jev_shadow_scores",
+   "totalMB": 0
+  },
+  {
+   "table": "meta_label_features",
+   "totalMB": 0
+  },
+  {
+   "table": "mover_coverage",
+   "totalMB": 0
+  },
+  {
+   "table": "research_experiments",
+   "totalMB": 0
+  },
+  {
+   "table": "research_trials",
+   "totalMB": 0
+  },
+  {
+   "table": "strategy_engine_signals",
+   "totalMB": 0
+  },
+  {
+   "table": "sessions",
+   "totalMB": 0
+  },
+  {
+   "table": "daily_learning_archive",
+   "totalMB": 0
+  },
+  {
+   "table": "insider_transactions",
+   "totalMB": 0
+  },
+  {
+   "table": "quant_backtest_decision_log",
+   "totalMB": 0
+  },
+  {
+   "table": "research_hypotheses",
+   "totalMB": 0
+  },
+  {
+   "table": "strategy_engine_backtest_runs",
+   "totalMB": 0
+  },
+  {
+   "table": "strategy_engine_promotions",
+   "totalMB": 0
+  },
+  {
+   "table": "strategy_evolution_events",
+   "totalMB": 0
+  },
+  {
+   "table": "weekly_reflection_digest",
+   "totalMB": 0
+  },
+  {
+   "table": "agent_performance_stats",
+   "totalMB": 0
+  },
+  {
+   "table": "agent_routing_overrides",
+   "totalMB": 0
+  },
+  {
+   "table": "ai_models",
+   "totalMB": 0
+  },
+  {
+   "table": "ai_providers",
+   "totalMB": 0
+  },
+  {
+   "table": "config_change_events",
+   "totalMB": 0
+  },
+  {
+   "table": "config_overrides",
+   "totalMB": 0
+  },
+  {
+   "table": "crypto_paper_broker_state",
+   "totalMB": 0
+  },
+  {
+   "table": "crypto_paper_positions",
+   "totalMB": 0
+  },
+  {
+   "table": "daily_strategy_performance",
+   "totalMB": 0
+  },
+  {
+   "table": "daily_trading_summary",
+   "totalMB": 0
+  },
+  {
+   "table": "diagnostic_trade_archive",
+   "totalMB": 0
+  },
+  {
+   "table": "reconciliation_acknowledgements",
+   "totalMB": 0
+  },
+  {
+   "table": "rollback_events",
+   "totalMB": 0
+  },
+  {
+   "table": "news_providers",
+   "totalMB": 0
+  },
+  {
+   "table": "portfolio",
+   "totalMB": 0
+  },
+  {
+   "table": "prediction_engine_weights",
+   "totalMB": 0
+  },
+  {
+   "table": "reflection_session_metrics",
+   "totalMB": 0
+  },
+  {
+   "table": "strategy_configurations",
+   "totalMB": 0
+  },
+  {
+   "table": "agent_memory",
+   "totalMB": 0
+  },
+  {
+   "table": "broker_connections",
+   "totalMB": 0
+  },
+  {
+   "table": "memory_rules",
+   "totalMB": 0
+  },
+  {
+   "table": "settings",
+   "totalMB": 0
+  },
+  {
+   "table": "sqlite_sequence",
+   "totalMB": 0
+  },
+  {
+   "table": "users",
+   "totalMB": 0
+  }
+ ],
+ "sumTablesGB": 24.85,
+ "doneAt": "2026-10-15T12:14:02.668Z",
+ "totalSeconds": 641.107
+}
