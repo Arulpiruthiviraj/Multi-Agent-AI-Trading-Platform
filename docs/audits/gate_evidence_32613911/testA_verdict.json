@@ -1,0 +1,290 @@
+{
+  "file": "C:/Users/ithay/AppData/Local/Temp/J/gate/e2e/testA-seed102.json",
+  "which": "A",
+  "funnel": [
+    {
+      "symbol": "LAOW",
+      "kind": "MOMENTUM_BREAKOUT",
+      "promotedMin": 131,
+      "ideasByAgent": [
+        {
+          "a": "QuantEngine",
+          "c": 10
+        },
+        {
+          "a": "TechnicalAgent",
+          "c": 11
+        }
+      ],
+      "consensusRounds": 11,
+      "deskNoTrade": 54,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 33,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 11,
+        "reason\":\"[Quant Not Eligible] strategy MOMENTUM_BREAKOUT: NO_LIFECYCLE_RECORD (lifecycle u": 10
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LAOZ",
+      "kind": "GAP_AND_GO",
+      "promotedMin": 9,
+      "ideasByAgent": [
+        {
+          "a": "KronosEngine",
+          "c": 1
+        },
+        {
+          "a": "TechnicalAgent",
+          "c": 15
+        }
+      ],
+      "consensusRounds": 16,
+      "deskNoTrade": 102,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 86,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 16
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LAIR",
+      "kind": "HIGH_VOLUME_MOVER",
+      "promotedMin": 195,
+      "ideasByAgent": [
+        {
+          "a": "QuantEngine",
+          "c": 16
+        },
+        {
+          "a": "TechnicalAgent",
+          "c": 15
+        }
+      ],
+      "consensusRounds": 15,
+      "deskNoTrade": 67,
+      "noTradeReasons": {
+        "reason\":\"[Quant Not Eligible] strategy RANGE_REVERSION: NO_LIFECYCLE_RECORD (lifecycle unk": 16,
+        "reason\":\"[NO TRADE] Confidence # did not clear ## MODERATE tier also declined: Fewer indep": 2,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 13,
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 36
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LARZ",
+      "kind": "GAP_AND_GO",
+      "promotedMin": 17,
+      "ideasByAgent": [
+        {
+          "a": "TechnicalAgent",
+          "c": 22
+        }
+      ],
+      "consensusRounds": 22,
+      "deskNoTrade": 113,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 91,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 22
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LAGU",
+      "kind": "HIGH_VOLUME_MOVER",
+      "promotedMin": 45,
+      "ideasByAgent": [
+        {
+          "a": "QuantEngine",
+          "c": 73
+        },
+        {
+          "a": "TechnicalAgent",
+          "c": 31
+        }
+      ],
+      "consensusRounds": 31,
+      "deskNoTrade": 109,
+      "noTradeReasons": {
+        "reason\":\"[Quant Not Eligible] strategy PULLBACK_CONTINUATION: NO_LIFECYCLE_RECORD (lifecyc": 73,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 30,
+        "reason\":\"[NO TRADE] Confidence # did not clear ## MODERATE tier also declined: Fewer indep": 1,
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 5
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LAQF",
+      "kind": "MEAN_REVERSION",
+      "promotedMin": 14,
+      "ideasByAgent": [
+        {
+          "a": "TechnicalAgent",
+          "c": 3
+        }
+      ],
+      "consensusRounds": 3,
+      "deskNoTrade": 23,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 20,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 3
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LADR",
+      "kind": "GAP_AND_GO",
+      "promotedMin": 28,
+      "ideasByAgent": [
+        {
+          "a": "KronosEngine",
+          "c": 4
+        },
+        {
+          "a": "QuantEngine",
+          "c": 12
+        },
+        {
+          "a": "TechnicalAgent",
+          "c": 2
+        }
+      ],
+      "consensusRounds": 5,
+      "deskNoTrade": 17,
+      "noTradeReasons": {
+        "reason\":\"[Quant Not Eligible] strategy RANGE_REVERSION: NO_LIFECYCLE_RECORD (lifecycle unk": 12,
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on BUY (need #) from produ": 2,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 3
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LAQA",
+      "kind": "CONTINUATION",
+      "promotedMin": 44,
+      "ideasByAgent": [
+        {
+          "a": "TechnicalAgent",
+          "c": 21
+        }
+      ],
+      "consensusRounds": 21,
+      "deskNoTrade": 107,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 86,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 21
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LAAU",
+      "kind": "MOMENTUM_BREAKOUT",
+      "promotedMin": 77,
+      "ideasByAgent": [
+        {
+          "a": "TechnicalAgent",
+          "c": 3
+        }
+      ],
+      "consensusRounds": 3,
+      "deskNoTrade": 49,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 46,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 3
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LAKA",
+      "kind": "GAP_AND_GO",
+      "promotedMin": 11,
+      "ideasByAgent": [
+        {
+          "a": "QuantEngine",
+          "c": 14
+        },
+        {
+          "a": "TechnicalAgent",
+          "c": 21
+        }
+      ],
+      "consensusRounds": 21,
+      "deskNoTrade": 105,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 70,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 21,
+        "reason\":\"[Quant Not Eligible] strategy MOMENTUM_BREAKOUT: NO_LIFECYCLE_RECORD (lifecycle u": 14
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LAPB",
+      "kind": "CONTINUATION",
+      "promotedMin": 62,
+      "ideasByAgent": [
+        {
+          "a": "TechnicalAgent",
+          "c": 11
+        }
+      ],
+      "consensusRounds": 11,
+      "deskNoTrade": 85,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 74,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 11
+      },
+      "buys": 0,
+      "sells": 0
+    }
+  ],
+  "dbPath": "C:\\Users\\ithay\\AppData\\Local\\Temp\\J\\gate\\e2e\\evidence\\argus_synthetic_sim_e2e-testA-102-mv95sc5r.db",
+  "generatedAt": "2026-10-15T07:50:03.633Z",
+  "areas": [
+    {
+      "area": "REAL_DISCOVERY_IN_SESSION",
+      "verdict": "PASS",
+      "evidence": "production scanners/allocator at cap via provider seam; blocked=0 unsupported=0; recall=0.47 precision=0.129 promotedNew=114 trapHits=1"
+    },
+    {
+      "area": "ACCOUNTING_ORACLE",
+      "verdict": "PASS",
+      "evidence": "0 fills, mismatches=0"
+    },
+    {
+      "area": "NO_INJECTED_APPROVALS",
+      "verdict": "PASS",
+      "evidence": "harness-injected trades: 0"
+    },
+    {
+      "area": "PRODUCTION_FAITHFUL_ABSTENTION",
+      "verdict": "PASS",
+      "evidence": "orders=0; session certification=PASS (no reason); calibration=PRODUCTION_OCT14; lifecycleSeed=none (production Oct 14 state)"
+    },
+    {
+      "area": "ABSTENTION_EXPLAINED",
+      "verdict": "PASS",
+      "evidence": "normalized reasons: {\"Quant live emit requires a strategy idea that clears live EV and min R:R\":6253,\"strategy RANGE_REVERSION: NO_LIFECYCLE_RECORD (lifecycle unknown)\":780,\"strategy PULLBACK_CONTINUATION: NO_LIFECYCLE_RECORD (lifecycle unknown)\":831,\"strategy TREND_FOLLOWING: NO_LIFECYCLE_RECORD (lifecycle unknown)\":9,\"Confidence # did not clear #.\":1898,\"Confidence # did not clear #\":404,\"Only # independent evidence group(s) agreed on BUY (need #) from producers [TechnicalAgent\":10,\"Only # independent evidence group(s) agreed on SELL (need #) from producers [JavaCoreEnsem\":14,\"UNKNOWN_FRESHNESS: no tick age for this symbol\":15,\"Only # independent evidence group(s) agreed on SELL (need #) from producers [TechnicalAgen\":1,\"strategy MOMENTUM_BREAKOUT: NO_LIFECYCLE_RECORD (lifecycle unknown)\":24}"
+    },
+    {
+      "area": "SIMULATED_TIME_INTEGRITY",
+      "verdict": "PASS",
+      "evidence": "26 of 262420 persisted events outside the simulated session window (0.01%)"
+    },
+    {
+      "area": "TIMELINE_INVARIANTS",
+      "verdict": "PASS",
+      "evidence": "violations=0"
+    }
+  ],
+  "overall": "PASS"
+}

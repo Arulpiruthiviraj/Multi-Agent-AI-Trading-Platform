@@ -1,0 +1,63 @@
+{
+  "sha": "32613911842dfce05b722360bf67b7fb673dbb7b",
+  "generatedAt": "2026-10-15T10:15:47.448Z",
+  "control": {
+    "red": false,
+    "reasons": []
+  },
+  "restoredClean": true,
+  "results": [
+    {
+      "id": "SM1",
+      "defect": "Commission omitted from broker costs",
+      "verdict": "CAUGHT",
+      "reasons": [
+        "ACCOUNTING_ORACLE:FAIL"
+      ],
+      "minutes": 18.6
+    },
+    {
+      "id": "SM2",
+      "defect": "Broker reports a doubled fill quantity (duplicate/over fill)",
+      "verdict": "CAUGHT",
+      "reasons": [
+        "ACCOUNTING_ORACLE:FAIL",
+        "ORGANIC_BUY_OF_DISCOVERED_SYMBOL:FAIL",
+        "MONITOR_AND_SELL_OF_DISCOVERED_SYMBOL:FAIL",
+        "ORGANIC_BUY_OF_ORACLE_OPPORTUNITY:FAIL",
+        "LINEAGE:POSITION_NOT_EXPLAINED_BY_FILLS"
+      ],
+      "minutes": 19.1
+    },
+    {
+      "id": "SM3",
+      "defect": "Research capital wrong: replay allocation budget inflated 5x",
+      "verdict": "CAUGHT",
+      "reasons": [
+        "RESEARCH_CAPITAL_BASIS:FAIL"
+      ],
+      "minutes": 25.8
+    },
+    {
+      "id": "SM4",
+      "defect": "Protective hard stop / trailing stop exits never fire",
+      "verdict": "CAUGHT",
+      "reasons": [
+        "MONITOR_AND_SELL_OF_DISCOVERED_SYMBOL:FAIL",
+        "SESSION_CERTIFICATION_GATE:FAIL",
+        "EXIT_ORACLE:15"
+      ],
+      "minutes": 17.7
+    },
+    {
+      "id": "SM5",
+      "defect": "Wall-clock contamination: Date.now is no longer bound to the simulated clock",
+      "verdict": "CAUGHT",
+      "reasons": [
+        "ORGANIC_BUY_OF_ORACLE_OPPORTUNITY:FAIL",
+        "SIMULATED_TIME_INTEGRITY:FAIL"
+      ],
+      "minutes": 13.8
+    }
+  ]
+}

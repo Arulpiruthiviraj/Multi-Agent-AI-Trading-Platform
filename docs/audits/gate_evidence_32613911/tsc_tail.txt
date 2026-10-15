@@ -1,0 +1,2 @@
+npm notice run my-money-miner@0.0.0 npx
+npm notice run tsc --noEmit

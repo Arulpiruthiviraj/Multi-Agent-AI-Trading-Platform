@@ -1,0 +1,7 @@
+      1       Tests  7082 passed | 3 expected fail | 2 skipped (7087)
+      1      Errors  8 errors
+      1    Duration  1757.01s (transform 16.77s, setup 11.10s, import 232.44s, tests 1353.57s, environment 2.19s)
+      1  Test Files  870 passed (870)
+      8 EnvironmentTeardownError: [vitest-worker]: Closing rpc while "onUserConsoleLog" was pending
+      8 ⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+      1 ⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯
