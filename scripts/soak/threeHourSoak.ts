@@ -82,7 +82,16 @@ async function main(): Promise<void> {
     });
     child.on('error', reject);
     child.on('exit', (code) => {
+      // Child exit codes: 0 = stable PASS, 2 = instability FAIL, 3 = disk-full abort (fail-fast).
       if (code === 0) resolve();
+      else if (code === 3)
+        reject(
+          new Error(
+            'Soak aborted: disk full (DISK_FULL fail-fast) - the result file may be missing or ' +
+              'partial. Free disk space (or reduce --wall-minutes) and retry; the end-of-soak ' +
+              'proof is skipped because it cannot be trusted on a full disk.',
+          ),
+        );
       else reject(new Error(`Soak child exited with code ${code}`));
     });
   });

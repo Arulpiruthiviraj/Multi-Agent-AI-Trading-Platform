@@ -145,6 +145,10 @@ async function main(): Promise<void> {
 
   const { SyntheticSessionEngine, defaultSessionStartMs } = await import('../../src/server/replay/synthetic/SyntheticSessionEngine');
   const { computeSyntheticSimulationPaths } = await import('../../src/server/replay/syntheticSimulationPaths');
+  // Soak-scoped retention + disk-full fail-fast (scripts/soak/soakRetention.ts header explains why
+  // the production sweepers cannot bound this DB). Imported dynamically like every other src module
+  // here: the engine contract is env-first (prepareIsolatedEnvironment), real modules second.
+  const { pruneSoakIterations, isDiskFullError, SOAK_KEEP_ITERATIONS } = await import('./soakRetention');
 
   // Prepare once: env vars + isolated DB path. The loop reuses the same process and DB.
   const bootstrapEngine = new SyntheticSessionEngine();
@@ -191,8 +195,13 @@ async function main(): Promise<void> {
   console.log(`[soak] starting session loop...`);
   let finalSessionStartMs = baseSessionStartMs;
   let finalSessionEndMs = baseSessionStartMs;
+  // 2026-10-15 (seg1 defect fix): fail fast on disk-full. When the disk fills, every further
+  // iteration fails identically ("database or disk is full") - seg1 burned its whole wall-clock
+  // budget on 720,845 doomed iterations instead of aborting with an honest verdict.
+  let diskFullAbort = false;
+  let totalPrunedRows = 0;
   try {
-    while (Date.now() - wallStart < wallBudgetMs) {
+    while (Date.now() - wallStart < wallBudgetMs && !diskFullAbort) {
       currentIteration += 1;
       const iterStart = Date.now();
       // Unique session window per iteration so activity is distinguishable in the shared DB.
@@ -234,10 +243,31 @@ async function main(): Promise<void> {
       } catch (e) {
         summary.error = e instanceof Error ? e.message : String(e);
         console.error(`[soak] iteration ${currentIteration} FAILED: ${summary.error}`);
+        if (isDiskFullError(e)) {
+          // Fail fast: the disk is full, so no later iteration can succeed. Abort the loop
+          // now so the result file is written promptly with a DISK_FULL verdict instead of
+          // spinning through hundreds of thousands of doomed iterations (seg1: 720,845).
+          diskFullAbort = true;
+        }
       }
       iterations.push(summary);
       if (currentIteration % 10 === 0 || summary.error) {
         console.log(`[soak] iter ${currentIteration}: ${summary.wallClockSec.toFixed(1)}s, ${summary.tradesFilled} fills, err=${summary.error ?? 'none'} (elapsed ${((Date.now() - wallStart) / 60000).toFixed(1)}m)`);
+      }
+      if (!diskFullAbort) {
+        // Soak-scoped retention: prune rows from iterations older than the keep window.
+        // Session windows are sequential and non-overlapping (180 sim-min each), so
+        // keepFromMs is exact. Skipped on the abort path - with a full disk even the
+        // prune's rollback journal may fail, and there is nothing left to save.
+        const keepFromMs =
+          baseSessionStartMs + (currentIteration - SOAK_KEEP_ITERATIONS) * SESSION_SIM_MINUTES * 60_000;
+        const pruned = await pruneSoakIterations(keepFromMs);
+        totalPrunedRows += pruned.totalDeleted;
+        if (pruned.totalDeleted > 0 && currentIteration % 10 === 0) {
+          console.log(
+            `[soak] retention: pruned ${pruned.totalDeleted} rows from iterations older than #${currentIteration - SOAK_KEEP_ITERATIONS + 1}`,
+          );
+        }
       }
     }
   } finally {
@@ -278,7 +308,7 @@ async function main(): Promise<void> {
   if (maxP95Ms > bounds.maxEventLoopP95Ms) boundViolations.push(`maxEventLoopP95Ms ${maxP95Ms.toFixed(1)} > ${bounds.maxEventLoopP95Ms}`);
   if (growthBytes > bounds.maxDbGrowthBytes) boundViolations.push(`dbGrowthBytes ${growthBytes} > ${bounds.maxDbGrowthBytes}`);
   if (maxWalBytes > bounds.maxWalBytes) boundViolations.push(`maxWalBytes ${maxWalBytes} > ${bounds.maxWalBytes}`);
-  const stabilityVerdict = failedIters.length === 0 && boundViolations.length === 0 ? 'PASS' : 'FAIL';
+  const stabilityVerdict = failedIters.length === 0 && boundViolations.length === 0 && !diskFullAbort ? 'PASS' : 'FAIL';
   const report = {
     type: 'SOAK_RESULT',
     soakId,
@@ -312,17 +342,32 @@ async function main(): Promise<void> {
     stabilityVerdict,
     resourceBounds: bounds,
     boundViolations,
+    // 2026-10-15: disk-full fail-fast + soak-scoped retention (see scripts/soak/soakRetention.ts).
+    abortReason: diskFullAbort ? 'DISK_FULL' : null,
+    abortIteration: diskFullAbort ? currentIteration : null,
+    retention: {
+      keepIterations: SOAK_KEEP_ITERATIONS,
+      totalPrunedRows,
+      note: 'Per-iteration prune of synthetic session rows older than the keep window; production retention policy untouched.',
+    },
     iterationErrors: failedIters.map((i) => ({ iteration: i.iteration, error: i.error })),
     samplesTail: samples.slice(-5),
   };
 
   const resultsDir = path.join(process.cwd(), 'scripts', 'soak', 'results');
   fs.mkdirSync(resultsDir, { recursive: true });
-  fs.writeFileSync(path.join(resultsDir, `soak-${soakId}.json`), JSON.stringify(report, null, 2));
+  try {
+    // May itself fail when the abort reason is DISK_FULL - the parent still learns the
+    // verdict from the exit code, so a failed write must not mask the abort.
+    fs.writeFileSync(path.join(resultsDir, `soak-${soakId}.json`), JSON.stringify(report, null, 2));
+  } catch (e) {
+    console.error('[soak] could not write result file:', e instanceof Error ? e.message : String(e));
+  }
   if (typeof process.send === 'function') process.send(report);
-  const stable = failedIters.length === 0;
-  console.log(`\n[soak] done: ${iterations.length} iterations, ${failedIters.length} failed, ${totalFills} fills. Stability: ${stable ? 'PASS' : 'FAIL'}`);
-  process.exit(stable ? 0 : 2);
+  const stable = failedIters.length === 0 && !diskFullAbort;
+  console.log(`\n[soak] done: ${iterations.length} iterations, ${failedIters.length} failed, ${totalFills} fills, ${totalPrunedRows} rows pruned. Stability: ${stable ? 'PASS' : 'FAIL'}${diskFullAbort ? ' (DISK_FULL abort)' : ''}`);
+  // Exit codes: 0 = stable PASS, 2 = instability FAIL, 3 = disk-full abort (fail-fast).
+  process.exit(diskFullAbort ? 3 : stable ? 0 : 2);
 }
 
 main().catch((e) => {
