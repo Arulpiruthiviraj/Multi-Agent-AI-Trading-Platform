@@ -41,3 +41,15 @@ Automated PAPER entries are **enabled** (`TRADING_ENABLED`, Autobot on) under th
 
 ## Not done / deferred
 No lifecycle baseline applied; no calibration, ChiefTrader threshold or confidence change; no flag changed. Calibration and grading fixes are developing on the isolated branch `dev/calibration-grading` and are not part of this runtime.
+
+## Addendum (08:00 ET): owner-approved UNTESTED baseline, storage and backup position
+**Baseline applied (owner-approved, four strategies only).** State before: exactly one `strategyEligibility` record (PULLBACK_CONTINUATION RETIRED, 2026-08-31). Applied through `argus-cli strategy-lifecycle-baseline --apply` for MOMENTUM_BREAKOUT, MEAN_REVERSION, TREND_FOLLOWING and RANGE_REVERSION. State after: 5 records. The four new rows are UNTESTED (version ids `lv-strategyEligibility:<ID>-1792065543476...`); PULLBACK_CONTINUATION is unchanged and RETIRED. `argus-cli quant-readiness`: AUTHORIZED_QUANT_POLICY = 0, REQUIRES_CONSENSUS (STRATEGY_UNTESTED) = 4, NOT_ELIGIBLE (RETIRED) = 1, NOT_AUTHORIZED (no record) = 16. No strategy has VALIDATED, CHAMPION or ACTIVE_EXPLORATION authority. Consensus threshold, independence rule, RiskEngine limits and PAPER-only operation are unchanged. Trades that result from these strategies are **unvalidated exploration** and are not evidence of predictive skill.
+
+**Observed after the baseline (6-minute window, runtime DB):** QuantEngine emitted 17 ideas (10 SELL, 7 BUY); authorization checks: 3 `UNTESTED -> REQUIRES_CONSENSUS`, 14 `NO_LIFECYCLE_RECORD` (ideas from strategies outside the four baselined, or checked before the baseline was applied, are still dropped); 101 consensus rounds, 0 approvals; 0 orders and 0 risk assessments. Subscription lines ramped 30 -> 50 in about 10 minutes (up to 20 per discovery scan; cap 90).
+
+**Storage and backup position (honest).**
+* C: free 29.5 GB (above the 15 GB floor); G: is Google Drive (cloud-synced; not appropriate for production account data); no other local volume exists.
+* No full 28 GB recovery backup exists for today's state. The engine's own daily backup is skipped by its disk guard (database 28 GB vs 29.5 GB free) and its last successful backup is 2026-10-13 (19.6 GB). Available recovery points: the verified Oct 14 post-close snapshot (compressed, SHA-256 + `quick_check` ok), production's Oct 13 backup, and the 40 MB critical-state copy taken at 07:43 today.
+* Recommended (not executed): after the close, losslessly compress the operator-managed backups in `data/backups` (about 100 GB, NTFS compression, SHA-256 verified before/after) to free tens of GB so both the engine's own backup and a full verified copy can run; or attach an external drive of at least 64 GB for the backup target. No same-disk copy will be retried while the engine is trading.
+
+**Isolated branch.** `dev/calibration-grading` (deterministic `ALL`-row selection in `calibrateConfidenceDetailed`, with regression tests) is pushed to its own branch and is not merged into `main` or the deployed runtime.
