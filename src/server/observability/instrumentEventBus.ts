@@ -131,6 +131,10 @@ export function installObservabilityEventBridge(): void {
         gapMs: payload?.gapMs,
         disconnectedAt: payload?.disconnectedAt,
         reconnectedAt: payload?.reconnectedAt,
+        // 2026-10-15 (fifth confirmed instance of this whitelist gap): NEWS_PROVIDER_FAILED publishes {providerId, error} (NewsProviderManager.fetchAllLatest), so all 362
+        // rows persisted in the 09:30-10:00 ET window collapsed to `{}` and the failing provider and cause could not be recovered. Error text is bounded (secrets are redacted below).
+        providerId: payload?.providerId,
+        error: typeof payload?.error === 'string' ? payload.error.slice(0, 300) : undefined,
       });
       logStructured(level, eventType, {
         category,

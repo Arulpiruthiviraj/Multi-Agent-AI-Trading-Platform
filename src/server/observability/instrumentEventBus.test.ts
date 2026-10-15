@@ -139,4 +139,16 @@ describe('instrumentEventBus - generic wildcard bridge', () => {
     expect(parsed.disconnectedAt).toBe(1790685058374);
     expect(parsed.reconnectedAt).toBe(1790685059655);
   });
+
+  // 2026-10-15 (fifth instance): NEWS_PROVIDER_FAILED's real payload is {providerId, error}; 362 rows in one 30-minute window persisted as `{}`.
+  it('persists providerId and a bounded error for NEWS_PROVIDER_FAILED instead of collapsing to {}', () => {
+    eventBus.publish(EVENTS.NEWS_PROVIDER_FAILED, { providerId: 'rss-example', error: 'Error: HTTP 429 ' + 'x'.repeat(600) });
+
+    expect(enqueueObservabilityEvent).toHaveBeenCalled();
+    const row = enqueueObservabilityEvent.mock.calls[0][0];
+    const parsed = JSON.parse(row.payload).payload;
+    expect(parsed.providerId).toBe('rss-example');
+    expect(parsed.error.startsWith('Error: HTTP 429')).toBe(true);
+    expect(parsed.error.length).toBeLessThanOrEqual(300);
+  });
 });
