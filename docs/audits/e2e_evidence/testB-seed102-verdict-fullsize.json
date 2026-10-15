@@ -1,0 +1,384 @@
+{
+  "file": "C:/Users/ithay/AppData/Local/Temp/J/e2e4/testB-seed102.json",
+  "which": "B",
+  "funnel": [
+    {
+      "symbol": "LAOW",
+      "kind": "CERTIFIED_PATH",
+      "promotedMin": 81,
+      "ideasByAgent": [
+        {
+          "a": "TechnicalAgent",
+          "c": 2
+        }
+      ],
+      "consensusRounds": 2,
+      "deskNoTrade": 23,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 21,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 1,
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on BUY (need #) from produ": 1
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LAAI",
+      "kind": "CERTIFIED_PATH",
+      "promotedMin": 100,
+      "ideasByAgent": [
+        {
+          "a": "JavaCoreEnsemble",
+          "c": 1
+        },
+        {
+          "a": "QuantEngine",
+          "c": 15
+        },
+        {
+          "a": "TechnicalAgent",
+          "c": 5
+        }
+      ],
+      "consensusRounds": 18,
+      "deskNoTrade": 31,
+      "noTradeReasons": {
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 3,
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on BUY (need #) from produ": 6,
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on SELL (need #) from prod": 7,
+        "reason\":\"[NO TRADE] Confidence # did not clear ## MODERATE tier also declined: At least on": 1,
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 14
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LAHP",
+      "kind": "MOMENTUM_BREAKOUT",
+      "promotedMin": 43,
+      "ideasByAgent": [
+        {
+          "a": "PortfolioManager",
+          "c": 1
+        },
+        {
+          "a": "QuantEngine",
+          "c": 10
+        },
+        {
+          "a": "TechnicalAgent",
+          "c": 15
+        }
+      ],
+      "consensusRounds": 21,
+      "deskNoTrade": 88,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 70,
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on BUY (need #) from produ": 14,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 4
+      },
+      "buys": 2,
+      "sells": 1
+    },
+    {
+      "symbol": "LAPH",
+      "kind": "GAP_AND_GO",
+      "promotedMin": 15,
+      "ideasByAgent": [
+        {
+          "a": "TechnicalAgent",
+          "c": 9
+        }
+      ],
+      "consensusRounds": 9,
+      "deskNoTrade": 91,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 82,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 4,
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on BUY (need #) from produ": 5
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LAMO",
+      "kind": "HIGH_VOLUME_MOVER",
+      "promotedMin": 61,
+      "ideasByAgent": [
+        {
+          "a": "JavaCoreEnsemble",
+          "c": 5
+        },
+        {
+          "a": "PortfolioManager",
+          "c": 1
+        },
+        {
+          "a": "QuantEngine",
+          "c": 20
+        },
+        {
+          "a": "TechnicalAgent",
+          "c": 19
+        }
+      ],
+      "consensusRounds": 33,
+      "deskNoTrade": 88,
+      "noTradeReasons": {
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on BUY (need #) from produ": 16,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 10,
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on SELL (need #) from prod": 4,
+        "reason\":\"[NO TRADE] Confidence # did not clear ## MODERATE tier also declined: At least on": 1,
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 57
+      },
+      "buys": 1,
+      "sells": 1
+    },
+    {
+      "symbol": "LACI",
+      "kind": "CONTINUATION",
+      "promotedMin": 120,
+      "ideasByAgent": [
+        {
+          "a": "TechnicalAgent",
+          "c": 7
+        }
+      ],
+      "consensusRounds": 7,
+      "deskNoTrade": 60,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 53,
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on BUY (need #) from produ": 6,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 1
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LADE",
+      "kind": "MEAN_REVERSION",
+      "promotedMin": 45,
+      "ideasByAgent": [
+        {
+          "a": "TechnicalAgent",
+          "c": 17
+        }
+      ],
+      "consensusRounds": 17,
+      "deskNoTrade": 97,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 80,
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on BUY (need #) from produ": 14,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 3
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LAQD",
+      "kind": "MOMENTUM_BREAKOUT",
+      "promotedMin": 110,
+      "ideasByAgent": [
+        {
+          "a": "QuantEngine",
+          "c": 12
+        },
+        {
+          "a": "TechnicalAgent",
+          "c": 16
+        }
+      ],
+      "consensusRounds": 25,
+      "deskNoTrade": 74,
+      "noTradeReasons": {
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on BUY (need #) from produ": 14,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 6,
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on SELL (need #) from prod": 4,
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 50
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LAIW",
+      "kind": "GAP_AND_GO",
+      "promotedMin": 9,
+      "ideasByAgent": [
+        {
+          "a": "KronosEngine",
+          "c": 1
+        },
+        {
+          "a": "TechnicalAgent",
+          "c": 9
+        }
+      ],
+      "consensusRounds": 10,
+      "deskNoTrade": 93,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 83,
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on BUY (need #) from produ": 10
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LAEM",
+      "kind": "HIGH_VOLUME_MOVER",
+      "promotedMin": 145,
+      "ideasByAgent": [
+        {
+          "a": "QuantEngine",
+          "c": 5
+        },
+        {
+          "a": "TechnicalAgent",
+          "c": 5
+        }
+      ],
+      "consensusRounds": 10,
+      "deskNoTrade": 55,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 45,
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on SELL (need #) from prod": 3,
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on BUY (need #) from produ": 5,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 2
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LADJ",
+      "kind": "CONTINUATION",
+      "promotedMin": 71,
+      "ideasByAgent": [
+        {
+          "a": "TechnicalAgent",
+          "c": 4
+        }
+      ],
+      "consensusRounds": 4,
+      "deskNoTrade": 35,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 31,
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on BUY (need #) from produ": 2,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 2
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LALP",
+      "kind": "MOMENTUM_BREAKOUT",
+      "promotedMin": 216,
+      "ideasByAgent": [
+        {
+          "a": "TechnicalAgent",
+          "c": 6
+        }
+      ],
+      "consensusRounds": 6,
+      "deskNoTrade": 44,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 38,
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on BUY (need #) from produ": 6
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LAJB",
+      "kind": "GAP_AND_GO",
+      "promotedMin": 17,
+      "ideasByAgent": [
+        {
+          "a": "JavaCoreEnsemble",
+          "c": 5
+        }
+      ],
+      "consensusRounds": 5,
+      "deskNoTrade": 25,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 20,
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on SELL (need #) from prod": 5
+      },
+      "buys": 0,
+      "sells": 0
+    },
+    {
+      "symbol": "LANZ",
+      "kind": "MEAN_REVERSION",
+      "promotedMin": 105,
+      "ideasByAgent": [
+        {
+          "a": "TechnicalAgent",
+          "c": 11
+        }
+      ],
+      "consensusRounds": 11,
+      "deskNoTrade": 71,
+      "noTradeReasons": {
+        "reason\":\"Quant live emit requires a strategy idea that clears live EV and min R:R# Regime-": 60,
+        "reason\":\"[NO TRADE] Only # independent evidence group(s) agreed on BUY (need #) from produ": 10,
+        "reason\":\"[NO TRADE] Confidence # did not clear ##\"}}": 1
+      },
+      "buys": 0,
+      "sells": 0
+    }
+  ],
+  "dbPath": "C:\\Users\\ithay\\AppData\\Local\\Temp\\J\\e2e4\\evidence\\argus_synthetic_sim_e2e-testB-102-mv8wkagf.db",
+  "generatedAt": "2026-10-15T03:56:06.470Z",
+  "areas": [
+    {
+      "area": "REAL_DISCOVERY_IN_SESSION",
+      "verdict": "PASS",
+      "evidence": "production scanners/allocator at cap via provider seam; blocked=0 unsupported=0; recall=0.63 precision=0.165 promotedNew=114 trapHits=1"
+    },
+    {
+      "area": "ACCOUNTING_ORACLE",
+      "verdict": "PASS",
+      "evidence": "13 fills, mismatches=0"
+    },
+    {
+      "area": "NO_INJECTED_APPROVALS",
+      "verdict": "PASS",
+      "evidence": "harness-injected trades: 0"
+    },
+    {
+      "area": "ORGANIC_BUY_OF_DISCOVERED_SYMBOL",
+      "verdict": "PASS",
+      "evidence": "buys on allocator-discovered symbols: [\"LAMO\",\"LAQS\",\"LAHP\",\"LAFP\",\"LANE\",\"LASA\"]; of which oracle-valid opportunities: [\"LAMO\",\"LAHP\"]"
+    },
+    {
+      "area": "MONITOR_AND_SELL_OF_DISCOVERED_SYMBOL",
+      "verdict": "PASS",
+      "evidence": "discovered symbols with a filled SELL: [\"LAMO\",\"LAHP\"]; all SELL symbols: [\"LAHP\",\"LAMO\"]"
+    },
+    {
+      "area": "ORGANIC_BUY_OF_ORACLE_OPPORTUNITY",
+      "verdict": "PASS",
+      "evidence": "an oracle-valid hidden opportunity discovered by the allocator and bought: [\"LAMO\",\"LAHP\"]"
+    },
+    {
+      "area": "REAL_CONSENSUS_APPROVALS",
+      "verdict": "PASS",
+      "evidence": "approved consensus rounds: 65"
+    },
+    {
+      "area": "SESSION_CERTIFICATION_GATE",
+      "verdict": "PASS",
+      "evidence": "PASS firstBlockingStage=none"
+    },
+    {
+      "area": "SIMULATED_TIME_INTEGRITY",
+      "verdict": "PASS",
+      "evidence": "26 of 250515 persisted events outside the simulated session window (0.01%)"
+    },
+    {
+      "area": "TIMELINE_INVARIANTS",
+      "verdict": "PASS",
+      "evidence": "violations=0"
+    }
+  ],
+  "overall": "PASS"
+}
