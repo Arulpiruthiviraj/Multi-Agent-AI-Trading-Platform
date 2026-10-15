@@ -178,6 +178,13 @@ export interface SyntheticSessionOptions {
    */
   discovery?: Partial<SessionDiscoveryOptions>;
   /**
+   * REAL HISTORICAL BARS (2026-10-14, "can the current PAPER configuration approve trades"): replaces the generated universe with REAL 1Min bars and REAL prior
+   * 1Day history read (read-only) from a production snapshot database, for a fixed symbol list and one trading day. The REAL production agents, calibration
+   * table (via agentCalibrationProfile), lifecycle state, ChiefTrader, RiskEngine and OMS then decide against a synthetic broker. Missing minutes are
+   * forward-filled with a zero-volume flat bar (count reported). Evidence class: HISTORICAL_REAL_BARS_SYNTHETIC_BROKER; never organic paper evidence.
+   */
+  historical?: { snapshotDbPath: string; symbols: string[] };
+  /**
    * Test-scoped strategy lifecycle records (written through the REAL recordStrategyLifecycleTransition into the isolated DB; labeled SYNTHETIC).
    * `baselineCoreUntested` reproduces the planned production baseline (UNTESTED = no authority). `records` grants explicit test-scoped states.
    * Absent = production reality on Oct 14: no lifecycle records at all (QuantEngine NOT_AUTHORIZED / NO_LIFECYCLE_RECORD).
@@ -408,7 +415,38 @@ export class SyntheticSessionEngine {
       const discoveryDriver = options.discovery ? new SessionDiscoveryDriver({ ...DEFAULT_SESSION_DISCOVERY, ...options.discovery }) : null;
       const discoveryMarket = discoveryDriver ? await discoveryDriver.buildMarket() : null;
       const realDateNow = Date.now; // captured BEFORE any simulated-time patch; wall-clock metrics must never use the patched value
-      const universeConfigs = discoveryDriver && discoveryMarket
+      let historicalBars: Map<string, SyntheticBar[]> | null = null;
+      const historicalDaily = new Map<string, Array<{ timestamp: number; open: number; high: number; low: number; close: number; volume: number }>>();
+      const historicalFillCounts: Record<string, number> = {};
+      if (options.historical) {
+        const { default: BetterSqlite } = await import('better-sqlite3');
+        const snap = new BetterSqlite(options.historical.snapshotDbPath, { readonly: true });
+        try {
+          historicalBars = new Map();
+          const minutes = Math.floor(sessionDurationMs / BAR_INTERVAL_MS);
+          const qMin = snap.prepare("select timestamp t, open o, high h, low l, close c, volume v from ohlcv_bars where symbol=? and timeframe='1Min' and timestamp>=? and timestamp<? order by timestamp");
+          const qDay = snap.prepare("select timestamp t, open o, high h, low l, close c, volume v from ohlcv_bars where symbol=? and timeframe='1Day' and timestamp<? order by timestamp desc limit 260");
+          for (const symbol of options.historical.symbols) {
+            const rows = qMin.all(symbol, sessionStartMs, sessionEndMs) as Array<{ t: number; o: number; h: number; l: number; c: number; v: number }>;
+            if (rows.length < 30) continue;
+            const byMin = new Map(rows.map((r) => [Math.floor((r.t - sessionStartMs) / BAR_INTERVAL_MS), r]));
+            const bars: SyntheticBar[] = []; let last = rows[0].o; let filled = 0;
+            for (let m = 0; m < minutes; m++) {
+              const r = byMin.get(m);
+              if (r) { last = r.c; }
+              else filled++;
+              const open = r ? r.o : last; const close = r ? r.c : last; const high = r ? r.h : last; const low = r ? r.l : last; const half = close * 0.00015;
+              bars.push({ symbol, timestamp: sessionStartMs + m * BAR_INTERVAL_MS, open, high, low, close, volume: r ? r.v : 0, bid: close - half, ask: close + half, spread: 2 * half });
+            }
+            historicalBars.set(symbol, bars); historicalFillCounts[symbol] = filled;
+            historicalDaily.set(symbol, (qDay.all(symbol, sessionStartMs) as Array<{ t: number; o: number; h: number; l: number; c: number; v: number }>).reverse().map((d) => ({ timestamp: d.t, open: d.o, high: d.h, low: d.l, close: d.c, volume: d.v })));
+          }
+        } finally { snap.close(); }
+        if (!historicalBars || historicalBars.size === 0) throw new Error('options.historical produced no symbols with real bars for the requested day');
+      }
+      const universeConfigs = historicalBars
+        ? [...historicalBars.entries()].map(([symbol, bars]) => ({ symbol, startPrice: bars[0].open, baseVolatility: 0.0007, baseVolumePerBar: Math.max(1000, Math.round(bars.reduce((a, b) => a + b.volume, 0) / bars.length)), baseSpreadPct: 0.0003 }))
+        : discoveryDriver && discoveryMarket
         ? discoveryDriver.initialSymbols().map((symbol) => ({ symbol, startPrice: discoveryMarket.prevCloseOf(symbol) ?? 100, baseVolatility: 0.0007, baseVolumePerBar: Math.max(1000, Math.round((discoveryMarket.snapshot(symbol, 0)?.prevDailyBar.v ?? 1_000_000) / 390)), baseSpreadPct: 0.0003 }))
         : defaultSyntheticUniverse(options.universeSize ?? 5);
       const universe = universeConfigs.map((u) => u.symbol);
@@ -464,7 +502,7 @@ export class SyntheticSessionEngine {
         // admits them mid-session.
         const allHistoryConfigs = [...universeConfigs, ...(options.lateMoverConfigs ?? [])];
         for (const config of allHistoryConfigs) {
-          const priorDays = generateSyntheticPriorDayHistory(config, scenario, options.seed, sessionStartMs);
+          const priorDays = historicalDaily.has(config.symbol) ? historicalDaily.get(config.symbol)! : generateSyntheticPriorDayHistory(config, scenario, options.seed, sessionStartMs);
           if (staleSet.has(config.symbol)) {
             // STALE_CACHE_SEED environment control: shift the whole tail ~30 days into the past
             // so the real HistoricalDataGateway stale-tail gate (quantBarsTailFreshnessToleranceMs)
@@ -599,7 +637,7 @@ export class SyntheticSessionEngine {
       const rng = new SyntheticRandom(options.seed);
       const allBarConfigs = [...universeConfigs, ...(options.lateMoverConfigs ?? [])];
       const marketDataEngine = new SyntheticMarketDataEngine(rng, allBarConfigs, scenario);
-      const barsBySymbol = discoveryMarket
+      const barsBySymbol = historicalBars ? historicalBars : discoveryMarket
         ? barsFromDiscoveryMarket(discoveryMarket, sessionStartMs, Math.floor(sessionDurationMs / BAR_INTERVAL_MS))
         : marketDataEngine.generateSession(sessionStartMs, sessionEndMs);
       const newsItems = await seedSyntheticNewsForScenario(scenario, sessionStartMs, universe);
@@ -1026,7 +1064,7 @@ export class SyntheticSessionEngine {
         stoppedAtBarIndex: stoppedEarly ? lastProcessedBar : null,
         brokerState: stoppedEarly ? this.broker.exportState() : null,
         ideaGenerationGateOpen,
-        discovery: discoveryReport,
+        discovery: discoveryReport ?? (historicalBars ? { mode: 'HISTORICAL_REAL_BARS', symbols: [...historicalBars.keys()], forwardFilledMinutes: historicalFillCounts, label: 'HISTORICAL_REAL_BARS_SYNTHETIC_BROKER / NOT_ORGANIC' } : null),
         lifecycleSeed,
       };
     } finally {

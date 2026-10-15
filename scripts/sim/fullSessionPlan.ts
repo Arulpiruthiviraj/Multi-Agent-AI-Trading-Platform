@@ -44,6 +44,10 @@ export interface FullSessionSpec {
   resume?: { startBarIndex: number; brokerState: HistoricalReplayBrokerState };
   /** REAL DISCOVERY inside the session (see SyntheticSessionOptions.discovery). */
   discovery?: Partial<import('../../src/server/replay/synthetic/discovery/SessionDiscoveryDriver').SessionDiscoveryOptions>;
+  /** REAL historical bars from a production snapshot (see SyntheticSessionOptions.historical). */
+  historical?: { snapshotDbPath: string; symbols: string[] };
+  /** Explicit session start (ms); defaults to the engine's fixed synthetic day. Required for historical sessions. */
+  sessionStartMs?: number;
   /** Test-scoped strategy lifecycle records (see SyntheticSessionOptions.lifecycle). Absent = production Oct 14 state (no records). */
   lifecycle?: { baselineCoreUntested?: boolean; records?: Array<{ strategyId: string; status: string; reason: string }> };
   /**

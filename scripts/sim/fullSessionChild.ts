@@ -87,6 +87,8 @@ async function main() {
     stopWhen: spec.stopWhen,
     resume: spec.resume,
     discovery: spec.discovery,
+    historical: spec.historical,
+    sessionStartMs: spec.sessionStartMs,
     lifecycle: spec.lifecycle,
   });
 
