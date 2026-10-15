@@ -1,0 +1,270 @@
+{
+ "generatedFrom": "C:/Users/ithay/AppData/Local/Temp/J/db_backup/argus_oct14_postclose_1792008436014.db",
+ "method": "production outcome rule on sampled recent predictions; clusters = symbol x 10min",
+ "agents": {
+  "KronosEngine": {
+   "horizonMin": 5,
+   "populationEarly": 92481,
+   "populationLate": 76869,
+   "gradedEarly": 356,
+   "gradedLate": 677,
+   "buckets": {
+    "0": {
+     "storedCalibrated": 0.5172,
+     "storedWinsLosses": "12/7",
+     "earlyN": 0,
+     "earlyEffN": 0,
+     "earlyWinRate": null,
+     "refitEffective": 0.3,
+     "refitRaw": 0.3,
+     "lateN": 1,
+     "lateEffN": 1,
+     "lateWinRate": 0
+    },
+    "0.6": {
+     "storedCalibrated": 0.6389,
+     "storedWinsLosses": "5/3",
+     "earlyN": 0,
+     "earlyEffN": 0,
+     "earlyWinRate": null,
+     "refitEffective": 0.65,
+     "refitRaw": 0.65,
+     "lateN": 0,
+     "lateEffN": 0,
+     "lateWinRate": null
+    },
+    "0.7": {
+     "storedCalibrated": 0.4959,
+     "storedWinsLosses": "112/119",
+     "earlyN": 0,
+     "earlyEffN": 0,
+     "earlyWinRate": null,
+     "refitEffective": 0.75,
+     "refitRaw": 0.75,
+     "lateN": 2,
+     "lateEffN": 2,
+     "lateWinRate": 0.5
+    },
+    "0.8": {
+     "storedCalibrated": 0.5108,
+     "storedWinsLosses": "747/722",
+     "earlyN": 356,
+     "earlyEffN": 341,
+     "earlyWinRate": 0.4607,
+     "refitEffective": 0.4734,
+     "refitRaw": 0.4713,
+     "lateN": 674,
+     "lateEffN": 635,
+     "lateWinRate": 0.5282
+    },
+    "0.9": {
+     "storedCalibrated": null,
+     "storedWinsLosses": null,
+     "earlyN": 0,
+     "earlyEffN": 0,
+     "earlyWinRate": null,
+     "refitEffective": 0.95,
+     "refitRaw": 0.95,
+     "lateN": 0,
+     "lateEffN": 0,
+     "lateWinRate": null
+    }
+   },
+   "bySide": {
+    "BUY": {
+     "n": 135,
+     "winRate": 0.5333,
+     "effectiveN": 133
+    },
+    "SELL": {
+     "n": 542,
+     "winRate": 0.5258,
+     "effectiveN": 512
+    }
+   },
+   "oosBrier": {
+    "n": 677,
+    "storedCalibration": 0.24954,
+    "refitEffectiveEarlyWindow": 0.25214,
+    "refitRawEarlyWindow": 0.25238,
+    "coinFlip": 0.25
+   }
+  },
+  "TechnicalAgent": {
+   "horizonMin": 60,
+   "populationEarly": 24220,
+   "populationLate": 20874,
+   "gradedEarly": 328,
+   "gradedLate": 672,
+   "buckets": {
+    "0": {
+     "storedCalibrated": 0.2174,
+     "storedWinsLosses": "7/29",
+     "earlyN": 239,
+     "earlyEffN": 228,
+     "earlyWinRate": 0.6025,
+     "refitEffective": 0.5987,
+     "refitRaw": 0.5904,
+     "lateN": 483,
+     "lateEffN": 457,
+     "lateWinRate": 0.47
+    },
+    "0.6": {
+     "storedCalibrated": 0.4079,
+     "storedWinsLosses": "9/19",
+     "earlyN": 83,
+     "earlyEffN": 79,
+     "earlyWinRate": 0.5663,
+     "refitEffective": 0.573,
+     "refitRaw": 0.5753,
+     "lateN": 187,
+     "lateEffN": 180,
+     "lateWinRate": 0.5134
+    },
+    "0.7": {
+     "storedCalibrated": 0.7083,
+     "storedWinsLosses": "1/1",
+     "earlyN": 2,
+     "earlyEffN": 2,
+     "earlyWinRate": 0.5,
+     "refitEffective": 0.7083,
+     "refitRaw": 0.7083,
+     "lateN": 1,
+     "lateEffN": 1,
+     "lateWinRate": 0
+    },
+    "0.8": {
+     "storedCalibrated": 0.7727,
+     "storedWinsLosses": "0/1",
+     "earlyN": 2,
+     "earlyEffN": 2,
+     "earlyWinRate": 0.5,
+     "refitEffective": 0.7917,
+     "refitRaw": 0.7917,
+     "lateN": 0,
+     "lateEffN": 0,
+     "lateWinRate": null
+    },
+    "0.9": {
+     "storedCalibrated": null,
+     "storedWinsLosses": null,
+     "earlyN": 2,
+     "earlyEffN": 2,
+     "earlyWinRate": 1,
+     "refitEffective": 0.9583,
+     "refitRaw": 0.9583,
+     "lateN": 1,
+     "lateEffN": 1,
+     "lateWinRate": 0
+    }
+   },
+   "bySide": {
+    "BUY": {
+     "n": 668,
+     "winRate": 0.4805,
+     "effectiveN": 617
+    },
+    "SELL": {
+     "n": 4,
+     "winRate": 0.5,
+     "effectiveN": 4
+    }
+   },
+   "oosBrier": {
+    "n": 672,
+    "storedCalibration": 0.2996,
+    "refitEffectiveEarlyWindow": 0.26358,
+    "refitRawEarlyWindow": 0.26215,
+    "coinFlip": 0.25
+   }
+  },
+  "QuantEngine": {
+   "horizonMin": 60,
+   "populationEarly": 2588,
+   "populationLate": 3575,
+   "gradedEarly": 389,
+   "gradedLate": 822,
+   "buckets": {
+    "0": {
+     "storedCalibrated": null,
+     "storedWinsLosses": null,
+     "earlyN": 0,
+     "earlyEffN": 0,
+     "earlyWinRate": null,
+     "refitEffective": 0.3,
+     "refitRaw": 0.3,
+     "lateN": 0,
+     "lateEffN": 0,
+     "lateWinRate": null
+    },
+    "0.6": {
+     "storedCalibrated": 0.6818,
+     "storedWinsLosses": "1/0",
+     "earlyN": 37,
+     "earlyEffN": 13,
+     "earlyWinRate": 0.0811,
+     "refitEffective": 0.337,
+     "refitRaw": 0.2021,
+     "lateN": 0,
+     "lateEffN": 0,
+     "lateWinRate": null
+    },
+    "0.7": {
+     "storedCalibrated": 0.7917,
+     "storedWinsLosses": "2/0",
+     "earlyN": 163,
+     "earlyEffN": 67,
+     "earlyWinRate": 0.4724,
+     "refitEffective": 0.4528,
+     "refitRaw": 0.4884,
+     "lateN": 808,
+     "lateEffN": 263,
+     "lateWinRate": 0.4468
+    },
+    "0.8": {
+     "storedCalibrated": 0.125,
+     "storedWinsLosses": "0/58",
+     "earlyN": 75,
+     "earlyEffN": 27,
+     "earlyWinRate": 0.72,
+     "refitEffective": 0.6842,
+     "refitRaw": 0.7353,
+     "lateN": 2,
+     "lateEffN": 2,
+     "lateWinRate": 0.5
+    },
+    "0.9": {
+     "storedCalibrated": 0.6803,
+     "storedWinsLosses": "32/19",
+     "earlyN": 114,
+     "earlyEffN": 46,
+     "earlyWinRate": 0.5789,
+     "refitEffective": 0.6321,
+     "refitRaw": 0.6089,
+     "lateN": 12,
+     "lateEffN": 7,
+     "lateWinRate": 0.0833
+    }
+   },
+   "bySide": {
+    "BUY": {
+     "n": 359,
+     "winRate": 0.429,
+     "effectiveN": 110
+    },
+    "SELL": {
+     "n": 463,
+     "winRate": 0.4514,
+     "effectiveN": 162
+    }
+   },
+   "oosBrier": {
+    "n": 822,
+    "storedCalibration": 0.36715,
+    "refitEffectiveEarlyWindow": 0.2492,
+    "refitRawEarlyWindow": 0.25055,
+    "coinFlip": 0.25
+   }
+  }
+ }
+}
