@@ -118,8 +118,19 @@ const MIN_REGIME_CONFIDENCE_TO_TRADE = tradingSafety.minRegimeConfidenceToTrade;
  * is directly unit-testable without the full evaluateSymbol pipeline.
  */
 export function resolveQuantCurrentPrice(lastBar: Bar, liveQuote: number | null, nowMs: number): number {
+  const liveOk = liveQuote != null && Number.isFinite(liveQuote) && liveQuote > 0;
+  if (!liveOk) return lastBar.close; // no usable live quote: the bar close is all there is (never silently losing the bar-based evaluation)
   const lastBarIsFinal = isDailyBarFinal(lastBar.timestamp, nowMs, TRADING_TIMEZONE);
-  return (!lastBarIsFinal && liveQuote != null && Number.isFinite(liveQuote) && liveQuote > 0) ? liveQuote : lastBar.close;
+  if (!lastBarIsFinal) return liveQuote as number; // the bar's own session is still open: it is a frozen early-session snapshot
+  // 2026-10-15 (MRNA/MCD forensics): a FINAL bar is only the current price while it is the bar of the session that just ended. A final bar from an EARLIER session
+  // (Oct 13 close, evaluated on Oct 15 when the Oct 14 and Oct 15 bars were not stored) is stale by whole sessions: 84% of 672 recent rounds had Quant's price >1% from
+  // Kronos's (mean 3.7%, MRNA 216.25 vs 238.3), and RiskEngine sizes and checks notional from this price. Prefer the live quote unless the bar is today's own post-close bar.
+  const sameTradingDate = tradingDateKey(lastBar.timestamp) === tradingDateKey(nowMs);
+  return sameTradingDate ? lastBar.close : (liveQuote as number);
+}
+
+function tradingDateKey(ms: number): string {
+  return new Intl.DateTimeFormat('en-US', { timeZone: TRADING_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
 }
 
 export interface DerivedIdea {

@@ -186,6 +186,18 @@
       "severity": "P2",
       "status": "open",
       "title": "~28 near-identical Kronos predictions per symbol per 30 minutes"
+    },
+    {
+      "date": "2026-10-15",
+      "detectedIn": "prod",
+      "fixRef": "see git log (QuantSignalAgent.resolveQuantCurrentPrice)",
+      "id": "quant-idea-price-stale-final-bar-preferred-20261015",
+      "notes": "Escaped certification: synthetic daily bars are always current, so a stale-session last bar never occurred, and the one unit test encoded the defect. Separate open item: daily-bar coverage gap (Oct 14 181/262 symbols, Oct 15 39).",
+      "regressionTest": "src/server/services/QuantSignalAgent.currentPrice.test.ts",
+      "rootCause": "resolveQuantCurrentPrice preferred the bar close whenever the last bar was final, even when it belonged to an earlier session (Oct 13 close used on Oct 15 because Oct 14/15 daily bars were not stored). Its unit test asserted that behaviour. RiskEngine sizes and checks notional from proposal.currentPrice. 84% of 672 recent rounds had Quant price >1% from Kronos price (mean 3.74%; MRNA 216.25 vs 238.3).",
+      "severity": "P1",
+      "status": "fixed-merged-to-main-not-deployed-2026-10-15",
+      "title": "Quant idea currentPrice used a final bar from an earlier session instead of the live quote"
     }
   ],
   "version": 1
