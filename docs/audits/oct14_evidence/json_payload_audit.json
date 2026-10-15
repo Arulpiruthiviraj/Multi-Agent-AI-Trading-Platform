@@ -1,0 +1,256 @@
+{
+ "snapshot": "argus_oct14_postclose",
+ "sample": 1200,
+ "tables": {
+  "quant_assessments": {
+   "totalRows": 224927,
+   "sampledRows": 1200,
+   "avgRowBytes": 27506,
+   "avgRowZlib": 7520,
+   "topKeys": [
+    {
+     "key": "strategy_evaluations",
+     "avgBytes": 17120,
+     "avgZlib": 4538,
+     "zlibRatio": 0.265,
+     "nPresent": 1200,
+     "sampleDupRate": 0.261
+    },
+    {
+     "key": "market_context",
+     "avgBytes": 7773,
+     "avgZlib": 2442,
+     "zlibRatio": 0.314,
+     "nPresent": 1200,
+     "sampleDupRate": 0.132
+    },
+    {
+     "key": "market_context.iwm",
+     "avgBytes": 2108,
+     "avgZlib": 1208,
+     "zlibRatio": 0.573,
+     "nPresent": 1200,
+     "sampleDupRate": 0.896
+    },
+    {
+     "key": "market_context.qqq",
+     "avgBytes": 2104,
+     "avgZlib": 1212,
+     "zlibRatio": 0.576,
+     "nPresent": 1200,
+     "sampleDupRate": 0.896
+    },
+    {
+     "key": "market_context.spy",
+     "avgBytes": 2103,
+     "avgZlib": 1212,
+     "zlibRatio": 0.576,
+     "nPresent": 1200,
+     "sampleDupRate": 0.886
+    },
+    {
+     "key": "regime",
+     "avgBytes": 2044,
+     "avgZlib": 1165,
+     "zlibRatio": 0.57,
+     "nPresent": 1200,
+     "sampleDupRate": 0.162
+    },
+    {
+     "key": "regime.features",
+     "avgBytes": 1180,
+     "avgZlib": 667,
+     "zlibRatio": 0.565,
+     "nPresent": 1200,
+     "sampleDupRate": 0.422
+    },
+    {
+     "key": "market_context.sector",
+     "avgBytes": 865,
+     "avgZlib": 497,
+     "zlibRatio": 0.575,
+     "nPresent": 1200,
+     "sampleDupRate": 0.802
+    },
+    {
+     "key": "regime.deskSession",
+     "avgBytes": 703,
+     "avgZlib": 429,
+     "zlibRatio": 0.61,
+     "nPresent": 1200,
+     "sampleDupRate": 0.968
+    },
+    {
+     "key": "grouped_scores",
+     "avgBytes": 453,
+     "avgZlib": 192,
+     "zlibRatio": 0.423,
+     "nPresent": 1200,
+     "sampleDupRate": 0.421
+    },
+    {
+     "key": "ai_contradiction_analysis",
+     "avgBytes": 250,
+     "avgZlib": 178,
+     "zlibRatio": 0.711,
+     "nPresent": 277,
+     "sampleDupRate": 0.888
+    },
+    {
+     "key": "ai_contradiction_analysis.reason",
+     "avgBytes": 237,
+     "avgZlib": 172,
+     "zlibRatio": 0.724,
+     "nPresent": 61,
+     "sampleDupRate": 0.738
+    },
+    {
+     "key": "market_context.relativeStrengthVsSPY",
+     "avgBytes": 228,
+     "avgZlib": 184,
+     "zlibRatio": 0.807,
+     "nPresent": 1200,
+     "sampleDupRate": 0.338
+    },
+    {
+     "key": "grouped_scores.BUY",
+     "avgBytes": 219,
+     "avgZlib": 145,
+     "zlibRatio": 0.662,
+     "nPresent": 1200,
+     "sampleDupRate": 0.421
+    },
+    {
+     "key": "grouped_scores.SELL",
+     "avgBytes": 219,
+     "avgZlib": 145,
+     "zlibRatio": 0.663,
+     "nPresent": 1200,
+     "sampleDupRate": 0.421
+    },
+    {
+     "key": "market_context.breadth",
+     "avgBytes": 177,
+     "avgZlib": 140,
+     "zlibRatio": 0.791,
+     "nPresent": 1200,
+     "sampleDupRate": 0.999
+    }
+   ],
+   "crossColumnDuplicates": {}
+  },
+  "decision_provenance": {
+   "totalRows": 69270,
+   "sampledRows": 1200,
+   "avgRowBytes": 58457,
+   "avgRowZlib": 12408,
+   "topKeys": [
+    {
+     "key": "bar_evidence_json",
+     "avgBytes": 24648,
+     "avgZlib": 2655,
+     "zlibRatio": 0.108,
+     "nPresent": 1200,
+     "sampleDupRate": 0.59
+    },
+    {
+     "key": "evaluations_json",
+     "avgBytes": 17481,
+     "avgZlib": 4568,
+     "zlibRatio": 0.261,
+     "nPresent": 1200,
+     "sampleDupRate": 0.424
+    },
+    {
+     "key": "strategy_context_json",
+     "avgBytes": 14137,
+     "avgZlib": 4072,
+     "zlibRatio": 0.288,
+     "nPresent": 1200,
+     "sampleDupRate": 0.216
+    },
+    {
+     "key": "strategy_context_json.marketContext",
+     "avgBytes": 7689,
+     "avgZlib": 2438,
+     "zlibRatio": 0.317,
+     "nPresent": 1200,
+     "sampleDupRate": 0.312
+    },
+    {
+     "key": "strategy_context_json.regime",
+     "avgBytes": 2047,
+     "avgZlib": 1166,
+     "zlibRatio": 0.57,
+     "nPresent": 1200,
+     "sampleDupRate": 0.425
+    },
+    {
+     "key": "strategy_context_json.supportResistance",
+     "avgBytes": 1674,
+     "avgZlib": 610,
+     "zlibRatio": 0.364,
+     "nPresent": 1200,
+     "sampleDupRate": 0.582
+    },
+    {
+     "key": "strategy_versions_json",
+     "avgBytes": 1022,
+     "avgZlib": 399,
+     "zlibRatio": 0.391,
+     "nPresent": 1200,
+     "sampleDupRate": 0.583
+    },
+    {
+     "key": "strategy_context_json.smc",
+     "avgBytes": 812,
+     "avgZlib": 454,
+     "zlibRatio": 0.56,
+     "nPresent": 1200,
+     "sampleDupRate": 0.765
+    },
+    {
+     "key": "strategy_context_json.trend",
+     "avgBytes": 694,
+     "avgZlib": 390,
+     "zlibRatio": 0.562,
+     "nPresent": 1200,
+     "sampleDupRate": 0.764
+    },
+    {
+     "key": "lifecycle_states_json",
+     "avgBytes": 682,
+     "avgZlib": 258,
+     "zlibRatio": 0.378,
+     "nPresent": 1200,
+     "sampleDupRate": 0.583
+    },
+    {
+     "key": "strategy_context_json.volume",
+     "avgBytes": 336,
+     "avgZlib": 247,
+     "zlibRatio": 0.738,
+     "nPresent": 1200,
+     "sampleDupRate": 0.5
+    },
+    {
+     "key": "strategy_context_json.volatility",
+     "avgBytes": 331,
+     "avgZlib": 243,
+     "zlibRatio": 0.734,
+     "nPresent": 1200,
+     "sampleDupRate": 0.767
+    },
+    {
+     "key": "strategy_context_json.momentum",
+     "avgBytes": 257,
+     "avgZlib": 190,
+     "zlibRatio": 0.74,
+     "nPresent": 1200,
+     "sampleDupRate": 0.767
+    }
+   ],
+   "crossColumnDuplicates": {}
+  }
+ }
+}
