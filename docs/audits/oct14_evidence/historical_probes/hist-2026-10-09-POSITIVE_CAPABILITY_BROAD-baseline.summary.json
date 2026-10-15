@@ -1,0 +1,119 @@
+{
+ "file": "C:/Users/ithay/AppData/Local/Temp/J/hist/hist-2026-10-09-POSITIVE_CAPABILITY_BROAD-baseline.json",
+ "symbols": [
+  "AAPL",
+  "GOOGL",
+  "GLD",
+  "CMCSA",
+  "SPY",
+  "SOXL",
+  "QQQ",
+  "ORCL",
+  "TQQQ",
+  "TSLA",
+  "META",
+  "AMZN"
+ ],
+ "forwardFilled": {
+  "AAPL": 0,
+  "GOOGL": 0,
+  "GLD": 3,
+  "CMCSA": 52,
+  "SPY": 0,
+  "SOXL": 0,
+  "QQQ": 6,
+  "ORCL": 0,
+  "TQQQ": 0,
+  "TSLA": 0,
+  "META": 0,
+  "AMZN": 0
+ },
+ "ideasByAgentSide": [
+  {
+   "a": "TechnicalAgent",
+   "s": "BUY",
+   "c": 246
+  },
+  {
+   "a": "KronosEngine",
+   "s": "BUY",
+   "c": 39
+  },
+  {
+   "a": "KronosEngine",
+   "s": "SELL",
+   "c": 33
+  },
+  {
+   "a": "TechnicalAgent",
+   "s": "SELL",
+   "c": 14
+  },
+  {
+   "a": "JavaCoreEnsemble",
+   "s": "SELL",
+   "c": 5
+  },
+  {
+   "a": "QuantEngine",
+   "s": "SELL",
+   "c": 4
+  }
+ ],
+ "rounds": 213,
+ "approvedRounds": 30,
+ "confidence": {
+  "max": 0.8023809523809524,
+  "p50": 0.682,
+  "p90": 0.797,
+  "p99": 0.802,
+  "atLeast0_6": 115,
+  "atLeast0_75": 99
+ },
+ "topReasons": [
+  [
+   "[NO TRADE] Confidence # did not clear ##",
+   98
+  ],
+  [
+   "[NO TRADE] Only # independent evidence group(s) agreed on BUY (need #) from producers [TechnicalAgent] resolvi",
+   53
+  ],
+  [
+   "[Chief Consensus Approval] Strong agreement# Final Confidence: ## Agreed: [TechnicalAgent(wt:#), KronosEngine(",
+   18
+  ],
+  [
+   "[NO TRADE] Confidence # did not clear ## MODERATE tier also declined: At least one participating agent lacks a",
+   16
+  ],
+  [
+   "[Chief Consensus Approval] Strong agreement# Final Confidence: ## Agreed: [KronosEngine(wt:#), TechnicalAgent(",
+   12
+  ],
+  [
+   "[NO TRADE] Only # independent evidence group(s) agreed on SELL (need #) from producers [KronosEngine] resolvin",
+   5
+  ],
+  [
+   "[NO TRADE] Only # independent evidence group(s) agreed on BUY (need #) from producers [KronosEngine] resolving",
+   5
+  ],
+  [
+   "[NO TRADE] Only # independent evidence group(s) agreed on SELL (need #) from producers [TechnicalAgent] resolv",
+   5
+  ]
+ ],
+ "orders": [
+  {
+   "side": "BUY",
+   "status": "FILLED",
+   "c": 12
+  },
+  {
+   "side": "SELL",
+   "status": "FILLED",
+   "c": 1
+  }
+ ]
+}

@@ -1,0 +1,80 @@
+{
+ "file": "C:/Users/ithay/AppData/Local/Temp/J/hist/hist-2026-10-13-PRODUCTION_OCT14-baseline.json",
+ "symbols": [
+  "UNH",
+  "INTC",
+  "ARM",
+  "COST",
+  "SPY",
+  "QQQ",
+  "GLD",
+  "MDB",
+  "AAPL",
+  "META",
+  "SOXL",
+  "TSLA"
+ ],
+ "forwardFilled": {
+  "UNH": 57,
+  "INTC": 0,
+  "ARM": 0,
+  "COST": 0,
+  "SPY": 0,
+  "QQQ": 4,
+  "GLD": 0,
+  "MDB": 49,
+  "AAPL": 0,
+  "META": 0,
+  "SOXL": 58,
+  "TSLA": 0
+ },
+ "ideasByAgentSide": [
+  {
+   "a": "TechnicalAgent",
+   "s": "BUY",
+   "c": 174
+  },
+  {
+   "a": "KronosEngine",
+   "s": "SELL",
+   "c": 41
+  },
+  {
+   "a": "KronosEngine",
+   "s": "BUY",
+   "c": 23
+  },
+  {
+   "a": "TechnicalAgent",
+   "s": "SELL",
+   "c": 20
+  },
+  {
+   "a": "QuantEngine",
+   "s": "BUY",
+   "c": 2
+  },
+  {
+   "a": "QuantEngine",
+   "s": "SELL",
+   "c": 1
+  }
+ ],
+ "rounds": 158,
+ "approvedRounds": 0,
+ "confidence": {
+  "max": 0.5942954232427916,
+  "p50": 0.391,
+  "p90": 0.511,
+  "p99": 0.594,
+  "atLeast0_6": 0,
+  "atLeast0_75": 0
+ },
+ "topReasons": [
+  [
+   "[NO TRADE] Confidence # did not clear ##",
+   158
+  ]
+ ],
+ "orders": []
+}

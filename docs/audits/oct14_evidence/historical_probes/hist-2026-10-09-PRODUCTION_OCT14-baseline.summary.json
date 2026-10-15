@@ -1,0 +1,88 @@
+{
+ "file": "C:/Users/ithay/AppData/Local/Temp/J/hist/hist-2026-10-09-PRODUCTION_OCT14-baseline.json",
+ "symbols": [
+  "AAPL",
+  "GOOGL",
+  "GLD",
+  "CMCSA",
+  "SPY",
+  "SOXL",
+  "QQQ",
+  "ORCL",
+  "TQQQ",
+  "TSLA",
+  "META",
+  "AMZN"
+ ],
+ "forwardFilled": {
+  "AAPL": 0,
+  "GOOGL": 0,
+  "GLD": 3,
+  "CMCSA": 52,
+  "SPY": 0,
+  "SOXL": 0,
+  "QQQ": 6,
+  "ORCL": 0,
+  "TQQQ": 0,
+  "TSLA": 0,
+  "META": 0,
+  "AMZN": 0
+ },
+ "ideasByAgentSide": [
+  {
+   "a": "TechnicalAgent",
+   "s": "BUY",
+   "c": 248
+  },
+  {
+   "a": "KronosEngine",
+   "s": "BUY",
+   "c": 45
+  },
+  {
+   "a": "KronosEngine",
+   "s": "SELL",
+   "c": 37
+  },
+  {
+   "a": "TechnicalAgent",
+   "s": "SELL",
+   "c": 13
+  },
+  {
+   "a": "QuantEngine",
+   "s": "SELL",
+   "c": 4
+  },
+  {
+   "a": "QuantEngine",
+   "s": "BUY",
+   "c": 2
+  }
+ ],
+ "rounds": 201,
+ "approvedRounds": 0,
+ "confidence": {
+  "max": 0.7916666666666666,
+  "p50": 0.454,
+  "p90": 0.495,
+  "p99": 0.594,
+  "atLeast0_6": 2,
+  "atLeast0_75": 1
+ },
+ "topReasons": [
+  [
+   "[NO TRADE] Confidence # did not clear ##",
+   199
+  ],
+  [
+   "[NO TRADE] Only # independent evidence group(s) agreed on SELL (need #) from producers [QuantEngine] resolving",
+   1
+  ],
+  [
+   "[NO TRADE] Confidence # did not clear ## MODERATE tier also declined: Fewer independent agreeing agents than m",
+   1
+  ]
+ ],
+ "orders": []
+}
