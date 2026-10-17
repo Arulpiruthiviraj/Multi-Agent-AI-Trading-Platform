@@ -1,4 +1,5 @@
 node_modules/
+.worktrees/
 build/
 dist/
 coverage/
@@ -11,6 +12,7 @@ __pycache__/
 data/secrets.json
 data/.encryption_key
 data/.argus_cli_session
+data/.argus_disk_guard.lock/
 data/*.db*
 data/*.sqlite*
 data/audit_trail.jsonl
