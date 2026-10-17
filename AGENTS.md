@@ -80,6 +80,7 @@ Forensic snapshot (2026-08-18 hostile pass, not a certificate): engineering ~89.
 
 ## Hard working rules
 
+- **Disk floor:** keep the repository-owned `ops:disk-guard` supervisor active during PAPER operation. Its threshold is the versioned `config/diskSafety.json` policy (currently 26 GiB on the database volume); do not override or lower it. It may request only the existing entries-only pause and must never resume trading. A running process and fresh guard log prove monitoring is active; they do not prove the pause path unless an actual threshold event is safely observed or verified through its tests.
 - Do **not** bypass RiskEngine, BrokerManager, or OMS. AI interprets quant evidence; it does not replace it or invent prices/EV.
 - Do **not** add a second kill switch. `emergency-stop` / `TRADING_PAUSED` / `EMERGENCY_STOP` already exist. Autobot off is **not** a second kill switch (it blocks new BUY; SELL/exits still require `TRADING_ENABLED`).
 - `settings.budget` is Argus **allocation**, not broker equity. Enforced by `CapitalAllocation` + gate `argus_capital_allocation`.
