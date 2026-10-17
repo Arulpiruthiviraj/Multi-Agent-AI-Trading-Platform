@@ -47,6 +47,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { computeSyntheticSimulationPaths } from '../../src/server/replay/syntheticSimulationPaths';
 import { parseArgs, type ScenarioRunSpec, DEFAULT_CALIBRATION_SEEDS } from './simCliArgs';
+import { assertDiskSpace, loadArtifactPolicy } from './artifactLifecycle';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -97,6 +98,10 @@ function buildChildEnv(dbPath: string): NodeJS.ProcessEnv {
 function runScenarioInChildProcess(spec: ScenarioRunSpec): Promise<ChildResultMessage | null> {
   return new Promise((resolve, reject) => {
     const { dbPath } = computeSyntheticSimulationPaths(spec.simulationId);
+    // The market-open harness writes a separate SQLite database and WAL under the OS temp volume.
+    // Check that exact volume before starting each child; this launcher stays free of Argus runtime imports.
+    const artifactPolicy = loadArtifactPolicy(path.resolve(__dirname, '../..'));
+    assertDiskSpace(path.dirname(dbPath), artifactPolicy.minFreeDiskGb);
     const env = buildChildEnv(dbPath);
     const childScriptPath = path.join(__dirname, 'marketOpenChild.ts');
     // Same tsx-CLI invocation as this launcher's own npm script (see package.json's

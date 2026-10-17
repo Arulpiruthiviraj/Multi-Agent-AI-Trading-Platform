@@ -1,0 +1,6 @@
+{
+  "minimumRecoveryReserveGiB": 15,
+  "observedTransientLossReserveGiB": 8,
+  "nextSessionDatabaseGrowthReserveGiB": 3,
+  "sampleIntervalMs": 10000
+}

@@ -10,12 +10,27 @@ const mk = () => fs.mkdtempSync(path.join(os.tmpdir(), 'artlife_test_'));
 describe('artifactLifecycle (REGRESSION 2026-10-14: 4.3 GB free + a cleanup that deleted certification-session databases)', () => {
   it('policy comes from config and protects certification evidence prefixes', () => {
     expect(policy.minFreeDiskGb).toBeGreaterThan(0);
+    const diskSafety = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', '..', 'config', 'diskSafety.json'), 'utf8')) as {
+      minimumRecoveryReserveGiB: number; observedTransientLossReserveGiB: number; nextSessionDatabaseGrowthReserveGiB: number;
+    };
+    expect(policy.minFreeDiskGb).toBe(diskSafety.minimumRecoveryReserveGiB + diskSafety.observedTransientLossReserveGiB + diskSafety.nextSessionDatabaseGrowthReserveGiB);
     expect(isProtectedArtifact('argus_synthetic_sim_full-session-abc.db', policy)).toBe(true);
     expect(isProtectedArtifact('argus_unit_test_123.db', policy)).toBe(false);
   });
   it('disk preflight refuses to start below the configured floor and passes above it', () => {
+    expect(policy.minFreeDiskGb).toBe(26);
     expect(() => assertDiskSpace('/x', policy.minFreeDiskGb, () => policy.minFreeDiskGb - 0.5)).toThrow(/requires >=/);
     expect(assertDiskSpace('/x', policy.minFreeDiskGb, () => policy.minFreeDiskGb + 1)).toBeGreaterThan(policy.minFreeDiskGb);
+  });
+  it('ignores legacy development overrides that would lower the repository disk safety floor', () => {
+    const previous = process.env.ARGUS_SYNTH_MIN_FREE_DISK_GB;
+    process.env.ARGUS_SYNTH_MIN_FREE_DISK_GB = '8';
+    try {
+      expect(loadArtifactPolicy(path.resolve(__dirname, '..', '..')).minFreeDiskGb).toBe(26);
+    } finally {
+      if (previous === undefined) delete process.env.ARGUS_SYNTH_MIN_FREE_DISK_GB;
+      else process.env.ARGUS_SYNTH_MIN_FREE_DISK_GB = previous;
+    }
   });
   it('cleanup removes stale unit-test leftovers but NEVER a protected evidence database, a recent file, or an unrelated file', () => {
     const dir = mk();
