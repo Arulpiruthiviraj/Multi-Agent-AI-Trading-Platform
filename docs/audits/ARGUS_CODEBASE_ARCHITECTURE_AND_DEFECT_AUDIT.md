@@ -48,6 +48,7 @@ The EventBus is a synchronous coordination point; better-sqlite3 persistence and
 | Disk guard used a shell-interpolated reason; `<` could be interpreted as redirection | Reproduced production defect | `scripts/ops/diskFloorGuard.test.ts` has incident-shaped old-behavior reproduction and argv-safe fix coverage; focused test passed |
 | Simulator artifact floor (15 GiB) disagreed with 26 GiB disk guard/operational floor | Reproduced policy mismatch | Fixed on this `main` worktree; config parity tests added and passed |
 | `marketOpen.ts` lacked disk preflight before creating isolated simulation DB | Verified missing protection | Added preflight against the exact temp DB volume; no large run executed |
+| Oct. 16 rate-limit denial payload omitted candidate direction/confidence/strategy/origin | Verified telemetry defect | Added candidate attributes to the existing denial event and asserted them under real configured limiter saturation; admission behavior unchanged |
 | Oct. 16 rate-limit and consensus event lineage was insufficient for retrospective causal analysis | Verified observability limitation | Oct. 16 old records cannot be repaired; prospective instrumentation is in a separate worktree and not included here |
 | Slow SQL/persistence calls correlate to missed votes | Unproven | No decision/deadline join; do not classify as cause |
 | Discovery filters missed named Oct. 16 winners | Unproven | Eight of ten names have no queried event evidence; required contemporaneous eligibility inputs absent |

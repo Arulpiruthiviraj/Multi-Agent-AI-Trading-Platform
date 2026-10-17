@@ -19,9 +19,9 @@ function idea(over: Record<string, unknown>) {
 describe('EventBus protective-exit rate-limit exemption', () => {
   it('delivers a genuine risk exit while the window is saturated, and rate-limits spoofed exits', () => {
     const delivered: string[] = [];
-    const limited: string[] = [];
+    const limited: any[] = [];
     const onIdea = (p: any) => delivered.push(p.traceId);
-    const onLimited = (p: any) => limited.push(p.traceId);
+    const onLimited = (p: any) => limited.push(p);
     eventBus.on(EVENTS.TRADE_IDEA_GENERATED, onIdea);
     eventBus.on(EVENTS.IDEA_RATE_LIMITED, onLimited);
     try {
@@ -31,7 +31,7 @@ describe('EventBus protective-exit rate-limit exemption', () => {
       const spoofedAgentOnly = idea({ agent: agentWeightConfig.riskExitAgent, origin: 'AGENT_IDEA', side: 'SELL' });
       const spoofedOriginOnly = idea({ agent: 'KronosEngine', origin: 'PORTFOLIO_EXIT', side: 'SELL' });
       const exitShapedBuy = idea({ agent: agentWeightConfig.riskExitAgent, origin: 'PORTFOLIO_EXIT', side: 'BUY' });
-      const ordinary = idea({ agent: 'TechnicalAgent', side: 'BUY' });
+      const ordinary = idea({ agent: 'TechnicalAgent', side: 'BUY', origin: 'TECHNICAL' });
 
       eventBus.emitTradeIdea(genuine);
       for (const x of [spoofedAgentOnly, spoofedOriginOnly, exitShapedBuy, ordinary]) eventBus.emitTradeIdea(x);
@@ -39,8 +39,17 @@ describe('EventBus protective-exit rate-limit exemption', () => {
       expect(delivered).toContain(genuine.traceId);
       for (const x of [spoofedAgentOnly, spoofedOriginOnly, exitShapedBuy, ordinary]) {
         expect(delivered).not.toContain(x.traceId);
-        expect(limited).toContain(x.traceId);
+        expect(limited.some((p) => p.traceId === x.traceId)).toBe(true);
       }
+      expect(limited.find((p) => p.traceId === ordinary.traceId)).toMatchObject({
+        symbol: ordinary.symbol,
+        agent: ordinary.agent,
+        candidateSide: ordinary.side,
+        candidateConfidence: ordinary.confidence,
+        strategyId: undefined,
+        origin: 'TECHNICAL',
+        traceId: ordinary.traceId,
+      });
       expect(getPipelineRateSnapshot().protectiveExitsExempted).toBe(1);
     } finally {
       eventBus.off(EVENTS.TRADE_IDEA_GENERATED, onIdea);

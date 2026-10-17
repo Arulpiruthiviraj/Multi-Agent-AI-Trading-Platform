@@ -9,7 +9,8 @@
 - Set `config/syntheticArtifacts.json`'s minimum free space to 26 GiB, aligned with `config/diskSafety.json`'s 15+8+3 GiB reserves.
 - Removed the legacy environment override that could lower the simulator's disk floor.
 - Added a 26 GiB preflight to the `marketOpen.ts` parent before spawning each isolated child, checking the volume that contains the simulator DB.
-- Added config parity and override regression assertions. Disk guard and artifact lifecycle suites passed: 15/15.
+- Added bounded candidate attributes to `IDEA_RATE_LIMITED` events for future suppression analysis; the rate cap and protective-exit exemption are unchanged.
+- Added config parity and override regression assertions. Disk guard, artifact lifecycle, and saturated EventBus lineage suites passed 16/16.
 
 These changes do not touch trading decisions, thresholds, broker state, `.env`, live runtime, or order code. The simulator was not run and the fix is not deployed.
 

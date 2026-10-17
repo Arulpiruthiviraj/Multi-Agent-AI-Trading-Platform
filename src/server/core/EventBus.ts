@@ -108,6 +108,12 @@ class EventBus extends EventEmitter {
             reason: 'MAX_TRADE_IDEAS_PER_MINUTE',
             symbol: eligible.idea.symbol,
             agent: eligible.idea.agent,
+            // Preserve the bounded evidence needed to diagnose whether a denied idea could
+            // have changed a consensus episode. Telemetry only; rate admission is unchanged.
+            candidateSide: eligible.idea.side,
+            candidateConfidence: eligible.idea.confidence,
+            strategyId: eligible.idea.strategyId,
+            origin: eligible.idea.origin,
             traceId: eligible.idea.traceId,
             ...getPipelineRateSnapshot(),
           });
